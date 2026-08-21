@@ -1,0 +1,148 @@
+import {
+  PEACE_FATIGUE_RECOVERY_PER_WEEK,
+  clamp,
+  round,
+} from './balance';
+import type { WorldContentV2 } from './content';
+import { synchronizeArmyCapacityV2 } from './capacity';
+import { advanceTerritoryIntegrationV2 } from './integration';
+import {
+  createPowerSnapshotV2,
+  projectFinanceManpowerPhaseV2,
+  selectPopulationDynamicsV2,
+  selectTerritoriesOfV2,
+  selectWarsOfV2,
+  selectWeeklyFinanceBreakdownV2,
+  sortedNationIdsV2,
+  type PowerSnapshotV2,
+} from './selectors';
+import type { PlayerId, WeeklyFinanceBreakdownV2, WorldStateV2 } from './types';
+
+export type FinancePlansV2 = ReadonlyMap<PlayerId, WeeklyFinanceBreakdownV2>;
+
+export function createFinancePlansV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  powerSnapshot: PowerSnapshotV2 = createPowerSnapshotV2(state, content),
+): Map<PlayerId, WeeklyFinanceBreakdownV2> {
+  return new Map(sortedNationIdsV2(state)
+    .map((id) => [id, selectWeeklyFinanceBreakdownV2(state, content, id, powerSnapshot)]));
+}
+
+function processMilitaryAndCondition(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  playerId: PlayerId,
+  finance: WeeklyFinanceBreakdownV2,
+): void {
+  const atWar = selectWarsOfV2(state, playerId).length > 0;
+  const territories = selectTerritoriesOfV2(state, playerId);
+  const projectedArmy = projectFinanceManpowerPhaseV2(state, content, playerId, finance);
+  const projectedByTerritory = new Map(projectedArmy.territories.map((army) => [army.id, army]));
+  for (const view of territories) {
+    const territory = state.territories[view.id]!;
+    const projected = projectedByTerritory.get(view.id);
+    if (projected) {
+      territory.army.capacity = projected.capacity;
+      territory.army.manpower = projected.manpower;
+      territory.army.baseAttack = projected.baseAttack;
+      territory.army.baseDefense = projected.baseDefense;
+      territory.army.veteranManpower = projected.veteranManpower;
+      territory.army.veteranExperience = projected.veteranExperience;
+    }
+    const isConquered = content.territories[view.id]?.initialOwnerId !== playerId;
+    // Occupied infrastructure cannot recover at homeland speed. Restoration
+    // accelerates only as administration and local supply chains return.
+    const reconstructionReadiness = isConquered
+      ? 0.18 + 0.82 * clamp(territory.integration, 0, 1)
+      : 1;
+    const conditionGain = 0.006 * finance.conditionFundingRatio * finance.aiEfficiency
+      * (atWar ? 0.35 : 1) * reconstructionReadiness;
+    territory.condition = round(clamp(territory.condition + conditionGain, 0.15, 1));
+    // Integration is a calendar promise, not an AI, budget or wartime bonus.
+    // Small countries complete in roughly ten years and the largest in twenty.
+    territory.integration = advanceTerritoryIntegrationV2(
+      content,
+      view.id,
+      territory.integration,
+    );
+  }
+}
+
+function processDevelopment(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  playerId: PlayerId,
+  finance: WeeklyFinanceBreakdownV2,
+): void {
+  const territories = selectTerritoriesOfV2(state, playerId);
+  if (territories.length === 0) return;
+  const annualEconomy = finance.annualEconomyGrowthRate;
+  const populationDynamics = selectPopulationDynamicsV2(
+    state,
+    content,
+    playerId,
+    finance.populationGrowth,
+  );
+  const economyMultiplier = Math.max(0, 1 + annualEconomy) ** (1 / 52);
+  for (const view of territories) {
+    const territory = state.territories[view.id]!;
+    const populationMultiplier = (1 + populationDynamics.annualNetRate) ** (1 / 52);
+    territory.economy = round(Math.max(0.10, territory.economy * economyMultiplier));
+    territory.population = round(Math.max(0.01, territory.population * populationMultiplier));
+  }
+}
+
+export function processEconomyV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  financePlans: FinancePlansV2 = createFinancePlansV2(state, content),
+): void {
+  processFinanceMilitaryV2(state, content, financePlans);
+  processDevelopmentPhaseV2(state, content, financePlans);
+}
+
+export function processFinanceMilitaryV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  financePlans: FinancePlansV2,
+): void {
+  synchronizeArmyCapacityV2(state, content);
+  for (const playerId of sortedNationIdsV2(state)) {
+    if (selectTerritoriesOfV2(state, playerId).length === 0) continue;
+    const nation = state.players[playerId]!;
+    const finance = financePlans.get(playerId) ?? selectWeeklyFinanceBreakdownV2(state, content, playerId);
+    nation.treasury = round(finance.closingTreasury);
+    nation.foodStock = round(clamp(
+      nation.foodStock + finance.foodProduced - finance.foodConsumed,
+      0,
+      finance.foodStorageCapacity,
+    ));
+    nation.foodSecurity = round(clamp(finance.foodCoverage, 0, 1));
+    // Regular personnel and veteran survivors are projected and then committed by one
+    // shared rule path inside processMilitaryAndCondition. This keeps the
+    // visible weekly manpower delta identical to the canonical peace update.
+    processMilitaryAndCondition(state, content, playerId, finance);
+    if (selectWarsOfV2(state, playerId).length === 0) nation.warFatigue = round(Math.max(
+      0,
+      nation.warFatigue - PEACE_FATIGUE_RECOVERY_PER_WEEK,
+    ));
+  }
+  state.ceasefireObligations = state.ceasefireObligations
+    .filter((obligation) => obligation.expiresTick > state.tick
+      && selectTerritoriesOfV2(state, obligation.payerId).length > 0
+      && selectTerritoriesOfV2(state, obligation.payeeId).length > 0);
+}
+
+export function processDevelopmentPhaseV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  financePlans: FinancePlansV2,
+): void {
+  for (const playerId of sortedNationIdsV2(state)) {
+    if (selectTerritoriesOfV2(state, playerId).length === 0) continue;
+    const finance = financePlans.get(playerId) ?? selectWeeklyFinanceBreakdownV2(state, content, playerId);
+    processDevelopment(state, content, playerId, finance);
+  }
+  synchronizeArmyCapacityV2(state, content);
+}
