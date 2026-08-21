@@ -63,11 +63,11 @@ describe('V2 canonical architecture', () => {
     const state = createWorldStateV2(2);
     const nation = state.players[nationIdV2('bel')];
     const territory = state.territories[territoryIdV2('bel')];
-    expect(state.schemaVersion).toBe(17);
-    expect(Object.keys(nation).sort()).toEqual(['budget', 'capitalId', 'ceasefiresRequested', 'empireName', 'foodSecurity', 'foodStock', 'manualActionUses', 'propagandaAvailableTick', 'propagandaProgram', 'rapidRecruitmentAvailableTick', 'research', 'researchSurgeAvailableTick', 'treasury', 'warFatigue']);
-    expect(Object.keys(territory).sort()).toEqual(['army', 'condition', 'economy', 'integration', 'owner', 'population']);
+    expect(state.schemaVersion).toBe(19);
+    expect(Object.keys(nation).sort()).toEqual(['budget', 'capitalId', 'ceasefiresRequested', 'combatExperience', 'empireName', 'foodSecurity', 'foodStock', 'manualActionUses', 'propagandaAvailableTick', 'propagandaProgram', 'rapidRecruitmentAvailableTick', 'research', 'researchSurgeAvailableTick', 'treasury', 'warFatigue']);
+    expect(Object.keys(territory).sort()).toEqual(['army', 'condition', 'coreOwner', 'economy', 'integration', 'owner', 'population']);
     expect(Object.keys(territory.army).sort()).toEqual([
-      'baseAttack', 'baseDefense', 'capacity', 'manpower', 'veteranExperience', 'veteranManpower',
+      'baseAttack', 'baseDefense', 'capacity', 'manpower',
     ]);
     expect(Object.keys(nation.research).sort()).toEqual(['allocations', 'breakthroughs', 'effectLevels', 'progress']);
     expect(nation.budget).toEqual(DEFAULT_BUDGET_V2);

@@ -60,7 +60,7 @@ export interface NationalAiPlanV2 {
 
 /**
  * Authoritative projection of the regular army's next finance phase.
- * Recruitment, payroll-driven demobilization and all population-derived
+ * Recruitment, explicit extreme-crisis demobilization and all population-derived
  * territory caps are exact. During war, the following battle phase remains
  * stochastic, so `net` includes only a clearly marked historical loss estimate.
  */
@@ -132,6 +132,8 @@ export interface NationStateV2 {
   propagandaAvailableTick: number;
   propagandaProgram: PropagandaProgramStateV2 | null;
   warFatigue: number;
+  /** Empire-wide institutional combat knowledge earned only through real wars. */
+  combatExperience: number;
   capitalId: TerritoryId;
 }
 
@@ -160,10 +162,6 @@ export interface ArmyStateV2 {
   baseAttack: number;
   /** Manpower-weighted base defense quality carried by this local force. */
   baseDefense: number;
-  /** Veteran personnel are always a subset of manpower, never a second army. */
-  veteranManpower: number;
-  /** Uncapped equivalent XP preserving the cohort's manpower-weighted sqrt-XP bonus. */
-  veteranExperience: number;
 }
 
 export interface ControlStateV2 {
@@ -171,14 +169,29 @@ export interface ControlStateV2 {
   share: number;
 }
 
+export interface IntegrationProgramStateV2 {
+  /** The sovereign owner displaced when this specific capture began. */
+  fromOwnerId: PlayerId;
+  /** The sovereign core whose identity is being absorbed. */
+  fromCoreOwnerId: PlayerId;
+  /** The empire that becomes the permanent core owner on completion. */
+  toOwnerId: PlayerId;
+  startedTick: number;
+  completesTick: number;
+}
+
 /** Exact canonical territory payload; geometry and presentation are static. */
 export interface TerritoryStateV2 {
   owner: PlayerId;
+  /** Permanent sovereign identity; changes only when a full integration program completes. */
+  coreOwner: PlayerId;
   population: number;
   economy: number;
   condition: number;
   /** 0..1 share of the population integrated into this owner's army system. */
   integration: number;
+  /** Fixed calendar promise created on conquest; absent for stable core territory. */
+  integrationProgram?: IntegrationProgramStateV2;
   army: ArmyStateV2;
   control?: ControlStateV2;
 }
@@ -268,7 +281,7 @@ export interface BattleEventV2 {
   targetId: TerritoryId;
   attackerId: PlayerId;
   defenderId: PlayerId;
-  /** Combat-strength-equivalent loss in millions, including veteran durability. */
+  /** Actual military headcount lost, in millions. */
   attackerLosses: number;
   defenderLosses: number;
   /** Civilian losses in the attacker's source territory, in millions. */
@@ -304,8 +317,6 @@ export interface LogisticsMovementV2 {
   targetId: TerritoryId;
   manpower: number;
   capacity: number;
-  /** Veteran subset included in `manpower`; used only for truthful telemetry. */
-  veteranManpower: number;
 }
 
 export interface AiEscalationStateV2 {
@@ -320,7 +331,7 @@ export interface AiEscalationStateV2 {
 
 /** Live facade state. speed/winner/gameOver are transient projections and omitted from saves/hashes. */
 export interface WorldStateV2 {
-  schemaVersion: 17;
+  schemaVersion: 19;
   rulesVersion: string;
   contentVersion: string;
   mapId: string;
@@ -371,7 +382,7 @@ export interface WeeklyFinanceBreakdownV2 {
   newBorrowing: number;
   /** One-time 10% premium added to newly borrowed principal. */
   debtPremium: number;
-  /** Required weekly payroll and maintenance; underfunding causes demobilization. */
+  /** Required weekly payroll and maintenance; underfunding alone never demobilizes. */
   armyUpkeep: number;
   /** Portion of required upkeep actually funded inside the military envelope. */
   fundedArmyUpkeep: number;
@@ -387,7 +398,7 @@ export interface WeeklyFinanceBreakdownV2 {
   /** Extra soldiers trained through the AI's paid mobilization fast-track. */
   acceleratedRecruitment: number;
   recruitmentAccelerationCost: number;
-  /** Paid orderly drawdown on top of the slow underfunding-driven transition. */
+  /** Explicit catastrophic-crisis force reduction, capped at 0.05% per week. */
   acceleratedDemobilization: number;
   demobilizationCost: number;
   standingOperations: number;
@@ -464,16 +475,14 @@ export interface ResearchSurgeTermsV2 {
   cost: number;
 }
 
-export interface VeteranForcesViewV2 {
-  /** Veteran headcount in millions; already included in total manpower. */
-  manpower: number;
-  /** Equivalent XP preserving the manpower-weighted sqrt-XP bonus score. */
+export interface CombatExperienceViewV2 {
+  /** Canonical empire-wide experience earned from completed wars with combat. */
   experience: number;
-  /** Derived, uncapped average rank. Zero means there are no veterans. */
-  rank: number;
-  hpMultiplier: number;
+  /** Diminishing-return score used by every experience modifier. */
+  score: number;
   attackMultiplier: number;
   defenseMultiplier: number;
+  casualtyMultiplier: number;
 }
 
 export interface NuclearPowerViewV2 {
@@ -489,7 +498,7 @@ export interface NuclearPowerViewV2 {
 export interface ArmyStrengthV2 extends TotalManpowerV2 {
   capacityTarget: number;
   fillRatio: number;
-  veterans: VeteranForcesViewV2;
+  combatExperience: CombatExperienceViewV2;
 }
 
 export interface NationalEconomyV2 {
@@ -608,12 +617,8 @@ export interface WarForecastV2 {
   outlook: 'dominant' | 'favored' | 'contested' | 'risky' | 'desperate';
   attackerStrength: number;
   defenderStrength: number;
-  attackerRegulars: number;
-  defenderRegulars: number;
-  attackerVeterans: number;
-  defenderVeterans: number;
-  attackerVeteranExperience: number;
-  defenderVeteranExperience: number;
+  attackerCombatExperience: number;
+  defenderCombatExperience: number;
   attackerAttack: number;
   attackerDefense: number;
   defenderAttack: number;
@@ -632,8 +637,7 @@ export interface WarForecastV2 {
   estimatedWeeksMax: number;
 }
 
-/** Live, perspective-aware estimate for one active war. Damage is expressed
- * as combat-strength equivalent, so veteran durability is included. */
+/** Live, perspective-aware estimate for one active war. Losses are actual headcount. */
 export interface LiveWarEstimateV2 {
   warId: string;
   viewerId: PlayerId;
@@ -727,11 +731,9 @@ export interface WarOutcomeV2 {
   reparationsPaid: number;
   treatyWeeklyPayment: number;
   treatyPaymentWeeks: number;
-  veteranManpowerBefore: number;
-  veteranManpowerAfter: number;
-  veteransPromoted: number;
-  veteranExperienceBefore: number;
-  veteranExperienceAfter: number;
+  combatExperienceBefore: number;
+  combatExperienceAfter: number;
+  combatExperienceGained: number;
   baseAttackBefore: number;
   baseAttackAfter: number;
   baseDefenseBefore: number;

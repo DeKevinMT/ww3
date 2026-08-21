@@ -66,11 +66,11 @@ function equalPulse(
   state.tick = 2;
   state.territories[belTerritory].army = {
     ...state.territories[belTerritory].army,
-    manpower: 0.10, capacity: 0.10, veteranManpower: 0, veteranExperience: 0,
+    manpower: 0.10, capacity: 0.10,
   };
   state.territories[nldTerritory].army = {
     ...state.territories[nldTerritory].army,
-    manpower: 0.10, capacity: 0.10, veteranManpower: 0, veteranExperience: 0,
+    manpower: 0.10, capacity: 0.10,
   };
   state.territories[belTerritory].condition = 1;
   state.territories[nldTerritory].condition = 1;
@@ -81,10 +81,10 @@ function equalPulse(
 describe('V2 one-source manpower combat', () => {
   it('stores army manpower only on territories and derives national totals/views', () => {
     const state = createWorldStateV2(301);
-    expect(state.schemaVersion).toBe(17);
+    expect(state.schemaVersion).toBe(19);
     expect(state.players[bel]).not.toHaveProperty('manpower');
     expect(Object.keys(state.territories[belTerritory].army).sort()).toEqual([
-      'baseAttack', 'baseDefense', 'capacity', 'manpower', 'veteranExperience', 'veteranManpower',
+      'baseAttack', 'baseDefense', 'capacity', 'manpower',
     ]);
     const total = selectTotalManpowerV2(state, bel);
     expect(total.deployed).toBe(state.territories[belTerritory].army.manpower);
@@ -136,7 +136,7 @@ describe('V2 one-source manpower combat', () => {
     const event = equalPulse(3032, (state) => {
       state.territories[belTerritory].army = {
         ...state.territories[belTerritory].army,
-        manpower: 0.40, capacity: 0.40, veteranManpower: 0, veteranExperience: 0,
+        manpower: 0.40, capacity: 0.40,
       };
     });
     expect(event.defenderLosses).toBeGreaterThan(event.attackerLosses);
@@ -156,11 +156,11 @@ describe('V2 one-source manpower combat', () => {
     const event = equalPulse(305, (state) => {
       state.territories[belTerritory].army = {
         ...state.territories[belTerritory].army,
-        manpower: 0.001, capacity: 0.001, veteranManpower: 0, veteranExperience: 0,
+        manpower: 0.001, capacity: 0.001,
       };
       state.territories[nldTerritory].army = {
         ...state.territories[nldTerritory].army,
-        manpower: 0.0002, capacity: 0.001, veteranManpower: 0, veteranExperience: 0,
+        manpower: 0.0002, capacity: 0.001,
       };
     });
     expect(event.controlGained).toBeGreaterThan(0);
@@ -182,11 +182,11 @@ describe('V2 one-source manpower combat', () => {
     state.tick = 2;
     state.territories[belTerritory].army = {
       ...state.territories[belTerritory].army,
-      manpower: 0.000001, capacity: 0.10, veteranManpower: 0, veteranExperience: 0,
+      manpower: 0.000001, capacity: 0.10,
     };
     state.territories[nldTerritory].army = {
       ...state.territories[nldTerritory].army,
-      manpower: 0.10, capacity: 0.10, veteranManpower: 0, veteranExperience: 0,
+      manpower: 0.10, capacity: 0.10,
     };
     const war = activeWar(state);
     const front = operation();
@@ -199,12 +199,10 @@ describe('V2 one-source manpower combat', () => {
   it('ends a war after exactly one connected territory is conquered', () => {
     const state = createWorldStateV2(306);
     state.territories[luxTerritory].owner = nld;
+    state.territories[luxTerritory].coreOwner = nld;
+    state.territories[luxTerritory].integration = 1;
     state.territories[nldTerritory].army.manpower = 0;
-    state.territories[nldTerritory].army.veteranManpower = 0;
-    state.territories[nldTerritory].army.veteranExperience = 0;
     state.territories[luxTerritory].army.manpower = 0;
-    state.territories[luxTerritory].army.veteranManpower = 0;
-    state.territories[luxTerritory].army.veteranExperience = 0;
     const beforeVictor = selectTotalManpowerV2(state, bel);
     const beforeTreasury = state.players[nld].treasury;
     const victorTreasury = state.players[bel].treasury;
@@ -223,8 +221,6 @@ describe('V2 one-source manpower combat', () => {
   it('uses deterministic ceasefire instead of mutual absorption when both armies are zero', () => {
     const state = createWorldStateV2(307);
     state.territories[belTerritory].army.manpower = 0;
-    state.territories[belTerritory].army.veteranManpower = 0;
-    state.territories[belTerritory].army.veteranExperience = 0;
     state.territories[nldTerritory].army.manpower = 0;
     activeWar(state);
     processWarsV2(state, WORLD_CONTENT_V2);

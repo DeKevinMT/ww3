@@ -1,17 +1,14 @@
 import { MAP_WIDTH, REGION_BY_ID, TERRITORY_BY_ID } from '../game/data/worldMap';
 import { mapBridge, type MapForeignControlState, type MapTerritoryState, type WorldMapEngineContract } from '../game/map/bridge';
 import {
+  CONQUEST_CAPTURE_GUARD_TICKS,
   RAPID_RECRUITMENT_COOLDOWN_TICKS,
   diminishingResearchLevelV2,
-  UNDERDOG_VETERAN_MAX_EXPERIENCE,
   PEACE_REQUEST_MIN_WAR_AGE_TICKS,
   WAR_MOBILIZATION_TICKS,
 } from '../sim/v2/balance';
 import { WORLD_CONTENT_V2 } from '../sim/v2/content';
-import { territoryIntegrationGainPerWeekV2 } from '../sim/v2/integration';
-import { underdogVeteranTermsV2 } from '../sim/v2/WorldEngineV2';
 import { selectResearchEffectImpactV2, type MilitaryBaseSnapshotV2 } from '../sim/v2/selectors';
-import { veteranRankV2 } from '../sim/v2/veterans';
 import { countryFlagHtml } from './countryFlags';
 import { projectMapArmyV2 } from './mapArmyProjection';
 import type {
@@ -50,7 +47,6 @@ import type {
   WarStateV2,
   WeeklyFinanceBreakdownV2,
   WeeklyManpowerProjectionV2,
-  VeteranForcesViewV2,
   WorldChangeV2,
   WorldEventV2,
   WorldStateV2,
@@ -84,7 +80,6 @@ export interface WorldEngineV2UIContract {
   weeklyManpowerProjection(playerId: string): WeeklyManpowerProjectionV2;
   nationalEconomy(playerId: string): NationalEconomyV2;
   totalManpower(playerId: string): { deployed: number; capacity: number };
-  totalVeterans(playerId: string): VeteranForcesViewV2;
   recentLogisticsMovements(): readonly LogisticsMovementV2[];
   rapidRecruitmentTerms(playerId: string): RapidRecruitmentTermsV2;
   rapidRecruitment(playerId: string): CommandOutcome;
@@ -357,6 +352,9 @@ function mapTerritory(
   return {
     id: territoryId,
     ownerId: territory.owner,
+    coreOwnerId: territory.coreOwner,
+    integration: territory.integration,
+    integrationCompletesTick: territory.integrationProgram?.completesTick,
     army,
     foreignControl: mapControl(territoryId, territory, controlSourceId),
   };
@@ -373,8 +371,6 @@ function nationalArmyState(
     capacity: strength.capacity,
     baseAttack: quality.attack,
     baseDefense: quality.defense,
-    veteranManpower: strength.veterans.manpower,
-    veteranExperience: strength.veterans.experience,
   };
 }
 
@@ -496,10 +492,7 @@ export class WorldUIV2 {
   private readonly toastLayer: HTMLElement;
   private selectedTerritoryId?: TerritoryId;
   private panelMode: PanelMode = 'war';
-  private gameExplainerOpen = true;
   private introOpen = true;
-  private activationBriefingOpen = false;
-  private activationBaselineRank?: number;
   private helpOpen = false;
   private inboxOpen = false;
   private eventFeedOpen = false;
@@ -634,7 +627,7 @@ export class WorldUIV2 {
   };
 
   private syncMapInputBlock(): void {
-    const modalOpen = this.gameExplainerOpen || this.introOpen || this.activationBriefingOpen || this.helpOpen || this.inboxOpen
+    const modalOpen = this.introOpen || this.helpOpen || this.inboxOpen
       || Boolean(this.confirmWarTargetId) || Boolean(this.confirmCeasefireWarId)
       || this.confirmResearchSurge || this.confirmPropaganda
       || this.warOutcomeQueue.length > 0
@@ -643,7 +636,7 @@ export class WorldUIV2 {
   }
 
   private readonly onKeyDown = (event: KeyboardEvent): void => {
-    if (this.gameExplainerOpen || this.introOpen || this.activationBriefingOpen || this.helpOpen || this.inboxOpen || this.confirmWarTargetId || this.confirmCeasefireWarId || this.confirmResearchSurge || this.confirmPropaganda || this.warOutcomeQueue.length > 0 || this.shouldPromptEmpireName()) return;
+    if (this.introOpen || this.helpOpen || this.inboxOpen || this.confirmWarTargetId || this.confirmCeasefireWarId || this.confirmResearchSurge || this.confirmPropaganda || this.warOutcomeQueue.length > 0 || this.shouldPromptEmpireName()) return;
     if (event.key === 'Escape') {
       this.selectedTerritoryId = undefined;
       this.contextPanelOpen = false;
@@ -673,6 +666,14 @@ export class WorldUIV2 {
       const rank = this.engine.globalRanking().findIndex((entry) => entry.player.id === change.victorId) + 1;
       if (victor && defeated) this.toast(
         `${victor.shortName} defeated ${defeated.shortName} and conquered its land · now rank #${Math.max(1, rank)}`,
+        'conquest',
+      );
+    }
+    if (change.reason === 'integration-complete' && change.victorId && change.defeatedId) {
+      const owner = this.engine.player(change.victorId);
+      const formerCore = this.engine.player(change.defeatedId);
+      if (owner && formerCore) this.toast(
+        `${formerCore.shortName} fully integrated · now permanent ${owner.shortName} core territory`,
         'conquest',
       );
     }
@@ -812,7 +813,7 @@ export class WorldUIV2 {
   }
 
   private selectTerritory(territoryId: TerritoryId): void {
-    if (this.gameExplainerOpen || this.introOpen || this.activationBriefingOpen || this.helpOpen || this.inboxOpen || this.confirmWarTargetId || this.confirmCeasefireWarId || this.confirmResearchSurge || this.confirmPropaganda || this.warOutcomeQueue.length > 0 || this.shouldPromptEmpireName()) return;
+    if (this.introOpen || this.helpOpen || this.inboxOpen || this.confirmWarTargetId || this.confirmCeasefireWarId || this.confirmResearchSurge || this.confirmPropaganda || this.warOutcomeQueue.length > 0 || this.shouldPromptEmpireName()) return;
     this.selectedTerritoryId = territoryId;
     this.contextPanelOpen = true;
     this.updateMapSelection();
@@ -844,7 +845,7 @@ export class WorldUIV2 {
     const definition = WORLD_CONTENT_V2.territories[territoryId];
     const owner = territory ? this.engine.player(territory.owner) : undefined;
     if (!territory || !definition || !owner) return;
-    const integration = territory.integration < 0.999999
+    const integration = territory.coreOwner !== territory.owner && territory.integration < 0.999999
       ? ` · INTEGRATION ${format(territory.integration * 100)}%` : '';
     this.tooltip.innerHTML = `
       <div class="tooltip__eyebrow">${escapeHtml(REGION_BY_ID[definition.regionId]?.name ?? definition.regionId)}</div>
@@ -952,7 +953,6 @@ export class WorldUIV2 {
     // This is the authoritative next-week recurring forecast.
     const displayedNet = finance.net;
     const army = this.engine.armyStrength(human.id);
-    const veterans = this.engine.totalVeterans(human.id);
     const combatPower = this.engine.currentPower(human.id);
     // Reuse the already calculated finance plan. Population dynamics otherwise
     // calculate a second full finance/power snapshot for the same render.
@@ -970,7 +970,7 @@ export class WorldUIV2 {
     const wars = this.humanWars();
     const warOutcome = this.warOutcomeQueue[0];
     const commandOpen = this.contextPanelOpen && !this.selectedTerritoryId;
-    if (this.gameExplainerOpen || this.introOpen || this.activationBriefingOpen || this.helpOpen || this.inboxOpen || this.confirmWarTargetId || this.confirmCeasefireWarId || this.confirmResearchSurge || this.confirmPropaganda || warOutcome || this.shouldPromptEmpireName() || state.gameOver) this.tooltip.classList.remove('is-visible');
+    if (this.introOpen || this.helpOpen || this.inboxOpen || this.confirmWarTargetId || this.confirmCeasefireWarId || this.confirmResearchSurge || this.confirmPropaganda || warOutcome || this.shouldPromptEmpireName() || state.gameOver) this.tooltip.classList.remove('is-visible');
 
     this.hud.innerHTML = `
       <header class="situation-topbar command-topbar glass-panel v2-topbar v2-interactive simple-topbar" style="grid-template-columns:minmax(190px,250px) minmax(520px,1fr) auto">
@@ -982,7 +982,7 @@ export class WorldUIV2 {
           <div role="group" aria-label="APEX national management mode ${escapeHtml(finance.aiMode)}"><span>APEX</span><strong>${escapeHtml(finance.aiMode.toUpperCase())}</strong><small>Reserves managed automatically</small></div>
           <div data-stat-target="people" role="group" title="Net annual population change ${signed(populationDynamics.annualNetRate * 100, 2)}%" aria-label="Population ${format(economy.population, 2)} million; annual trend ${signedPeople(annualPopulationTrend)}"><span>PEOPLE</span><strong>${population(economy.population)}</strong><small class="weekly-delta ${populationTrend >= 0 ? 'is-positive' : 'is-negative'}">${signedPeople(annualPopulationTrend)}/yr</small></div>
           <div data-stat-target="food" role="group" aria-label="Food stock ${people(human.foodStock)} of ${people(finance.foodStorageCapacity)} capacity; annualized stock change ${signedPeople(annualFoodStockChange)}"><span>FOOD</span><strong>${people(human.foodStock)} / ${people(finance.foodStorageCapacity)}</strong><small class="weekly-delta ${finance.foodStockChange >= 0 ? 'is-positive' : 'is-negative'}">${signedPeople(annualFoodStockChange)}/yr</small></div>
-          <div class="top-metric--army" data-stat-target="army" role="group" title="Combat power includes the veteran bonus. Veterans are already included in deployed manpower." aria-label="Army ${people(army.deployed)} active of ${people(army.capacity)} capacity; combat power ${compactNumber(combatPower)}; veterans ${people(veterans.manpower)} at average rank ${veterans.rank}"><span>ARMY</span><strong>${people(army.deployed)} / ${people(army.capacity)}</strong><small>${format(army.fillRatio * 100)}% · PWR ${compactNumber(combatPower)} · VET ${people(veterans.manpower)} R${veterans.rank}</small></div>
+          <div class="top-metric--army" data-stat-target="army" role="group" title="Combat power includes empire-wide Combat Experience earned in completed wars." aria-label="Army ${people(army.deployed)} active of ${people(army.capacity)} capacity; combat power ${compactNumber(combatPower)}; combat experience ${format(army.combatExperience.experience, 2)}"><span>ARMY</span><strong>${people(army.deployed)} / ${people(army.capacity)}</strong><small>${format(army.fillRatio * 100)}% · PWR ${compactNumber(combatPower)} · EXP ${format(army.combatExperience.experience, 1)}</small></div>
           <div class="top-metric--research" role="group" aria-label="Research ${completedUpgrades} completed upgrades; ${cash(annual(finance.research))} funded per year"><span>RESEARCH</span><strong>${completedUpgrades} upgrades</strong><small>${cash(annual(finance.research))}/yr funded</small></div>
         </div>
         <div class="top-actions">
@@ -1002,8 +1002,7 @@ export class WorldUIV2 {
       ${wars.length ? this.renderWarTracker(wars) : ''}
       ${this.contextPanelOpen ? this.renderContextPanel(human, economy, finance, populationDynamics) : ''}
       ${activeOffer ? this.renderOfferBanner(activeOffer) : ''}
-      ${!warOutcome && this.gameExplainerOpen ? this.renderGameExplainer() : !warOutcome && this.introOpen ? this.renderIntro() : ''}
-      ${!warOutcome && this.activationBriefingOpen ? this.renderActivationBriefing() : ''}
+      ${!warOutcome && this.introOpen ? this.renderIntro() : ''}
       ${!warOutcome && this.helpOpen ? this.renderHelp() : ''}
       ${!warOutcome && this.inboxOpen ? this.renderInbox() : ''}
       ${!warOutcome && this.confirmWarTargetId ? this.renderWarConfirmation(this.confirmWarTargetId) : ''}
@@ -1088,8 +1087,8 @@ export class WorldUIV2 {
       }).join('');
     const armyAction = army.fillRatio < 0.92
       ? `Training toward ${people(army.capacity)} capacity`
-      : army.veterans.manpower > 0
-        ? `${people(army.veterans.manpower)} veterans keep their experience`
+      : army.combatExperience.experience > 0
+        ? `Maintaining full strength · ${format(army.combatExperience.experience, 1)} Combat Experience`
         : 'Maintaining full strength';
     const moneyAction = finance.foodCoverage < 0.95
       ? `Food emergency ${cash(annual(finance.foodProduction))}/yr · Logistics R&D ${allocations['logistics-medicine']}%`
@@ -1232,7 +1231,7 @@ export class WorldUIV2 {
         <div class="drawer-heading drawer-heading--compact"><div><h2>${wars.length ? `${wars.length} active war${wars.length > 1 ? 's' : ''}` : 'Ready for orders'}</h2><span>APEX COMMANDS EVERY FRONT</span></div><strong class="${wars.length ? 'is-negative' : 'is-positive'}">${wars.length ? 'AT WAR' : 'READY'}</strong></div>
         <div class="simple-economy-grid simple-panel-grid war-summary-grid">
           <article class="simple-economy-card"><span>COMBAT POWER</span><strong>${compactNumber(combatPower)}</strong><small>ATK ${format(attack, 2)} · DEF ${format(defense, 2)}</small></article>
-          <article class="simple-economy-card ${weakArmy ? 'is-warn' : 'is-good'}"><span>ARMY</span><strong>${people(army.deployed)} / ${people(army.capacity)}</strong><small>${format(army.fillRatio * 100)}% ready · ${people(army.veterans.manpower)} veterans R${army.veterans.rank}</small></article>
+          <article class="simple-economy-card ${weakArmy ? 'is-warn' : 'is-good'}"><span>ARMY</span><strong>${people(army.deployed)} / ${people(army.capacity)}</strong><small>${format(army.fillRatio * 100)}% ready · Combat Experience ${format(army.combatExperience.experience, 1)}</small></article>
           <article class="simple-economy-card"><span>ANNUAL CHANGE</span><strong class="${manpowerTrend >= 0 ? 'is-positive' : 'is-negative'}">${manpowerTrend >= 0 ? '+' : '−'}${people(Math.abs(annual(manpowerTrend)))}</strong><small>${cash(annual(finance.armyUpkeep + finance.warOperations))}/year army + fronts</small></article>
           <article class="simple-economy-card"><span>TRAINING PIPELINE</span><strong>+${people(annual(finance.passiveRecruitment))}/year</strong><small>${finance.acceleratedRecruitment > 0 ? `AI fast-track +${people(annual(finance.acceleratedRecruitment))}/yr · ${cash(annual(finance.recruitmentAccelerationCost))}/yr` : finance.acceleratedDemobilization > 0 ? `Paid drawdown −${people(annual(finance.acceleratedDemobilization))}/yr` : 'Steady training · Training research improves speed'}</small></article>
         </div>
@@ -1333,11 +1332,10 @@ export class WorldUIV2 {
       const quality = Math.max(0.000001, 0.55 * attack + 0.45 * defense);
       return sum + this.engine.effectivePower(humanId, army) / (1_000 * quality);
     }, 0);
-    const frontVeterans = frontForces.reduce((sum, army) => sum + army.veteranManpower, 0);
     const averageMomentum = operations.length > 0
       ? operations.reduce((sum, front) => sum + front.momentum, 0) / operations.length : 0;
     const frontDetail = operations.length > 0
-      ? `Committed ${people(frontStrength)} across ${operations.length} front${operations.length === 1 ? '' : 's'} · ${people(frontVeterans)} veterans`
+      ? `Committed ${people(frontStrength)} across ${operations.length} front${operations.length === 1 ? '' : 's'} · Combat Experience ${format(this.engine.armyStrength(humanId).combatExperience.experience, 1)}`
       : 'Front force pending';
     const accessKinds = new Set(operations.map((front) => front.access));
     const frontLabel = operations.length === 1
@@ -1396,12 +1394,21 @@ export class WorldUIV2 {
     const foodSupplyRatio = finance.foodProduced / Math.max(0.01, finance.foodDemand);
     const access = declaration?.access ?? 'none';
     const controller = territory.control ? this.engine.player(territory.control.controller) : undefined;
-    const integrationGain = territoryIntegrationGainPerWeekV2(WORLD_CONTENT_V2, territoryId);
-    const integrationWeeks = territory.integration < 0.999999 && integrationGain > 0
-      ? Math.ceil((1 - territory.integration) / integrationGain) : 0;
+    const integratingCore = territory.coreOwner !== territory.owner
+      ? this.engine.player(territory.coreOwner) : undefined;
+    const integrationWeeks = territory.integrationProgram
+      ? Math.max(0, territory.integrationProgram.completesTick - this.engine.state.tick)
+      : 0;
     const integrationYears = integrationWeeks / 52;
+    const guardWeeks = territory.integrationProgram
+      ? Math.max(0, territory.integrationProgram.startedTick
+        + CONQUEST_CAPTURE_GUARD_TICKS - this.engine.state.tick)
+      : 0;
+    const guardStatus = guardWeeks > 0
+      ? ` · occupation guard ${guardWeeks} week${guardWeeks === 1 ? '' : 's'}`
+      : '';
     const integrationPanel = integrationWeeks > 0
-      ? `<div class="simple-selected-land"><b>INTEGRATION · ${format(territory.integration * 100, 1)}%</b><span>${format(integrationYears, 1)} years remaining · ${cash(territory.economy * territory.integration)} of ${cash(territory.economy)} output · ${population(territory.population * territory.integration)} of ${population(territory.population)} capacity unlocked</span></div>`
+      ? `<div class="simple-selected-land"><b>INTEGRATING ${escapeHtml(integratingCore?.shortName ?? definition.name).toUpperCase()} · ${format(territory.integration * 100, 1)}%</b><span>${format(integrationYears, 1)} years remaining · then permanent ${escapeHtml(owner.shortName)} core territory${guardStatus} · ${cash(territory.economy * territory.integration)} of ${cash(territory.economy)} output unlocked</span></div>`
       : '';
     return `
       <aside class="world-panel command-drawer glass-panel territory-inspector" data-scroll-key="territory:${territoryId}">
@@ -1412,7 +1419,7 @@ export class WorldUIV2 {
         <div class="territory-kpis simple-country-kpis"><div><span>PEOPLE</span><strong>${population(economy.population)}</strong><small class="${demographics.weeklyNet >= 0 ? 'is-positive' : 'is-negative'}">${signedPeople(annual(demographics.weeklyNet))} / year</small></div><div><span>ECONOMY</span><strong>${cash(economy.controlledOutput)}</strong><small class="${finance.annualEconomyGrowthRate >= 0 ? 'is-positive' : 'is-negative'}">${signed(finance.annualEconomyGrowthRate * 100, 2)}% / year</small></div><div><span>CASH</span><strong>${cash(owner.treasury)}</strong><small class="${finance.net >= 0 ? 'is-positive' : 'is-negative'}">${signedCash(annual(finance.net))} / year</small></div><div><span>POWER</span><strong>${compactNumber(power)}</strong><small>${empireTerritories.length} territor${empireTerritories.length === 1 ? 'y' : 'ies'}</small></div></div>
         <div class="simple-selected-land"><b>FOOD · ${people(owner.foodStock)} / ${people(finance.foodStorageCapacity)}</b><span class="${finance.foodStockChange >= 0 ? 'is-positive' : 'is-negative'}">${format(foodSupplyRatio * 100, 1)}% incoming · ${signedPeople(annual(finance.foodStockChange))} stored / year</span></div>
         <div class="simple-selected-land"><b>AUTO TAX · ${format(economy.dynamicTaxRate * 100, 1)}%</b><span>${cash(annual(economy.weeklyRevenue))} income · ${cash(annual(finance.expenses))} costs / year</span></div>
-        <div class="simple-country-force"><div><span>ARMY · ${armyCondition(nationalArmy)}</span><strong>${format(manpowerRatio * 100)}%</strong></div><i><b style="width:${manpowerRatio * 100}%;background:${manpowerRatio < 0.3 ? '#ff655f' : owner.cssColor}"></b></i><small>${people(army.deployed)} soldiers · ${people(army.veterans.manpower)} veterans · ATK ${format(attack, 2)} · DEF ${format(defense, 2)}</small></div>
+        <div class="simple-country-force"><div><span>ARMY · ${armyCondition(nationalArmy)}</span><strong>${format(manpowerRatio * 100)}%</strong></div><i><b style="width:${manpowerRatio * 100}%;background:${manpowerRatio < 0.3 ? '#ff655f' : owner.cssColor}"></b></i><small>${people(army.deployed)} soldiers · Combat Experience ${format(army.combatExperience.experience, 1)} · ATK ${format(attack, 2)} · DEF ${format(defense, 2)}</small></div>
         <div class="simple-selected-land"><b>${escapeHtml(definition.name)}</b><span>${people(territory.army.manpower)} local army · ${format(territory.condition * 100)}% condition</span></div>
         ${integrationPanel}
         ${owner.id !== humanId ? `${declaration?.warning ? `<div class="war-rule-note is-warning"><b>WEAK-ARMY WARNING</b><span>${escapeHtml(declaration.warning)}</span></div>` : ''}<div class="territory-actions">${activeWar ? `<button class="danger-button" disabled>WAR ALREADY LIVE</button>` : `<button class="danger-button" data-action="quick-war" data-player="${owner.id}" ${declaration?.allowed ? '' : 'disabled'}>${declaration?.allowed ? `ATTACK ONE LAND · ${warAccessLabel(access)}` : escapeHtml((declaration?.reason ?? 'WAR NOT LEGAL').toUpperCase())}</button>`}</div>` : ''}
@@ -1557,7 +1564,6 @@ export class WorldUIV2 {
     const attack = this.engine.effectiveAttack(preview.id, previewArmy);
     const defense = this.engine.effectiveDefense(preview.id, previewArmy);
     const rank = initialMilitaryRanking.get(preview.id) ?? nations.findIndex((nation) => nation.id === preview.id) + 1;
-    const openingElite = underdogVeteranTermsV2(rank, nations.length);
     const query = this.introSearchQuery.trim().toLocaleLowerCase('en');
     const continents = [...new Set(nations.map((nation) => nation.continent))].sort((left, right) => left.localeCompare(right, 'en'));
     const continentMatches = (continent: string) => this.introContinent === 'ALL' || continent === this.introContinent;
@@ -1575,70 +1581,16 @@ export class WorldUIV2 {
       if (this.introSort === 'growth') return `${value >= 0 ? '+' : ''}${format(value, 2)}%`;
       return format(value, this.introSort === 'attack' || this.introSort === 'defense' ? 2 : 0);
     };
-    return `<div class="modal-backdrop"><section class="country-select modal-card"><div class="country-select__head"><div><div class="panel-kicker">NEW CAMPAIGN · 2026</div><h1>Choose your nation</h1><p>APEX runs the country. You choose who to attack.</p></div><div class="country-select__facts"><span><b>${nations.length}</b> countries</span><span><b>APEX</b> Super AI</span><span><b>Elite</b> rank-scaled opening</span><span><b>Dynamic</b> world</span></div></div><div class="country-select__tools"><label class="country-search"><span>⌕</span><input id="country-search" type="search" value="${escapeHtml(this.introSearchQuery)}" placeholder="Search countries…" autocomplete="off"></label><label class="country-sort"><span>SORT</span><select id="country-sort" aria-label="Sort countries"><option value="power" ${this.introSort === 'power' ? 'selected' : ''}>Military rank</option><option value="attack" ${this.introSort === 'attack' ? 'selected' : ''}>ATK</option><option value="defense" ${this.introSort === 'defense' ? 'selected' : ''}>DEF</option><option value="manpower" ${this.introSort === 'manpower' ? 'selected' : ''}>Manpower</option><option value="economy" ${this.introSort === 'economy' ? 'selected' : ''}>Economy</option><option value="tax" ${this.introSort === 'tax' ? 'selected' : ''}>Automatic tax rate</option><option value="population" ${this.introSort === 'population' ? 'selected' : ''}>Population</option><option value="growth" ${this.introSort === 'growth' ? 'selected' : ''}>Population growth</option></select></label><div class="country-filters" role="group" aria-label="Filter countries by continent"><button class="${this.introContinent === 'ALL' ? 'is-active' : ''}" data-action="continent-filter" data-continent="ALL">ALL</button>${continents.map((continent) => `<button class="${this.introContinent === continent ? 'is-active' : ''}" data-action="continent-filter" data-continent="${escapeHtml(continent)}">${escapeHtml(continent.toUpperCase())}</button>`).join('')}<span>${visibleCount} shown</span></div></div><div class="country-select__body"><div class="country-grid">${nations.map((nation) => {
+    return `<div class="modal-backdrop"><section class="country-select modal-card"><div class="country-select__head"><div><div class="panel-kicker">NEW CAMPAIGN · 2026</div><h1>Choose your nation</h1><p>APEX runs the country. You choose who to attack.</p></div><div class="country-select__facts"><span><b>${nations.length}</b> countries</span><span><b>APEX</b> Super AI</span><span><b>Experience</b> earned in war</span><span><b>Dynamic</b> world</span></div></div><div class="country-select__tools"><label class="country-search"><span>⌕</span><input id="country-search" type="search" value="${escapeHtml(this.introSearchQuery)}" placeholder="Search countries…" autocomplete="off"></label><label class="country-sort"><span>SORT</span><select id="country-sort" aria-label="Sort countries"><option value="power" ${this.introSort === 'power' ? 'selected' : ''}>Military rank</option><option value="attack" ${this.introSort === 'attack' ? 'selected' : ''}>ATK</option><option value="defense" ${this.introSort === 'defense' ? 'selected' : ''}>DEF</option><option value="manpower" ${this.introSort === 'manpower' ? 'selected' : ''}>Manpower</option><option value="economy" ${this.introSort === 'economy' ? 'selected' : ''}>Economy</option><option value="tax" ${this.introSort === 'tax' ? 'selected' : ''}>Automatic tax rate</option><option value="population" ${this.introSort === 'population' ? 'selected' : ''}>Population</option><option value="growth" ${this.introSort === 'growth' ? 'selected' : ''}>Population growth</option></select></label><div class="country-filters" role="group" aria-label="Filter countries by continent"><button class="${this.introContinent === 'ALL' ? 'is-active' : ''}" data-action="continent-filter" data-continent="ALL">ALL</button>${continents.map((continent) => `<button class="${this.introContinent === continent ? 'is-active' : ''}" data-action="continent-filter" data-continent="${escapeHtml(continent)}">${escapeHtml(continent.toUpperCase())}</button>`).join('')}<span>${visibleCount} shown</span></div></div><div class="country-select__body"><div class="country-grid">${nations.map((nation) => {
       const searchable = `${nation.name} ${nation.sigil}`.toLowerCase();
       const hidden = !continentMatches(nation.continent) || (query.length > 0 && !searchable.includes(query));
       return `<button class="${nation.id === preview.id ? 'is-selected' : ''}" data-action="preview-country" data-country="${nation.id}" data-continent="${escapeHtml(nation.continent)}" data-country-name="${escapeHtml(nation.name.toLocaleLowerCase('en'))}" data-name="${escapeHtml(searchable)}" aria-pressed="${nation.id === preview.id}" ${hidden ? 'hidden' : ''} style="--country:${nation.cssColor}"><i class="country-flag">${countryFlagHtml(nation.id, nation.sigil)}</i><div><strong>${escapeHtml(nation.name)}</strong><small>${escapeHtml(nation.subregion)} · ${population(nation.real.population)} people</small><em>${cash(nation.real.gdp)} GDP</em></div><span><b>${displayMetric(nation.id)}</b><em>${sortLabels[this.introSort]}</em></span></button>`;
-    }).join('')}</div><aside class="country-preview" style="--country:${preview.cssColor}"><div class="country-preview__identity"><i class="country-flag country-flag--large">${countryFlagHtml(preview.id, preview.sigil, true)}</i><div><span>REAL-WORLD MILITARY BASELINE #${rank}</span><h2 title="${escapeHtml(preview.name)}">${escapeHtml(previewState.shortName)}</h2><p>${escapeHtml(preview.subregion)}</p></div><b>${compactNumber(this.engine.conventionalPower(preview.id))}<small>BASE POWER</small></b></div><div class="country-preview__stats"><div><span>ATK / SOLDIER</span><strong>${format(attack, 2)}</strong></div><div><span>DEF / SOLDIER</span><strong>${format(defense, 2)}</strong></div><div><span>DEPLOYED MANPOWER</span><strong>${people(army.deployed)}</strong></div><div><span>MAX MANPOWER</span><strong>${people(army.capacityTarget)}</strong></div><div><span>PLAYER ELITE START</span><strong>${openingElite.veteranShare > 0 ? `${format(openingElite.veteranShare * 100)}% · AVERAGE RANK ${veteranRankV2(1, openingElite.veteranExperience)} · XP ${compactNumber(openingElite.veteranExperience)}` : 'NONE · TOP 20'}</strong></div><div><span>POPULATION</span><strong>${population(economy.population)}</strong></div><div><span>ECONOMY</span><strong>${cash(economy.output)}</strong></div><div title="Automatic normalized percentage calculated from current wealth per person"><span>AUTO TAX RATE</span><strong>${format(economy.dynamicTaxRate * 100, 1)}%</strong></div><div><span>NET POP. GROWTH</span><strong class="${populationDynamics.annualNetRate >= 0 ? 'is-positive' : 'danger-text'}">${populationDynamics.annualNetRate >= 0 ? '+' : ''}${format(populationDynamics.annualNetRate * 100, 2)}%</strong></div><div><span>FOOD COVERAGE</span><strong class="${finance.foodCoverage >= 0.95 ? 'is-positive' : 'danger-text'}">${format(finance.foodCoverage * 100)}%</strong></div></div><button class="primary-button country-preview__start" data-action="choose-country" data-country="${preview.id}">COMMAND ${escapeHtml(preview.name.toUpperCase())}</button></aside></div><footer><span>Dynamic economy: current population × wealth/person · Natural Earth · SIPRI 2025</span><strong>Sorted by ${escapeHtml(sortLabels[this.introSort].toLowerCase())}</strong></footer></section></div>`;
+    }).join('')}</div><aside class="country-preview" style="--country:${preview.cssColor}"><div class="country-preview__identity"><i class="country-flag country-flag--large">${countryFlagHtml(preview.id, preview.sigil, true)}</i><div><span>REAL-WORLD MILITARY BASELINE #${rank}</span><h2 title="${escapeHtml(preview.name)}">${escapeHtml(previewState.shortName)}</h2><p>${escapeHtml(preview.subregion)}</p></div><b>${compactNumber(this.engine.conventionalPower(preview.id))}<small>BASE POWER</small></b></div><div class="country-preview__stats"><div><span>ATK / SOLDIER</span><strong>${format(attack, 2)}</strong></div><div><span>DEF / SOLDIER</span><strong>${format(defense, 2)}</strong></div><div><span>DEPLOYED MANPOWER</span><strong>${people(army.deployed)}</strong></div><div><span>MAX MANPOWER</span><strong>${people(army.capacityTarget)}</strong></div><div><span>COMBAT EXPERIENCE</span><strong>STARTS AT 0 · EARNED THROUGH WARS</strong></div><div><span>POPULATION</span><strong>${population(economy.population)}</strong></div><div><span>ECONOMY</span><strong>${cash(economy.output)}</strong></div><div title="Automatic normalized percentage calculated from current wealth per person"><span>AUTO TAX RATE</span><strong>${format(economy.dynamicTaxRate * 100, 1)}%</strong></div><div><span>NET POP. GROWTH</span><strong class="${populationDynamics.annualNetRate >= 0 ? 'is-positive' : 'danger-text'}">${populationDynamics.annualNetRate >= 0 ? '+' : ''}${format(populationDynamics.annualNetRate * 100, 2)}%</strong></div><div><span>FOOD COVERAGE</span><strong class="${finance.foodCoverage >= 0.95 ? 'is-positive' : 'danger-text'}">${format(finance.foodCoverage * 100)}%</strong></div></div><button class="primary-button country-preview__start" data-action="choose-country" data-country="${preview.id}">COMMAND ${escapeHtml(preview.name.toUpperCase())}</button></aside></div><footer><span>Dynamic economy: current population × wealth/person · Natural Earth · SIPRI 2025</span><strong>Sorted by ${escapeHtml(sortLabels[this.introSort].toLowerCase())}</strong></footer></section></div>`;
   }
 
-  private renderActivationBriefing(): string {
-    const human = this.engine.player(this.engine.state.humanPlayerId)!;
-    const economy = this.engine.nationalEconomy(human.id);
-    const army = this.engine.armyStrength(human.id);
-    const finance = this.engine.weeklyFinanceBreakdown(human.id);
-    const aiPlan = this.engine.nationalAiPlan(human.id);
-    const veterans = this.engine.totalVeterans(human.id);
-    const deterrence = this.engine.nuclearPower(human.id);
-    const ranking = this.engine.globalRanking();
-    const militaryRank = ranking.findIndex((entry) => entry.player.id === human.id) + 1;
-    const livingIds = ranking.map((entry) => entry.player.id);
-    const baselineRank = this.activationBaselineRank ?? [...livingIds].sort((left, right) => (
-      (WORLD_CONTENT_V2.nations[right]?.real.powerIndex ?? 0)
-        - (WORLD_CONTENT_V2.nations[left]?.real.powerIndex ?? 0)
-        || left.localeCompare(right)
-    )).indexOf(human.id) + 1;
-    const economyRank = [...livingIds].sort((left, right) => (
-      this.engine.nationalEconomy(right).controlledOutput - this.engine.nationalEconomy(left).controlledOutput
-    )).indexOf(human.id) + 1;
-    const manpowerRank = [...livingIds].sort((left, right) => (
-      this.engine.totalManpower(right).deployed - this.engine.totalManpower(left).deployed
-    )).indexOf(human.id) + 1;
-    const cashRunway = human.treasury > 0 ? human.treasury / Math.max(0.01, economy.weeklyRevenue) : 0;
-    const foodWeeks = human.foodStock / Math.max(0.01, finance.foodDemand);
-    const viableTargets = this.connectedOpponentIds(human.id).map((targetId) => ({
-      target: this.engine.player(targetId)!,
-      chance: this.winChance(human.id, targetId),
-      status: this.engine.warDeclarationStatus(human.id, targetId),
-    })).filter((candidate) => candidate.status.allowed)
-      .sort((left, right) => right.chance - left.chance || left.target.id.localeCompare(right.target.id));
-    const bestTarget = viableTargets[0];
-    const strengths = [
-      `Starting army #${baselineRank}; live military power is #${militaryRank}`,
-      economyRank <= 30 ? `Economic depth ranked #${economyRank}` : `Compact economy ranked #${economyRank}`,
-      deterrence.level ? `Nuclear Power Tier ${deterrence.level}: +${format(deterrence.attackBonus * 100)}% ATK`
-        : veterans.manpower > 0 ? `Elite core: ${people(veterans.manpower)} veterans · average rank ${veterans.rank} · XP ${compactNumber(veterans.experience)}` : 'Veterans grow only after soldiers survive a full war',
-    ];
-    const risks = [
-      army.fillRatio < 0.70 ? `Army only ${format(army.fillRatio * 100)}% filled` : `Manpower reserve ranked #${manpowerRank}`,
-      finance.foodCoverage < 0.95 ? `Food covers only ${format(finance.foodCoverage * 100)}% of demand` : `Food reserve: ${format(foodWeeks, 1)} weeks`,
-      human.treasury < 0 ? `Debt: ${cash(human.treasury)}` : `Cash runway: ${format(cashRunway, 1)} revenue weeks`,
-    ];
-    const opening = army.fillRatio < 0.72
-      ? 'Rebuild manpower first; a premature war risks losing the opening campaign.'
-      : finance.foodCoverage < 0.92
-        ? 'Stabilize food access before expansion; war would deepen the shortage.'
-        : bestTarget
-          ? `Best opening target: ${bestTarget.target.shortName} · ${bestTarget.chance}% opening-front outlook.`
-          : 'No safe legal target yet; APEX will build cash, research and army strength.';
-    const targetDetail = bestTarget
-      ? `${bestTarget.status.access.toUpperCase()} route · ${cash(bestTarget.status.mobilizationCost)} mobilisation`
-      : aiPlan.explanation;
-    return `<div class="modal-backdrop modal-backdrop--soft"><section class="modal-card ai-activation" style="--country:${human.cssColor}"><div class="ai-activation__head"><i class="country-flag">${countryFlagHtml(human.id, human.sigil, true)}</i><div><div class="panel-kicker">APEX COUNTRY ANALYSIS</div><h2>${escapeHtml(human.name)} is ready.</h2><p>I manage reserves, food, research and every front. You decide when—and whom—we attack.</p></div></div><div class="ai-activation__scan"><span>LIVE MILITARY <b>#${militaryRank}</b></span><span>REAL BASELINE <b>#${baselineRank}</b></span><span>COMBAT POWER <b>${compactNumber(this.engine.currentPower(human.id))}</b></span><span>ARMY READY <b>${format(army.fillRatio * 100)}%</b></span><span>FOOD <b>${format(finance.foodCoverage * 100)}%</b></span><span>APEX MODE <b>${escapeHtml(finance.aiMode.toUpperCase())}</b></span></div><div class="ai-activation__assessment"><article><span>OUR ADVANTAGES</span>${strengths.map((item) => `<p>+ ${escapeHtml(item)}</p>`).join('')}</article><article><span>IMMEDIATE RISKS</span>${risks.map((item) => `<p>− ${escapeHtml(item)}</p>`).join('')}</article></div><div class="ai-activation__plan"><span>OPENING PLAN · ${escapeHtml(aiPlan.mode.toUpperCase())}</span><strong>${escapeHtml(opening)}</strong><small>${escapeHtml(targetDetail)}</small></div><button class="primary-button" data-action="dismiss-activation">ENTER COMMAND</button></section></div>`;
-  }
 
   private renderHelp(): string {
-    return `<div class="modal-backdrop"><section class="modal-card world-help"><button class="modal-close" data-action="help">×</button><div class="panel-kicker">FRONTIER COMMAND · SUPER AI</div><h2>You choose conquest. APEX runs the nation.</h2><div class="help-grid world-help-grid"><article><span>⚔</span><h3>War</h3><p>Choose targets, compare the forecast and decide when to stop.</p></article><article><span>AI</span><h3>Nation</h3><p>APEX automatically manages cash, food, research and recruitment.</p></article><article><span>◎</span><h3>Veterans</h3><p>Low-ranked player starts receive a rank-scaled elite core, up to 80% at ${format(UNDERDOG_VETERAN_MAX_EXPERIENCE, 0)} XP. Casualties can destroy it; later growth comes only from surviving a completed war.</p></article></div><p class="help-tip"><b>World reaction:</b> fast conquest raises suspicion and can trigger defensive coalitions.</p></section></div>`;
+    return `<div class="modal-backdrop"><section class="modal-card world-help"><button class="modal-close" data-action="help">×</button><div class="panel-kicker">FRONTIER COMMAND · SUPER AI</div><h2>You choose conquest. APEX runs the nation.</h2><div class="help-grid world-help-grid"><article><span>⚔</span><h3>War</h3><p>Choose targets, compare the forecast and decide when to stop.</p></article><article><span>AI</span><h3>Nation</h3><p>APEX automatically manages cash, food, research and recruitment.</p></article><article><span>◎</span><h3>Combat Experience</h3><p>Every empire starts at 0. Real wars build permanent national experience, improving attack, defence and casualty control with diminishing returns.</p></article></div><p class="help-tip"><b>World reaction:</b> fast conquest raises suspicion and can trigger defensive coalitions.</p></section></div>`;
   }
 
   private renderInbox(): string {
@@ -1659,16 +1611,18 @@ export class WorldUIV2 {
     const targetEconomy = this.engine.nationalEconomy(target.id);
     const weakArmy = army.fillRatio < 0.55;
     const warning = declaration.warning ?? (weakArmy ? 'Your army has low deployed manpower for its population-based capacity.' : undefined);
-    const accessNote = access === 'naval' ? 'Naval landing · expedition penalty' : 'Land campaign · best logistics';
+    const accessNote = access === 'naval'
+      ? 'Naval landing · +35% operations cost · modest supply friction'
+      : 'Land campaign · best logistics';
     const sourceName = forecast.sourceId ? WORLD_CONTENT_V2.territories[forecast.sourceId]?.name : undefined;
     const targetName = forecast.targetId ? WORLD_CONTENT_V2.territories[forecast.targetId]?.name : undefined;
     const outlook = forecast.outlook.toUpperCase();
-    const attackerComposition = `${people(forecast.attackerRegulars)} regulars + ${people(forecast.attackerVeterans)} veterans (average rank ${veteranRankV2(forecast.attackerVeterans, forecast.attackerVeteranExperience)} · XP ${compactNumber(forecast.attackerVeteranExperience)})`;
-    const defenderComposition = `${people(forecast.defenderRegulars)} regulars + ${people(forecast.defenderVeterans)} veterans (average rank ${veteranRankV2(forecast.defenderVeterans, forecast.defenderVeteranExperience)} · XP ${compactNumber(forecast.defenderVeteranExperience)})`;
+    const attackerComposition = `Combat Experience ${format(forecast.attackerCombatExperience, 1)}`;
+    const defenderComposition = `Combat Experience ${format(forecast.defenderCombatExperience, 1)}`;
     const concurrentCampaigns = this.humanWars().length + 1;
     const supportText = forecast.supportingForces > 0
       ? ` · ${forecast.supportingForces} supporting front${forecast.supportingForces === 1 ? '' : 's'}` : '';
-    return `<div class="modal-backdrop"><section class="modal-card war-confirm simple-war-confirm" style="--target:${target.cssColor}"><div class="war-confirm__sigil country-flag">${countryFlagHtml(target.id, target.sigil, true)}</div><div class="panel-kicker">APEX OPENING-FRONT FORECAST · ${outlook}</div><h2>Attack ${escapeHtml(target.name)}?</h2><p>${escapeHtml(sourceName ?? human.shortName)} → ${escapeHtml(targetName ?? target.shortName)} · ${accessNote}</p><div class="simple-chance"><div><span>OPENING OUTLOOK</span><strong>${chance}%</strong></div><i><b style="width:${chance}%"></b></i><small>Opening front may break in ${forecast.estimatedWeeksMin}–${forecast.estimatedWeeksMax} weeks. The full war may take longer.</small></div><div class="simple-war-decision-grid"><article><span>OUR FRONT</span><strong>${people(forecast.attackerStrength)}</strong><small>${attackerComposition} · ATK ${format(forecast.attackerAttack, 2)} · DEF ${format(forecast.attackerDefense, 2)} · SUP ${format(forecast.attackerSupply * 100)}%</small></article><article><span>ENEMY FRONT</span><strong>${people(forecast.defenderStrength)}</strong><small>${defenderComposition} · ATK ${format(forecast.defenderAttack, 2)} · DEF ${format(forecast.defenderDefense, 2)} · SUP ${format(forecast.defenderSupply * 100)}%</small></article><article><span>TARGET FOOD</span><strong>${format(targetFinance.foodCoverage * 100, 1)}% fed</strong><small>${people(target.foodStock)} / ${people(targetFinance.foodStorageCapacity)} stored · ${people(annual(targetFinance.foodDomesticProduced))} domestic/year · ${signedPeople(annual(targetFinance.foodStockChange))}/year stock</small></article><article><span>TARGET ECONOMY</span><strong>${cash(targetEconomy.controlledOutput)}</strong><small>${signed(targetFinance.annualEconomyGrowthRate * 100, 2)}% growth/year · ${population(targetEconomy.population)} people</small></article><article><span>WAR DECLARATION</span><strong>FREE</strong><small>Annual operating costs appear in the War tab</small></article><article><span>OCCUPATION OUTPUT</span><strong>${cash(gains.initialOccupationOutput)}</strong><small>10% unlocked immediately</small></article></div><div class="combat-exchange-preview"><span>PROJECTED NEXT BATTLE · 2 WEEKS</span><strong>YOU −${people(forecast.projectedAttackerLosses)} · ENEMY −${people(forecast.projectedDefenderLosses)}</strong><small>Combat-strength loss includes veteran durability.</small></div><div class="combat-modifier-line">DEFENDER ×${format(forecast.defenderPositionMultiplier, 2)} POSITION · ${escapeHtml((forecast.terrain ?? 'plains').toUpperCase())} ×${format(forecast.terrainDefenseMultiplier, 2)}${supportText} · ${concurrentCampaigns} active campaign${concurrentCampaigns === 1 ? '' : 's'}</div>${warning ? `<div class="war-rule-note is-warning"><b>RISK</b><span>${escapeHtml(warning)}</span></div>` : ''}${!declaration.allowed ? `<div class="war-rule-note is-blocked"><b>WAR CANNOT START</b><span>${escapeHtml(declaration.reason ?? 'Legal or access requirements are not met.')}</span></div>` : ''}<div class="simple-victory-gain"><b>IF WE WIN</b><span>~${gains.territoryCount} territor${gains.territoryCount === 1 ? 'y' : 'ies'} · ~${population(gains.retainedPopulation)} residents · ~${cash(gains.initialOccupationOutput)} output now</span><small>Population capacity, economy, food and army capacity start at 10%; the rest unlocks gradually over 10–20 years by country size. Enemy troops are never inherited.</small></div><div class="panel-actions"><button class="ghost-button" data-action="cancel-war">Cancel</button><button class="danger-button" data-action="declare-war" ${declaration.allowed ? '' : 'disabled'}>${declaration.allowed ? 'START WAR' : escapeHtml((declaration.reason ?? 'WAR CANNOT START').toUpperCase())}</button></div></section></div>`;
+    return `<div class="modal-backdrop"><section class="modal-card war-confirm simple-war-confirm" style="--target:${target.cssColor}"><div class="war-confirm__sigil country-flag">${countryFlagHtml(target.id, target.sigil, true)}</div><div class="panel-kicker">APEX OPENING-FRONT FORECAST · ${outlook}</div><h2>Attack ${escapeHtml(target.name)}?</h2><p>${escapeHtml(sourceName ?? human.shortName)} → ${escapeHtml(targetName ?? target.shortName)} · ${accessNote}</p><div class="simple-chance"><div><span>OPENING OUTLOOK</span><strong>${chance}%</strong></div><i><b style="width:${chance}%"></b></i><small>Opening front may break in ${forecast.estimatedWeeksMin}–${forecast.estimatedWeeksMax} weeks. The full war may take longer.</small></div><div class="simple-war-decision-grid"><article><span>OUR FRONT</span><strong>${people(forecast.attackerStrength)}</strong><small>${attackerComposition} · ATK ${format(forecast.attackerAttack, 2)} · DEF ${format(forecast.attackerDefense, 2)} · SUP ${format(forecast.attackerSupply * 100)}%</small></article><article><span>ENEMY FRONT</span><strong>${people(forecast.defenderStrength)}</strong><small>${defenderComposition} · ATK ${format(forecast.defenderAttack, 2)} · DEF ${format(forecast.defenderDefense, 2)} · SUP ${format(forecast.defenderSupply * 100)}%</small></article><article><span>TARGET FOOD</span><strong>${format(targetFinance.foodCoverage * 100, 1)}% fed</strong><small>${people(target.foodStock)} / ${people(targetFinance.foodStorageCapacity)} stored · ${people(annual(targetFinance.foodDomesticProduced))} domestic/year · ${signedPeople(annual(targetFinance.foodStockChange))}/year stock</small></article><article><span>TARGET ECONOMY</span><strong>${cash(targetEconomy.controlledOutput)}</strong><small>${signed(targetFinance.annualEconomyGrowthRate * 100, 2)}% growth/year · ${population(targetEconomy.population)} people</small></article><article><span>WAR DECLARATION</span><strong>FREE</strong><small>Annual operating costs appear in the War tab</small></article><article><span>OCCUPATION OUTPUT</span><strong>${cash(gains.initialOccupationOutput)}</strong><small>10% unlocked immediately</small></article></div><div class="combat-exchange-preview"><span>PROJECTED NEXT BATTLE · 2 WEEKS</span><strong>YOU −${people(forecast.projectedAttackerLosses)} · ENEMY −${people(forecast.projectedDefenderLosses)}</strong><small>Losses are bounded only by the local force that remains.</small></div><div class="combat-modifier-line">DEFENDER ×${format(forecast.defenderPositionMultiplier, 2)} POSITION · ${escapeHtml((forecast.terrain ?? 'plains').toUpperCase())} ×${format(forecast.terrainDefenseMultiplier, 2)}${supportText} · ${concurrentCampaigns} active campaign${concurrentCampaigns === 1 ? '' : 's'}</div>${warning ? `<div class="war-rule-note is-warning"><b>RISK</b><span>${escapeHtml(warning)}</span></div>` : ''}${!declaration.allowed ? `<div class="war-rule-note is-blocked"><b>WAR CANNOT START</b><span>${escapeHtml(declaration.reason ?? 'Legal or access requirements are not met.')}</span></div>` : ''}<div class="simple-victory-gain"><b>IF WE WIN</b><span>~${gains.territoryCount} territor${gains.territoryCount === 1 ? 'y' : 'ies'} · ~${population(gains.retainedPopulation)} residents · ~${cash(gains.initialOccupationOutput)} output now</span><small>Population capacity, economy, food and army capacity start at 10%; the rest unlocks over about 12.5 years for Luxembourg-sized countries and roughly 170 years for China. Enemy troops are never inherited.</small></div><div class="panel-actions"><button class="ghost-button" data-action="cancel-war">Cancel</button><button class="danger-button" data-action="declare-war" ${declaration.allowed ? '' : 'disabled'}>${declaration.allowed ? 'START WAR' : escapeHtml((declaration.reason ?? 'WAR CANNOT START').toUpperCase())}</button></div></section></div>`;
   }
 
   private renderCeasefireConfirmation(warId: string): string {
@@ -1696,9 +1650,6 @@ export class WorldUIV2 {
     return `<div class="modal-backdrop modal-backdrop--soft"><section class="modal-card propaganda-confirm" style="--country:${human.cssColor}"><div class="panel-kicker">APEX INFLUENCE OPERATION</div><h2>Request a global propaganda campaign?</h2><p>APEX will reserve budget and launch this gradual operation when it is ready.</p><div class="propaganda-confirm__summary"><article><span>CAMPAIGN</span><strong>${terms.durationTicks} WEEKS</strong><small>−${format(terms.weeklySuspicionReduction, 2)} suspicion each week</small></article><article><span>FULL EFFECT</span><strong>${format(resistance.threat)}% → ~${format(projectedThreat)}%</strong><small>Up to −${format(terms.totalSuspicionReduction)} total suspicion</small></article><article><span>APEX STATUS</span><strong>${terms.cooldownRemainingTicks ? `${terms.cooldownRemainingTicks}W WAIT` : 'BUDGETING'}</strong><small>National reserves stay under AI control</small></article></div><div class="war-rule-note is-warning"><b>NO INSTANT EFFECT</b><span>Expansion and new wars can still create suspicion while the campaign is running.</span></div><div class="panel-actions"><button class="ghost-button" data-action="cancel-propaganda">Cancel</button><button class="secondary-button" data-action="confirm-propaganda">SEND REQUEST</button></div></section></div>`;
   }
 
-  private renderGameExplainer(): string {
-    return `<div class="modal-backdrop campaign-intro-backdrop"><section class="modal-card campaign-intro"><div class="campaign-intro__mark">APEX</div><div class="panel-kicker">FRONTIER COMMAND · 2026</div><h1>Build an empire. Conquer the world.</h1><p class="campaign-intro__lead">Choose any nation. Your Super AI runs the country; you decide where its power goes next.</p><div class="campaign-intro__rules"><article><span>01</span><div><h2>You command the wars</h2><p>Pick targets, compare the forecast, attack—or negotiate a ceasefire.</p></div></article><article><span>02</span><div><h2>APEX runs the nation</h2><p>Cash, food, research, recruitment and every active front are optimized automatically.</p></div></article><article><span>03</span><div><h2>War has a real price</h2><p>Fighting drains manpower, money, population growth and the economy. Peace is when you rebuild.</p></div></article></div><div class="campaign-intro__loop"><b>CONQUER</b><i>→</i><b>INTEGRATE</b><i>→</i><b>ADVANCE</b><span>Conquests unlock 10% immediately and integrate over 10–20 years. Rival powers expand too, and prolonged aggression can unite the world against you.</span></div><button class="primary-button campaign-intro__start" data-action="open-nation-select">CHOOSE YOUR NATION</button></section></div>`;
-  }
 
   private renderWarOutcome(outcome: WarOutcomeV2): string {
     const opponent = this.engine.player(outcome.opponentId);
@@ -1726,10 +1677,8 @@ export class WorldUIV2 {
         ? `${outcome.treatyWeeklyPayment > 0 ? '+' : '−'}${cash(annual(Math.abs(outcome.treatyWeeklyPayment)))}/year for ${outcome.treatyPaymentWeeks}w`
         : '',
     ].filter(Boolean).join(' · ') || 'No direct loot or treaty payment.';
-    const veteranGain = outcome.veteransPromoted > 0
-      ? `+${people(outcome.veteransPromoted)} promoted` : 'No new promotions';
-    const veteranRankBefore = veteranRankV2(outcome.veteranManpowerBefore, outcome.veteranExperienceBefore);
-    const veteranRankAfter = veteranRankV2(outcome.veteranManpowerAfter, outcome.veteranExperienceAfter);
+    const experienceGain = outcome.combatExperienceGained > 0
+      ? `+${format(outcome.combatExperienceGained, 2)} from this war` : 'No gain without combat';
     const queueNote = this.warOutcomeQueue.length > 1
       ? `${this.warOutcomeQueue.length - 1} more war report${this.warOutcomeQueue.length === 2 ? '' : 's'} waiting`
       : 'The campaign is fully recorded';
@@ -1744,8 +1693,8 @@ export class WorldUIV2 {
         <article class="war-outcome-card"><span>ECONOMY</span><strong class="${outcome.gainedEconomy >= outcome.lostEconomy ? 'is-positive' : 'danger-text'}">+${cash(outcome.gainedEconomy)} / −${cash(outcome.lostEconomy)}</strong><small>Current output of gained and lost land</small></article>
         <article class="war-outcome-card war-outcome-card--wide"><span>TREASURY & TREATY</span><strong>${cash(outcome.treasuryBefore)} → ${cash(outcome.treasuryAfter)} <em class="${cashDelta >= 0 ? 'is-positive' : 'danger-text'}">${signedCash(cashDelta)}</em></strong><small>${escapeHtml(financeDetails)}</small></article>
         <article class="war-outcome-card"><span>ARMY SURVIVORS</span><strong>${people(outcome.survivingManpower)}</strong><small>We lost ${people(outcome.ownLosses)} · enemy lost ${people(outcome.enemyLosses)}</small></article>
-        <article class="war-outcome-card"><span>VETERAN FORCES</span><strong>${people(outcome.veteranManpowerBefore)} → ${people(outcome.veteranManpowerAfter)}</strong><small>${veteranGain} · average rank ${veteranRankBefore} → ${veteranRankAfter} · XP ${compactNumber(outcome.veteranExperienceBefore)} → ${compactNumber(outcome.veteranExperienceAfter)}</small></article>
-        <article class="war-outcome-card"><span>COMBAT POWER</span><strong>${compactNumber(outcome.combatPowerBefore)} → ${compactNumber(outcome.combatPowerAfter)}</strong><small>Live troops, veterans, condition and army quality included</small></article>
+        <article class="war-outcome-card"><span>COMBAT EXPERIENCE</span><strong>${format(outcome.combatExperienceBefore, 2)} → ${format(outcome.combatExperienceAfter, 2)}</strong><small>${experienceGain} · permanent empire-wide knowledge</small></article>
+        <article class="war-outcome-card"><span>COMBAT POWER</span><strong>${compactNumber(outcome.combatPowerBefore)} → ${compactNumber(outcome.combatPowerAfter)}</strong><small>Live troops, Combat Experience, condition and army quality included</small></article>
         <article class="war-outcome-card"><span>MAX MANPOWER</span><strong>${people(outcome.capacityBefore)} → ${people(outcome.capacityAfter)}</strong><small>Population and force-capacity research only</small></article>
         <article class="war-outcome-card war-outcome-card--wide war-outcome-quality"><span>ARMY QUALITY MIX</span><div><strong>ATK ${format(outcome.baseAttackBefore, 2)} → ${format(outcome.baseAttackAfter, 2)}</strong><strong>DEF ${format(outcome.baseDefenseBefore, 2)} → ${format(outcome.baseDefenseAfter, 2)}</strong></div><small>Manpower-weighted average of surviving deployed armies. Existing soldiers keep their quality; movement and local recruitment blend it.</small></article>
       </div>
@@ -1776,10 +1725,6 @@ export class WorldUIV2 {
         event.stopPropagation();
         const action = element.dataset.action;
         switch (action) {
-          case 'open-nation-select':
-            this.gameExplainerOpen = false;
-            this.render();
-            break;
           case 'continent-filter': {
             this.introContinent = element.dataset.continent ?? 'ALL';
             this.introGridScrollTop = 0;
@@ -1800,21 +1745,12 @@ export class WorldUIV2 {
             break;
           case 'choose-country': {
             const countryId = element.dataset.country as PlayerId;
-            // Capture the unboosted ranking before chooseCountry applies the
-            // one-time underdog elite. The activation card can then compare the
-            // real starting baseline with the boosted live rank honestly.
-            this.activationBaselineRank = [...WORLD_CONTENT_V2.nationIds].sort((left, right) => (
-              this.engine.conventionalPower(right) - this.engine.conventionalPower(left)
-                || left.localeCompare(right)
-            )).indexOf(countryId) + 1;
             const result = this.engine.chooseCountry(countryId);
             if (!commandAccepted(result)) {
-              this.activationBaselineRank = undefined;
               this.toast(commandReason(result) ?? 'This country cannot be selected now.');
               break;
             }
             this.introOpen = false;
-            this.activationBriefingOpen = true;
             this.selectedTerritoryId = undefined;
             this.contextPanelOpen = false;
             this.updateMapSelection();
@@ -1822,7 +1758,6 @@ export class WorldUIV2 {
             this.render();
             break;
           }
-          case 'dismiss-activation': this.activationBriefingOpen = false; this.render(); break;
           case 'dismiss-war-outcome':
             this.warOutcomeQueue.shift();
             this.render();

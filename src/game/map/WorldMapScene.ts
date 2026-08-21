@@ -17,7 +17,11 @@ import {
   type MapWarState,
   type WorldMapEngineContract,
 } from './bridge';
-import { countryFlagAssetUrl } from '../../ui/countryFlags';
+import {
+  countryFlagAssetUrl,
+  MAP_FLAG_TEXTURE_HEIGHT,
+  MAP_FLAG_TEXTURE_WIDTH,
+} from '../../ui/countryFlags';
 
 interface TerritoryVisual {
   parts: Phaser.GameObjects.Polygon[];
@@ -96,20 +100,25 @@ function compactCountryName(name: string): string {
 const LABEL_NAME_SIZE = 10;
 const LABEL_DETAIL_SIZE = 8;
 const LABEL_TEXT_RESOLUTION = 2;
-const LABEL_MIN_SCREEN_SCALE = 0.16;
 const LABEL_MAX_SCREEN_SCALE = 1.20;
 const LABEL_PADDING_X = 6;
 const LABEL_COLLISION_GAP = 4;
 const LABEL_SAFE_TOP = 80;
 const LABEL_SAFE_BOTTOM = 8;
 const FLAG_TEXTURE_PREFIX = 'nation-flag-';
+const FLAG_ATLAS_SCALE = 3;
 const MAP_MIN_ZOOM = 0.78;
-const MAP_MAX_ZOOM = 6.2;
+const MAP_MAX_ZOOM = 24;
+const MAP_ZOOM_WHEEL_RATE = 0.00135;
+const MAP_ZOOM_RESPONSE_MS = 82;
+const MICROSTATE_FOCUS_SCREEN_SIZE = 110;
+const DEEP_LABEL_MIN_ZOOM = 3;
+const DEEP_LABEL_MIN_SCREEN_SPAN = 16;
 // Natural Earth contains roughly 95k coastline vertices. Keeping sub-pixel
 // bends adds a lot of Phaser hit-test/triangulation work without making the
-// map more legible. A 0.20 world-pixel tolerance removes about 70% of those
-// points while staying below 1.25 screen pixels even at maximum zoom.
-const BORDER_SIMPLIFICATION_TOLERANCE = 0.2;
+// map more legible. Deep microstate zoom needs a tighter tolerance so retained
+// bends stay near one screen pixel even at the maximum camera scale.
+const BORDER_SIMPLIFICATION_TOLERANCE = 0.05;
 
 interface RenderPoint {
   x: number;
@@ -190,8 +199,109 @@ const RENDER_RINGS = new Map(COUNTRIES.map((country) => [
   country.rings.map(simplifyRenderRing).filter((ring) => ring.length >= 3),
 ]));
 
+interface CountryRenderBounds {
+  centerX: number;
+  centerY: number;
+  width: number;
+  height: number;
+}
+
+function wrappedXNear(x: number, anchorX: number): number {
+  let result = x;
+  while (result - anchorX > MAP_WIDTH / 2) result -= MAP_WIDTH;
+  while (result - anchorX < -MAP_WIDTH / 2) result += MAP_WIDTH;
+  return result;
+}
+
+/**
+ * Focus and deep-label decisions use the landmass cluster around the country's
+ * label anchor. Remote islands therefore do not make mainland microstates look
+ * artificially huge or force a world-scale camera framing.
+ */
+function countryRenderBounds(countryId: string): CountryRenderBounds | undefined {
+  const anchor = TERRITORY_BY_ID[countryId];
+  const rings = RENDER_RINGS.get(countryId) ?? [];
+  if (!anchor || rings.length === 0) return undefined;
+  const ringEntries = rings.map((ring) => {
+    const points = ring.map((point) => ({ x: wrappedXNear(point.x, anchor.x), y: point.y }));
+    const centerX = points.reduce((sum, point) => sum + point.x, 0) / points.length;
+    const centerY = points.reduce((sum, point) => sum + point.y, 0) / points.length;
+    return { points, distance: Math.hypot(centerX - anchor.x, centerY - anchor.y) };
+  });
+  const nearestDistance = Math.min(...ringEntries.map((entry) => entry.distance));
+  const localEntries = ringEntries.filter((entry) => entry.distance <= Math.max(180, nearestDistance + 24));
+  const points = localEntries.flatMap((entry) => entry.points);
+  if (points.length === 0) return undefined;
+  const minX = Math.min(...points.map((point) => point.x));
+  const maxX = Math.max(...points.map((point) => point.x));
+  const minY = Math.min(...points.map((point) => point.y));
+  const maxY = Math.max(...points.map((point) => point.y));
+  return {
+    centerX: (minX + maxX) / 2,
+    centerY: (minY + maxY) / 2,
+    width: Math.max(0.25, maxX - minX),
+    height: Math.max(0.25, maxY - minY),
+  };
+}
+
+const COUNTRY_RENDER_BOUNDS = new Map(COUNTRIES.flatMap((country) => {
+  const bounds = countryRenderBounds(country.id);
+  return bounds ? [[country.id, bounds] as const] : [];
+}));
+
 function flagTextureKey(nationId: string): string {
   return `${FLAG_TEXTURE_PREFIX}${nationId}`;
+}
+
+function labelPlacementOffsets(
+  width: number,
+  height: number,
+  strategic: boolean,
+  persistentTopPower: boolean,
+): RenderPoint[] {
+  if (!strategic) return [{ x: 0, y: 0 }];
+  const offsets: RenderPoint[] = [
+    { x: 0, y: 0 },
+    { x: 0, y: -height - 4 }, { x: 0, y: height + 4 },
+    { x: -width * 0.56, y: 0 }, { x: width * 0.56, y: 0 },
+    { x: -width * 0.56, y: -height - 4 }, { x: width * 0.56, y: -height - 4 },
+    { x: -width * 0.56, y: height + 4 }, { x: width * 0.56, y: height + 4 },
+    { x: 0, y: -2 * height - 8 }, { x: 0, y: 2 * height + 8 },
+    { x: -width * 1.12, y: 0 }, { x: width * 1.12, y: 0 },
+  ];
+  if (!persistentTopPower) return offsets;
+
+  // The global top ten is part of the overview, not optional geography. Give
+  // those labels a deterministic expanding search field so dense European and
+  // Asian clusters can fan out instead of losing the lower-ranked badge.
+  const seen = new Set(offsets.map(({ x, y }) => `${Math.round(x)}:${Math.round(y)}`));
+  const stepX = width + LABEL_COLLISION_GAP * 2;
+  const stepY = height + LABEL_COLLISION_GAP * 2;
+  const add = (x: number, y: number): void => {
+    const key = `${Math.round(x)}:${Math.round(y)}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    offsets.push({ x, y });
+  };
+  for (let ring = 1; ring <= 5; ring += 1) {
+    for (let column = -ring; column <= ring; column += 1) {
+      add(column * stepX, -ring * stepY);
+      add(column * stepX, ring * stepY);
+    }
+    for (let row = -ring + 1; row < ring; row += 1) {
+      add(-ring * stepX, row * stepY);
+      add(ring * stepX, row * stepY);
+    }
+  }
+  return offsets;
+}
+
+function rectangleOverlapArea(left: Phaser.Geom.Rectangle, right: Phaser.Geom.Rectangle): number {
+  const width = Math.max(0,
+    Math.min(left.x + left.width, right.x + right.width) - Math.max(left.x, right.x));
+  const height = Math.max(0,
+    Math.min(left.y + left.height, right.y + right.height) - Math.max(left.y, right.y));
+  return width * height;
 }
 
 export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
@@ -200,6 +310,7 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
   private engine?: WorldMapEngineContract;
   private frontGraphics?: Phaser.GameObjects.Graphics;
   private routeGraphics?: Phaser.GameObjects.Graphics;
+  private graticuleGraphics?: Phaser.GameObjects.Graphics;
   private logisticsGraphics?: Phaser.GameObjects.Graphics;
   private ownershipBoundaryGraphics?: Phaser.GameObjects.Graphics;
   private flagAtlas?: Phaser.Textures.CanvasTexture | null;
@@ -218,6 +329,7 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
   private ownerTerritoryCounts = new Map<string, number>();
   private ownerLabelTerritoryIds = new Map<string, string>();
   private absorbedTerritoryIds = new Set<string>();
+  private integratingTerritoryIds = new Set<string>();
   private fillSignatures = new Map<string, string>();
   private labelSignatures = new Map<string, string>();
   private strategicScores = new Map<string, number>();
@@ -229,18 +341,24 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
   private lastLogisticsSignature = '';
   private activeBattleEffects = 0;
   private battleLabelRefresh?: Phaser.Time.TimerEvent;
+  private zoomTarget = 1;
+  private zoomAnchorScreen?: RenderPoint;
+  private zoomAnchorWorld?: RenderPoint;
 
   constructor() {
     super({ key: 'WorldMapScene' });
   }
 
   preload(): void {
-    // Exactly one tiny texture per nation. Territories only swap a cached
+    // Exactly one sharp texture per nation. Territories only swap a cached
     // texture on conquest; no flag is generated, fetched or decoded per frame.
     for (const country of COUNTRIES) {
       const url = countryFlagAssetUrl(country.id);
       if (url && !this.textures.exists(flagTextureKey(country.id))) {
-        this.load.svg(flagTextureKey(country.id), url, { width: 64, height: 48 });
+        this.load.svg(flagTextureKey(country.id), url, {
+          width: MAP_FLAG_TEXTURE_WIDTH,
+          height: MAP_FLAG_TEXTURE_HEIGHT,
+        });
       }
     }
   }
@@ -248,8 +366,15 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
   create(): void {
     this.cameras.main.setBounds(0, 0, MAP_WIDTH, MAP_HEIGHT);
     this.drawOcean();
-    this.flagAtlas = this.textures.createCanvas('world-flag-atlas', MAP_WIDTH, MAP_HEIGHT);
-    this.flagAtlasImage = this.add.image(0, 0, 'world-flag-atlas').setOrigin(0, 0).setDepth(0.4);
+    this.flagAtlas = this.textures.createCanvas(
+      'world-flag-atlas',
+      MAP_WIDTH * FLAG_ATLAS_SCALE,
+      MAP_HEIGHT * FLAG_ATLAS_SCALE,
+    );
+    this.flagAtlasImage = this.add.image(0, 0, 'world-flag-atlas')
+      .setOrigin(0, 0)
+      .setDisplaySize(MAP_WIDTH, MAP_HEIGHT)
+      .setDepth(0.4);
     this.routeGraphics = this.add.graphics().setDepth(-6);
     this.logisticsGraphics = this.add.graphics().setDepth(5.5);
     this.ownershipBoundaryGraphics = this.add.graphics().setDepth(2);
@@ -266,18 +391,25 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
     const sea = this.add.graphics().setDepth(-20);
     sea.fillGradientStyle(0x071521, 0x071521, 0x0a2432, 0x0a2432, 1);
     sea.fillRect(0, 0, MAP_WIDTH, MAP_HEIGHT);
-    sea.lineStyle(1, 0x4c94aa, 0.11);
+    this.graticuleGraphics = this.add.graphics().setDepth(-19);
+    this.drawGraticule();
+  }
+
+  private drawGraticule(): void {
+    const grid = this.graticuleGraphics;
+    if (!grid) return;
+    grid.clear();
+    grid.lineStyle(this.screenWorldSize(1), 0x4c94aa, 0.11);
     for (let longitude = -150; longitude <= 150; longitude += 30) {
       const top = projectWorldPoint(longitude, 84);
       const bottom = projectWorldPoint(longitude, -58);
-      sea.lineBetween(top.x, top.y, bottom.x, bottom.y);
+      grid.lineBetween(top.x, top.y, bottom.x, bottom.y);
     }
     for (let latitude = -45; latitude <= 75; latitude += 15) {
       const left = projectWorldPoint(-180, latitude);
       const right = projectWorldPoint(180, latitude);
-      sea.lineBetween(left.x, left.y, right.x, right.y);
+      grid.lineBetween(left.x, left.y, right.x, right.y);
     }
-
   }
 
   private buildOwnershipBoundarySegments(): void {
@@ -326,6 +458,7 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
     graphics.clear();
     const border: OwnershipBoundarySegment[] = [];
     const humanBorder: OwnershipBoundarySegment[] = [];
+    const integrationBorder: OwnershipBoundarySegment[] = [];
     for (const segment of this.ownershipBoundarySegments) {
       // Singleton segments are coastlines. Their filled silhouette already reads
       // against the ocean, so this layer only owns political land perimeters.
@@ -334,16 +467,24 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
         .map((territoryId) => state.territories[territoryId]?.ownerId)
         .filter((ownerId): ownerId is string => Boolean(ownerId)));
       if (owners.size === 0) continue;
+      const integrating = segment.territoryIds.some((territoryId) => (
+        this.integratingTerritoryIds.has(territoryId)
+      ));
+      if (owners.size === 1 && integrating) {
+        integrationBorder.push(segment);
+        continue;
+      }
       if (owners.size === 1) continue;
       if (owners.has(state.humanPlayerId)) humanBorder.push(segment);
       else border.push(segment);
     }
     const draw = (segmentsToDraw: readonly OwnershipBoundarySegment[], width: number, color: number, alpha: number) => {
-      graphics.lineStyle(width, color, alpha);
+      graphics.lineStyle(this.screenWorldSize(width), color, alpha);
       for (const segment of segmentsToDraw) this.drawWrappedLine(graphics, segment.x1, segment.y1, segment.x2, segment.y2);
     };
     draw(border, 1.15, 0xd4e7eb, 0.58);
     draw(humanBorder, 1.7, 0x8cf3ff, 0.88);
+    draw(integrationBorder, 0.85, 0xf2c879, 0.42);
   }
 
   private createCountries(): void {
@@ -411,16 +552,19 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
   }
 
   /**
-   * Builds every current realm into one low-resolution world texture. An empire
+   * Builds every current realm into one high-resolution world texture. An empire
    * receives exactly one stretched flag, clipped across all territory it owns.
-   * The atlas is rebuilt only when ownership changes, leaving one cheap map draw
-   * instead of 165 live flag images and geometry masks every frame.
+   * The atlas is rebuilt only when ownership or a visible integration-percent
+   * step changes, leaving one cheap map draw instead of 165 live flag images
+   * and geometry masks every frame.
    */
   private redrawFlagAtlas(state: MapStateSnapshot | undefined = this.mapState): void {
     const atlas = this.flagAtlas;
     if (!atlas) return;
     const context = atlas.context;
-    context.clearRect(0, 0, MAP_WIDTH, MAP_HEIGHT);
+    context.clearRect(0, 0, MAP_WIDTH * FLAG_ATLAS_SCALE, MAP_HEIGHT * FLAG_ATLAS_SCALE);
+    context.save();
+    context.scale(FLAG_ATLAS_SCALE, FLAG_ATLAS_SCALE);
     type EmpireShape = { rings: { x: number; y: number }[][] };
     const empires = new Map<string, EmpireShape>();
     for (const country of COUNTRIES) {
@@ -477,6 +621,37 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
         context.restore();
       }
     }
+    // A conquered country keeps a faint trace of its former flag while the
+    // integration calendar is active. The trace fades monotonically and is
+    // removed exactly when the territory becomes core homeland.
+    for (const country of COUNTRIES) {
+      const territory = state?.territories[country.id];
+      if (!territory || territory.coreOwnerId === territory.ownerId
+        || territory.integration >= 0.999999
+        || !this.textures.exists(flagTextureKey(territory.coreOwnerId))) continue;
+      const rings = RENDER_RINGS.get(country.id) ?? [];
+      const points = rings.flat();
+      if (points.length < 3) continue;
+      const source = this.textures.get(flagTextureKey(territory.coreOwnerId)).getSourceImage() as CanvasImageSource;
+      const minX = Math.min(...points.map((point) => point.x));
+      const maxX = Math.max(...points.map((point) => point.x));
+      const minY = Math.min(...points.map((point) => point.y));
+      const maxY = Math.max(...points.map((point) => point.y));
+      context.save();
+      context.beginPath();
+      for (const ring of rings) {
+        if (ring.length < 3) continue;
+        context.moveTo(ring[0]!.x, ring[0]!.y);
+        for (let index = 1; index < ring.length; index += 1) context.lineTo(ring[index]!.x, ring[index]!.y);
+        context.closePath();
+      }
+      context.clip();
+      context.globalAlpha = 0.50 * (1 - Phaser.Math.Clamp(territory.integration, 0, 1));
+      context.filter = 'brightness(0.92) saturate(0.72)';
+      context.drawImage(source, minX, minY, Math.max(1, maxX - minX), Math.max(1, maxY - minY));
+      context.restore();
+    }
+    context.restore();
     atlas.refresh();
   }
 
@@ -486,9 +661,16 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
     this.hoveredId = countryId;
     const visual = this.visuals.get(countryId);
     const territoryState = this.mapState?.territories[countryId];
-    const mergedRegion = territoryState ? (this.ownerTerritoryCounts.get(territoryState.ownerId) ?? 1) > 1 : false;
+    const integrating = territoryState
+      ? territoryState.coreOwnerId !== territoryState.ownerId && territoryState.integration < 0.999999
+      : false;
+    const mergedRegion = territoryState
+      ? (this.ownerTerritoryCounts.get(territoryState.ownerId) ?? 1) > 1 && !integrating
+      : false;
     const absorbed = this.absorbedTerritoryIds.has(countryId);
-    if (!mergedRegion) for (const part of visual?.parts ?? []) part.setStrokeStyle(1.35, 0xe8fbff, 0.92).setDepth(0.8);
+    if (!mergedRegion) for (const part of visual?.parts ?? []) {
+      part.setStrokeStyle(this.screenWorldSize(1.35), 0xe8fbff, 0.92).setDepth(0.8);
+    }
     if (visual && !absorbed) visual.hud.setAlpha(1).setDepth(13);
     if (hoverChanged) this.refreshZoomDetails();
     const position = this.clientPosition(pointer);
@@ -540,6 +722,7 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       priority: number;
       required: boolean;
       strategic: boolean;
+      persistentTopPower: boolean;
       showDetail: boolean;
     }[] = [];
     for (const [territoryId, visual] of this.visuals) {
@@ -548,7 +731,7 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
         && (zoom >= 1.45 || movedIds.has(territoryId) || activeSourceIds.has(territoryId) || strongestHumanIds.has(territoryId));
       const forceAnchor = TERRITORY_BY_ID[territoryId];
       if (showLocalForce && forceAnchor) {
-        const forceScale = Phaser.Math.Clamp(1 / zoom, 0.24, 1.18);
+        const forceScale = Phaser.Math.Clamp(1 / zoom, 1 / MAP_MAX_ZOOM, 1.18);
         const barY = forceAnchor.y + 39 / zoom;
         visual.localForce.setPosition(forceAnchor.x, forceAnchor.y + 29 / zoom)
           .setScale(forceScale).setVisible(true)
@@ -569,10 +752,17 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       const hovered = territoryId === this.hoveredId;
       const ownCapital = territoryId === this.humanCapitalId;
       const atWar = this.warTerritoryIds.has(territoryId);
+      const integrating = this.integratingTerritoryIds.has(territoryId);
       const ownerId = this.mapState?.territories[territoryId]?.ownerId;
       const topPower = Boolean(ownerId && this.topPowerOwnerIds.has(ownerId));
+      const persistentTopPower = topPower
+        && this.ownerLabelTerritoryIds.get(ownerId!) === territoryId;
       const required = selected || hovered;
-      const strategic = required || ownCapital || atWar || topPower;
+      const strategic = required || ownCapital || atWar || integrating || topPower;
+      const bounds = COUNTRY_RENDER_BOUNDS.get(territoryId);
+      const projectedSpan = bounds ? Math.max(bounds.width, bounds.height) * zoom : 0;
+      const deepGeography = zoom >= Math.max(DEEP_LABEL_MIN_ZOOM, visual.minLabelZoom * 1.75)
+        && projectedSpan >= DEEP_LABEL_MIN_SCREEN_SPAN;
       const absorbed = this.absorbedTerritoryIds.has(territoryId);
       visual.hud.setVisible(false);
       const anchor = TERRITORY_BY_ID[territoryId];
@@ -580,19 +770,23 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       // A captured country becomes part of its owner's empire. Its former national
       // label never returns on the map; geographic identity remains in DOM intel.
       if (absorbed) continue;
-      // Keep the strategic map quiet: only the player's empire, active
-      // belligerents, the military top five, selection and hover receive a nameplate.
-      // Zoom reveals geography, never a wall of labels.
-      const eligible = strategic;
+      // The overview stays strategic: the player's empire, active belligerents,
+      // military top ten, selection and hover receive a nameplate. At close
+      // range, countries whose shape is genuinely legible may join the same
+      // collision pass, making Luxembourg-sized states discoverable.
+      const eligible = strategic || deepGeography;
       if (!eligible) continue;
       const country = COUNTRY_BY_ID[territoryId];
       candidates.push({
         territoryId,
         visual,
         required,
-        strategic,
-        showDetail: required || atWar || zoom >= 1.55,
-        priority: (target ? 110_000 : source ? 105_000 : hovered ? 100_000 : ownCapital ? 90_000 : atWar ? 80_000 : topPower ? 70_000 : 0)
+        strategic: strategic || deepGeography,
+        persistentTopPower,
+        showDetail: required || atWar || integrating || (topPower && zoom >= 1.55)
+          || (deepGeography && projectedSpan >= 48),
+        priority: (target ? 110_000 : source ? 105_000 : hovered ? 100_000 : persistentTopPower ? 95_000 : ownCapital ? 90_000 : atWar ? 80_000 : integrating ? 75_000 : topPower ? 70_000 : deepGeography ? 50_000 : 0)
+          + (deepGeography ? Math.min(5_000, projectedSpan * 10) : 0)
           + (this.mapState ? this.strategicScores.get(this.mapState.territories[territoryId]?.ownerId ?? territoryId) ?? country?.powerIndex ?? 0 : country?.powerIndex ?? 0) * 10
           - (country?.labelRank ?? 5),
       });
@@ -605,10 +799,12 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       new Phaser.Geom.Rectangle(0, Math.max(0, camera.height - 76), Math.min(340, camera.width), 76),
     ];
     candidates.sort((left, right) => right.priority - left.priority || left.territoryId.localeCompare(right.territoryId));
-    for (const { territoryId, visual, required, strategic, showDetail } of candidates) {
+    for (const {
+      territoryId, visual, required, strategic, persistentTopPower, showDetail,
+    } of candidates) {
       // One compact badge system at every zoom. The overview shows names only;
       // military detail appears for interaction, active wars and closer zoom.
-      const scale = Phaser.Math.Clamp(1 / zoom, LABEL_MIN_SCREEN_SCALE, LABEL_MAX_SCREEN_SCALE);
+      const scale = Phaser.Math.Clamp(1 / zoom, 1 / MAP_MAX_ZOOM, LABEL_MAX_SCREEN_SCALE);
       const screenScale = scale * zoom;
       const layout = this.layoutLabel(visual, showDetail);
       const anchor = TERRITORY_BY_ID[territoryId];
@@ -623,11 +819,11 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       )) continue;
       const width = layout.width * screenScale;
       const height = layout.height * screenScale;
-      const offsets = strategic
-        ? [[0, 0], [0, -height - 4], [0, height + 4], [-width * 0.56, 0], [width * 0.56, 0]] as const
-        : [[0, 0]] as const;
+      const offsets = labelPlacementOffsets(width, height, strategic, persistentTopPower);
       let placement: { x: number; y: number; bounds: Phaser.Geom.Rectangle } | undefined;
-      for (const [offsetX, offsetY] of offsets) {
+      let leastOverlap: typeof placement;
+      let leastOverlapScore = Number.POSITIVE_INFINITY;
+      for (const { x: offsetX, y: offsetY } of offsets) {
         const centerX = Phaser.Math.Clamp(
           anchorScreenX + offsetX,
           width / 2 + LABEL_COLLISION_GAP,
@@ -645,12 +841,29 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
           height,
         );
         Phaser.Geom.Rectangle.Inflate(bounds, LABEL_COLLISION_GAP, LABEL_COLLISION_GAP);
-        if (accepted.some((other) => Phaser.Geom.Intersects.RectangleToRectangle(bounds, other))) continue;
+        const collisions = accepted.filter((other) => (
+          Phaser.Geom.Intersects.RectangleToRectangle(bounds, other)
+        ));
+        if (collisions.length > 0) {
+          if (required || persistentTopPower) {
+            const overlap = collisions.reduce((sum, other) => sum + rectangleOverlapArea(bounds, other), 0);
+            const score = overlap * 1_000 + Math.hypot(offsetX, offsetY);
+            if (score < leastOverlapScore) {
+              leastOverlapScore = score;
+              leastOverlap = { x: centerX - anchorScreenX, y: centerY - anchorScreenY, bounds };
+            }
+          }
+          continue;
+        }
         placement = { x: centerX - anchorScreenX, y: centerY - anchorScreenY, bounds };
         break;
       }
-      // The currently selected/hovered label is the only one allowed to win an
-      // impossible collision; other labels cull cleanly instead of piling up.
+      // Selection/hover and each on-screen top-ten badge must remain visible.
+      // The expanded search normally finds free space; least-overlap is only a
+      // final guarantee for very small windows or unusually dense empires.
+      if (!placement && (required || persistentTopPower)) {
+        placement = leastOverlap;
+      }
       if (!placement && required) {
         const centerX = Phaser.Math.Clamp(anchorScreenX, width / 2 + LABEL_COLLISION_GAP, camera.width - width / 2 - LABEL_COLLISION_GAP);
         const centerY = Phaser.Math.Clamp(
@@ -694,6 +907,69 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
     return touch ? { x: touch.clientX, y: touch.clientY } : { x: pointer.x, y: pointer.y };
   }
 
+  private screenWorldSize(screenPixels: number): number {
+    return screenPixels / Math.max(0.000001, this.cameras.main.zoom);
+  }
+
+  private cancelWheelZoom(): void {
+    this.zoomTarget = this.cameras.main.zoom;
+    this.zoomAnchorScreen = undefined;
+    this.zoomAnchorWorld = undefined;
+  }
+
+  private applyAnchoredZoom(zoom: number, zoomingOut: boolean): void {
+    const camera = this.cameras.main;
+    const screen = this.zoomAnchorScreen;
+    const world = this.zoomAnchorWorld;
+    if (!screen || !world) return;
+    camera.setZoom(zoom);
+    camera.scrollX = world.x - camera.width / 2 - (screen.x - camera.width / 2) / zoom;
+    camera.scrollY = world.y - camera.height / 2 - (screen.y - camera.height / 2) / zoom;
+    if (zoomingOut) {
+      const centeredScrollX = MAP_WIDTH / 2 - camera.width / 2;
+      const centeredScrollY = MAP_HEIGHT / 2 - camera.height / 2;
+      // Close zoom remains pointer-anchored. Near the complete world view the
+      // camera progressively returns to the actual centre of the map.
+      const centerPull = Phaser.Math.Clamp((1.22 - zoom) / (1.22 - MAP_MIN_ZOOM), 0, 1);
+      camera.scrollX = Phaser.Math.Linear(camera.scrollX, centeredScrollX, centerPull);
+      camera.scrollY = Phaser.Math.Linear(camera.scrollY, centeredScrollY, centerPull);
+      if (zoom <= MAP_MIN_ZOOM + 0.005) {
+        camera.scrollX = centeredScrollX;
+        camera.scrollY = centeredScrollY;
+      }
+    }
+    this.constrainCamera();
+  }
+
+  private refreshCameraPresentation(): void {
+    this.drawGraticule();
+    const state = this.mapState;
+    if (state) {
+      this.drawOwnershipPerimeters(state);
+      if (this.engine) this.drawLiveFronts(this.engine, state);
+      this.drawLogistics(state);
+    }
+    this.setSelection(this.selection);
+  }
+
+  update(_time: number, delta: number): void {
+    if (!this.zoomAnchorScreen || !this.zoomAnchorWorld) return;
+    const camera = this.cameras.main;
+    const difference = this.zoomTarget - camera.zoom;
+    const epsilon = Math.max(0.0002, this.zoomTarget * 0.0002);
+    const zoomingOut = difference < 0;
+    if (Math.abs(difference) <= epsilon) {
+      this.applyAnchoredZoom(this.zoomTarget, zoomingOut);
+      this.refreshCameraPresentation();
+      this.zoomAnchorScreen = undefined;
+      this.zoomAnchorWorld = undefined;
+      return;
+    }
+    const response = 1 - Math.exp(-Math.max(0, delta) / MAP_ZOOM_RESPONSE_MS);
+    this.applyAnchoredZoom(camera.zoom + difference * response, zoomingOut);
+    this.refreshCameraPresentation();
+  }
+
   private configureCamera(): void {
     // Phaser anchors worlds smaller than the zoomed viewport to the top-left.
     // Manual constraints below keep that case centred while still preventing
@@ -702,32 +978,21 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
     this.input.on('wheel', (pointer: Phaser.Input.Pointer, _objects: unknown, _dx: number, deltaY: number) => {
       if (this.inputBlocked) return;
       const camera = this.cameras.main;
+      const continuingWheelZoom = Boolean(this.zoomAnchorScreen && this.zoomAnchorWorld);
+      this.tweens.killTweensOf(camera);
       const before = camera.getWorldPoint(pointer.x, pointer.y);
-      const oldZoom = camera.zoom;
-      const zoom = Phaser.Math.Clamp(oldZoom - deltaY * 0.00115, MAP_MIN_ZOOM, MAP_MAX_ZOOM);
-      camera.setZoom(zoom);
-      camera.scrollX = before.x - camera.width / 2 - (pointer.x - camera.width / 2) / zoom;
-      camera.scrollY = before.y - camera.height / 2 - (pointer.y - camera.height / 2) / zoom;
-      if (zoom < oldZoom) {
-        const cursorScrollX = camera.scrollX;
-        const cursorScrollY = camera.scrollY;
-        const centeredScrollX = MAP_WIDTH / 2 - camera.width / 2;
-        const centeredScrollY = MAP_HEIGHT / 2 - camera.height / 2;
-        // Close zoom remains pointer-anchored. Near the complete world view the
-        // camera progressively returns to the actual centre of the map.
-        const centerPull = Phaser.Math.Clamp((1.22 - zoom) / (1.22 - MAP_MIN_ZOOM), 0, 1);
-        camera.scrollX = Phaser.Math.Linear(cursorScrollX, centeredScrollX, centerPull);
-        camera.scrollY = Phaser.Math.Linear(cursorScrollY, centeredScrollY, centerPull);
-        if (zoom <= MAP_MIN_ZOOM + 0.005) {
-          camera.scrollX = centeredScrollX;
-          camera.scrollY = centeredScrollY;
-        }
-      }
-      this.constrainCamera();
-      this.refreshZoomDetails();
+      this.zoomAnchorScreen = { x: pointer.x, y: pointer.y };
+      this.zoomAnchorWorld = { x: before.x, y: before.y };
+      const baseZoom = Phaser.Math.Clamp(continuingWheelZoom ? this.zoomTarget : camera.zoom, MAP_MIN_ZOOM, MAP_MAX_ZOOM);
+      this.zoomTarget = Phaser.Math.Clamp(
+        baseZoom * Math.exp(-deltaY * MAP_ZOOM_WHEEL_RATE),
+        MAP_MIN_ZOOM,
+        MAP_MAX_ZOOM,
+      );
     });
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
       if (this.inputBlocked) return;
+      this.cancelWheelZoom();
       this.dragged = false;
       this.countryPointerHandled = false;
       this.pointerDown = { x: pointer.x, y: pointer.y, scrollX: this.cameras.main.scrollX, scrollY: this.cameras.main.scrollY };
@@ -804,11 +1069,21 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
     const humanId = state.humanPlayerId;
     const human = engine.player(humanId);
     const ownerSignature = `${humanId}|${TERRITORIES.map((territory) => state.territories[territory.id]?.ownerId ?? '').join(',')}`;
-    if (ownerSignature !== this.flagAtlasOwnerSignature) {
-      this.flagAtlasOwnerSignature = ownerSignature;
+    const integrationSignature = TERRITORIES.map((territory) => {
+      const live = state.territories[territory.id];
+      return `${live?.coreOwnerId ?? ''}:${Math.round((live?.integration ?? 1) * 100)}`;
+    }).join(',');
+    const flagSignature = `${ownerSignature}|${integrationSignature}`;
+    if (flagSignature !== this.flagAtlasOwnerSignature) {
+      this.flagAtlasOwnerSignature = flagSignature;
       this.redrawFlagAtlas(state);
     }
-    const topologySignature = `${humanId}:${human?.capitalId ?? ''}|${ownerSignature}|${state.wars.map((war) => `${war.id}:${war.attackerId}:${war.defenderId}`).sort().join(',')}`;
+    const integrationTopology = TERRITORIES.map((territory) => {
+      const live = state.territories[territory.id];
+      return live && live.coreOwnerId !== live.ownerId && live.integration < 0.999999
+        ? `${territory.id}:${live.coreOwnerId}>${live.ownerId}` : '';
+    }).filter(Boolean).join(',');
+    const topologySignature = `${humanId}:${human?.capitalId ?? ''}|${ownerSignature}|${integrationTopology}|${state.wars.map((war) => `${war.id}:${war.attackerId}:${war.defenderId}`).sort().join(',')}`;
     const topologyChanged = topologySignature !== this.lastTopologySignature;
     if (topologyChanged) {
       this.lastTopologySignature = topologySignature;
@@ -816,6 +1091,7 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       this.ownerTerritoryCounts.clear();
       this.ownerLabelTerritoryIds.clear();
       this.absorbedTerritoryIds.clear();
+      this.integratingTerritoryIds.clear();
       const territoryIdsByOwner = new Map<string, string[]>();
       for (const territoryState of Object.values(state.territories)) {
         this.ownerTerritoryCounts.set(territoryState.ownerId, (this.ownerTerritoryCounts.get(territoryState.ownerId) ?? 0) + 1);
@@ -835,7 +1111,10 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       }
       this.humanCapitalId = this.ownerLabelTerritoryIds.get(humanId) ?? human?.capitalId;
       for (const territoryState of Object.values(state.territories)) {
-        if ((this.ownerTerritoryCounts.get(territoryState.ownerId) ?? 0) > 1
+        const integrating = territoryState.coreOwnerId !== territoryState.ownerId
+          && territoryState.integration < 0.999999;
+        if (integrating) this.integratingTerritoryIds.add(territoryState.id);
+        if (!integrating && (this.ownerTerritoryCounts.get(territoryState.ownerId) ?? 0) > 1
           && territoryState.id !== this.ownerLabelTerritoryIds.get(territoryState.ownerId)) this.absorbedTerritoryIds.add(territoryState.id);
       }
       this.warTerritoryIds.clear();
@@ -850,7 +1129,7 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       const ranking = engine.globalRanking();
       this.strategicScores = new Map(ranking.map((entry) => [entry.player.id, entry.score]));
       this.ownerRanks = new Map(ranking.map((entry, index) => [entry.player.id, index + 1]));
-      this.topPowerOwnerIds = new Set(ranking.slice(0, 5).map((entry) => entry.player.id));
+      this.topPowerOwnerIds = new Set(ranking.slice(0, 10).map((entry) => entry.player.id));
       this.lastStrategicScoreTick = state.tick;
       this.refreshZoomDetails();
     }
@@ -861,7 +1140,7 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
     const operationChanged = operationSignature !== this.lastOperationSignature;
     if (operationChanged) this.lastOperationSignature = operationSignature;
     const logisticsSignature = state.logisticsMovements.map((movement) => (
-      `${movement.playerId}:${movement.sourceId}:${movement.targetId}:${movement.manpower.toFixed(6)}:${movement.veteranManpower.toFixed(6)}`
+      `${movement.playerId}:${movement.sourceId}:${movement.targetId}:${movement.manpower.toFixed(6)}`
     )).join('|');
     const logisticsChanged = logisticsSignature !== this.lastLogisticsSignature;
     if (logisticsChanged) this.lastLogisticsSignature = logisticsSignature;
@@ -906,27 +1185,44 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
           defense: empireArmy.power > 0 ? empireArmy.defenseMass / empireArmy.power : territoryState.army.defense,
         }
         : territoryState.army;
+      const integrating = territoryState.coreOwnerId !== territoryState.ownerId
+        && territoryState.integration < 0.999999;
+      const integrationPercent = Math.round(Phaser.Math.Clamp(territoryState.integration, 0, 1) * 100);
       const fillSignature = [
         owner.id,
         owner.id === humanId ? 1 : 0,
+        integrating ? integrationPercent : 'core',
       ].join(':');
       if (this.fillSignatures.get(territory.id) !== fillSignature) {
         this.fillSignatures.set(territory.id, fillSignature);
         // The flag is now the ownership colour. This neutral underlay is only a
         // fallback for entities without an ISO flag and improves text contrast.
-        for (const part of visual.parts) part.setFillStyle(0x0d1a22, 0.18);
-        visual.panel.setStrokeStyle(1, owner.id === humanId ? 0x77efff : 0xa8c8d2, 0.74);
+        const integrationTint = 1 - Phaser.Math.Clamp(territoryState.integration, 0, 1);
+        for (const part of visual.parts) part.setFillStyle(
+          integrating ? 0x9a6a2d : 0x0d1a22,
+          integrating ? 0.055 + 0.065 * integrationTint : 0.18,
+        );
+        visual.panel.setStrokeStyle(
+          1,
+          integrating ? 0xf2c879 : owner.id === humanId ? 0x77efff : 0xa8c8d2,
+          integrating ? 0.82 : 0.74,
+        );
       }
       // An absorbed territory never keeps its former country label. The current
       // realm name appears once, at its capital; every visible label uses the same
-      // compact name + one consistent total-force badge. Veteran durability is
-      // folded into this value by the UI bridge.
+      // compact name + one consistent total-force badge. National Combat
+      // Experience is already folded into this value by the UI bridge.
       const absorbed = this.absorbedTerritoryIds.has(territory.id);
       const ownerRank = this.ownerRanks.get(owner.id);
-      const labelName = empireCapital
-        ? `${compactCountryName(owner.name).toUpperCase()}${ownerRank ? `  #${ownerRank}` : ''}` : '';
-      const armyLabel = absorbed ? ''
-        : `${compactPower(displayedArmy.power)} · A ${displayedArmy.attack.toFixed(1)} · D ${displayedArmy.defense.toFixed(1)}`;
+      const coreOwner = integrating ? playerFor(territoryState.coreOwnerId) : undefined;
+      const originalName = coreOwner?.name ?? COUNTRY_BY_ID[territory.id]?.englishName ?? territory.id;
+      const labelName = integrating
+        ? compactCountryName(originalName).toUpperCase()
+        : empireCapital
+          ? `${compactCountryName(owner.name).toUpperCase()}${ownerRank ? `  #${ownerRank}` : ''}` : '';
+      const armyLabel = integrating ? `INTEGRATING ${integrationPercent}%`
+        : absorbed ? ''
+          : `${compactPower(displayedArmy.power)} · A ${displayedArmy.attack.toFixed(1)} · D ${displayedArmy.defense.toFixed(1)}`;
       const labelSignature = `${owner.id}:${empireSize}:${labelName}:${armyLabel}`;
       if (this.labelSignatures.get(territory.id) !== labelSignature) {
         this.labelSignatures.set(territory.id, labelSignature);
@@ -973,7 +1269,7 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
         if (!ownerId || !neighborOwnerId || ownerId === neighborOwnerId || !atWar) continue;
         const neighbor = TERRITORY_BY_ID[neighborId];
         if (!neighbor) continue;
-        graphics.lineStyle(0.75, 0xff8a79, 0.24);
+        graphics.lineStyle(this.screenWorldSize(0.75), 0xff8a79, 0.24);
         this.drawWrappedLine(graphics, territory.x, territory.y, neighbor.x, neighbor.y);
       }
     }
@@ -984,9 +1280,9 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
         const commander = engine.player(operation.commanderId);
         if (!source || !target || !commander) continue;
         const color = commander.isHuman ? 0x70ecff : commander.color;
-        graphics.lineStyle(1.4, color, 0.045 + Math.max(0, operation.momentum) * 0.0008);
+        graphics.lineStyle(this.screenWorldSize(1.4), color, 0.045 + Math.max(0, operation.momentum) * 0.0008);
         this.drawWrappedLine(graphics, source.x, source.y, target.x, target.y);
-        graphics.lineStyle(0.65, color, commander.isHuman ? 0.34 : 0.22);
+        graphics.lineStyle(this.screenWorldSize(0.65), color, commander.isHuman ? 0.34 : 0.22);
         this.drawWrappedLine(graphics, source.x, source.y, target.x, target.y);
       }
     }
@@ -999,25 +1295,22 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
     const humanMoves = state.logisticsMovements
       .filter((movement) => movement.playerId === state.humanPlayerId
         && movement.manpower > 0.000001)
-      .sort((left, right) => right.manpower - left.manpower
-        || right.veteranManpower - left.veteranManpower)
+      .sort((left, right) => right.manpower - left.manpower)
       .slice(0, 6);
     for (const movement of humanMoves) {
       const source = TERRITORY_BY_ID[movement.sourceId];
       const target = TERRITORY_BY_ID[movement.targetId];
       if (!source || !target) continue;
-      const includesVeterans = movement.veteranManpower > 0.000001;
       const intensity = Phaser.Math.Clamp(movement.manpower * 12, 0.10, 0.48);
-      const color = includesVeterans ? 0xffd56a : 0x75efff;
-      graphics.lineStyle(includesVeterans ? 1.15 : 0.7 + intensity, color,
-        includesVeterans ? 0.42 : 0.12 + intensity * 0.28);
+      graphics.lineStyle(this.screenWorldSize(0.7 + intensity), 0x75efff,
+        0.12 + intensity * 0.28);
       this.drawWrappedLine(graphics, source.x, source.y, target.x, target.y);
       if (Math.abs(source.x - target.x) < MAP_WIDTH / 2) {
         const x = source.x + (target.x - source.x) * 0.72;
         const y = source.y + (target.y - source.y) * 0.72;
-        graphics.fillStyle(includesVeterans ? 0xffe6a0 : 0xbaf9ff, 0.40 + intensity * 0.65);
-        if (includesVeterans) graphics.fillRect(x - 2, y - 2, 4, 4);
-        else graphics.fillCircle(x, y, 1.2 + intensity * 1.8);
+        const markerScale = this.screenWorldSize(1);
+        graphics.fillStyle(0xbaf9ff, 0.40 + intensity * 0.65);
+        graphics.fillCircle(x, y, (1.2 + intensity * 1.8) * markerScale);
       }
     }
   }
@@ -1049,7 +1342,10 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       const territoryState = state?.territories[territoryId];
       const owner = territoryState ? this.engine?.player(territoryState.ownerId) : undefined;
       const empireSize = owner ? this.ownerTerritoryCounts.get(owner.id) ?? 1 : 1;
-      const mergedRegion = empireSize > 1;
+      const integrating = territoryState
+        ? territoryState.coreOwnerId !== territoryState.ownerId && territoryState.integration < 0.999999
+        : false;
+      const mergedRegion = empireSize > 1 && !integrating;
       for (const part of visual.parts) {
         const mergedFill = owner
           ? colorMix(owner.id === humanId ? colorMix(owner.color, 0x65efff, 0.22) : owner.color, 0x071521, owner.id === humanId ? 0.08 : 0.24)
@@ -1061,10 +1357,10 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
           part.setAlpha(legal.size > 0 && !selected && !target && !isLegal ? 0.62 : 1);
           continue;
         }
-        const width = selected || target ? 1.85 : hovered ? 1.35 : humanOwned ? 1.3 : isLegal ? 1.1 : 0.7;
-        const color = target ? 0xffd36b : selected || isLegal || humanOwned ? 0x8cf3ff : 0xa9c5cd;
-        const alpha = selected || target ? 1 : hovered ? 0.98 : humanOwned ? 0.92 : isLegal ? 0.72 : 0.28;
-        part.setStrokeStyle(width, color, alpha).setDepth(0.8);
+        const width = selected || target ? 1.85 : hovered ? 1.35 : humanOwned ? 1.3 : isLegal ? 1.1 : integrating ? 0.9 : 0.7;
+        const color = target ? 0xffd36b : selected || isLegal || humanOwned ? 0x8cf3ff : integrating ? 0xf2c879 : 0xa9c5cd;
+        const alpha = selected || target ? 1 : hovered ? 0.98 : humanOwned ? 0.92 : isLegal ? 0.72 : integrating ? 0.56 : 0.28;
+        part.setStrokeStyle(this.screenWorldSize(width), color, alpha).setDepth(0.8);
         part.setAlpha(legal.size > 0 && !selected && !target && !isLegal ? 0.62 : 1);
       }
       visual.hud.setDepth(selected || target ? 14 : hovered ? 13 : humanOwned ? 12 : isLegal ? 11 : 8);
@@ -1075,6 +1371,7 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
   setInputBlocked(blocked: boolean): void {
     if (this.inputBlocked === blocked) return;
     this.inputBlocked = blocked;
+    if (blocked) this.cancelWheelZoom();
     this.pointerDown = undefined;
     this.dragged = false;
     if (!blocked || !this.hoveredId) return;
@@ -1083,22 +1380,38 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
     this.setSelection(this.selection);
   }
 
+  private detailZoomFor(territoryId: string, minimum: number): number {
+    const bounds = COUNTRY_RENDER_BOUNDS.get(territoryId);
+    if (!bounds) return minimum;
+    const largestDimension = Math.max(bounds.width, bounds.height);
+    return Phaser.Math.Clamp(
+      Math.max(minimum, MICROSTATE_FOCUS_SCREEN_SIZE / Math.max(0.25, largestDimension)),
+      MAP_MIN_ZOOM,
+      MAP_MAX_ZOOM,
+    );
+  }
+
   focusAction(sourceId?: string, targetId?: string): void {
-    const point = targetId ? TERRITORY_BY_ID[targetId] : sourceId ? TERRITORY_BY_ID[sourceId] : undefined;
-    if (!point) return;
+    const territoryId = targetId ?? sourceId;
+    const point = territoryId ? TERRITORY_BY_ID[territoryId] : undefined;
+    if (!territoryId || !point) return;
     const camera = this.cameras.main;
-    const targetZoom = Math.max(camera.zoom, 1.45);
+    const targetZoom = Math.max(camera.zoom, this.detailZoomFor(territoryId, 1.45));
+    this.cancelWheelZoom();
+    this.tweens.killTweensOf(camera);
+    this.zoomTarget = targetZoom;
     this.tweens.add({
       targets: camera,
-      // Phaser's scroll position is measured from the unzoomed camera centre.
-      // Dividing the half-viewport by zoom shifts the target east/south.
       scrollX: point.x - camera.width / 2,
       scrollY: point.y - camera.height / 2,
       zoom: targetZoom,
       duration: 420,
       ease: 'Sine.easeInOut',
-      onUpdate: () => this.refreshZoomDetails(),
-      onComplete: () => this.refreshZoomDetails(),
+      onUpdate: () => this.refreshCameraPresentation(),
+      onComplete: () => {
+        this.zoomTarget = camera.zoom;
+        this.refreshCameraPresentation();
+      },
     });
   }
 
@@ -1107,9 +1420,12 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
     if (!point) return;
     const camera = this.cameras.main;
     // The country-selection handoff should feel like entering a command map,
-    // not returning to the continent overview. Large countries remain freely
-    // pannable and the player can always zoom back out afterwards.
-    const targetZoom = 3.15;
+    // not returning to the continent overview. Microstates receive enough
+    // screen area to read their real outline; large countries stay restrained.
+    const targetZoom = this.detailZoomFor(territoryId, 3.15);
+    this.cancelWheelZoom();
+    this.tweens.killTweensOf(camera);
+    this.zoomTarget = targetZoom;
     this.tweens.add({
       targets: camera,
       scrollX: point.x - camera.width / 2,
@@ -1117,8 +1433,11 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       zoom: targetZoom,
       duration: 620,
       ease: 'Sine.easeInOut',
-      onUpdate: () => this.refreshZoomDetails(),
-      onComplete: () => this.refreshZoomDetails(),
+      onUpdate: () => this.refreshCameraPresentation(),
+      onComplete: () => {
+        this.zoomTarget = camera.zoom;
+        this.refreshCameraPresentation();
+      },
     });
   }
 
@@ -1149,9 +1468,16 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       this.tweens.add({ targets: target.hud, alpha: { from: .58, to: 1 }, duration: 260, ease: 'Quad.easeOut' });
     }
     const targetState = this.mapState?.territories[result.targetId];
-    const mergedTarget = targetState ? (this.ownerTerritoryCounts.get(targetState.ownerId) ?? 1) > 1 : false;
+    const targetIntegrating = targetState
+      ? targetState.coreOwnerId !== targetState.ownerId && targetState.integration < 0.999999
+      : false;
+    const mergedTarget = targetState
+      ? (this.ownerTerritoryCounts.get(targetState.ownerId) ?? 1) > 1 && !targetIntegrating
+      : false;
     for (const part of target.parts.slice(0, 20)) {
-      if (humanDefending && !mergedTarget && !result.conquered) part.setStrokeStyle(1.85, 0xff3f38, 1).setDepth(7);
+      if (humanDefending && !mergedTarget && !result.conquered) {
+        part.setStrokeStyle(this.screenWorldSize(1.85), 0xff3f38, 1).setDepth(7);
+      }
       this.tweens.add({ targets: part, alpha: { from: 0.25, to: 1 }, duration: result.conquered ? 650 : 320, ease: 'Quad.easeOut' });
     }
     const sourcePoint = TERRITORY_BY_ID[result.sourceId];
@@ -1170,10 +1496,11 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       const wrapped = Math.abs(targetPoint.x - sourcePoint.x) > MAP_WIDTH / 2;
       const arcDirection = String(result.sourceId) < String(result.targetId) ? 1 : -1;
       const arcHeight = wrapped ? 0 : Phaser.Math.Clamp(distance * 0.14, 7, 34) * arcDirection;
+      const effectScale = this.screenWorldSize(1);
       const controlX = sourcePoint.x + dx * 0.5 - dy / distance * arcHeight;
       const controlY = sourcePoint.y + dy * 0.5 + dx / distance * arcHeight;
       const drawRoute = (width: number, alpha: number) => {
-        strike.lineStyle(width, operationColor, alpha);
+        strike.lineStyle(width * effectScale, operationColor, alpha);
         if (wrapped) this.drawWrappedLine(strike, sourcePoint.x, sourcePoint.y, targetPoint.x, targetPoint.y);
         else {
           const curve = new Phaser.Curves.QuadraticBezier(
@@ -1186,11 +1513,11 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       };
       drawRoute(2.4, result.conquered ? 0.17 : 0.10);
       drawRoute(0.85, result.conquered ? 0.78 : 0.58);
-      const sourcePulse = this.add.circle(sourcePoint.x, sourcePoint.y, 2.2, operationColor, 0.18)
-        .setStrokeStyle(0.8, operationColor, 0.72).setDepth(19);
+      const sourcePulse = this.add.circle(sourcePoint.x, sourcePoint.y, 2.2 * effectScale, operationColor, 0.18)
+        .setStrokeStyle(0.8 * effectScale, operationColor, 0.72).setDepth(19);
       this.tweens.add({ targets: sourcePulse, scale: 2.2, alpha: 0, duration: 380,
         ease: 'Sine.easeOut', onComplete: () => sourcePulse.destroy() });
-      const projectile = this.add.container(sourcePoint.x, sourcePoint.y).setDepth(19)
+      const projectile = this.add.container(sourcePoint.x, sourcePoint.y).setDepth(19).setScale(effectScale)
         .setRotation(Math.atan2(dy, dx));
       const glow = this.add.circle(-3, 0, 3.2, operationColor, 0.16);
       const tail = this.add.rectangle(-5, 0, 9, 0.75, operationColor, 0.52).setOrigin(0.5);
@@ -1219,8 +1546,9 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
         },
         onComplete: () => {
           projectile.destroy();
-          const impact = this.add.circle(targetPoint.x, targetPoint.y, result.conquered ? 3.2 : 2.4,
-            operationColor, 0.10).setStrokeStyle(1, operationColor, 0.78).setDepth(19);
+          const impact = this.add.circle(targetPoint.x, targetPoint.y,
+            (result.conquered ? 3.2 : 2.4) * effectScale,
+            operationColor, 0.10).setStrokeStyle(effectScale, operationColor, 0.78).setDepth(19);
           this.tweens.add({ targets: impact, scale: result.conquered ? 4.2 : 3.1, alpha: 0,
             duration: result.conquered ? 620 : 420, ease: 'Sine.easeOut', onComplete: () => impact.destroy() });
         },
@@ -1261,6 +1589,9 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
 
   resetCamera(): void {
     const camera = this.cameras.main;
+    this.cancelWheelZoom();
+    this.tweens.killTweensOf(camera);
+    this.zoomTarget = 1;
     this.tweens.add({
       targets: camera,
       scrollX: MAP_WIDTH / 2 - camera.width / 2,
@@ -1268,8 +1599,11 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       zoom: 1,
       duration: 420,
       ease: 'Sine.easeInOut',
-      onUpdate: () => this.refreshZoomDetails(),
-      onComplete: () => this.refreshZoomDetails(),
+      onUpdate: () => this.refreshCameraPresentation(),
+      onComplete: () => {
+        this.zoomTarget = camera.zoom;
+        this.refreshCameraPresentation();
+      },
     });
   }
 }

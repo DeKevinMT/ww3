@@ -7,7 +7,6 @@ import {
   CEASEFIRE_POST_PAYMENT_TRUCE_TICKS,
   PEACE_OFFER_DURATION_TICKS,
   PEACE_REQUEST_MIN_WAR_AGE_TICKS,
-  UNDERDOG_VETERAN_MAX_EXPERIENCE, UNDERDOG_VETERAN_MAX_SHARE,
   WAR_MOBILIZATION_TICKS,
   WAR_RECRUITMENT_THROUGHPUT_FACTOR,
 } from './balance';
@@ -31,11 +30,11 @@ function isolatedEngine(seed: number, humanId: string): WorldEngineV2 {
 }
 
 describe('clear war decisions and attrition', () => {
-  it('gives Luxembourg a bounded elite core without making it a guaranteed winner', () => {
+  it('starts Luxembourg without an artificial underdog bonus', () => {
     const engine = isolatedEngine(1_501, 'lux');
     const forecast = engine.warForecast('lux', 'bel');
-    expect(forecast.attackerVeterans).toBeCloseTo(engine.totalManpower('lux').deployed * UNDERDOG_VETERAN_MAX_SHARE, 6);
-    expect(forecast.attackerVeteranExperience).toBe(UNDERDOG_VETERAN_MAX_EXPERIENCE);
+    expect(forecast.attackerCombatExperience).toBe(0);
+    expect(engine.combatExperience('lux').experience).toBe(0);
     expect(forecast.winChance).toBeGreaterThanOrEqual(5);
     expect(forecast.winChance).toBeLessThanOrEqual(15);
 
@@ -162,7 +161,12 @@ describe('clear war decisions and attrition', () => {
       weeklyCost: 3, startsTick: 0, expiresTick: 52,
     });
     for (const territory of Object.values(engine.state.territories)) {
-      if (territory.owner === id('lux')) territory.owner = id('bel');
+      if (territory.owner === id('lux')) {
+        territory.owner = id('bel');
+        territory.coreOwner = id('bel');
+        territory.integration = 1;
+        delete territory.integrationProgram;
+      }
     }
     invalidateTerritoryIndexV2(engine.state);
     expect(engine.weeklyFinanceBreakdown('bel').ceasefireIncome).toBe(0);
@@ -181,7 +185,6 @@ describe('clear war decisions and attrition', () => {
     engine.step();
     const offer = engine.state.offers.find((candidate) => candidate.warId === war.id && candidate.status === 'pending')!;
     expect(engine.respondToOffer(offer.id, false).accepted).toBe(true);
-    engine.step();
     expect(engine.activeWarBetween('lux', 'bel')).toBeDefined();
     expect(engine.ceasefireTerms(war.id, 'lux').allowed).toBe(false);
     expect(engine.requestCeasefire(war.id, 'lux').accepted).toBe(false);
@@ -235,8 +238,6 @@ describe('clear war decisions and attrition', () => {
     for (const territory of Object.values(engine.state.territories)) {
       if (territory.owner !== id('bel')) continue;
       territory.army.manpower = territory.army.capacity * 0.11;
-      territory.army.veteranManpower = 0;
-      territory.army.veteranExperience = 0;
     }
     engine.state.tick = 21;
     processWarsV2(engine.state, WORLD_CONTENT_V2);

@@ -2,11 +2,6 @@ import {
   V2_TICK_DURATION_MS,
   RAPID_RECRUITMENT_COOLDOWN_TICKS,
   RESEARCH_SURGE_COOLDOWN_TICKS,
-  UNDERDOG_VETERAN_CURVE,
-  UNDERDOG_VETERAN_FREE_RANKS,
-  UNDERDOG_VETERAN_FULL_STRENGTH_DEPTH,
-  UNDERDOG_VETERAN_MAX_EXPERIENCE,
-  UNDERDOG_VETERAN_MAX_SHARE,
   clamp,
   round,
   copyResearchAllocationsV2,
@@ -29,7 +24,7 @@ import {
   selectActiveWarBetweenV2,
   selectArmyCapacityTargetV2,
   selectArmyStrengthV2,
-  selectVeteranForcesV2,
+  selectCombatExperienceV2,
   selectControlledPopulationV2,
   selectConquestForecastV2,
   selectConventionalPowerV2,
@@ -83,6 +78,7 @@ import type {
   BudgetPolicyV2,
   CeasefireTermsV2,
   CommandResultV2,
+  CombatExperienceViewV2,
   ConquestForecastV2,
   ArmyStateV2,
   ArmyStrengthV2,
@@ -106,7 +102,6 @@ import type {
   TerritoryId,
   TerritoryViewV2,
   TotalManpowerV2,
-  VeteranForcesViewV2,
   WarAccessV2,
   WarDeclarationStatusV2,
   WarForecastV2,
@@ -121,7 +116,6 @@ import type {
   WorldStateV2,
 } from './types';
 import { nationIdV2, territoryIdV2 } from './types';
-import { equivalentVeteranExperienceV2 } from './veterans';
 
 type WorldListenerV2 = (state: WorldStateV2, change: WorldChangeV2) => void;
 
@@ -157,37 +151,6 @@ function validBudgetV2(budget: BudgetPolicyV2): boolean {
     && budget.military + budget.research + budget.development === 100;
 }
 
-export interface UnderdogVeteranTermsV2 {
-  rank: number;
-  countryCount: number;
-  veteranShare: number;
-  veteranExperience: number;
-}
-
-/** Opening-only elite assistance for the selected human country; it never adds manpower. */
-export function underdogVeteranTermsV2(rank: number, countryCount: number): UnderdogVeteranTermsV2 {
-  const safeCount = Math.max(1, Math.floor(countryCount));
-  const safeRank = clamp(Math.floor(rank), 1, safeCount);
-  const underdogDepth = clamp(
-    (safeRank - UNDERDOG_VETERAN_FREE_RANKS)
-      / Math.max(1, safeCount - UNDERDOG_VETERAN_FREE_RANKS),
-    0,
-    1,
-  );
-  const eliteIntensity = clamp(
-    underdogDepth / UNDERDOG_VETERAN_FULL_STRENGTH_DEPTH,
-    0,
-    1,
-  );
-  return {
-    rank: safeRank,
-    countryCount: safeCount,
-    veteranShare: round(UNDERDOG_VETERAN_MAX_SHARE * eliteIntensity ** UNDERDOG_VETERAN_CURVE, 9),
-    veteranExperience: eliteIntensity > 0
-      ? round(UNDERDOG_VETERAN_MAX_EXPERIENCE * eliteIntensity, 9) : 0,
-  };
-}
-
 export class WorldEngineV2 {
   readonly content: WorldContentV2;
   readonly state: WorldStateV2;
@@ -197,7 +160,6 @@ export class WorldEngineV2 {
   private applyingCommand = false;
   private sequenceAlreadyAssigned = false;
   private logisticsMovements: LogisticsMovementV2[] = [];
-  private openingUnderdogPlayerId?: PlayerId;
   private readonly humanWarBaselines = new Map<string, HumanWarBaselineV2>();
 
   constructor(seed = 1, content: WorldContentV2 = WORLD_CONTENT_V2, initialState?: WorldStateV2) {
@@ -321,7 +283,7 @@ export class WorldEngineV2 {
       const sumTerritories = (territoryIds: readonly TerritoryId[], field: 'population' | 'economy'): number => round(
         territoryIds.reduce((sum, territoryId) => sum + (this.state.territories[territoryId]?.[field] ?? 0), 0),
       );
-      const humanVeterans = conclusion.veterans.find((entry) => entry.playerId === humanId)!;
+      const humanExperience = conclusion.experience.find((entry) => entry.playerId === humanId)!;
       const ratingsAfter = createMilitaryBaseSnapshotV2(this.state, this.content).byNation.get(humanId);
       const reparationsReceived = settlement?.kind === 'reparations' && settlement.payeeId === humanId
         ? settlement.amount ?? 0 : 0;
@@ -372,11 +334,12 @@ export class WorldEngineV2 {
         reparationsPaid,
         treatyWeeklyPayment,
         treatyPaymentWeeks: settlement?.kind === 'ceasefire' ? settlement.paymentWeeks ?? 0 : 0,
-        veteranManpowerBefore: humanVeterans.manpowerBefore,
-        veteranManpowerAfter: humanVeterans.manpowerAfter,
-        veteransPromoted: round(Math.max(0, humanVeterans.manpowerAfter - humanVeterans.manpowerBefore)),
-        veteranExperienceBefore: humanVeterans.experienceBefore,
-        veteranExperienceAfter: humanVeterans.experienceAfter,
+        combatExperienceBefore: humanExperience.experienceBefore,
+        combatExperienceAfter: humanExperience.experienceAfter,
+        combatExperienceGained: round(Math.max(
+          0,
+          humanExperience.experienceAfter - humanExperience.experienceBefore,
+        )),
         baseAttackBefore: baseline.baseAttackBefore,
         baseAttackAfter: ratingsAfter?.attack ?? baseline.baseAttackBefore,
         baseDefenseBefore: baseline.baseDefenseBefore,
@@ -399,47 +362,11 @@ export class WorldEngineV2 {
     return selectTerritoriesOfV2(this.state, nationIdV2(playerId));
   }
 
-  private clearOpeningUnderdogVeterans(playerId: PlayerId): void {
-    for (const territory of this.territoriesOf(playerId)) {
-      territory.army.veteranManpower = 0;
-      territory.army.veteranExperience = 0;
-    }
-  }
-
-  private grantOpeningUnderdogVeterans(playerId: PlayerId, terms: UnderdogVeteranTermsV2): void {
-    if (terms.veteranShare <= 0 || terms.veteranExperience <= 0) return;
-    for (const territory of this.territoriesOf(playerId)) {
-      const army = territory.army;
-      const targetVeterans = Math.min(army.manpower, army.manpower * terms.veteranShare);
-      const existingVeterans = Math.min(army.manpower, Math.max(0, army.veteranManpower));
-      if (targetVeterans <= existingVeterans) continue;
-      const addedVeterans = targetVeterans - existingVeterans;
-      army.veteranManpower = round(targetVeterans, 9);
-      army.veteranExperience = army.veteranManpower > 0.000000001
-        ? equivalentVeteranExperienceV2([
-          { manpower: existingVeterans, experience: army.veteranExperience },
-          { manpower: addedVeterans, experience: terms.veteranExperience },
-        ]) : 0;
-    }
-  }
-
   chooseCountry(countryId: string): CommandResultV2 {
     const id = nationIdV2(countryId);
     if (this.state.tick > 0) return { accepted: false, reason: 'Country selection is locked after the campaign begins.' };
     if (!this.state.players[id] || this.territoriesOf(id).length === 0) return { accepted: false, reason: 'Unknown or eliminated country.' };
     const formerHumanId = this.state.humanPlayerId;
-    if (this.openingUnderdogPlayerId) {
-      this.clearOpeningUnderdogVeterans(this.openingUnderdogPlayerId);
-      this.openingUnderdogPlayerId = undefined;
-    }
-    const openingRanking = selectGlobalRankingV2(this.state, this.content);
-    const openingRank = openingRanking.findIndex((entry) => entry.player.id === id) + 1;
-    const underdogTerms = underdogVeteranTermsV2(
-      openingRank > 0 ? openingRank : openingRanking.length,
-      openingRanking.length,
-    );
-    this.grantOpeningUnderdogVeterans(id, underdogTerms);
-    if (underdogTerms.veteranShare > 0) this.openingUnderdogPlayerId = id;
     if (this.state.tick === 0 && formerHumanId !== id) {
       this.state.players[formerHumanId]!.propagandaProgram = null;
       this.state.players[formerHumanId]!.propagandaAvailableTick = 0;
@@ -537,8 +464,8 @@ export class WorldEngineV2 {
     return selectTotalManpowerV2(this.state, nationIdV2(playerId));
   }
 
-  totalVeterans(playerId: string): VeteranForcesViewV2 {
-    return selectVeteranForcesV2(this.state, nationIdV2(playerId));
+  combatExperience(playerId: string): CombatExperienceViewV2 {
+    return selectCombatExperienceV2(this.state, nationIdV2(playerId));
   }
 
   /** Ephemeral one-week map telemetry; never part of saves or deterministic hashes. */
@@ -951,7 +878,13 @@ export class WorldEngineV2 {
       synchronizeArmyCapacityV2(this.state, this.content);
       const financePowers = createPowerSnapshotV2(this.state, this.content);
       const finance = createFinancePlansV2(this.state, this.content, financePowers);
-      processFinanceMilitaryV2(this.state, this.content, finance);
+      const integrationCompletions = processFinanceMilitaryV2(this.state, this.content, finance);
+      for (const completion of integrationCompletions) this.emit({
+        reason: 'integration-complete',
+        victorId: completion.ownerId,
+        defeatedId: completion.formerCoreOwnerId,
+        critical: completion.ownerId === this.state.humanPlayerId,
+      });
       const researchPowers = createPowerSnapshotV2(this.state, this.content);
       processResearchV2(this.state, this.content, finance, researchPowers);
       processDevelopmentPhaseV2(this.state, this.content, finance);

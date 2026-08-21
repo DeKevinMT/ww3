@@ -258,7 +258,9 @@ function absorbFederationMemberV2(
   for (const territory of Object.values(state.territories)) {
     if (territory.owner !== memberId) continue;
     territory.owner = leaderId;
+    territory.coreOwner = leaderId;
     territory.integration = 1;
+    delete territory.integrationProgram;
     delete territory.control;
   }
   leader.treasury = round(leader.treasury + member.treasury);
@@ -266,6 +268,10 @@ function absorbFederationMemberV2(
   member.treasury = 0;
   member.foodStock = 0;
   member.warFatigue = 100;
+  leader.combatExperience = round(Math.max(
+    leader.combatExperience,
+    member.combatExperience,
+  ));
   for (const branch of RESEARCH_BRANCHES) {
     leader.research.progress[branch] = round(Math.max(
       leader.research.progress[branch], member.research.progress[branch],

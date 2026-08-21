@@ -1,10 +1,12 @@
 import {
-  AI_CRISIS_DEFENSIVE_ARMY_FLOOR,
   AI_HEALTHY_ARMY_TARGET,
-  AI_PEACE_DEFENSIVE_ARMY_FLOOR,
   AI_SEVERE_DEBT_REVENUE_WEEKS,
-  ACCELERATED_DEMOBILIZATION_COST_MULTIPLIER,
-  ACCELERATED_DEMOBILIZATION_RATE,
+  COMBAT_EXPERIENCE_ATTACK_BONUS_PER_SCORE,
+  COMBAT_EXPERIENCE_CASUALTY_REDUCTION_PER_SCORE,
+  COMBAT_EXPERIENCE_DEFENSE_BONUS_PER_SCORE,
+  COMBAT_EXPERIENCE_MAX_ATTACK_BONUS,
+  COMBAT_EXPERIENCE_MAX_CASUALTY_REDUCTION,
+  COMBAT_EXPERIENCE_MAX_DEFENSE_BONUS,
   CONQUEST_INITIAL_INTEGRATION_SHARE,
   ECONOMY_ANNUAL_GROWTH_MAX,
   ECONOMY_ANNUAL_GROWTH_MIN,
@@ -40,7 +42,10 @@ import {
   FOOD_STORAGE_MILLIONS_PER_KM2,
   FOOD_MAX_STOCK_WEEKS,
   FOOD_TARGET_WEEKS,
-  PASSIVE_DEMOBILIZATION_RATE,
+  EXTREME_CRISIS_DEMOBILIZATION_RATE,
+  EXTREME_CRISIS_FOOD_COVERAGE,
+  EXTREME_CRISIS_FOOD_RESERVE_WEEKS,
+  EXTREME_CRISIS_MAX_UPKEEP_FUNDING,
   PASSIVE_RECRUITMENT_CAPACITY_RATE,
   PASSIVE_RECRUITMENT_TRAINING_BONUS,
   PEACE_RECRUITMENT_ACCELERATION_COST_MULTIPLIER,
@@ -68,10 +73,6 @@ import {
   WAR_OPERATION_COST_PER_MILLION,
   WAR_OPERATION_REVENUE_SHARE,
   WAR_RECRUITMENT_THROUGHPUT_FACTOR,
-  VETERAN_ATTACK_BONUS_PER_SQRT_EXPERIENCE,
-  VETERAN_DEFENSE_BONUS_PER_SQRT_EXPERIENCE,
-  VETERAN_HP_BONUS_PER_SQRT_EXPERIENCE,
-  VETERAN_QUALITY_REFERENCE_RATING,
   researchFundingShareV2,
   clamp,
   diminishingResearchLevelV2,
@@ -92,6 +93,7 @@ import {
   type ArmyStateV2,
   ArmyStrengthV2,
   BudgetPolicyV2,
+  CombatExperienceViewV2,
   ConquestForecastV2,
   EconomicOutputLedgerV2,
   FrontOperationV2,
@@ -113,18 +115,12 @@ import {
   TerritoryStateV2,
   TerritoryViewV2,
   TotalManpowerV2,
-  VeteranForcesViewV2,
   WarAccessV2,
   WarStateV2,
   WeeklyFinanceBreakdownV2,
   WeeklyManpowerProjectionV2,
   WorldStateV2,
 } from './types';
-import {
-  equivalentVeteranExperienceV2,
-  veteranBonusScoreV2,
-  veteranRankV2,
-} from './veterans';
 
 const nationIdCache = new WeakMap<WorldStateV2, PlayerId[]>();
 const territoryIdCache = new WeakMap<WorldStateV2, TerritoryId[]>();
@@ -422,56 +418,42 @@ export function selectTotalManpowerV2(state: WorldStateV2, playerId: PlayerId): 
   return { deployed: round(deployed), capacity: round(capacity) };
 }
 
-export function selectVeteranMultipliersV2(experience: number): Pick<
-VeteranForcesViewV2,
-'hpMultiplier' | 'attackMultiplier' | 'defenseMultiplier'
-> {
-  const experienceRoot = veteranBonusScoreV2(experience);
+/**
+ * Empire-wide institutional experience. The canonical value is deliberately
+ * uncapped; square-root scoring and bounded modifiers provide diminishing
+ * returns without throwing earned history away.
+ */
+export function selectCombatExperienceV2(
+  state: WorldStateV2,
+  playerId: PlayerId,
+): CombatExperienceViewV2 {
+  const experience = Math.max(0, state.players[playerId]?.combatExperience ?? 0);
+  const score = Math.sqrt(experience);
   return {
-    hpMultiplier: round(1 + VETERAN_HP_BONUS_PER_SQRT_EXPERIENCE * experienceRoot, 9),
-    attackMultiplier: round(1 + VETERAN_ATTACK_BONUS_PER_SQRT_EXPERIENCE * experienceRoot, 9),
-    defenseMultiplier: round(1 + VETERAN_DEFENSE_BONUS_PER_SQRT_EXPERIENCE * experienceRoot, 9),
-  };
-}
-
-export function selectArmyVeteranForcesV2(army: ArmyStateV2): VeteranForcesViewV2 {
-  const manpower = clamp(army.veteranManpower, 0, army.manpower);
-  const experience = manpower > 0 ? Math.max(0, army.veteranExperience) : 0;
-  return {
-    manpower: round(manpower, 9),
     experience: round(experience, 9),
-    rank: veteranRankV2(manpower, experience),
-    ...selectVeteranMultipliersV2(experience),
+    score: round(score, 9),
+    attackMultiplier: round(1 + Math.min(
+      COMBAT_EXPERIENCE_MAX_ATTACK_BONUS,
+      COMBAT_EXPERIENCE_ATTACK_BONUS_PER_SCORE * score,
+    ), 9),
+    defenseMultiplier: round(1 + Math.min(
+      COMBAT_EXPERIENCE_MAX_DEFENSE_BONUS,
+      COMBAT_EXPERIENCE_DEFENSE_BONUS_PER_SCORE * score,
+    ), 9),
+    casualtyMultiplier: round(1 - Math.min(
+      COMBAT_EXPERIENCE_MAX_CASUALTY_REDUCTION,
+      COMBAT_EXPERIENCE_CASUALTY_REDUCTION_PER_SCORE * score,
+    ), 9),
   };
 }
 
-export function selectVeteranForcesV2(state: WorldStateV2, playerId: PlayerId): VeteranForcesViewV2 {
-  let manpower = 0;
-  const cohorts: Array<{ manpower: number; experience: number }> = [];
-  for (const id of territoryIndexV2(state).owned.get(playerId) ?? []) {
-    const army = state.territories[id]!.army;
-    const veterans = clamp(army.veteranManpower, 0, army.manpower);
-    manpower += veterans;
-    cohorts.push({ manpower: veterans, experience: army.veteranExperience });
-  }
-  const experience = equivalentVeteranExperienceV2(cohorts);
-  return {
-    manpower: round(manpower, 9),
-    experience: round(experience, 9),
-    rank: veteranRankV2(manpower, experience),
-    ...selectVeteranMultipliersV2(experience),
-  };
-}
-
-/** Effective damage pool: veterans remain ordinary manpower but endure more damage. */
+/** Combat experience changes quality and losses, never the army's headcount. */
 export function selectArmyCombatManpowerV2(
   _state: WorldStateV2,
   _playerId: PlayerId,
   army: ArmyStateV2,
 ): number {
-  const veterans = selectArmyVeteranForcesV2(army);
-  const regulars = Math.max(0, army.manpower - veterans.manpower);
-  return round(regulars + veterans.manpower * veterans.hpMultiplier, 9);
+  return round(Math.max(0, army.manpower), 9);
 }
 
 export function selectNuclearPowerV2(
@@ -515,14 +497,9 @@ export function selectEffectiveAttackV2(
 ): number {
   const level = state.players[playerId]?.research.effectLevels.attack ?? 0;
   const deterrence = selectNuclearPowerV2(state, content, playerId);
-  const veterans = selectArmyVeteranForcesV2(army);
+  const combatExperience = selectCombatExperienceV2(state, playerId);
   const researchMultiplier = (1 + 0.01 * level) * (1 + deterrence.attackBonus);
-  if (army.manpower <= 0.000000001) return round(army.baseAttack * researchMultiplier);
-  const combatManpower = Math.max(0.000000001,
-    selectArmyCombatManpowerV2(state, playerId, army));
-  const additiveAttackMass = army.manpower * army.baseAttack
-    + veterans.manpower * (veterans.attackMultiplier - 1) * VETERAN_QUALITY_REFERENCE_RATING;
-  return round(additiveAttackMass * researchMultiplier / combatManpower);
+  return round(army.baseAttack * researchMultiplier * combatExperience.attackMultiplier);
 }
 
 export function selectEffectiveDefenseV2(
@@ -535,14 +512,9 @@ export function selectEffectiveDefenseV2(
   const level = state.players[playerId]?.research.effectLevels.defense ?? 0;
   const researchBonus = level <= 0 ? 0
     : DEFENSE_RESEARCH_MAX_BONUS * level / (level + DEFENSE_RESEARCH_HALF_SATURATION);
-  const veterans = selectArmyVeteranForcesV2(army);
+  const combatExperience = selectCombatExperienceV2(state, playerId);
   const researchMultiplier = 1 + researchBonus;
-  if (army.manpower <= 0.000000001) return round(army.baseDefense * researchMultiplier);
-  const combatManpower = Math.max(0.000000001,
-    selectArmyCombatManpowerV2(state, playerId, army));
-  const additiveDefenseMass = army.manpower * army.baseDefense
-    + veterans.manpower * (veterans.defenseMultiplier - 1) * VETERAN_QUALITY_REFERENCE_RATING;
-  return round(additiveDefenseMass * researchMultiplier / combatManpower);
+  return round(army.baseDefense * researchMultiplier * combatExperience.defenseMultiplier);
 }
 
 export function selectTerritoryPowerV2(
@@ -569,7 +541,7 @@ export function selectCurrentPowerV2(
     .reduce((sum, id) => sum + selectTerritoryPowerV2(state, content, id, militaryBaseSnapshot), 0));
 }
 
-/** Live conventional army power, including the modest bonuses of surviving veterans. */
+/** Live conventional army power, including empire-wide combat experience. */
 export function selectConventionalPowerV2(
   state: WorldStateV2,
   content: WorldContentV2,
@@ -677,7 +649,7 @@ export function selectArmyStrengthV2(state: WorldStateV2, content: WorldContentV
     ...army,
     capacityTarget,
     fillRatio: army.capacity > 0 ? round(clamp(army.deployed / army.capacity, 0, 1)) : 0,
-    veterans: selectVeteranForcesV2(state, playerId),
+    combatExperience: selectCombatExperienceV2(state, playerId),
   };
 }
 
@@ -718,8 +690,6 @@ export function selectRapidRecruitmentTermsV2(
     capacity: army.capacity,
     baseAttack: baseQuality.attack,
     baseDefense: baseQuality.defense,
-    veteranManpower: 0,
-    veteranExperience: 0,
   };
   const attack = selectEffectiveAttackV2(state, content, playerId, armyState, militaryBaseSnapshot);
   const defense = selectEffectiveDefenseV2(state, content, playerId, armyState, militaryBaseSnapshot);
@@ -867,7 +837,7 @@ export function selectFoodAccessCeilingV2(
 /**
  * Food demand is intentionally nonlinear in the late game. Civilians remain
  * the base demand, while mega-populations and mass human armies add logistics
- * pressure. Veterans remain part of ordinary manpower and food demand.
+ * pressure. Combat experience does not add manpower or food demand.
  */
 export function selectFoodDemandV2(state: WorldStateV2, playerId: PlayerId): number {
   const nation = state.players[playerId];
@@ -1348,33 +1318,17 @@ export function selectWeeklyFinanceBreakdownV2(
   );
   const weaponsPremium = weeklyRealDefence * 0.65 * army.capacity / initialArmy * (weaponsUpkeep - 1);
   const armyUpkeep = baselineUpkeep + weaponsPremium;
-  // APEX treats payroll as a real obligation. It can shift almost the whole
-  // ordinary envelope toward the army, but it cannot conjure free upkeep: an
-  // army beyond 90% of the budget still demobilizes gradually.
+  // APEX treats payroll as a real obligation. It shifts the ordinary envelope
+  // toward the army before funding discretionary research or development.
   const requiredMilitaryShare = envelope > 0
     ? Math.min(90, Math.ceil(100 * armyUpkeep / envelope)) : 90;
-  // Recovery may trim an oversized peacetime force, but not erase national
-  // defence. Only a genuine food/debt emergency unlocks the lower crisis floor.
-  const severeSurvivalEmergency = foodCoverage < 0.65
-    || reserveWeeks < 0.5
-    || treasuryWeeks < -AI_SEVERE_DEBT_REVENUE_WEEKS;
-  const economicEmergency = foodCoverage < 0.90
-    || reserveWeeks < 2
-    || nation.treasury < 0
-    || treasuryWeeks < 0;
-  const defensiveFloor = severeSurvivalEmergency
-    ? AI_CRISIS_DEFENSIVE_ARMY_FLOOR : AI_PEACE_DEFENSIVE_ARMY_FLOOR;
-  const armyFillRatio = army.capacity > 0 ? army.deployed / army.capacity : 0;
-  const protectDefensiveForce = armyFillRatio <= defensiveFloor + 0.01;
-  if (atWar || !economicEmergency || protectDefensiveForce) {
-    while (budget.military < requiredMilitaryShare) {
-      const donor = (['development', 'research'] as const)
-        .filter((domain) => budget[domain] > 5)
-        .sort((left, right) => budget[right] - budget[left] || left.localeCompare(right))[0];
-      if (!donor) break;
-      budget[donor] -= 1;
-      budget.military += 1;
-    }
+  while (budget.military < requiredMilitaryShare) {
+    const donor = (['development', 'research'] as const)
+      .filter((domain) => budget[domain] > 5)
+      .sort((left, right) => budget[right] - budget[left] || left.localeCompare(right))[0];
+    if (!donor) break;
+    budget[donor] -= 1;
+    budget.military += 1;
   }
   // When APEX has a healthy army and cash above its runway, it stops wasting a
   // large Armed Forces remainder on generic operations. It keeps upkeep plus
@@ -1426,21 +1380,20 @@ export function selectWeeklyFinanceBreakdownV2(
   const acceleratedRecruitment = recruitmentUnitCost > 0
     ? recruitment / (recruitmentUnitCost * accelerationCostMultiplier) : 0;
   const standingOperations = Math.max(0, military - mandatoryFunded - recruitment);
-  const shouldAccelerateDemobilization = !atWar && economicEmergency
-    && mandatoryFundingRatio < 0.999999 && fillRatio > defensiveFloor + 0.05;
-  const acceleratedDemobilizationRequest = shouldAccelerateDemobilization
-    ? Math.min(
-      army.deployed * ACCELERATED_DEMOBILIZATION_RATE,
-      Math.max(0, army.deployed - army.capacity * defensiveFloor),
-    ) : 0;
-  const demobilizationCostRequest = acceleratedDemobilizationRequest
-    * recruitmentUnitCost * ACCELERATED_DEMOBILIZATION_COST_MULTIPLIER;
-  const demobilizationCost = Math.min(development * 0.15, demobilizationCostRequest);
-  const acceleratedDemobilization = recruitmentUnitCost > 0
-    ? demobilizationCost / (recruitmentUnitCost * ACCELERATED_DEMOBILIZATION_COST_MULTIPLIER) : 0;
+  const catastrophicFoodCrisis = foodCoverage < EXTREME_CRISIS_FOOD_COVERAGE
+    && reserveWeeks < EXTREME_CRISIS_FOOD_RESERVE_WEEKS;
+  const catastrophicDebtCrisis = treasuryWeeks < -AI_SEVERE_DEBT_REVENUE_WEEKS;
+  const shouldDemobilize = !atWar
+    && mandatoryFundingRatio <= EXTREME_CRISIS_MAX_UPKEEP_FUNDING
+    && (catastrophicFoodCrisis || catastrophicDebtCrisis);
+  // This legacy-named telemetry field now represents the only permitted force
+  // reduction: at most 0.05% per week in an extreme survival crisis.
+  const acceleratedDemobilization = shouldDemobilize
+    ? round(army.deployed * EXTREME_CRISIS_DEMOBILIZATION_RATE, 9) : 0;
+  const demobilizationCost = 0;
   const conditionRequest = selectTerritoriesOfV2(state, playerId)
     .reduce((sum, territory) => sum + (1 - territory.condition) * 0.20, 0);
-  const productiveDevelopment = Math.max(0, development - demobilizationCost);
+  const productiveDevelopment = development;
   const condition = Math.min(productiveDevelopment, conditionRequest);
   const developmentRemainder = Math.max(0, productiveDevelopment - condition);
   const economyGrowth = developmentRemainder * 0.70;
@@ -1535,8 +1488,6 @@ interface ProjectedTerritoryArmyV2 {
   capacity: number;
   baseAttack: number;
   baseDefense: number;
-  veteranManpower: number;
-  veteranExperience: number;
 }
 
 export interface FinanceManpowerPhaseProjectionV2 {
@@ -1572,38 +1523,27 @@ export function projectFinanceManpowerPhaseV2(
       capacity: army.capacity,
       baseAttack: army.baseAttack,
       baseDefense: army.baseDefense,
-      veteranManpower: army.veteranManpower,
-      veteranExperience: army.veteranExperience,
     };
   });
   const deployedBefore = current.reduce((sum, army) => sum + army.manpower, 0);
-  const fundingRatio = clamp(finance.mandatoryFundingRatio, 0, 1);
   const capacityTargets = stateArmyCapacityTargetsV2(
     state, content, playerId, current.map((army) => army.id),
   );
   const nationalCapacity = [...capacityTargets.values()].reduce((sum, capacity) => sum + capacity, 0);
-  const severeSurvivalEmergency = finance.foodCoverage < 0.65
-    || nation.foodStock / Math.max(0.01, finance.foodDemand) < 0.5
-    || finance.closingTreasury < -finance.revenue * AI_SEVERE_DEBT_REVENUE_WEEKS;
-  const economicEmergency = finance.foodCoverage < 0.90
-    || nation.foodStock / Math.max(0.01, finance.foodDemand) < 2
-    || finance.closingTreasury < 0
-    || fundingRatio < 0.999999;
-  const defensiveFloor = severeSurvivalEmergency
-    ? AI_CRISIS_DEFENSIVE_ARMY_FLOOR : AI_PEACE_DEFENSIVE_ARMY_FLOOR;
-  const minimumDefensiveManpower = nationalCapacity * defensiveFloor;
-  const passiveDemobilization = economicEmergency
-    ? deployedBefore * PASSIVE_DEMOBILIZATION_RATE * (1 - fundingRatio) : 0;
-  const demobilizationTarget = Math.max(
-    minimumDefensiveManpower,
-    deployedBefore - passiveDemobilization - finance.acceleratedDemobilization,
+  // Never infer demobilisation from capacity or ordinary underfunding. The
+  // finance phase may explicitly request the extreme-crisis trickle only.
+  const maximumWeeklyDemobilization = deployedBefore * EXTREME_CRISIS_DEMOBILIZATION_RATE;
+  const requestedDemobilization = clamp(
+    finance.acceleratedDemobilization,
+    0,
+    maximumWeeklyDemobilization,
   );
+  const demobilizationTarget = deployedBefore - requestedDemobilization;
   const demobilizationScale = deployedBefore > 0
     ? clamp(demobilizationTarget / deployedBefore, 0, 1) : 1;
   const projected = current.map((army) => {
     const capacity = capacityTargets.get(army.id) ?? 0;
     const manpower = round(army.manpower * demobilizationScale);
-    const veteranManpower = round(Math.min(army.veteranManpower, manpower), 9);
     const localQuality = localArmyBaseQualityV2(content, army.id);
     return {
       id: army.id,
@@ -1611,8 +1551,6 @@ export function projectFinanceManpowerPhaseV2(
       manpower,
       baseAttack: manpower > 0.000000001 ? army.baseAttack : localQuality.attack,
       baseDefense: manpower > 0.000000001 ? army.baseDefense : localQuality.defense,
-      veteranManpower,
-      veteranExperience: veteranManpower > 0 ? army.veteranExperience : 0,
     };
   });
   const deployedAfterDemobilization = projected.reduce((sum, army) => sum + army.manpower, 0);
@@ -1637,7 +1575,7 @@ export function projectFinanceManpowerPhaseV2(
       totalLocalRecruitmentRoom > 0 ? recruitedUnits * gap / totalLocalRecruitmentRoom : 0,
     );
     mixArmyBaseQualityV2(army, added, localArmyBaseQualityV2(content, army.id));
-    army.manpower = round(Math.min(army.capacity, army.manpower + added));
+    army.manpower = round(army.manpower + added);
   }
   const deployedAfterFinance = projected.reduce((sum, army) => sum + army.manpower, 0);
   return {
@@ -1777,7 +1715,7 @@ export function selectConquestForecastV2(
     maxTreasurySeized: round((state.players[targetId]?.treasury ?? 0) * 0.25),
     inheritedEnemyManpower: 0,
     asOfTick: state.tick,
-    assumptions: ['10% initial integration', '10–20 year size-based integration', 'occupation army transferred from attacker', '25% treasury only on final elimination', 'no enemy manpower inheritance'],
+    assumptions: ['10% initial integration', '12.5–170 year immutable size curve', 'occupation army transferred from attacker', '25% treasury only on final elimination', 'no enemy manpower inheritance'],
   };
 }
 
@@ -1887,6 +1825,7 @@ export function finiteStateNumbersV2(state: WorldStateV2): boolean {
     nation.foodStock,
     nation.foodSecurity,
     nation.warFatigue,
+    nation.combatExperience,
     nation.propagandaAvailableTick,
     nation.propagandaProgram?.startedTick ?? 0,
     nation.propagandaProgram?.endsTick ?? 0,
@@ -1900,7 +1839,8 @@ export function finiteStateNumbersV2(state: WorldStateV2): boolean {
   for (const territory of Object.values(state.territories)) values.push(territory.population, territory.economy, territory.condition, territory.integration,
     territory.army.manpower, territory.army.capacity,
     territory.army.baseAttack, territory.army.baseDefense,
-    territory.army.veteranManpower, territory.army.veteranExperience,
+    territory.integrationProgram?.startedTick ?? 0,
+    territory.integrationProgram?.completesTick ?? 0,
     territory.control?.share ?? 0);
   return values.every(Number.isFinite);
 }

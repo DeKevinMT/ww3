@@ -7,7 +7,7 @@ import type {
   TerrainType,
 } from './types';
 
-export const V2_RULES_VERSION = 'frontier-command-v2.52-integration-multifront';
+export const V2_RULES_VERSION = 'frontier-command-v2.54-faster-integration';
 export const V2_CONTENT_VERSION = 'natural-earth-countries-2026-v7-greenland';
 export const V2_MAP_ID = 'natural-earth-countries-2026';
 export const V2_TICK_DURATION_MS = 1_000;
@@ -36,11 +36,14 @@ export const MANUAL_ACTION_BASE_DISCOUNT = 0.85;
 export const MANUAL_RAPID_RECRUITMENT_COST_GROWTH = 1.25;
 export const MANUAL_RESEARCH_SURGE_COST_GROWTH = 1.30;
 export const MANUAL_PROPAGANDA_COST_GROWTH = 1.35;
-/** Healthy countries preserve their whole trained army; only a real economic crisis permits demobilisation. */
+/** Healthy countries preserve their whole trained army and always rebuild toward full capacity. */
 export const AI_HEALTHY_ARMY_TARGET = 1;
-export const AI_PEACE_DEFENSIVE_ARMY_FLOOR = 0.45;
-export const AI_CRISIS_DEFENSIVE_ARMY_FLOOR = 0.25;
-export const AI_SEVERE_DEBT_REVENUE_WEEKS = 8;
+export const AI_SEVERE_DEBT_REVENUE_WEEKS = 26;
+/** Only a catastrophic, genuinely unaffordable force may shrink, and then over decades. */
+export const EXTREME_CRISIS_FOOD_COVERAGE = 0.50;
+export const EXTREME_CRISIS_FOOD_RESERVE_WEEKS = 0.25;
+export const EXTREME_CRISIS_MAX_UPKEEP_FUNDING = 0.50;
+export const EXTREME_CRISIS_DEMOBILIZATION_RATE = 0.0005;
 /** Normal training is slow and predictable; Training research improves the pipeline. */
 export const PASSIVE_RECRUITMENT_CAPACITY_RATE = 0.001;
 export const PASSIVE_RECRUITMENT_TRAINING_BONUS = 0.02;
@@ -49,10 +52,6 @@ export const PEACE_RECRUITMENT_ACCELERATION_MULTIPLIER = 1.5;
 export const WAR_RECRUITMENT_ACCELERATION_MULTIPLIER = 3;
 export const PEACE_RECRUITMENT_ACCELERATION_COST_MULTIPLIER = 2.5;
 export const WAR_RECRUITMENT_ACCELERATION_COST_MULTIPLIER = 4.5;
-/** Force reduction is a gradual transition, with an optional paid peacetime fast-track. */
-export const PASSIVE_DEMOBILIZATION_RATE = 0.0015;
-export const ACCELERATED_DEMOBILIZATION_RATE = 0.0035;
-export const ACCELERATED_DEMOBILIZATION_COST_MULTIPLIER = 0.60;
 export const DEFENDER_POSITION_MULTIPLIER = 1.25;
 /** Prepared firing positions also improve defender counter-fire without duplicating the full shield bonus. */
 export const DEFENDER_COUNTERFIRE_MULTIPLIER = 1.15;
@@ -73,9 +72,9 @@ export const ATTACKER_CIVILIAN_LOSS_DEFENDER_SHARE = 0.20;
  */
 export const COMBAT_POWER_RATIO_EXPONENT = 1;
 /** Baseline share of an equally matched force lost in one battle pulse. */
-/** Sustained two-week attrition: wars should be costly without ending in a few pulses. */
-export const COMBAT_BASE_CASUALTY_RATE = 0.032;
-/** No combat pulse removes more than five percent of that local army's maximum strength. */
+/** Sustained two-week attrition at half the former 3.2% baseline. */
+export const COMBAT_BASE_CASUALTY_RATE = 0.016;
+/** No local formation may lose more than 5% of its supported maximum per pulse. */
 export const COMBAT_MAX_CASUALTY_RATE = 0.05;
 /** A local force below five percent of its opponent is routed after the exchange. */
 export const COMBAT_ROUTE_STRENGTH_RATIO = 0.05;
@@ -170,35 +169,24 @@ export const WAR_ACCESS_OPERATION_MULTIPLIER = {
 } as const;
 export const WAR_ACCESS_SUPPLY_MULTIPLIER = {
   land: 1,
-  naval: 0.78,
+  naval: 0.92,
 } as const;
 export const WAR_ACCESS_ASSAULT_MULTIPLIER = {
   land: 1,
-  naval: 0.78,
+  naval: 1,
 } as const;
 export const WAR_ACCESS_CASUALTY_MULTIPLIER = {
   land: 1,
-  naval: 1.10,
+  naval: 1,
 } as const;
-/** Veteran experience has no hard cap; square-root scaling keeps long-lived forces fair. */
-export const VETERAN_HP_BONUS_PER_SQRT_EXPERIENCE = 0.03;
-export const VETERAN_ATTACK_BONUS_PER_SQRT_EXPERIENCE = 0.01;
-export const VETERAN_DEFENSE_BONUS_PER_SQRT_EXPERIENCE = 0.01;
-/** Country-agnostic conversion from veteran bonus score to additive ATK/DEF rating mass. */
-export const VETERAN_QUALITY_REFERENCE_RATING = 100;
-export const VETERAN_EXPERIENCE_PER_WAR = 0.20;
-/** Base share of surviving regulars promoted once a war ends; total war difficulty scales this award. */
-export const VETERAN_PROMOTION_SHARE_PER_WAR = 0.04;
-/**
- * A human-controlled underdog can start with an elite core, never extra
- * manpower. The weakest countries receive the maximum aid; everyone above it
- * follows one smooth rank curve.
- */
-export const UNDERDOG_VETERAN_FREE_RANKS = 20;
-export const UNDERDOG_VETERAN_MAX_SHARE = 0.80;
-export const UNDERDOG_VETERAN_MAX_EXPERIENCE = 3_500;
-export const UNDERDOG_VETERAN_CURVE = 0.55;
-export const UNDERDOG_VETERAN_FULL_STRENGTH_DEPTH = 0.95;
+/** Empire-wide combat experience has diminishing returns and bounded military effects. */
+export const COMBAT_EXPERIENCE_PER_WAR = 1;
+export const COMBAT_EXPERIENCE_ATTACK_BONUS_PER_SCORE = 0.01;
+export const COMBAT_EXPERIENCE_DEFENSE_BONUS_PER_SCORE = 0.01;
+export const COMBAT_EXPERIENCE_CASUALTY_REDUCTION_PER_SCORE = 0.0075;
+export const COMBAT_EXPERIENCE_MAX_ATTACK_BONUS = 0.20;
+export const COMBAT_EXPERIENCE_MAX_DEFENSE_BONUS = 0.20;
+export const COMBAT_EXPERIENCE_MAX_CASUALTY_REDUCTION = 0.15;
 /** Strategic deterrence affects conventional attack power; nuclear strikes are not simulated. */
 export const NUCLEAR_POWER_ATTACK_BONUS_PER_LEVEL = 0.04;
 /** First researched tier cost; later tiers compound so established nuclear powers still progress slowly. */
@@ -261,12 +249,12 @@ export const RIVAL_AI_PEACE_RESERVE_WEEKS = 4;
 
 /** A conquest exposes ten percent of its surviving potential immediately. */
 export const CONQUEST_INITIAL_INTEGRATION_SHARE = 0.10;
-/** Country-size-calibrated integration always completes inside this calendar window. */
-export const CONQUEST_INTEGRATION_MIN_YEARS = 10;
-export const CONQUEST_INTEGRATION_MAX_YEARS = 20;
 export const WEEKS_PER_YEAR = 52;
 /** Only a light slice of the field army crosses the border as an occupation force. */
 export const CONQUEST_OCCUPATION_FORCE_TRANSFER_SHARE = 0.02;
+/** A fresh conquest may commit up to 10% of its surviving source as a real one-year guard. */
+export const CONQUEST_CAPTURE_GUARD_MAX_TRANSFER_SHARE = 0.10;
+export const CONQUEST_CAPTURE_GUARD_TICKS = 52;
 /** Loose containment networks prefer consolidation over a many-country dogpile. */
 export const DEFENSIVE_FEDERATION_THREAT = 78;
 export const DEFENSIVE_FEDERATION_COOLDOWN_TICKS = 312;

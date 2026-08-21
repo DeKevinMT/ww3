@@ -69,7 +69,6 @@ describe('V2 authoritative manpower projection', () => {
       state.wars = [];
       const army = state.territories[territoryIdV2('bel')]!.army;
       army.manpower = army.capacity * fillRatio;
-      army.veteranManpower = Math.min(army.veteranManpower, army.manpower);
       state.territories[territoryIdV2('bel')]!.condition = 0.40;
       state.players[belgium]!.warFatigue = 35;
       state.players[belgium]!.budget = { military: 5, research: 5, development: 90 };
@@ -154,7 +153,6 @@ describe('V2 food-aware national AI', () => {
     for (const territory of Object.values(state.territories)) {
       if (territory.owner !== belgium) continue;
       territory.army.manpower = territory.army.capacity * 0.80;
-      territory.army.veteranManpower = Math.min(territory.army.veteranManpower, territory.army.manpower);
     }
     state.players[belgium]!.budget = { military: 5, research: 5, development: 90 };
     state.players[belgium]!.treasury = 1_000_000;
@@ -175,7 +173,6 @@ describe('V2 food-aware national AI', () => {
     for (const territory of Object.values(state.territories)) {
       if (territory.owner !== belgium) continue;
       territory.army.manpower = territory.army.capacity * 0.25;
-      territory.army.veteranManpower = Math.min(territory.army.veteranManpower, territory.army.manpower);
     }
     state.players[belgium]!.budget = { military: 5, research: 5, development: 90 };
     state.players[belgium]!.foodStock = 0;

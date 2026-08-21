@@ -57,12 +57,10 @@ describe('simple APEX research surge', () => {
     expect(selectResearchSurgeTermsV2(state, WORLD_CONTENT_V2, bel).cost).toBeGreaterThan(damaged.cost);
   });
 
-  it('does not charge more merely because veteran combat power increased', () => {
+  it('does not charge more merely because Combat Experience increased', () => {
     const state = belgiumState(2_403);
     const before = selectResearchSurgeTermsV2(state, WORLD_CONTENT_V2, bel);
-    const capital = state.territories[state.players[bel].capitalId]!;
-    capital.army.veteranManpower = capital.army.manpower;
-    capital.army.veteranExperience = 100;
+    state.players[bel].combatExperience = 100;
     const after = selectResearchSurgeTermsV2(state, WORLD_CONTENT_V2, bel);
     expect(after.cost).toBeCloseTo(before.cost, 6);
   });

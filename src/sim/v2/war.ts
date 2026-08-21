@@ -9,10 +9,12 @@ import {
   CEASEFIRE_REPEAT_COST_MULTIPLIER,
   COLLAPSED_OCCUPATION_CAPTURE_SHARE,
   COMBAT_BASE_CASUALTY_RATE,
+  COMBAT_EXPERIENCE_PER_WAR,
   COMBAT_MAX_CASUALTY_RATE,
   COMBAT_POWER_RATIO_EXPONENT,
   COMBAT_ROUTE_STRENGTH_RATIO,
-  CONQUEST_INITIAL_INTEGRATION_SHARE,
+  CONQUEST_CAPTURE_GUARD_MAX_TRANSFER_SHARE,
+  CONQUEST_CAPTURE_GUARD_TICKS,
   CONQUEST_OCCUPATION_FORCE_TRANSFER_SHARE,
   CONTESTED_CONTROL_EROSION_PER_PULSE,
   ATTACKER_CIVILIAN_LOSS_DEFENDER_SHARE,
@@ -31,8 +33,6 @@ import {
   SUPER_AI_DEFENSIVE_COUNTERATTACK,
   TERRAIN_DEFENSE_MODIFIER,
   TRUCE_TICKS,
-  VETERAN_EXPERIENCE_PER_WAR,
-  VETERAN_PROMOTION_SHARE_PER_WAR,
   WAR_ACCESS_ASSAULT_MULTIPLIER,
   WAR_ACCESS_CASUALTY_MULTIPLIER,
   WAR_ACCESS_SUPPLY_MULTIPLIER,
@@ -43,18 +43,22 @@ import {
   smoothstep,
 } from './balance';
 import type { WorldContentV2 } from './content';
-import { stateTerritoryArmyCapacityTargetV2 } from './capacity';
+import {
+  stateTerritoryArmyCapacityTargetV2,
+  stateTerritoryArmySupportCeilingV2,
+} from './capacity';
 import {
   mixArmyBaseQualityV2,
   resetEmptyArmyBaseQualityV2,
 } from './armyQuality';
 import { addWorldEventV2 } from './events';
+import { beginTerritoryIntegrationV2 } from './integration';
 import { resistanceCombatMultiplierV2 } from './resistance';
 import {
   createMilitaryBaseSnapshotV2,
   selectActiveWarBetweenV2,
   selectArmyCombatManpowerV2,
-  selectArmyVeteranForcesV2,
+  selectCombatExperienceV2,
   selectCurrentPowerV2,
   selectEffectiveAttackV2,
   selectEffectiveDefenseV2,
@@ -65,7 +69,6 @@ import {
   selectTerritoryPowerV2,
   selectTerritoryWarAccessV2,
   selectTotalManpowerV2,
-  selectVeteranForcesV2,
   selectWarAccessTypeV2,
   selectWarMobilizationCostV2,
   selectWarsOfV2,
@@ -92,12 +95,9 @@ import type {
   WarForecastV2,
   WorldStateV2,
 } from './types';
-import { equivalentVeteranExperienceV2 } from './veterans';
 
-export interface WarConclusionVeteransV2 {
+export interface WarConclusionExperienceV2 {
   playerId: PlayerId;
-  manpowerBefore: number;
-  manpowerAfter: number;
   experienceBefore: number;
   experienceAfter: number;
 }
@@ -117,7 +117,7 @@ export interface WarConclusionV2 {
   war: WarStateV2;
   endedTick: number;
   reason: string;
-  veterans: [WarConclusionVeteransV2, WarConclusionVeteransV2];
+  experience: [WarConclusionExperienceV2, WarConclusionExperienceV2];
   settlement?: WarConclusionSettlementV2;
 }
 
@@ -138,11 +138,9 @@ interface CaptureOutcomeV2 {
 }
 
 function armyCombatCapacityV2(state: WorldStateV2, playerId: PlayerId, army: WorldStateV2['territories'][TerritoryId]['army']): number {
-  const currentVeteranDurability = Math.max(
-    0,
-    selectArmyCombatManpowerV2(state, playerId, army) - army.manpower,
-  );
-  return Math.max(army.capacity, army.manpower) + currentVeteranDurability;
+  void state;
+  void playerId;
+  return Math.max(army.capacity, army.manpower);
 }
 
 export interface CombatExchangeProjectionV2 {
@@ -439,12 +437,12 @@ export function projectCombatExchangeV2(
 
   const attackerCasualtyLevel = state.players[attackerId]!.research.effectLevels['casualty-reduction'];
   const defenderCasualtyLevel = state.players[defenderId]!.research.effectLevels['casualty-reduction'];
-  const attackerCasualtyModifier = 1 - 0.50 * attackerCasualtyLevel / (attackerCasualtyLevel + 30);
+  const attackerCasualtyModifier = (1 - 0.50 * attackerCasualtyLevel / (attackerCasualtyLevel + 30))
+    * selectCombatExperienceV2(state, attackerId).casualtyMultiplier;
   const defenderCasualtyModifier = (1 - 0.50 * defenderCasualtyLevel / (defenderCasualtyLevel + 30))
-    * apexDefense.casualty;
-  // There is intentionally no percentage floor. With a linear pressure
-  // ratio, a tiny force can only inflict casualties proportional to soldiers
-  // it actually committed; the old 0.6% floor inverted extreme matchups.
+    * apexDefense.casualty * selectCombatExperienceV2(state, defenderId).casualtyMultiplier;
+  // There is no minimum-casualty floor. The 5% ceiling is measured against
+  // supported maximum strength, so a depleted final remnant cannot stalemate.
   const defenderLossRate = clamp(COMBAT_BASE_CASUALTY_RATE * Math.pow(
     Math.max(0, attackRatio), COMBAT_POWER_RATIO_EXPONENT,
   ) * varianceA * defenderCasualtyModifier, 0, COMBAT_MAX_CASUALTY_RATE);
@@ -472,11 +470,17 @@ export function projectCombatExchangeV2(
     counterRatio,
     attackerLossRate,
     defenderLossRate,
-    // A pulse's 0–5% rate is applied to canonical maximum manpower, not to
-    // today's headcount. Depleted and full armies therefore share the same
-    // absolute cap at the same rate, until the remaining force is exhausted.
-    attackerLosses: Math.min(source.army.manpower, Math.max(source.army.capacity, source.army.manpower) * attackerLossRate),
-    defenderLosses: Math.min(target.army.manpower, Math.max(target.army.capacity, target.army.manpower) * defenderLossRate),
+    // Both pressure and the 5% pulse ceiling use supported maximum manpower.
+    // Remaining headcount is the final bound, allowing a depleted remnant to
+    // be routed instead of asymptotically surviving forever.
+    attackerLosses: Math.min(
+      source.army.manpower,
+      Math.max(source.army.capacity, source.army.manpower) * attackerLossRate,
+    ),
+    defenderLosses: Math.min(
+      target.army.manpower,
+      Math.max(target.army.capacity, target.army.manpower) * defenderLossRate,
+    ),
   };
 }
 
@@ -510,7 +514,7 @@ function frontCandidatesV2(
       // but can never outrank a locally viable front elsewhere in the empire.
       const viable = targetStrength <= 0.000001
         || sourceStrength > targetStrength * COMBAT_ROUTE_STRENGTH_RATIO;
-      const accessPenalty = access === 'naval' ? 2.5 : 0;
+      const accessPenalty = access === 'naval' ? 0.75 : 0;
       const score = 5 * supply + support + 4 * (1 - targetFill) + 2 * existingControl + economyValue
         + capitalValue + 2 * clamp(powerRatio, 0, 2)
         + 4 * Math.sqrt(clamp(commitmentShare, 0, 1)) - accessPenalty;
@@ -593,9 +597,8 @@ export function forecastWarV2(
     outlook: winChance >= 82 ? 'dominant' : winChance >= 64 ? 'favored'
       : winChance >= 42 ? 'contested' : winChance >= 22 ? 'risky' : 'desperate',
     attackerStrength: 0, defenderStrength: 0,
-    attackerRegulars: 0, defenderRegulars: 0,
-    attackerVeterans: 0, defenderVeterans: 0,
-    attackerVeteranExperience: 0, defenderVeteranExperience: 0,
+    attackerCombatExperience: selectCombatExperienceV2(state, attackerId).experience,
+    defenderCombatExperience: selectCombatExperienceV2(state, defenderId).experience,
     attackerAttack: 0, attackerDefense: 0, defenderAttack: 0, defenderDefense: 0,
     attackerSupply: 0, defenderSupply: 0,
     supportingForces: 0,
@@ -611,8 +614,6 @@ export function forecastWarV2(
   const terrain = content.territories[candidate.targetId]!.terrain;
   const attackerStrength = selectArmyCombatManpowerV2(state, attackerId, source.army);
   const defenderStrength = selectArmyCombatManpowerV2(state, defenderId, target.army);
-  const attackerVeterans = selectArmyVeteranForcesV2(source.army);
-  const defenderVeterans = selectArmyVeteranForcesV2(target.army);
   const projection = projectCombatExchangeV2(
     state, content, attackerId, defenderId,
     candidate.sourceId, candidate.targetId, candidate.access,
@@ -651,12 +652,8 @@ export function forecastWarV2(
     outlook: winChance >= 82 ? 'dominant' : winChance >= 64 ? 'favored'
       : winChance >= 42 ? 'contested' : winChance >= 22 ? 'risky' : 'desperate',
     attackerStrength: round(attackerStrength), defenderStrength: round(defenderStrength),
-    attackerRegulars: round(source.army.manpower - attackerVeterans.manpower),
-    defenderRegulars: round(target.army.manpower - defenderVeterans.manpower),
-    attackerVeterans: attackerVeterans.manpower,
-    defenderVeterans: defenderVeterans.manpower,
-    attackerVeteranExperience: attackerVeterans.experience,
-    defenderVeteranExperience: defenderVeterans.experience,
+    attackerCombatExperience: selectCombatExperienceV2(state, attackerId).experience,
+    defenderCombatExperience: selectCombatExperienceV2(state, defenderId).experience,
     attackerAttack: round(projection.attackerAttack), attackerDefense: round(projection.attackerDefense),
     defenderAttack: round(projection.defenderAttack), defenderDefense: round(projection.defenderDefense),
     attackerSupply: round(projection.attackerSupply), defenderSupply: round(projection.defenderSupply),
@@ -914,32 +911,36 @@ function captureTerritoryV2(
   // its field army on the original side of the border; the new territory must
   // subsequently be reinforced through the deliberately slow logistics net.
   const sourceManpowerBefore = source.army.manpower;
-  const sourceVeteransBefore = source.army.veteranManpower;
-  const sourceVeteranExperience = source.army.veteranExperience;
   const sourceBaseAttack = source.army.baseAttack;
   const sourceBaseDefense = source.army.baseDefense;
-  const requestedTransfer = source.army.manpower * CONQUEST_OCCUPATION_FORCE_TRANSFER_SHARE;
-  target.owner = newOwner;
+  const requestedOccupationForce = sourceManpowerBefore
+    * CONQUEST_OCCUPATION_FORCE_TRANSFER_SHARE;
+  beginTerritoryIntegrationV2(state, content, targetId, newOwner);
   delete target.control;
   invalidateTerritoryIndexV2(state);
   // Battle damage has already been committed above. Annexation preserves the
   // surviving people, production and infrastructure as latent potential;
   // administration initially unlocks ten percent and then integrates it.
-  target.integration = content.territories[targetId]?.initialOwnerId === newOwner
-    ? 1 : CONQUEST_INITIAL_INTEGRATION_SHARE;
   target.army.capacity = stateTerritoryArmyCapacityTargetV2(state, content, targetId, newOwner);
-  // Deduct only the occupation force the new local population cap can hold.
-  // This preserves both ordinary and veteran headcount at tiny-cap borders.
-  const transferredManpower = Math.min(requestedTransfer, target.army.capacity);
-  const transferredVeterans = sourceManpowerBefore > 0
-    ? sourceVeteransBefore * transferredManpower / sourceManpowerBefore : 0;
+  const supportCeiling = stateTerritoryArmySupportCeilingV2(
+    state, content, targetId, newOwner,
+  );
+  const occupationForce = Math.min(requestedOccupationForce, supportCeiling);
+  const guardTransferBudget = sourceManpowerBefore
+    * CONQUEST_CAPTURE_GUARD_MAX_TRANSFER_SHARE;
+  const guardReinforcement = Math.min(
+    Math.max(0, supportCeiling - occupationForce),
+    Math.max(0, guardTransferBudget - occupationForce),
+  );
+  // Every defender is transferred from the surviving source formation. The
+  // destination can reach 2x its new local cap, while one capture can consume
+  // no more than 10% of the source and therefore leaves at least 90% behind.
+  const transferredManpower = Math.min(
+    sourceManpowerBefore,
+    supportCeiling,
+    occupationForce + guardReinforcement,
+  );
   source.army.manpower = round(Math.max(0, sourceManpowerBefore - transferredManpower), 9);
-  source.army.veteranManpower = round(clamp(
-    sourceVeteransBefore - transferredVeterans,
-    0,
-    source.army.manpower,
-  ), 9);
-  if (source.army.veteranManpower <= 0.000000001) source.army.veteranExperience = 0;
   target.army.manpower = round(transferredManpower, 9);
   if (target.army.manpower > 0.000000001) {
     target.army.baseAttack = sourceBaseAttack;
@@ -947,8 +948,6 @@ function captureTerritoryV2(
   } else {
     resetEmptyArmyBaseQualityV2(target.army, content, targetId);
   }
-  target.army.veteranManpower = round(Math.min(transferredVeterans, target.army.manpower), 9);
-  target.army.veteranExperience = target.army.veteranManpower > 0 ? sourceVeteranExperience : 0;
   resetEmptyArmyBaseQualityV2(source.army, content, sourceId);
   moveCapitalAfterLossV2(state, oldOwner, targetId);
   state.players[oldOwner]!.warFatigue = round(clamp(state.players[oldOwner]!.warFatigue + 2, 0, 100));
@@ -977,51 +976,27 @@ function applyCombatCasualtiesV2(
   army: WorldStateV2['territories'][TerritoryId]['army'],
   requestedDamage: number,
 ): number {
-  const veterans = selectArmyVeteranForcesV2(army);
-  const regularManpower = Math.max(0, army.manpower - veterans.manpower);
-  const veteranDurability = veterans.manpower * veterans.hpMultiplier;
-  const total = regularManpower + veteranDurability;
-  const damage = Math.min(total, Math.max(0, requestedDamage));
-  if (damage <= 0 || total <= 0) return 0;
-  const regularDamage = Math.min(regularManpower, damage * regularManpower / total);
-  const veteranEffectiveDamage = Math.min(veteranDurability, damage * veteranDurability / total);
-  const veteranHeadcountLoss = veteranEffectiveDamage / Math.max(1, veterans.hpMultiplier);
-  const headcountLoss = regularDamage + veteranHeadcountLoss;
-  army.manpower = round(Math.max(0, army.manpower - headcountLoss), 9);
-  army.veteranManpower = round(clamp(
-    army.veteranManpower - veteranHeadcountLoss,
-    0,
-    army.manpower,
-  ), 9);
-  if (army.veteranManpower <= 0.000000001) {
-    army.veteranManpower = 0;
-    army.veteranExperience = 0;
-  }
-  return round(regularDamage + veteranEffectiveDamage);
+  const manpowerBefore = Math.max(0, army.manpower);
+  const casualties = Math.min(manpowerBefore, Math.max(0, requestedDamage));
+  army.manpower = round(Math.max(0, manpowerBefore - casualties), 9);
+  // Budget routing from the canonical state change at the same precision as
+  // manpower. Six-decimal reporting could turn a real sub-millionth loss into
+  // zero and incorrectly grant the routed tail a second full cap allowance.
+  return round(Math.max(0, manpowerBefore - army.manpower), 9);
 }
 
-function awardWarVeterancyV2(
+function awardWarCombatExperienceV2(
   state: WorldStateV2,
   playerId: PlayerId,
   difficulty: number,
 ): void {
-  const experienceGain = VETERAN_EXPERIENCE_PER_WAR * clamp(difficulty, 0.5, 2);
-  const promotionShare = clamp(VETERAN_PROMOTION_SHARE_PER_WAR * difficulty, 0, 1);
-  for (const territory of selectTerritoriesOfV2(state, playerId)) {
-    const army = territory.army;
-    if (army.manpower <= 0.000000001) continue;
-    const existingVeterans = clamp(army.veteranManpower, 0, army.manpower);
-    const promoted = (army.manpower - existingVeterans) * promotionShare;
-    const nextVeterans = existingVeterans + promoted;
-    army.veteranManpower = round(nextVeterans, 9);
-    army.veteranExperience = army.veteranManpower > 0.000000001
-      ? equivalentVeteranExperienceV2([
-        // Surviving veterans advance from their own prior equivalent XP.
-        { manpower: existingVeterans, experience: Math.max(0, army.veteranExperience) + experienceGain },
-        // First-war promotions begin at Rank 1; they never inherit an elite core's score.
-        { manpower: promoted, experience: experienceGain },
-      ]) : 0;
-  }
+  const nation = state.players[playerId];
+  if (!nation) return;
+  nation.combatExperience = round(
+    Math.max(0, nation.combatExperience)
+      + COMBAT_EXPERIENCE_PER_WAR * clamp(difficulty, 0.5, 2),
+    9,
+  );
 }
 
 function nationalCombatManpowerV2(state: WorldStateV2, playerId: PlayerId): number {
@@ -1074,26 +1049,28 @@ export function resolveBattlePulseV2(
     attackerStrength: sourceStrength,
     defenderStrength: targetStrength,
   } = projection;
-  // Freeze canonical maximum manpower at pulse start. This is also the hard
-  // route-damage budget, independent of how depleted the army already is.
+  // Freeze supported maximum manpower at pulse start. It supplies the total
+  // casualty budget across both the exchange and any route.
   const sourceCapacity = Math.max(source.army.capacity, source.army.manpower);
   const targetCapacity = Math.max(target.army.capacity, target.army.manpower);
+  const sourcePulseCasualtyBudget = sourceCapacity * COMBAT_MAX_CASUALTY_RATE;
+  const targetPulseCasualtyBudget = targetCapacity * COMBAT_MAX_CASUALTY_RATE;
   let damageToDefender = applyCombatCasualtiesV2(state, defenderId, target.army,
     projection.defenderLosses);
   let damageToAttacker = applyCombatCasualtiesV2(state, attackerId, source.army,
     projection.attackerLosses);
   const defenderRemaining = selectArmyCombatManpowerV2(state, defenderId, target.army);
   const attackerRemaining = selectArmyCombatManpowerV2(state, attackerId, source.army);
-  // A force below five percent of the opposing field army is routed. This uses
-  // real deployed strength, but even the routed tail may not breach the hard
-  // five-percent-of-supported-maximum casualty ceiling for this pulse.
+  // A force below five percent of the opposing field army is routed. Route
+  // losses remain inside the same 5%-of-supported-maximum pulse budget, which
+  // may remove a final remnant and therefore cannot create a last-3% stalemate.
   if (defenderRemaining > 0 && defenderRemaining <= attackerRemaining * COMBAT_ROUTE_STRENGTH_RATIO) {
-    const remainingPulseBudget = Math.max(0, targetCapacity * COMBAT_MAX_CASUALTY_RATE - damageToDefender);
+    const remainingPulseBudget = Math.max(0, targetPulseCasualtyBudget - damageToDefender);
     damageToDefender = round(damageToDefender + applyCombatCasualtiesV2(
       state, defenderId, target.army, Math.min(defenderRemaining, remainingPulseBudget),
     ));
   } else if (attackerRemaining > 0 && attackerRemaining <= defenderRemaining * COMBAT_ROUTE_STRENGTH_RATIO) {
-    const remainingPulseBudget = Math.max(0, sourceCapacity * COMBAT_MAX_CASUALTY_RATE - damageToAttacker);
+    const remainingPulseBudget = Math.max(0, sourcePulseCasualtyBudget - damageToAttacker);
     damageToAttacker = round(damageToAttacker + applyCombatCasualtiesV2(
       state, attackerId, source.army, Math.min(attackerRemaining, remainingPulseBudget),
     ));
@@ -1198,11 +1175,6 @@ export function resolveBattlePulseV2(
       battleTerritory.owner,
     );
     army.manpower = round(Math.max(0, army.manpower), 9);
-    army.veteranManpower = round(clamp(army.veteranManpower, 0, army.manpower), 9);
-    if (army.veteranManpower <= 0.000000001) {
-      army.veteranManpower = 0;
-      army.veteranExperience = 0;
-    }
     resetEmptyArmyBaseQualityV2(army, content, territoryId);
   }
   if (conquered) {
@@ -1308,9 +1280,9 @@ function endWarV2(
   endedWars?: WarConclusionV2[],
   settlement?: WarConclusionSettlementV2,
 ): void {
-  const veteranBefore = ([war.attackerId, war.defenderId] as const).map((playerId) => {
-    const veterans = selectVeteranForcesV2(state, playerId);
-    return { playerId, manpower: veterans.manpower, experience: veterans.experience };
+  const experienceBefore = ([war.attackerId, war.defenderId] as const).map((playerId) => {
+    const experience = selectCombatExperienceV2(state, playerId).experience;
+    return { playerId, experience };
   });
   if (war.battles > 0) {
     const attackerRemaining = selectTotalManpowerV2(state, war.attackerId).deployed;
@@ -1328,27 +1300,25 @@ function endWarV2(
       0.5,
       2,
     );
-    awardWarVeterancyV2(state, war.attackerId, difficulty(
+    awardWarCombatExperienceV2(state, war.attackerId, difficulty(
       attackerCampaignForce,
       defenderCampaignForce,
       war.attackerLosses,
     ));
-    awardWarVeterancyV2(state, war.defenderId, difficulty(
+    awardWarCombatExperienceV2(state, war.defenderId, difficulty(
       defenderCampaignForce,
       attackerCampaignForce,
       war.defenderLosses,
     ));
   }
-  const veteranTransitions = veteranBefore.map((before) => {
-    const after = selectVeteranForcesV2(state, before.playerId);
+  const experienceTransitions = experienceBefore.map((before) => {
+    const after = selectCombatExperienceV2(state, before.playerId).experience;
     return {
       playerId: before.playerId,
-      manpowerBefore: before.manpower,
-      manpowerAfter: after.manpower,
       experienceBefore: before.experience,
-      experienceAfter: after.experience,
+      experienceAfter: after,
     };
-  }) as [WarConclusionVeteransV2, WarConclusionVeteransV2];
+  }) as [WarConclusionExperienceV2, WarConclusionExperienceV2];
   endedWars?.push({
     war: {
       ...war,
@@ -1357,7 +1327,7 @@ function endWarV2(
     },
     endedTick: state.tick,
     reason,
-    veterans: veteranTransitions,
+    experience: experienceTransitions,
     ...(settlement ? { settlement: { ...settlement } } : {}),
   });
   state.wars = state.wars.filter((candidate) => candidate.id !== war.id);
@@ -1491,6 +1461,18 @@ export function logisticsThroughputShareV2(
   return clamp(0.035 * scale * research * (superAi ? 1.05 : 1), 0.01, 0.12);
 }
 
+function captureGuardActiveV2(
+  state: WorldStateV2,
+  territoryId: TerritoryId,
+): boolean {
+  const territory = state.territories[territoryId];
+  const program = territory?.integrationProgram;
+  return Boolean(program
+    && program.toOwnerId === territory.owner
+    && state.tick >= program.startedTick
+    && state.tick - program.startedTick < CONQUEST_CAPTURE_GUARD_TICKS);
+}
+
 export function redistributeArmiesV2(state: WorldStateV2, content: WorldContentV2): LogisticsMovementV2[] {
   const movements: LogisticsMovementV2[] = [];
   const recordMovement = (movement: LogisticsMovementV2): void => {
@@ -1499,7 +1481,6 @@ export function redistributeArmiesV2(state: WorldStateV2, content: WorldContentV
     if (existing) {
       existing.manpower = round(existing.manpower + movement.manpower, 9);
       existing.capacity = round(existing.capacity + movement.capacity, 9);
-      existing.veteranManpower = round(existing.veteranManpower + movement.veteranManpower, 9);
     } else movements.push({ ...movement });
   };
   const nextHop = (component: ReadonlySet<TerritoryId>, sourceId: TerritoryId, targetId: TerritoryId): TerritoryId | undefined => {
@@ -1568,8 +1549,9 @@ export function redistributeArmiesV2(state: WorldStateV2, content: WorldContentV
       if (ids.length < 2) continue;
       const componentSet = new Set(ids);
       const totalManpowerBefore = ids.reduce((sum, id) => sum + state.territories[id]!.army.manpower, 0);
-      const componentCapacity = ids.reduce((sum, id) => sum + state.territories[id]!.army.capacity, 0);
       const weighted = ids.map((id) => {
+        const territory = state.territories[id]!;
+        const supportCeiling = stateTerritoryArmySupportCeilingV2(state, content, id, playerId);
         const edges = content.territories[id]?.connections ?? [];
         const adjacentOwners = edges.map((edge) => state.territories[edge.targetId]?.owner).filter(Boolean) as PlayerId[];
         const activeBorder = adjacentOwners.some((owner) => hostile.has(owner));
@@ -1580,30 +1562,51 @@ export function redistributeArmiesV2(state: WorldStateV2, content: WorldContentV
         const weight = attacked ? 18 : attackBase ? 16 : activeBorder ? 12 : peaceBorder ? 6.5 : capital ? 1.5 : 0.2;
         const desiredFill = attacked ? 0.98 : attackBase ? 0.95 : activeBorder ? 0.88
           : peaceBorder ? 0.45 : capital ? 0.08 : 0.015;
-        return { id, weight, desiredFill, desired: 0, warFront: attacked || attackBase || activeBorder };
+        return {
+          id,
+          weight,
+          desiredFill,
+          desired: 0,
+          warFront: attacked || attackBase || activeBorder,
+          supportCeiling,
+          hasOvershoot: territory.army.manpower > supportCeiling + 1e-9,
+        };
       });
-      const baseTotal = weighted.reduce((sum, item) => (
+      const supportedOvershootBase = weighted.reduce((sum, item) => {
+        if (!item.hasOvershoot) return sum;
+        // Excess above two local caps becomes a slow logistics donor. The
+        // ordinary throughput budget below moves it only when another owned
+        // territory has support room; otherwise the excess remains in place.
+        item.desired = item.supportCeiling;
+        return sum + item.desired;
+      }, 0);
+      const flexible = weighted.filter((item) => !item.hasOvershoot);
+      const distributableManpower = Math.max(0, totalManpowerBefore - supportedOvershootBase);
+      const baseTotal = flexible.reduce((sum, item) => (
         sum + state.territories[item.id]!.army.capacity * item.desiredFill
       ), 0);
-      if (totalManpowerBefore <= baseTotal && baseTotal > 0) {
-        for (const item of weighted) {
+      if (distributableManpower <= baseTotal && baseTotal > 0) {
+        for (const item of flexible) {
           item.desired = state.territories[item.id]!.army.capacity * item.desiredFill
-            * totalManpowerBefore / baseTotal;
+            * distributableManpower / baseTotal;
         }
       } else {
-        for (const item of weighted) item.desired = state.territories[item.id]!.army.capacity * item.desiredFill;
-        let unallocated = Math.max(0, totalManpowerBefore - baseTotal);
+        for (const item of flexible) {
+          item.desired = state.territories[item.id]!.army.capacity * item.desiredFill;
+        }
+        let unallocated = Math.max(0, distributableManpower - baseTotal);
         // Water-fill remaining personnel toward the most important borders,
-        // never past the local support capacity.
-        for (let pass = 0; pass < weighted.length && unallocated > 1e-9; pass += 1) {
-          const open = weighted.filter((item) => componentCapacity - item.desired > 1e-9);
+        // never past twice the local capacity. A pre-existing overshoot is
+        // excluded as a receiver but its excess may supply this free room.
+        for (let pass = 0; pass < flexible.length && unallocated > 1e-9; pass += 1) {
+          const open = flexible.filter((item) => item.supportCeiling - item.desired > 1e-9);
           const score = open.reduce((sum, item) => (
-            sum + item.weight * (componentCapacity - item.desired)
+            sum + item.weight * (item.supportCeiling - item.desired)
           ), 0);
           if (score <= 0) break;
           let assigned = 0;
           for (const item of open) {
-            const room = componentCapacity - item.desired;
+            const room = item.supportCeiling - item.desired;
             const add = Math.min(room, unallocated * item.weight * room / score);
             item.desired += add;
             assigned += add;
@@ -1620,7 +1623,9 @@ export function redistributeArmiesV2(state: WorldStateV2, content: WorldContentV
       );
       const outgoing = new Map(weighted.map((item) => [
         item.id,
-        Math.max(0, state.territories[item.id]!.army.manpower - item.desired),
+        captureGuardActiveV2(state, item.id)
+          ? 0
+          : Math.max(0, state.territories[item.id]!.army.manpower - item.desired),
       ]));
       const receivers = [...weighted]
         .map((item) => ({ ...item, gap: item.desired - state.territories[item.id]!.army.manpower }))
@@ -1639,36 +1644,25 @@ export function redistributeArmiesV2(state: WorldStateV2, content: WorldContentV
           const from = state.territories[donor.id]!;
           const to = state.territories[hop]!;
           const available = outgoing.get(donor.id) ?? 0;
-          const destinationRoom = Math.max(0, componentCapacity - to.army.manpower);
+          const destinationRoom = Math.max(
+            0,
+            stateTerritoryArmySupportCeilingV2(state, content, hop, playerId) - to.army.manpower,
+          );
           const moveManpower = Math.min(needed, available, remainingMove, destinationRoom);
           if (moveManpower <= 1e-9) continue;
-          const sourceManpowerBefore = from.army.manpower;
           const movedBaseQuality = {
             attack: from.army.baseAttack,
             defense: from.army.baseDefense,
           };
-          const movedVeterans = sourceManpowerBefore > 0
-            ? moveManpower * from.army.veteranManpower / sourceManpowerBefore : 0;
-          const movedVeteranExperience = from.army.veteranExperience;
-          const destinationVeteransBefore = to.army.veteranManpower;
-          const destinationEquivalentExperience = equivalentVeteranExperienceV2([
-            { manpower: destinationVeteransBefore, experience: to.army.veteranExperience },
-            { manpower: movedVeterans, experience: movedVeteranExperience },
-          ]);
           from.army.manpower -= moveManpower;
-          from.army.veteranManpower = Math.max(0, from.army.veteranManpower - movedVeterans);
-          if (from.army.veteranManpower <= 0.000000001) from.army.veteranExperience = 0;
           mixArmyBaseQualityV2(to.army, moveManpower, movedBaseQuality);
           to.army.manpower += moveManpower;
-          to.army.veteranManpower += movedVeterans;
-          to.army.veteranExperience = to.army.veteranManpower > 0
-            ? destinationEquivalentExperience : 0;
           outgoing.set(donor.id, Math.max(0, available - moveManpower));
           needed -= moveManpower;
           remainingMove -= moveManpower;
           recordMovement({
             playerId, sourceId: donor.id, targetId: hop,
-            manpower: moveManpower, capacity: 0, veteranManpower: movedVeterans,
+            manpower: moveManpower, capacity: 0,
           });
         }
       }
@@ -1677,18 +1671,13 @@ export function redistributeArmiesV2(state: WorldStateV2, content: WorldContentV
       // support, but this redistribution creates no personnel.
       for (const id of ids) {
         const army = state.territories[id]!.army;
-        army.manpower = clamp(army.manpower, 0, componentCapacity);
-        army.veteranManpower = clamp(army.veteranManpower, 0, army.manpower);
-        if (army.veteranManpower <= 0.000000001) {
-          army.veteranManpower = 0;
-          army.veteranExperience = 0;
-        }
+        army.manpower = Math.max(0, army.manpower);
         resetEmptyArmyBaseQualityV2(army, content, id);
       }
     }
   }
   return movements.sort((left, right) => right.manpower - left.manpower
-    || right.veteranManpower - left.veteranManpower || left.sourceId.localeCompare(right.sourceId)
+    || left.sourceId.localeCompare(right.sourceId)
     || left.targetId.localeCompare(right.targetId));
 }
 

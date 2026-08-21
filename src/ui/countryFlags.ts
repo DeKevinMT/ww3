@@ -22,10 +22,13 @@ const ISO2_BY_NATION: Readonly<Record<string, string>> = {
 // Vite turns these bundled SVGs into local, hashed production assets. The map
 // and DOM UI share the exact same URL cache, so flags never depend on a remote
 // service and are downloaded only once by the browser.
+export const MAP_FLAG_TEXTURE_WIDTH = 256;
+export const MAP_FLAG_TEXTURE_HEIGHT = 192;
+
 const RAW_FLAG_ASSETS = import.meta.glob('../../node_modules/flag-icons/flags/4x3/*.svg', {
   eager: true,
   import: 'default',
-  // Phaser must receive a URL so it can rasterise each vector at 96×72. Vite's
+  // Phaser must receive a URL so it can rasterise each vector at map quality. Vite's
   // default inline data URI is ideal for DOM flags but its SVG loader cannot
   // resize it and would allocate the full source dimensions on the GPU.
   query: '?url&no-inline',

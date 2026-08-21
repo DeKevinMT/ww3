@@ -2679,12 +2679,6 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
   border-color: rgba(255, 129, 121, .25);
   background: linear-gradient(145deg, rgba(255, 129, 121, .07), rgba(255, 255, 255, .012));
 }
-.world-ui-v2 .simple-economy-card.veteran-card {
-  border-color: rgba(181, 156, 255, .24);
-  background: linear-gradient(145deg, rgba(181, 156, 255, .075), rgba(255, 255, 255, .012));
-}
-.world-ui-v2 .simple-economy-card.veteran-card span { color: #beaef1; }
-
 .world-ui-v2 .nation-reaction-block {
   margin-top: 8px;
   padding: 11px;

@@ -9,6 +9,9 @@ import type { PlayerId, TerritoryId, WorldStateV2 } from './types';
 
 const initialNationCapacityCache = new WeakMap<WorldContentV2, Map<PlayerId, number>>();
 
+/** Empire logistics may support at most one additional local-cap equivalent. */
+export const EMPIRE_SUPPORT_LOCAL_CAP_MULTIPLIER_V2 = 2;
+
 /**
  * The one canonical army-cap rule. Captured territory unlocks its structural
  * population reserve gradually through the canonical integration share.
@@ -132,10 +135,26 @@ export function stateTerritoryArmyCapacityTargetV2(
   );
 }
 
+/** Hard ceiling for new recruitment or logistics entering one territory. */
+export function stateTerritoryArmySupportCeilingV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  territoryId: TerritoryId,
+  ownerId: PlayerId,
+): number {
+  return round(stateTerritoryArmyCapacityTargetV2(
+    state,
+    content,
+    territoryId,
+    ownerId,
+  ) * EMPIRE_SUPPORT_LOCAL_CAP_MULTIPLIER_V2, 9);
+}
+
 /**
- * Maximum personnel that imperial logistics may station in one territory.
- * This is deployment support, not new recruitment capacity: the sum of all
- * deployed armies must still remain inside the one national population cap.
+ * Stable local deployment envelope. A legacy/external overshoot is never
+ * deleted; bounded logistics may rehome its excess when another owned
+ * territory has room, while attrition and extreme-crisis demobilisation can
+ * reduce national headcount.
  */
 export function stateTerritoryArmyDeploymentLimitV2(
   state: WorldStateV2,
@@ -145,16 +164,17 @@ export function stateTerritoryArmyDeploymentLimitV2(
 ): number {
   const territory = state.territories[territoryId];
   if (!territory || territory.owner !== ownerId) return 0;
-  return nationalArmyCapacityTargetV2(state, content, ownerId);
+  return Math.max(
+    stateTerritoryArmySupportCeilingV2(state, content, territoryId, ownerId),
+    Math.max(0, territory.army.manpower),
+  );
 }
 
 /**
- * Restores every local cap from live population and research. Only deployed
- * personnel are clamped when population falls; cap infrastructure never
- * decays and never needs to be purchased back.
+ * Restores every local cap from live population and research. Capacity gates
+ * future recruitment; recalculation never deletes trained personnel.
  */
 export function synchronizeArmyCapacityV2(state: WorldStateV2, content: WorldContentV2): void {
-  const territoriesByOwner = new Map<PlayerId, TerritoryId[]>();
   for (const territoryId of content.territoryIds) {
     const territory = state.territories[territoryId];
     if (!territory) continue;
@@ -164,37 +184,7 @@ export function synchronizeArmyCapacityV2(state: WorldStateV2, content: WorldCon
       territoryId,
       territory.owner,
     );
-    territoriesByOwner.set(territory.owner, [
-      ...(territoriesByOwner.get(territory.owner) ?? []), territoryId,
-    ]);
-  }
-  for (const [ownerId, territoryIds] of territoriesByOwner) {
-    const nationalCapacity = territoryIds.reduce((sum, territoryId) => (
-      sum + state.territories[territoryId]!.army.capacity
-    ), 0);
-    const deployed = territoryIds.reduce((sum, territoryId) => (
-      sum + Math.max(0, state.territories[territoryId]!.army.manpower)
-    ), 0);
-    const nationalScale = deployed > nationalCapacity && deployed > 0
-      ? nationalCapacity / deployed : 1;
-    for (const territoryId of territoryIds) {
-      const territory = state.territories[territoryId]!;
-      const deploymentLimit = stateTerritoryArmyDeploymentLimitV2(
-        state, content, territoryId, ownerId,
-      );
-      territory.army.manpower = round(clamp(
-      territory.army.manpower * nationalScale, 0, deploymentLimit,
-      ), 9);
-      territory.army.veteranManpower = round(clamp(
-        territory.army.veteranManpower,
-        0,
-        territory.army.manpower,
-      ), 9);
-      if (territory.army.veteranManpower <= 0.000000001) {
-        territory.army.veteranManpower = 0;
-        territory.army.veteranExperience = 0;
-      }
-      resetEmptyArmyBaseQualityV2(territory.army, content, territoryId);
-    }
+    territory.army.manpower = round(Math.max(0, territory.army.manpower), 9);
+    resetEmptyArmyBaseQualityV2(territory.army, content, territoryId);
   }
 }

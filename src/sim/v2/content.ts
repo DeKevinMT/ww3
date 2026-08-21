@@ -57,9 +57,9 @@ export interface NationContentV2 {
   profile: string;
   influenceTags: readonly string[];
   militaryQuality: number;
-  /** Data-calibrated baseline ATK before research and veterans. */
+  /** Data-calibrated baseline ATK before research and Combat Experience. */
   militaryAttackRating?: number;
-  /** Data-calibrated baseline DEF before research and veterans. */
+  /** Data-calibrated baseline DEF before research and Combat Experience. */
   militaryDefenseRating?: number;
   /** 2026 strategic-deterrence tier; this is a power modifier, never a strike action. */
   nuclearPowerLevel: number;

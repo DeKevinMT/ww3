@@ -2,28 +2,26 @@
 
 Frontier Command is a real-time world-conquest game on a true political world map. In 2026, the country you choose activates the world's first **Super AI**. You choose war targets; it continuously manages finance, development, recruitment, recovery and military operations. Rival countries use deterministic AI under the same core rules.
 
-The game is designed for desktop. The map contains 166 strategically useful countries; microstates and very small islands are omitted to keep the campaign readable and fast. Greenland is an explicit playable exception with its own territory, flag, economy and Arctic sea routes.
+The game is designed for desktop. The map contains 166 strategically useful countries; microstates and very small islands are omitted to keep the campaign readable and fast. Greenland is an explicit playable exception with its own territory, flag, economy and Arctic sea routes. The strategic map keeps the current top ten powers legible, uses sharp vector flags and supports deep zoom up to 24× so compact countries such as Luxembourg remain practical to inspect and select.
 
 ## The core military model
 
-**Manpower** is the complete deployed army and its normal combat-health pool. **Veteran Forces** are experienced soldiers inside that manpower total, never a separate unit or currency. Every territory army stores:
+**Manpower** is the complete deployed army and its normal combat-health pool. Every territory army stores:
 
 - total manpower;
-- the manpower-weighted base ATK and DEF carried by that local army;
-- veteran manpower, which must remain between zero and total manpower;
-- the veterans' equivalent experience, which is non-negative and has no hard cap.
+- its current population-, integration- and research-based capacity;
+- the manpower-weighted base ATK and DEF carried by that local army.
 
-A low-ranked country selected by the human player receives a one-time, rank-scaled elite core drawn from its existing manpower; this never creates extra soldiers. The top 20 receive no opening aid. The share and XP rise smoothly below them, up to 80% of the army and 3,500 XP for the weakest countries. After the campaign starts, veteran status changes only when a complete war ends. If that war contained combat, a difficulty-scaled share of the surviving national force is promoted and existing veterans gain one experience step. Duration, battle count, losses and the campaign power ratio determine the total-war difficulty. A veteran contribution uses diminishing returns so long-lived forces may keep improving without quickly breaking balance:
+**Combat Experience** is one non-negative institutional score shared by the complete country or empire. Every country starts at zero; country selection grants no opening military bonus. Experience is earned only once when a real war with at least one battle ends. Duration, battle count, cumulative losses and the campaign power ratio determine the difficulty-scaled gain. Its square-root score improves the empire's entire army with bounded diminishing returns:
 
 ```text
-veteran HP bonus  = 0.03 × sqrt(equivalent experience)
-veteran ATK bonus = 0.01 × sqrt(equivalent experience)
-veteran DEF bonus = 0.01 × sqrt(equivalent experience)
+combat score = sqrt(Combat Experience)
+ATK bonus = min(20%, 1% × combat score)
+DEF bonus = min(20%, 1% × combat score)
+casualty reduction = min(15%, 0.75% × combat score)
 ```
 
-The linear veteran bonus score is `sqrt(XP)`. Whenever cohorts merge, their scores are weighted by veteran manpower and the average score is squared back into the stored equivalent XP. `Average Rank = floor(sqrt(equivalent XP)) + 1`, or Rank 0 when no veterans exist. New post-war promotions start at Rank 1 and therefore never inherit a 5,000-XP opening elite's bonus merely by joining it. These bonuses apply only to the veteran share of the army. Casualties remove veteran soldiers; when no veterans survive, their XP and elite advantage are gone. New recruits are regular soldiers, so growth and conquest naturally dilute an opening elite core.
-
-ATK/DEF quality is additive: `manpower × base quality` is conserved when armies mix, and veteran quality adds `veteran manpower × bonus × 100` rating-mass. HP changes casualty durability only. This one global reference keeps the weakest opening countries playable without country-specific exceptions, while ordinary low-XP post-war cohorts remain modest because they begin as a small share.
+Local ATK/DEF quality remains additive: `manpower × base quality` is conserved when armies mix. Moving, recruiting or taking casualties cannot manufacture experience, while a completed real war teaches the whole surviving institution instead of tagging a special soldier subset.
 
 Army capacity is intentionally simple and cannot be permanently damaged by budget trouble or a temporary crisis. Newly conquered land unlocks its population reserve gradually through its visible integration share:
 
@@ -32,7 +30,7 @@ territory army capacity = live population × integration × 0.00145
   × (1 + Force Capacity research × 0.01)
 ```
 
-Capacity automatically synchronises with live population, integration and research. Recruitment fills available national capacity; it does not purchase more capacity. A healthy AI keeps recruiting toward 100% readiness, including after a war. Demobilisation is permitted only during a real food, debt or payroll emergency, and even then releases only a small share each week; it never changes army size instantly. A conquered frontier starts at 10% of its native local cap and unlocks the remainder over 10–20 years according to country size. Imperial logistics may slowly station existing troops above a local cap, but total empire manpower remains bounded by the summed national cap. Rapid Recruitment can fill at most 5% of live capacity and then has a 104-week cooldown. Its first price is fixed from the chosen country's opening army and discounted by 15%; every successful use raises only the next quote by 25%, so conquest or temporary GDP changes cannot reprice the button. Troops may redistribute through owned territory without any treasury charge or separate logistics cost.
+Capacity automatically synchronises with live population, integration and research. Recruitment fills available national capacity; it does not purchase more capacity. A healthy AI keeps recruiting toward 100% readiness, including after a war. Demobilisation is forbidden in ordinary recovery and permitted only during an extreme food or debt emergency that also makes payroll genuinely unaffordable; even then at most 0.05% of deployed manpower leaves per week, so army size never changes abruptly. A conquered frontier starts at exactly 10% of its native local cap. Its fixed size curve takes 12.5 years for Luxembourg, about 25.5 for Belgium and about 170 for China. Imperial logistics may slowly reinforce a territory up to 200% of its current local cap, but never creates personnel or bypasses the empire's free national recruitment capacity. A pre-existing overshoot is never deleted: normal weekly logistics gradually moves its excess to another owned territory with room, or leaves it in place until real attrition if no such room exists. Rapid Recruitment can fill at most 5% of live capacity and then has a 104-week cooldown. Its first price is fixed from the chosen country's opening army and discounted by 15%; every successful use raises only the next quote by 25%, so conquest or temporary GDP changes cannot reprice the button. Troops may redistribute through owned territory without any treasury charge or separate logistics cost.
 
 Starting ATK and DEF are calibrated separately from the capacity rule. The country's existing military power index is divided by its actually deployable opening manpower; SIPRI spending per deployed soldier then applies only a small ATK-versus-DEF tilt while preserving the same combined 55/45 value. Each territory army keeps its own manpower-weighted quality after that. Moving or occupying troops carries their quality with them, merged armies blend by manpower, and local recruits use the starting profile of the land they come from. Annexation or federation never rewrites or weakens soldiers already deployed. National ATK/DEF is only a lightweight display average; live Combat Power remains the additive sum of every local army.
 
@@ -78,7 +76,7 @@ The Super AI manages one treasury and three priorities:
 - **Research** funds the six Development programs.
 - **National Economy** supports repair, economic growth and population growth.
 
-Food remains the first required weekly cost. When reserves fall below one week or food security becomes critical, the country may spend its positive cash reserve to close the emergency food gap. In peace, food shortage, population decline, exhausted reserves or debt place every AI in survival recovery: development and essential research take priority and optional wars stop. Low post-war condition by itself never authorises demobilisation; a solvent, fed country protects payroll and rebuilds toward a full army. A truly unaffordable force reduces gradually, never below the 45% ordinary crisis floor; only a severe food or debt disaster unlocks the 25% home guard. During war, each viable owned border army opens and pays for its own real front, so a multi-country empire can attack simultaneously from several territories. Every war still ends after one territory is conquered. Treasury may fall below zero; borrowing adds a premium and causes the AI to reduce discretionary spending until finances recover.
+Food remains the first required weekly cost. When reserves fall below one week or food security becomes critical, the country may spend its positive cash reserve to close the emergency food gap. In peace, food shortage, population decline, exhausted reserves or debt place every AI in survival recovery: development and essential research take priority and optional wars stop. Low post-war condition or an ordinary deficit never authorises demobilisation; a solvent, fed country protects payroll and rebuilds toward a full army. Only an extreme combined survival and affordability crisis permits the 0.05%-per-week drawdown. During war, every viable source-unique owned army opens and pays for its own real front, so a multi-country empire can attack simultaneously from several territories. A campaign continues across the enemy's remaining territories until peace, withdrawal or capitulation. Treasury may fall below zero; borrowing adds a premium and causes the AI to reduce discretionary spending until finances recover.
 
 ## Development
 
@@ -95,9 +93,9 @@ Every breakthrough adds a deterministic seeded +1% result from its branch. Requi
 
 ## War and conquest
 
-Wars are persistent operations resolved on a deterministic combat cadence. Every viable, source-unique army route becomes a real simultaneous front; all of those local armies fight, take losses, appear on the map and add operations cost. ATK, DEF, supply, condition, terrain, supporting armies and the defender's 25% position advantage all matter. Veteran bonuses are folded into the relevant soldiers' HP, ATK and DEF. A pulse applies its 0–5% damage rate to that army's maximum manpower at pulse start, capped by its remaining canonical manpower; veteran HP converts the same damage budget into fewer veteran headcount losses.
+Wars are persistent operations resolved on a deterministic combat cadence. Every viable, source-unique army route becomes a real simultaneous front; all of those local armies fight, take losses, appear on the map and add operations cost. ATK, DEF, supply, condition, terrain, supporting armies, Combat Experience and the defender's 25% position advantage all matter. Naval fronts cost 35% more to operate and receive only modest supply friction; they have no separate assault or casualty penalty. Combat uses the gentler 1.6% base casualty rate and no local formation can lose more than 5% of its supported maximum manpower in one battle pulse. That ceiling does not shield a depleted final remnant, preventing last-percent stalemates.
 
-Conquest preserves the surviving population, economy and infrastructure as the territory's full long-term potential. A foreign owner receives exactly 10% of its population capacity, taxable output, food production and army capacity immediately; the remaining 90% unlocks smoothly over a deterministic 10–20 year calendar based on baseline population, GDP and land area. Recapturing a territory by its original country restores full integration. No enemy army is inherited. Two percent of the surviving attacking manpower crosses as the initial occupation force, limited by the newly unlocked local cap; its veteran share and experience are preserved proportionally. Final capitulation may transfer up to 25% of the defeated treasury.
+Conquest preserves the surviving population, economy and infrastructure as the territory's full long-term potential. A foreign owner receives exactly 10% of its population capacity, taxable output, food production and army capacity immediately. The remaining 90% unlocks smoothly on one immutable population/GDP/land-area curve: Luxembourg takes 12.5 years, Belgium about 25.5 and China about 170. The integrating country's former identity, flag and internal boundary remain subtly visible on the map. At completion its core identity disappears permanently and its land, statistics and land/naval routes become ordinary core territory of the owning country or empire. When the displaced sovereign or former core owns no other territory, its strongest Combat Experience and research knowledge also become part of the final empire without stacking duplicate bonuses. Recapturing a territory by its core owner restores full integration. No enemy army is inherited. A real occupation guard is drawn from the surviving attacking source: up to 10% of that army moves across, never beyond the territory's 2× local support ceiling, and remains protected from ordinary outbound logistics for 52 weeks. After that first year it can redistribute normally; it never disappears or becomes free manpower. Final capitulation may transfer up to 25% of the defeated treasury.
 
 Rival expansion is deliberately restrained:
 
@@ -113,10 +111,10 @@ Expansion-driven suspicion can still create permanent defensive federations, but
 
 ## Controls
 
-- Choose a country from the power-ranked campaign screen.
+- Choose a country from the power-ranked country picker; selection opens the live map immediately, without an explainer or activation briefing.
 - The campaign advances automatically at one week per real second.
 - Click a country for intelligence or an opening-front forecast.
-- Scroll to zoom, drag to pan and press `Esc` to close the current panel.
+- Scroll to zoom as deep as 24×, drag to pan and press `Esc` to close the current panel. The top ten powers keep strategic labels while close zoom reveals compact countries and integration progress.
 - War, Nation, Progress and Economy use desktop drawers and preserve their scroll positions during weekly updates. War targets show food coverage, food-stock trend, GDP and population before the player commits. Conquest does not open a blocking report: gained economy, cash, population, food land and capacity travel subtly from the captured country to their matching top-bar metric.
 
 ## Start
@@ -145,7 +143,7 @@ The starting power index is a gameplay score based on these datasets, not a poli
 
 ## Architecture and verification
 
-The deterministic TypeScript simulation, AI, persistence and map content remain isolated from Phaser rendering and the DOM HUD. Canonical saves use **schema 17** and rules version **v2.52**. Authenticated schema-13 through schema-16 saves migrate deterministically; schema-16 single fronts become front arrays, prior conquests are grandfathered at their already-reduced values, and the former combined Denmark/Greenland state is split without changing its owner or totals. Incompatible rules versions are rejected. Manual Research Surge and Propaganda costs also use discounted opening-country quotes and rise only after successful uses (30% and 35% respectively). The Progress drawer lists every active empire-wide upgrade level as well as the next milestones.
+The deterministic TypeScript simulation, AI, persistence and map content remain isolated from Phaser rendering and the DOM HUD. Canonical saves use **schema 19** and rules version **v2.54**. Authenticated schema-13 through schema-18 saves migrate deterministically; schema-16 single fronts become front arrays, prior conquest progress is preserved, schema-18 active programs receive the shorter remaining calendar exactly once, and the former combined Denmark/Greenland state is split without changing its owner or totals. Incompatible rules versions are rejected. Manual Research Surge and Propaganda costs also use discounted opening-country quotes and rise only after successful uses (30% and 35% respectively). The Progress drawer lists every active empire-wide upgrade level as well as the next milestones.
 
 ```bash
 pnpm test

@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { AI_FIRST_WAR_TICK } from './balance';
 import { WorldEngineV2 } from './WorldEngineV2';
-import { nationalArmyCapacityTargetV2 } from './capacity';
+import {
+  nationalArmyCapacityTargetV2,
+  stateTerritoryArmyDeploymentLimitV2,
+  stateTerritoryArmySupportCeilingV2,
+} from './capacity';
 import { WORLD_CONTENT_V2 } from './content';
 import { assertInvariantsV2 } from './invariants';
 import { loadSaveV2 } from './persistence';
+import { projectFinanceManpowerPhaseV2, selectWeeklyFinanceBreakdownV2 } from './selectors';
 import { nationIdV2 } from './types';
 
 describe('V2 deterministic ticks, queues and saves', () => {
@@ -112,12 +117,36 @@ describe('V2 deterministic ticks, queues and saves', () => {
       assertInvariantsV2(engine.state, WORLD_CONTENT_V2);
       expect(engine.state.tick).toBe(60);
       for (const nationId of WORLD_CONTENT_V2.nationIds) {
-        const deployed = Object.values(engine.state.territories).reduce((sum, territory) => (
-          territory.owner === nationId ? sum + territory.army.manpower : sum
-        ), 0);
-        expect(deployed).toBeLessThanOrEqual(
-          nationalArmyCapacityTargetV2(engine.state, WORLD_CONTENT_V2, nationId) + 1e-6,
+        const finance = selectWeeklyFinanceBreakdownV2(
+          engine.state, WORLD_CONTENT_V2, nationId,
         );
+        const projection = projectFinanceManpowerPhaseV2(
+          engine.state, WORLD_CONTENT_V2, nationId, finance,
+        );
+        const nationalCapacity = nationalArmyCapacityTargetV2(
+          engine.state, WORLD_CONTENT_V2, nationId,
+        );
+        const nationalFreeRoom = Math.max(
+          0,
+          nationalCapacity - projection.deployedAfterDemobilization,
+        );
+        expect(projection.recruited).toBeLessThanOrEqual(nationalFreeRoom + 1e-9);
+        expect(projection.deployedAfterFinance).toBeLessThanOrEqual(
+          Math.max(projection.deployedAfterDemobilization, nationalCapacity) + 1e-9,
+        );
+        for (const projected of projection.territories) {
+          const current = engine.state.territories[projected.id]!.army.manpower;
+          const supportCeiling = stateTerritoryArmySupportCeilingV2(
+            engine.state, WORLD_CONTENT_V2, projected.id, nationId,
+          );
+          const stableLimit = stateTerritoryArmyDeploymentLimitV2(
+            engine.state, WORLD_CONTENT_V2, projected.id, nationId,
+          );
+          expect(projected.manpower).toBeLessThanOrEqual(stableLimit + 1e-9);
+          if (current > supportCeiling && finance.acceleratedDemobilization === 0) {
+            expect(projected.manpower).toBe(current);
+          }
+        }
       }
     }
   }, 60_000);
