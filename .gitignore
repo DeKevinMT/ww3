@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.local-modules/
+work/
+
+*.zip
+coverage/
+.vite/
+*.log
+
+.env
+.env.*
+!.env.example
+
+.DS_Store
+Thumbs.db
