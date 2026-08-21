@@ -1,0 +1,27 @@
+{
+  "name": "frontier-command",
+  "description": "A deterministic browser grand-strategy simulation with autonomous national AI.",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/DeKevinMT/ww3.git"
+  },
+  "homepage": "https://github.com/DeKevinMT/ww3",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --configLoader runner",
+    "build": "tsc --noEmit && vite build --configLoader runner",
+    "test": "vitest run --configLoader runner --maxWorkers 1 --minWorkers 1",
+    "test:watch": "vitest --configLoader runner"
+  },
+  "dependencies": {
+    "flag-icons": "^7.5.0",
+    "phaser": "^3.90.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.2",
+    "vite": "^7.1.2",
+    "vitest": "^3.2.4"
+  }
+}

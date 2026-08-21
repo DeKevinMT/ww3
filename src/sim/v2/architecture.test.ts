@@ -1,0 +1,115 @@
+import { describe, expect, it } from 'vitest';
+import { DEFAULT_BUDGET_V2, RESEARCH_BRANCH_EFFECTS } from './balance';
+import { createWorldStateV2 } from './bootstrap';
+import { WORLD_CONTENT_V2 } from './content';
+import { COUNTRIES, TERRITORIES, isSeaConnection, validateMap } from '../../game/data/worldMap';
+import { assertInvariantsV2 } from './invariants';
+import { canonicalStateHashV2, createSaveV2, loadSaveV2, type SaveGameV2 } from './persistence';
+import { nationIdV2, territoryIdV2 } from './types';
+
+describe('V2 canonical architecture', () => {
+  it('boots every currently exported map nation through explicit initial ownership', () => {
+    const state = createWorldStateV2(17);
+    expect(WORLD_CONTENT_V2.nationIds).toHaveLength(COUNTRIES.length);
+    expect(WORLD_CONTENT_V2.territoryIds).toHaveLength(TERRITORIES.length);
+    for (const territoryId of WORLD_CONTENT_V2.territoryIds) {
+      expect(state.territories[territoryId].owner).toBe(WORLD_CONTENT_V2.territories[territoryId].initialOwnerId);
+    }
+    expect(state.territories[territoryIdV2('bel')].owner).toBe(nationIdV2('bel'));
+    assertInvariantsV2(state, WORLD_CONTENT_V2);
+  });
+
+  it('keeps Greenland separate from Denmark without enabling other microstates', () => {
+    const state = createWorldStateV2(18);
+    const denmark = COUNTRIES.find((country) => country.id === 'dnk');
+    const greenland = COUNTRIES.find((country) => country.id === 'grl');
+    const denmarkTerritory = TERRITORIES.find((territory) => territory.id === 'dnk');
+    const greenlandTerritory = TERRITORIES.find((territory) => territory.id === 'grl');
+    const denmarkContent = WORLD_CONTENT_V2.nations[nationIdV2('dnk')];
+    const greenlandContent = WORLD_CONTENT_V2.nations[nationIdV2('grl')];
+
+    expect(COUNTRIES.filter((country) => country.population < 0.25).map((country) => country.id)).toEqual(['grl']);
+    expect(denmark).toMatchObject({ iso3: 'DNK', population: 6.009, gdp: 462.527, military: 9.959 });
+    expect(greenland).toMatchObject({ iso3: 'GRL', population: 0.057, gdp: 3.327, military: 0.063 });
+    expect(denmark?.rings).toHaveLength(12);
+    expect(greenland?.rings).toHaveLength(17);
+    expect(denmarkTerritory).toBeDefined();
+    expect(greenlandTerritory).toBeDefined();
+    expect(isSeaConnection('can', 'grl')).toBe(true);
+    expect(isSeaConnection('grl', 'can')).toBe(true);
+    expect(isSeaConnection('grl', 'isl')).toBe(true);
+    expect(isSeaConnection('isl', 'grl')).toBe(true);
+    expect(greenlandTerritory?.seaNeighbors).toEqual(expect.arrayContaining(['can', 'isl']));
+    expect(WORLD_CONTENT_V2.nationIds).toEqual(expect.arrayContaining([nationIdV2('dnk'), nationIdV2('grl')]));
+    expect(WORLD_CONTENT_V2.territoryIds).toEqual(expect.arrayContaining([territoryIdV2('dnk'), territoryIdV2('grl')]));
+    expect(WORLD_CONTENT_V2.territories[territoryIdV2('grl')].connections).toEqual(expect.arrayContaining([
+      { targetId: territoryIdV2('can'), kind: 'sea' },
+      { targetId: territoryIdV2('isl'), kind: 'sea' },
+    ]));
+    expect(WORLD_CONTENT_V2.territories[territoryIdV2('can')].connections).toContainEqual(
+      { targetId: territoryIdV2('grl'), kind: 'sea' },
+    );
+    expect(WORLD_CONTENT_V2.territories[territoryIdV2('isl')].connections).toContainEqual(
+      { targetId: territoryIdV2('grl'), kind: 'sea' },
+    );
+    expect(greenlandContent.real.taxRevenueSource).toBe('sovereign-proxy');
+    expect(greenlandContent.real.taxRevenueShare).toBe(denmarkContent.real.taxRevenueShare);
+    expect(state.territories[territoryIdV2('dnk')].owner).toBe(nationIdV2('dnk'));
+    expect(state.territories[territoryIdV2('grl')].owner).toBe(nationIdV2('grl'));
+    expect(validateMap()).toEqual([]);
+  });
+
+  it('keeps nation and territory payloads on the exact canonical key allowlist', () => {
+    const state = createWorldStateV2(2);
+    const nation = state.players[nationIdV2('bel')];
+    const territory = state.territories[territoryIdV2('bel')];
+    expect(state.schemaVersion).toBe(17);
+    expect(Object.keys(nation).sort()).toEqual(['budget', 'capitalId', 'ceasefiresRequested', 'empireName', 'foodSecurity', 'foodStock', 'manualActionUses', 'propagandaAvailableTick', 'propagandaProgram', 'rapidRecruitmentAvailableTick', 'research', 'researchSurgeAvailableTick', 'treasury', 'warFatigue']);
+    expect(Object.keys(territory).sort()).toEqual(['army', 'condition', 'economy', 'integration', 'owner', 'population']);
+    expect(Object.keys(territory.army).sort()).toEqual([
+      'baseAttack', 'baseDefense', 'capacity', 'manpower', 'veteranExperience', 'veteranManpower',
+    ]);
+    expect(Object.keys(nation.research).sort()).toEqual(['allocations', 'breakthroughs', 'effectLevels', 'progress']);
+    expect(nation.budget).toEqual(DEFAULT_BUDGET_V2);
+  });
+
+  it('uses only the normative research pools and omits derived/UI state from saves', () => {
+    expect(RESEARCH_BRANCH_EFFECTS).toEqual({
+      'population-recruitment': ['population-growth', 'training'],
+      'military-industry': ['force-capacity', 'reinforcement-efficiency'],
+      'advanced-weapons': ['attack', 'control'],
+      'defensive-systems': ['defense', 'casualty-reduction'],
+      'logistics-medicine': ['recovery', 'supply'],
+      'economy-science': ['economy-growth', 'research-speed', 'research-efficiency'],
+    });
+    const save = createSaveV2(createWorldStateV2(3), WORLD_CONTENT_V2) as unknown as Record<string, unknown>;
+    expect(save).not.toHaveProperty('speed');
+    expect(save).not.toHaveProperty('events');
+    expect(save).not.toHaveProperty('winnerId');
+    expect(save).not.toHaveProperty('gameOver');
+    expect(save).not.toHaveProperty('content');
+    expect(save).toHaveProperty('canonicalStateHash');
+  });
+
+  it('rejects extra nested canonical keys even when a tampered save is rehashed', () => {
+    const mutations: Array<(save: SaveGameV2) => void> = [
+      (save) => Object.assign(save.players[nationIdV2('bel')].budget, { legacyFund: 1 }),
+      (save) => Object.assign(save.players[nationIdV2('bel')].research.effectLevels, { resilience: 1 }),
+      (save) => Object.assign(save.players[nationIdV2('bel')].research.breakthroughs, { industry: 1 }),
+      (save) => Object.assign(save.territories[territoryIdV2('bel')].army, { readiness: 1 }),
+    ];
+    for (const mutate of mutations) {
+      const save = structuredClone(createSaveV2(createWorldStateV2(4), WORLD_CONTENT_V2));
+      mutate(save);
+      save.canonicalStateHash = canonicalStateHashV2(save);
+      expect(() => loadSaveV2(save, WORLD_CONTENT_V2)).toThrow(/non-canonical/);
+    }
+  });
+
+  it('rejects invalid nested references even with a matching hash', () => {
+    const save = structuredClone(createSaveV2(createWorldStateV2(5), WORLD_CONTENT_V2));
+    save.truces.push({ leftId: nationIdV2('missing'), rightId: nationIdV2('bel'), expiresTick: 12 });
+    save.canonicalStateHash = canonicalStateHashV2(save);
+    expect(() => loadSaveV2(save, WORLD_CONTENT_V2)).toThrow(/invalid references/);
+  });
+});
