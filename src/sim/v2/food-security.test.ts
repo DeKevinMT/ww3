@@ -89,7 +89,7 @@ describe('V2 automated food security', () => {
     expect(after).toBeGreaterThan(population);
   });
 
-  it('counts Veteran Forces as ordinary manpower without double-counting their food demand', () => {
+  it('does not let Combat Experience create extra manpower food demand', () => {
     const state = createWorldStateV2(2_110);
     const usa = nationIdV2('usa');
     const territory = state.territories[territoryIdV2('usa')];
@@ -99,8 +99,7 @@ describe('V2 automated food security', () => {
     territory.army.manpower = 20;
     const massArmy = selectFoodDemandV2(state, usa);
     expect(massArmy - modestArmy).toBeGreaterThan(20);
-    territory.army.veteranManpower = 10;
-    territory.army.veteranExperience = 5;
+    state.players[usa].combatExperience = 500;
     expect(selectFoodDemandV2(state, usa)).toBeCloseTo(massArmy, 6);
   });
 

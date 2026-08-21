@@ -73,11 +73,11 @@ function calibratedState(seed = 4_001): WorldStateV2 {
   state.territories[nldTerritory].condition = 1;
   state.territories[belTerritory].army = {
     ...state.territories[belTerritory].army,
-    manpower: 0.20, capacity: 0.20, veteranManpower: 0, veteranExperience: 0,
+    manpower: 0.20, capacity: 0.20,
   };
   state.territories[nldTerritory].army = {
     ...state.territories[nldTerritory].army,
-    manpower: 0.10, capacity: 0.10, veteranManpower: 0, veteranExperience: 0,
+    manpower: 0.10, capacity: 0.10,
   };
   return state;
 }
@@ -134,7 +134,7 @@ describe('V2 coherent combat and forecast calibration', () => {
     expect(event.defenderLosses).toBeCloseTo(randomized.defenderLosses, 6);
   });
 
-  it('caps pulse damage at five percent of maximum manpower for full and half-filled armies', () => {
+  it('caps decisive pulse damage at five percent of supported maximum manpower', () => {
     const projection = (defenderManpower: number) => {
       const state = calibratedState(4_001_001);
       state.territories[belTerritory].army.manpower = 10;
@@ -147,11 +147,10 @@ describe('V2 coherent combat and forecast calibration', () => {
     };
     const full = projection(0.10);
     const half = projection(0.05);
-    const capacityCap = 0.10 * COMBAT_MAX_CASUALTY_RATE;
     expect(full.defenderLossRate).toBe(COMBAT_MAX_CASUALTY_RATE);
     expect(half.defenderLossRate).toBe(COMBAT_MAX_CASUALTY_RATE);
-    expect(full.defenderLosses).toBeCloseTo(capacityCap, 9);
-    expect(half.defenderLosses).toBeCloseTo(capacityCap, 9);
+    expect(full.defenderLosses).toBeCloseTo(0.10 * COMBAT_MAX_CASUALTY_RATE, 9);
+    expect(half.defenderLosses).toBeCloseTo(0.10 * COMBAT_MAX_CASUALTY_RATE, 9);
   });
 
   it('reports perspective-aware live damage and a bounded remaining-war estimate', () => {
@@ -195,13 +194,14 @@ describe('V2 coherent combat and forecast calibration', () => {
     state.wars = [];
     state.tick = WAR_MOBILIZATION_TICKS;
     state.territories[deuTerritory].owner = bel;
+    state.territories[deuTerritory].coreOwner = bel;
     state.territories[deuTerritory].integration = 1;
+    delete state.territories[deuTerritory].integrationProgram;
     invalidateTerritoryIndexV2(state);
     synchronizeArmyCapacityV2(state, WORLD_CONTENT_V2);
     for (const sourceId of [belTerritory, deuTerritory]) {
       const army = state.territories[sourceId].army;
       army.manpower = army.capacity * 0.90;
-      army.veteranManpower = Math.min(army.veteranManpower, army.manpower);
     }
     state.territories[nldTerritory].army.manpower = state.territories[nldTerritory].army.capacity;
     const active = war(state, bel, nld, 'war-two-live-fronts');
@@ -249,12 +249,12 @@ describe('V2 coherent combat and forecast calibration', () => {
     expect(7 * 0.002 * chinaExposure).toBeLessThan(0.005);
   });
 
-  it('never inverts an overwhelming advantage or turns it into a one-pulse conquest', () => {
+  it('never inverts an overwhelming advantage and can finish a depleted routed remnant', () => {
     const state = calibratedState(4_002);
     state.territories[belTerritory].army.manpower = 1;
     state.territories[belTerritory].army.capacity = 1;
-    state.territories[nldTerritory].army.manpower = 0.01;
-    state.territories[nldTerritory].army.capacity = 0.01;
+    state.territories[nldTerritory].army.manpower = 0.003;
+    state.territories[nldTerritory].army.capacity = 0.10;
     const projected = projectCombatExchangeV2(
       state, WORLD_CONTENT_V2, bel, nld, belTerritory, nldTerritory, 'land', 1, 1,
     )!;
@@ -262,10 +262,35 @@ describe('V2 coherent combat and forecast calibration', () => {
     expect(projected.attackerLosses).toBeLessThan(0.05 * projected.defenderStrength);
     const event = resolveBattlePulseV2(state, WORLD_CONTENT_V2, war(state), operation())!;
     expect(event.defenderLosses).toBeGreaterThan(event.attackerLosses);
-    expect(event.defenderLosses).toBeLessThanOrEqual(0.01 * 0.05 + 1e-8);
-    expect(event.conquered).toBe(false);
-    expect(state.territories[nldTerritory].owner).toBe(nld);
+    expect(event.defenderLosses).toBeCloseTo(0.003, 9);
+    expect(event.defenderLosses).toBeLessThanOrEqual(projected.defenderStrength);
+    expect(state.territories[nldTerritory].army.manpower).toBe(0);
     expect(COMBAT_ROUTE_STRENGTH_RATIO).toBe(0.05);
+  });
+
+  it('keeps micro-formation route losses inside the same supported-maximum budget', () => {
+    const state = calibratedState(4_002_1);
+    state.territories[belTerritory].army.manpower = 1;
+    state.territories[belTerritory].army.capacity = 1;
+    // Keep the force at a meaningful 1,000-person scale, but make the initial
+    // exchange tiny so routing must spend only the budget that remains.
+    state.territories[belTerritory].army.baseAttack = 0.00001;
+    state.territories[nldTerritory].army.manpower = 0.001;
+    state.territories[nldTerritory].army.capacity = 0.001;
+    const manpowerBefore = state.territories[nldTerritory].army.manpower;
+    const supportedMaximum = Math.max(
+      state.territories[nldTerritory].army.capacity,
+      manpowerBefore,
+    );
+
+    const event = resolveBattlePulseV2(state, WORLD_CONTENT_V2, war(state), operation())!;
+    const canonicalLoss = manpowerBefore - state.territories[nldTerritory].army.manpower;
+
+    const pulseBudget = supportedMaximum * COMBAT_MAX_CASUALTY_RATE;
+    expect(canonicalLoss).toBeCloseTo(pulseBudget, 9);
+    expect(canonicalLoss).toBeLessThanOrEqual(pulseBudget + 1e-12);
+    expect(event.defenderLosses).toBeCloseTo(canonicalLoss, 9);
+    expect(state.territories[nldTerritory].army.manpower).toBeGreaterThan(0);
   });
 
   it('moves forecast probability in all four ATK/DEF directions', () => {
@@ -294,17 +319,20 @@ describe('V2 coherent combat and forecast calibration', () => {
   it('chooses a viable committed border army instead of locking onto a peripheral crumb', () => {
     const state = calibratedState(4_005);
     state.territories[deuTerritory].owner = bel;
+    state.territories[deuTerritory].coreOwner = bel;
+    state.territories[deuTerritory].integration = 1;
+    delete state.territories[deuTerritory].integrationProgram;
     state.territories[deuTerritory].army = {
       ...state.territories[deuTerritory].army,
-      manpower: 0.60, capacity: 0.60, veteranManpower: 0, veteranExperience: 0,
+      manpower: 0.60, capacity: 0.60,
     };
     state.territories[belTerritory].army = {
       ...state.territories[belTerritory].army,
-      manpower: 0.001, capacity: 0.20, veteranManpower: 0, veteranExperience: 0,
+      manpower: 0.001, capacity: 0.20,
     };
     state.territories[nldTerritory].army = {
       ...state.territories[nldTerritory].army,
-      manpower: 0.10, capacity: 0.10, veteranManpower: 0, veteranExperience: 0,
+      manpower: 0.10, capacity: 0.10,
     };
     invalidateTerritoryIndexV2(state);
     const forecast = forecastWarV2(state, WORLD_CONTENT_V2, bel, nld);

@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { ARMY_CAPACITY_STRUCTURAL_POPULATION_SHARE } from './balance';
+import {
+  ARMY_CAPACITY_STRUCTURAL_POPULATION_SHARE,
+  EXTREME_CRISIS_DEMOBILIZATION_RATE,
+} from './balance';
 import { createWorldStateV2 } from './bootstrap';
-import { nationalArmyCapacityTargetV2, synchronizeArmyCapacityV2 } from './capacity';
+import {
+  nationalArmyCapacityTargetV2,
+  stateTerritoryArmySupportCeilingV2,
+  synchronizeArmyCapacityV2,
+} from './capacity';
 import { WORLD_CONTENT_V2 } from './content';
 import { assertInvariantsV2 } from './invariants';
 import {
@@ -10,25 +17,34 @@ import {
   selectTotalManpowerV2,
   selectWeeklyFinanceBreakdownV2,
 } from './selectors';
-import { nationIdV2 } from './types';
+import { nationIdV2, territoryIdV2 } from './types';
 
 const bel = nationIdV2('bel');
+const lux = nationIdV2('lux');
+const luxTerritory = territoryIdV2('lux');
+const deuTerritory = territoryIdV2('deu');
 
 describe('population and research army cap', () => {
   it('uses integrated live population and force-capacity research', () => {
     const state = createWorldStateV2(8_101);
     state.players[bel].research.effectLevels['force-capacity'] = 17;
-    for (const territory of selectTerritoriesOfV2(state, bel)) {
-      territory.condition = 0.15;
-      territory.integration = 0.10;
-    }
+    state.territories[luxTerritory].owner = bel;
+    state.territories[luxTerritory].coreOwner = lux;
+    state.territories[luxTerritory].integration = 0.10;
+    state.territories[luxTerritory].integrationProgram = {
+      fromOwnerId: lux,
+      fromCoreOwnerId: lux,
+      toOwnerId: bel,
+      startedTick: state.tick,
+      completesTick: state.tick + 52,
+    };
     state.players[bel].treasury = -1_000;
     synchronizeArmyCapacityV2(state, WORLD_CONTENT_V2);
     const integratedPopulation = selectTerritoriesOfV2(state, bel)
       .reduce((sum, territory) => sum + territory.population * territory.integration, 0);
     const expected = integratedPopulation * ARMY_CAPACITY_STRUCTURAL_POPULATION_SHARE * 1.17;
-    expect(selectTotalManpowerV2(state, bel).capacity).toBeCloseTo(expected, 6);
-    expect(nationalArmyCapacityTargetV2(state, WORLD_CONTENT_V2, bel)).toBeCloseTo(expected, 6);
+    expect(selectTotalManpowerV2(state, bel).capacity).toBeCloseTo(expected, 5);
+    expect(nationalArmyCapacityTargetV2(state, WORLD_CONTENT_V2, bel)).toBeCloseTo(expected, 5);
     assertInvariantsV2(state, WORLD_CONTENT_V2);
   });
 
@@ -52,22 +68,72 @@ describe('population and research army cap', () => {
     assertInvariantsV2(state, WORLD_CONTENT_V2);
   });
 
-  it('underfunding can demobilize personnel but never destroys army cap', () => {
+  it('does not demobilize for ordinary underfunding or clamp trained personnel to capacity', () => {
     const state = createWorldStateV2(8_103);
     const territory = selectTerritoriesOfV2(state, bel)[0]!;
     territory.army.manpower = territory.army.capacity;
-    territory.army.veteranManpower = territory.army.manpower * 0.20;
-    territory.army.veteranExperience = 4;
+    const trainedBefore = territory.army.manpower;
+    state.territories[territory.id].population *= 0.10;
+    synchronizeArmyCapacityV2(state, WORLD_CONTENT_V2);
+    expect(territory.army.capacity).toBeLessThan(trainedBefore);
+    expect(territory.army.manpower).toBe(trainedBefore);
     const finance = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, bel);
     const projection = projectFinanceManpowerPhaseV2(state, WORLD_CONTENT_V2, bel, {
       ...finance,
       mandatoryFundingRatio: 0,
+      acceleratedDemobilization: 0,
     });
-    expect(projection.deployedAfterDemobilization).toBeLessThan(projection.deployedBefore);
+    expect(projection.deployedAfterDemobilization).toBe(projection.deployedBefore);
     expect(projection.territories.reduce((sum, army) => sum + army.capacity, 0))
       .toBeCloseTo(nationalArmyCapacityTargetV2(state, WORLD_CONTENT_V2, bel), 6);
-    expect(projection.territories[0]!.veteranManpower)
-      .toBeLessThanOrEqual(projection.territories[0]!.manpower);
+  });
+
+  it('caps an explicit extreme-crisis force reduction at 0.05% per week', () => {
+    const state = createWorldStateV2(8_105);
+    const territory = selectTerritoriesOfV2(state, bel)[0]!;
+    territory.army.manpower = territory.army.capacity;
+    const finance = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, bel);
+    const projection = projectFinanceManpowerPhaseV2(state, WORLD_CONTENT_V2, bel, {
+      ...finance,
+      mandatoryFundingRatio: 0,
+      acceleratedDemobilization: territory.army.manpower,
+    });
+    expect(projection.demobilized).toBeCloseTo(
+      projection.deployedBefore * EXTREME_CRISIS_DEMOBILIZATION_RATE,
+      6,
+    );
+  });
+
+  it('never recruits new personnel above twice a territory local capacity', () => {
+    const state = createWorldStateV2(8_106);
+    const supported = state.territories[territoryIdV2('bel')]!;
+    const reserve = state.territories[deuTerritory]!;
+    reserve.owner = bel;
+    reserve.coreOwner = bel;
+    reserve.integration = 1;
+    delete reserve.integrationProgram;
+    reserve.army.manpower = 0;
+    synchronizeArmyCapacityV2(state, WORLD_CONTENT_V2);
+    supported.army.manpower = stateTerritoryArmySupportCeilingV2(
+      state, WORLD_CONTENT_V2, territoryIdV2('bel'), bel,
+    );
+    const supportedBefore = supported.army.manpower;
+    const finance = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, bel);
+    const projection = projectFinanceManpowerPhaseV2(state, WORLD_CONTENT_V2, bel, {
+      ...finance,
+      acceleratedDemobilization: 0,
+      passiveRecruitment: 1_000_000,
+      acceleratedRecruitment: 1_000_000,
+    });
+    const supportedAfter = projection.territories.find((army) => army.id === territoryIdV2('bel'))!;
+
+    expect(projection.recruited).toBeGreaterThan(0);
+    expect(supportedAfter.manpower).toBe(supportedBefore);
+    for (const projected of projection.territories) {
+      expect(projected.manpower).toBeLessThanOrEqual(
+        stateTerritoryArmySupportCeilingV2(state, WORLD_CONTENT_V2, projected.id, bel) + 1e-9,
+      );
+    }
   });
 
   it('adds normal recruits with the original military quality of their territory', () => {

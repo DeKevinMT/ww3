@@ -9,14 +9,17 @@ import {
   AI_REGIONAL_ESCALATION_COOLDOWN,
   AI_REGIONAL_ESCALATION_EXTRA_WAR_CAP,
   aiActiveWarCapV2,
+  CONQUEST_CAPTURE_GUARD_MAX_TRANSFER_SHARE,
   DEFENDER_POSITION_MULTIPLIER,
   STALE_WAR_TICKS,
   TERRAIN_DEFENSE_MODIFIER,
-  clamp,
   round,
 } from './balance';
 import { createWorldStateV2 } from './bootstrap';
-import { nationalArmyCapacityTargetV2, stateTerritoryArmyCapacityTargetV2 } from './capacity';
+import {
+  stateTerritoryArmyCapacityTargetV2,
+  stateTerritoryArmySupportCeilingV2,
+} from './capacity';
 import { WORLD_CONTENT_V2, type NationContentV2, type TerritoryContentV2, type WorldContentV2 } from './content';
 import { invariantErrorsV2 } from './invariants';
 import { planAiCommandsV2 } from './ai';
@@ -160,15 +163,11 @@ function pulseFixture(options: { sourceHp?: number; sourceMaxHp?: number; target
     ...source.army,
     manpower: options.sourceHp ?? 100,
     capacity: options.sourceMaxHp ?? 100,
-    veteranManpower: 0,
-    veteranExperience: 0,
   };
   target.army = {
     ...target.army,
     manpower: options.targetHp ?? 100,
     capacity: options.targetMaxHp ?? 100,
-    veteranManpower: 0,
-    veteranExperience: 0,
   };
   if (options.control !== undefined) target.control = { controller: A, share: options.control };
   const currentWar = war(state);
@@ -251,11 +250,14 @@ describe('V2 combat and absorption acceptance', () => {
     const attackPressure = source.army.manpower * attack * attackerSupply;
     const expectedShield = target.army.manpower * defense * DEFENDER_POSITION_MULTIPLIER
       * TERRAIN_DEFENSE_MODIFIER.plains * defenderSupply;
-    const expectedRate = clamp(COMBAT_BASE_CASUALTY_RATE * Math.pow(
+    const expectedRate = Math.min(COMBAT_MAX_CASUALTY_RATE, Math.max(0, COMBAT_BASE_CASUALTY_RATE * Math.pow(
       attackPressure / expectedShield,
       COMBAT_POWER_RATIO_EXPONENT,
-    ) * varianceA, 0, COMBAT_MAX_CASUALTY_RATE);
-    const expectedDamage = target.army.manpower * expectedRate;
+    ) * varianceA));
+    const expectedDamage = Math.min(
+      target.army.manpower,
+      Math.max(target.army.capacity, target.army.manpower) * expectedRate,
+    );
 
     const event = resolveBattlePulseV2(state, FIXTURE_CONTENT, currentWar, currentOperation)!;
     expect(event.defenderPower).toBe(round(expectedShield));
@@ -317,7 +319,10 @@ describe('V2 combat and absorption acceptance', () => {
       8,
     );
     expect(target.army.manpower).toBeCloseTo(before.sourceManpower - source.army.manpower, 9);
-    expect(target.army.manpower).toBeLessThanOrEqual(before.sourceManpower * 0.02 + 1e-8);
+    expect(target.army.manpower).toBeCloseTo(Math.min(
+      before.sourceManpower * CONQUEST_CAPTURE_GUARD_MAX_TRANSFER_SHARE,
+      stateTerritoryArmySupportCeilingV2(state, FIXTURE_CONTENT, B_FRONT, A),
+    ), 8);
     expect(event.treasurySeized).toBe(0);
     expect(state.players[A].treasury).toBe(before.attackerTreasury);
     expect(state.players[B].treasury).toBe(before.defenderTreasury);
@@ -332,6 +337,8 @@ describe('V2 combat and absorption acceptance', () => {
       control: 0.60,
     });
     state.territories[B_HOME].owner = A;
+    state.territories[B_HOME].coreOwner = A;
+    state.territories[B_HOME].integration = 1;
     state.players[B].capitalId = B_FRONT;
     state.players[A].treasury = 10;
     state.players[B].treasury = 40;
@@ -392,7 +399,7 @@ describe('V2 determinism, saves, and invariants acceptance', () => {
     const state = createWorldStateV2(93, FIXTURE_CONTENT);
     (state.players[A] as unknown as Record<string, unknown>).stability = 0.8;
     (state.territories[A_HOME] as unknown as Record<string, unknown>).fortification = 3;
-    state.territories[A_HOME].army.manpower = nationalArmyCapacityTargetV2(state, FIXTURE_CONTENT, A) + 1;
+    state.territories[A_HOME].army.manpower = -1;
     state.territories[B_FRONT].control = { controller: B, share: 1 };
     const errors = invariantErrorsV2(state, FIXTURE_CONTENT);
     expect(errors).toContain(`Nation ${A} has non-canonical keys.`);

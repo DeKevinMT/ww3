@@ -64,8 +64,12 @@ describe('transient post-war outcomes', () => {
       treasuryBefore,
       treasuryAfter: treasuryBefore + 4,
     });
-    expect(outcomes[0]!.veteranManpowerAfter).toBeGreaterThan(outcomes[0]!.veteranManpowerBefore);
-    expect(outcomes[0]!.veteranExperienceAfter).toBeGreaterThan(outcomes[0]!.veteranExperienceBefore);
+    expect(outcomes[0]!.combatExperienceBefore).toBe(0);
+    expect(outcomes[0]!.combatExperienceAfter).toBeGreaterThan(0);
+    expect(outcomes[0]!.combatExperienceGained).toBeCloseTo(
+      outcomes[0]!.combatExperienceAfter - outcomes[0]!.combatExperienceBefore,
+      7,
+    );
     expect(outcomes[0]!.baseAttackAfter).toBeCloseTo(outcomes[0]!.baseAttackBefore, 8);
     expect(outcomes[0]!.baseDefenseAfter).toBeCloseTo(outcomes[0]!.baseDefenseBefore, 8);
     expect(engine.state.wars).toHaveLength(0);

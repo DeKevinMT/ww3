@@ -185,7 +185,7 @@ describe('V2 finance and research', () => {
     expect(minimumMandatoryFunding).toBeGreaterThanOrEqual(0.999);
   });
 
-  it('demobilizes personnel gradually under unfunded payroll without shrinking cap', () => {
+  it('preserves personnel under ordinary unfunded payroll without shrinking cap', () => {
     const state = createWorldStateV2(12);
     const bel = nationIdV2('bel');
     const territory = state.territories[territoryIdV2('bel')];
@@ -202,9 +202,7 @@ describe('V2 finance and research', () => {
     });
     processFinanceMilitaryV2(state, WORLD_CONTENT_V2, plans);
     expect(territory.army.capacity).toBeCloseTo(beforeCapacity, 8);
-    expect(territory.army.manpower).toBeGreaterThanOrEqual(beforeManpower * 0.99 - 1e-6);
-    expect(territory.army.manpower).toBeLessThan(beforeManpower);
-    expect(territory.army.manpower).toBeLessThanOrEqual(territory.army.capacity);
+    expect(territory.army.manpower).toBe(beforeManpower);
   });
 
   it('updates army cap from force-capacity research without a purchase system', () => {

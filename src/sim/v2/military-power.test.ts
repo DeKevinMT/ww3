@@ -106,7 +106,7 @@ describe('V2 real-world military power calibration', () => {
         + selectTerritoryPowerV2(state, WORLD_CONTENT_V2, dutchTerritory),
       8,
     );
-    expect(state.schemaVersion).toBe(17);
+    expect(state.schemaVersion).toBe(19);
     expect('militaryBaseRatings' in state.players[belgium]).toBe(false);
   });
 
@@ -129,8 +129,7 @@ describe('V2 real-world military power calibration', () => {
     territory.army.manpower = 0.10;
     territory.army.baseAttack = 5;
     territory.army.baseDefense = 5;
-    territory.army.veteranManpower = 0.10;
-    territory.army.veteranExperience = 100;
+    state.players[belgium].combatExperience = 100;
     const before = selectCurrentPowerV2(state, WORLD_CONTENT_V2, belgium);
     const attackMassBefore = territory.army.manpower * territory.army.baseAttack;
 

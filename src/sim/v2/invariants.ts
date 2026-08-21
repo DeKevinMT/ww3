@@ -1,6 +1,6 @@
 import { CEASEFIRE_PAYMENT_WEEKS, PROPAGANDA_DURATION_TICKS, RESEARCH_BRANCHES } from './balance';
 import type { WorldContentV2 } from './content';
-import { nationalArmyCapacityTargetV2, stateTerritoryArmyCapacityTargetV2, stateTerritoryArmyDeploymentLimitV2 } from './capacity';
+import { stateTerritoryArmyCapacityTargetV2 } from './capacity';
 import {
   finiteStateNumbersV2,
   relationKeyV2,
@@ -10,8 +10,8 @@ import {
 } from './selectors';
 import type { PlayerId, TerritoryId, WorldStateV2 } from './types';
 
-const NATION_KEYS = ['budget', 'capitalId', 'ceasefiresRequested', 'empireName', 'foodSecurity', 'foodStock', 'manualActionUses', 'propagandaAvailableTick', 'propagandaProgram', 'rapidRecruitmentAvailableTick', 'research', 'researchSurgeAvailableTick', 'treasury', 'warFatigue'];
-const TERRITORY_KEYS = ['army', 'condition', 'control', 'economy', 'integration', 'owner', 'population'];
+const NATION_KEYS = ['budget', 'capitalId', 'ceasefiresRequested', 'combatExperience', 'empireName', 'foodSecurity', 'foodStock', 'manualActionUses', 'propagandaAvailableTick', 'propagandaProgram', 'rapidRecruitmentAvailableTick', 'research', 'researchSurgeAvailableTick', 'treasury', 'warFatigue'];
+const TERRITORY_KEYS = ['army', 'condition', 'control', 'coreOwner', 'economy', 'integration', 'integrationProgram', 'owner', 'population'];
 const RESEARCH_KEYS = ['allocations', 'breakthroughs', 'effectLevels', 'progress'];
 const BUDGET_KEYS = ['development', 'military', 'research'];
 const MANUAL_ACTION_USE_KEYS = ['propaganda', 'rapidRecruitment', 'researchSurge'];
@@ -38,9 +38,10 @@ const BREAKTHROUGH_KEYS = [
   'military-industry',
   'population-recruitment',
 ];
-const ARMY_KEYS = ['baseAttack', 'baseDefense', 'capacity', 'manpower', 'veteranExperience', 'veteranManpower'];
+const ARMY_KEYS = ['baseAttack', 'baseDefense', 'capacity', 'manpower'];
 const PROPAGANDA_PROGRAM_KEYS = ['endsTick', 'startedTick', 'totalSuspicionReduction', 'weeklySuspicionReduction'];
 const CONTROL_KEYS = ['controller', 'share'];
+const INTEGRATION_PROGRAM_KEYS = ['completesTick', 'fromCoreOwnerId', 'fromOwnerId', 'startedTick', 'toOwnerId'];
 const WAR_KEYS = ['attackerId', 'attackerLosses', 'attackerOperations', 'battles', 'defenderId', 'defenderLosses', 'defenderOperations', 'id', 'lastBattleTick', 'lastPeaceOfferTick', 'startedTick', 'warScore'];
 const OPERATION_KEYS = ['access', 'commanderId', 'doctrine', 'holdUntilTick', 'lastBattleTick', 'momentum', 'sourceId', 'startedTick', 'targetId'];
 const TRUCE_KEYS = ['expiresTick', 'leftId', 'rightId'];
@@ -50,7 +51,9 @@ const AI_ESCALATION_KEYS = ['coalitionMembers', 'globalThreat', 'lastFederationT
 
 function exactKeys(value: object, allowed: readonly string[]): boolean {
   const actual = Object.keys(value).sort();
-  const presentAllowed = allowed.filter((key) => key !== 'control' || key in value).sort();
+  const presentAllowed = allowed.filter((key) => (
+    (key !== 'control' && key !== 'integrationProgram') || key in value
+  )).sort();
   return actual.length === presentAllowed.length && actual.every((key, index) => key === presentAllowed[index]);
 }
 
@@ -60,7 +63,7 @@ function hasOnlyKeys(value: object, allowed: readonly string[]): boolean {
 
 export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2): string[] {
   const errors: string[] = [];
-  if (state.schemaVersion !== 17) errors.push('Canonical state must use schema version 17.');
+  if (state.schemaVersion !== 19) errors.push('Canonical state must use schema version 19.');
   if (!finiteStateNumbersV2(state)) errors.push('Canonical state contains a non-finite number.');
   const playerIds = Object.keys(state.players) as PlayerId[];
   const territoryIds = Object.keys(state.territories) as TerritoryId[];
@@ -108,7 +111,9 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
     if (![budget.military, budget.research, budget.development].every((value) => Number.isInteger(value) && value >= 5 && value <= 90)
       || budget.military + budget.research + budget.development !== 100) errors.push(`Nation ${id} has an invalid budget.`);
     if (nation.empireName.length > 36 || /[<>\r\n]/.test(nation.empireName)) errors.push(`Nation ${id} has an invalid empire name.`);
-    if (!Number.isFinite(nation.treasury) || nation.foodStock < 0 || nation.foodSecurity < 0 || nation.foodSecurity > 1
+    if (!Number.isFinite(nation.treasury)
+      || !Number.isFinite(nation.combatExperience) || nation.combatExperience < 0
+      || nation.foodStock < 0 || nation.foodSecurity < 0 || nation.foodSecurity > 1
       || !Number.isInteger(nation.ceasefiresRequested) || nation.ceasefiresRequested < 0
       || !Number.isInteger(nation.rapidRecruitmentAvailableTick) || nation.rapidRecruitmentAvailableTick < 0
       || !Number.isInteger(nation.researchSurgeAvailableTick) || nation.researchSurgeAvailableTick < 0
@@ -139,28 +144,33 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
     if (!exactKeys(territory, TERRITORY_KEYS)) errors.push(`Territory ${id} has non-canonical keys.`);
     if (!exactKeys(territory.army, ARMY_KEYS)) errors.push(`Territory ${id} army has non-canonical keys.`);
     if (!state.players[territory.owner]) errors.push(`Territory ${id} has an unknown owner.`);
+    if (!state.players[territory.coreOwner]) errors.push(`Territory ${id} has an unknown core owner.`);
     const expectedCapacity = stateTerritoryArmyCapacityTargetV2(state, content, id, territory.owner);
-    const deploymentLimit = stateTerritoryArmyDeploymentLimitV2(state, content, id, territory.owner);
     if (territory.population < 0.01 || territory.economy < 0.10 || territory.condition < 0.15 || territory.condition > 1
       || territory.integration < 0 || territory.integration > 1
-      || territory.army.capacity < 0 || territory.army.manpower < 0 || territory.army.manpower > deploymentLimit + 0.000001
+      || territory.army.capacity < 0 || territory.army.manpower < 0
       || !Number.isFinite(territory.army.baseAttack) || territory.army.baseAttack <= 0 || territory.army.baseAttack > 20
       || !Number.isFinite(territory.army.baseDefense) || territory.army.baseDefense <= 0 || territory.army.baseDefense > 20
-      || Math.abs(territory.army.capacity - expectedCapacity) > 0.000001
-      || !Number.isFinite(territory.army.veteranManpower) || territory.army.veteranManpower < 0
-      || territory.army.veteranManpower > territory.army.manpower
-      || !Number.isFinite(territory.army.veteranExperience) || territory.army.veteranExperience < 0
-      || (territory.army.veteranManpower === 0 && territory.army.veteranExperience !== 0)) errors.push(`Territory ${id} has invalid canonical values.`);
+      || Math.abs(territory.army.capacity - expectedCapacity) > 0.000001) errors.push(`Territory ${id} has invalid canonical values.`);
     if (territory.control && (!state.players[territory.control.controller]
       || territory.control.controller === territory.owner || territory.control.share <= 0 || territory.control.share > 0.95)) errors.push(`Territory ${id} has invalid control.`);
     if (territory.control && !exactKeys(territory.control, CONTROL_KEYS)) errors.push(`Territory ${id} control has non-canonical keys.`);
-  }
-  for (const ownerId of Object.keys(state.players) as PlayerId[]) {
-    const deployed = territoryIds.reduce((sum, id) => (
-      state.territories[id]?.owner === ownerId ? sum + state.territories[id]!.army.manpower : sum
-    ), 0);
-    if (deployed > nationalArmyCapacityTargetV2(state, content, ownerId) + 0.000001) {
-      errors.push(`Nation ${ownerId} deploys above its national population cap.`);
+    const program = territory.integrationProgram;
+    if (program) {
+      if (!exactKeys(program, INTEGRATION_PROGRAM_KEYS)
+        || !state.players[program.fromOwnerId]
+        || !state.players[program.fromCoreOwnerId] || !state.players[program.toOwnerId]
+        || program.fromOwnerId === program.toOwnerId
+        || program.fromCoreOwnerId === program.toOwnerId
+        || program.fromCoreOwnerId !== territory.coreOwner
+        || program.toOwnerId !== territory.owner
+        || !Number.isInteger(program.startedTick) || !Number.isInteger(program.completesTick)
+        || program.startedTick < 0 || program.completesTick <= program.startedTick
+        || program.completesTick <= state.tick || territory.integration >= 1) {
+        errors.push(`Territory ${id} has an invalid integration program.`);
+      }
+    } else if (territory.coreOwner !== territory.owner || territory.integration !== 1) {
+      errors.push(`Territory ${id} has unfinished integration without a program.`);
     }
   }
   const warPairs = new Set<string>();

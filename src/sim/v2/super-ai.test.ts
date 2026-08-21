@@ -234,6 +234,9 @@ describe('V2 national Super AI', () => {
     expect(untouched.setEmpireName(untouched.state.humanPlayerId, 'North Sea Union').accepted).toBe(false);
     const engine = new WorldEngineV2(708);
     engine.state.territories[territoryIdV2('lux')].owner = belgium;
+    engine.state.territories[territoryIdV2('lux')].coreOwner = belgium;
+    engine.state.territories[territoryIdV2('lux')].integration = 1;
+    delete engine.state.territories[territoryIdV2('lux')].integrationProgram;
     invalidateTerritoryIndexV2(engine.state);
     engine.chooseCountry(belgium);
     engine.stopClock();

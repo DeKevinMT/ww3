@@ -1,8 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { WorldEngineV2 } from './WorldEngineV2';
-import { DEFENDER_POSITION_MULTIPLIER, TERRAIN_DEFENSE_MODIFIER, WAR_MOBILIZATION_TICKS } from './balance';
+import {
+  COMBAT_MAX_CASUALTY_RATE,
+  CONQUEST_CAPTURE_GUARD_MAX_TRANSFER_SHARE,
+  DEFENDER_POSITION_MULTIPLIER,
+  TERRAIN_DEFENSE_MODIFIER,
+  WAR_MOBILIZATION_TICKS,
+} from './balance';
 import { createWorldStateV2 } from './bootstrap';
-import { stateTerritoryArmyCapacityTargetV2, territoryArmyCapacityTargetV2 } from './capacity';
+import {
+  stateTerritoryArmyCapacityTargetV2,
+  stateTerritoryArmySupportCeilingV2,
+  territoryArmyCapacityTargetV2,
+} from './capacity';
 import { WORLD_CONTENT_V2 } from './content';
 import { assertInvariantsV2 } from './invariants';
 import {
@@ -81,7 +91,7 @@ describe('V2 combat, capture and absorption', () => {
     canada.integration = 0.10;
     canada.army = {
       ...canada.army,
-      manpower: 0, capacity: 0, veteranManpower: 0, veteranExperience: 0,
+      manpower: 0, capacity: 0,
     };
     invalidateTerritoryIndexV2(state);
 
@@ -104,14 +114,13 @@ describe('V2 combat, capture and absorption', () => {
     );
   });
 
-  it('applies the defender 1.25 exactly once and respects both damage caps', () => {
+  it('applies the defender 1.25 exactly once with a five-percent supported-max ceiling', () => {
     const state = createWorldStateV2(20);
     const target = state.territories[nldTerritory];
     const source = state.territories[belTerritory];
-    source.army.veteranManpower = 0;
-    source.army.veteranExperience = 0;
-    const beforeTargetCapacity = target.army.capacity;
-    const beforeSourceCapacity = source.army.capacity;
+    source.army.baseAttack *= 100;
+    const targetSupportedMaximum = Math.max(target.army.capacity, target.army.manpower);
+    const sourceSupportedMaximum = Math.max(source.army.capacity, source.army.manpower);
     const supply = supplyFactorV2(state, WORLD_CONTENT_V2, nld, nldTerritory, false);
     const terrain = WORLD_CONTENT_V2.territories[nldTerritory].terrain;
     const expectedShield = target.army.manpower * selectEffectiveDefenseV2(state, WORLD_CONTENT_V2, nld, target.army)
@@ -119,8 +128,13 @@ describe('V2 combat, capture and absorption', () => {
       * (0.65 + 0.35 * target.condition) * supply;
     const event = resolveBattlePulseV2(state, WORLD_CONTENT_V2, testWar(state), operation())!;
     expect(event.defenderPower).toBeCloseTo(expectedShield, 5);
-    expect(event.defenderLosses).toBeLessThanOrEqual(beforeTargetCapacity * 0.05 + 1e-6);
-    expect(event.attackerLosses).toBeLessThanOrEqual(beforeSourceCapacity * 0.05 + 1e-6);
+    expect(event.defenderLosses).toBeCloseTo(
+      targetSupportedMaximum * COMBAT_MAX_CASUALTY_RATE,
+      5,
+    );
+    expect(event.attackerLosses).toBeLessThanOrEqual(
+      sourceSupportedMaximum * COMBAT_MAX_CASUALTY_RATE,
+    );
     expect(event.attackerSupply).toBeGreaterThanOrEqual(0.25);
     expect(event.attackerSupply).toBeLessThanOrEqual(1);
   });
@@ -133,6 +147,7 @@ describe('V2 combat, capture and absorption', () => {
     const noControl = createWorldStateV2(22);
     const reserveTerritory = territoryIdV2('lux');
     noControl.territories[reserveTerritory].owner = nld;
+    noControl.territories[reserveTerritory].coreOwner = nld;
     noControl.territories[reserveTerritory].integration = 1;
     invalidateTerritoryIndexV2(noControl);
     noControl.territories[nldTerritory].army.manpower = 0;
@@ -149,8 +164,6 @@ describe('V2 combat, capture and absorption', () => {
     noSurvival.territories[nldTerritory].army.manpower = 0;
     noSurvival.territories[nldTerritory].control = { controller: bel, share: 0.95 };
     noSurvival.territories[belTerritory].army.manpower = 0;
-    noSurvival.territories[belTerritory].army.veteranManpower = 0;
-    noSurvival.territories[belTerritory].army.veteranExperience = 0;
     expect(resolveBattlePulseV2(noSurvival, WORLD_CONTENT_V2, testWar(noSurvival), operation())!.conquered).toBe(false);
   });
 
@@ -158,8 +171,6 @@ describe('V2 combat, capture and absorption', () => {
     const state = createWorldStateV2(2301);
     const target = state.territories[nldTerritory];
     target.army.manpower = 0;
-    target.army.veteranManpower = 0;
-    target.army.veteranExperience = 0;
     target.control = { controller: bel, share: 0.45 };
     const lateWar = testWar(state, deu, nld, 'war-late-entry');
     const lateOperation = operation(deuTerritory, nldTerritory, deu);
@@ -176,8 +187,6 @@ describe('V2 combat, capture and absorption', () => {
     const state = createWorldStateV2(2302);
     state.wars = [];
     state.territories[nldTerritory].army.manpower = 0;
-    state.territories[nldTerritory].army.veteranManpower = 0;
-    state.territories[nldTerritory].army.veteranExperience = 0;
     const establishedWar = testWar(state, bel, nld, 'war-established');
     establishedWar.defenderLosses = 0.25;
     establishedWar.battles = 12;
@@ -207,6 +216,9 @@ describe('V2 combat, capture and absorption', () => {
     ))).toBe(true);
 
     state.territories[nldTerritory].owner = bel;
+    state.territories[nldTerritory].coreOwner = bel;
+    state.territories[nldTerritory].integration = 1;
+    delete state.territories[nldTerritory].integrationProgram;
     invalidateTerritoryIndexV2(state);
     processWarsV2(state, WORLD_CONTENT_V2);
 
@@ -235,12 +247,11 @@ describe('V2 combat, capture and absorption', () => {
     const state = createWorldStateV2(2303);
     const reserveTerritory = territoryIdV2('lux');
     state.territories[reserveTerritory].owner = nld;
+    state.territories[reserveTerritory].coreOwner = nld;
     state.territories[reserveTerritory].integration = 1;
     invalidateTerritoryIndexV2(state);
     const target = state.territories[nldTerritory];
     target.army.manpower = 0;
-    target.army.veteranManpower = 0;
-    target.army.veteranExperience = 0;
     target.control = { controller: deu, share: 0.95 };
     const war = testWar(state, deu, nld, 'war-limited-objective');
     const battle = resolveBattlePulseV2(state, WORLD_CONTENT_V2, war, operation(deuTerritory, nldTerritory, deu))!;
@@ -282,9 +293,15 @@ describe('V2 combat, capture and absorption', () => {
       8,
     );
     expect(source.army.manpower + target.army.manpower).toBeCloseTo(beforeSourceManpower, 5);
-    expect(target.army.manpower).toBeGreaterThan(0);
-    expect(target.army.manpower).toBeLessThanOrEqual(beforeSourceManpower * 0.02 + 1e-6);
+    expect(target.army.manpower).toBeCloseTo(Math.min(
+      beforeSourceManpower * CONQUEST_CAPTURE_GUARD_MAX_TRANSFER_SHARE,
+      stateTerritoryArmySupportCeilingV2(state, WORLD_CONTENT_V2, nldTerritory, bel),
+    ), 8);
+    expect(source.army.manpower).toBeGreaterThanOrEqual(
+      beforeSourceManpower * (1 - CONQUEST_CAPTURE_GUARD_MAX_TRANSFER_SHARE) - 1e-9,
+    );
     expect(target.integration).toBe(0.10);
+    expect(target.integrationProgram?.startedTick).toBe(state.tick);
     const immediateCapacityTarget = selectArmyCapacityTargetV2(state, WORLD_CONTENT_V2, bel);
     const immediateControlledOutput = selectNationalEconomyV2(state, WORLD_CONTENT_V2, bel).controlledOutput;
     target.integration = 1;

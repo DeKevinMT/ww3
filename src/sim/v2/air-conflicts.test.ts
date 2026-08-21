@@ -63,7 +63,7 @@ describe('2026 conflicts and strategic naval warfare', () => {
     expect(landCost).toBe(0);
     expect(WAR_ACCESS_COST_MULTIPLIER.naval).toBeGreaterThan(WAR_ACCESS_COST_MULTIPLIER.land);
     expect(WAR_ACCESS_SUPPLY_MULTIPLIER.land).toBeGreaterThan(WAR_ACCESS_SUPPLY_MULTIPLIER.naval);
-    expect(WAR_ACCESS_ASSAULT_MULTIPLIER.land).toBeGreaterThan(WAR_ACCESS_ASSAULT_MULTIPLIER.naval);
+    expect(WAR_ACCESS_ASSAULT_MULTIPLIER.naval).toBe(WAR_ACCESS_ASSAULT_MULTIPLIER.land);
     expect(STRATEGIC_SEA_ROUTE_PAIRS.length).toBeGreaterThan(250);
   });
 

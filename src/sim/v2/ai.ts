@@ -171,7 +171,7 @@ function regionalEscalationCandidateV2(
         + Math.min(16, war.battles)
         + Math.max(0, alignmentEdge) * 1.4
         + Math.min(18, (aggressorRatio - AI_DEFENSIVE_AID_AGGRESSOR_RATIO) * 8)
-        - (access === 'naval' ? 8 : 0);
+        - (access === 'naval' ? 2 : 0);
       const interventionChance = clamp(0.16
         + Math.min(0.16, Math.max(0, alignmentEdge) * 0.015)
         + Math.min(0.16, Math.max(0, aggressorRatio - AI_DEFENSIVE_AID_AGGRESSOR_RATIO) * 0.08)
@@ -191,7 +191,7 @@ function regionalEscalationCandidateV2(
       + Math.min(18, war.battles * 0.8)
       + Math.max(0, alignmentEdge) * 1.6
       + (alignedIntervention ? Math.max(0, targetScore) * 0.25 : Math.max(0, -targetScore) * 0.15)
-      - (access === 'naval' ? 8 : 0);
+      - (access === 'naval' ? 2 : 0);
     return { linkedWarId: war.id, priority, defensiveAid: false, interventionChance: 0 };
   }).filter((candidate): candidate is RegionalEscalationCandidateV2 => Boolean(candidate));
   return candidates.sort((left, right) => right.priority - left.priority
@@ -614,7 +614,7 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
       const federationCounteroffensive = federation && targetId === state.humanPlayerId && resistance.level > 0;
       const requiredRunway = federationCounteroffensive
         ? 2 + ownWars.length * 2
-        : Math.max(3, 4 + ownWars.length * 4 - 1.5 * majorPowerDrive + (access === 'naval' ? 1.5 : 0));
+        : Math.max(3, 4 + ownWars.length * 4 - 1.5 * majorPowerDrive + (access === 'naval' ? 0.5 : 0));
       const remainingRunway = treasuryWeeks - costWeeks;
       const coalitionFactor = federationCounteroffensive ? 1 + resistance.offensiveBonus : 1;
       const effectiveRatio = ratio * coalitionFactor;
@@ -635,7 +635,7 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
           - 12 * Math.log2(1 + rivalPower / Math.max(1, ownPower))
           - 1.5 * targetWars * targetAlignment
           - 2.5 * costWeeks - 3 * Math.max(0, requiredRunway + 2 - remainingRunway)
-          - (access === 'naval' ? 8 : 0),
+          - (access === 'naval' ? 2 : 0),
         cost,
         remainingRunway,
         requiredRunway,
@@ -670,11 +670,11 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
       && ownWars.length + candidate.prospectiveFronts <= ownWarLimit
       && candidate.ratio >= (candidate.regionalEscalation
         ? candidate.regionalEscalation.defensiveAid
-          ? (candidate.access === 'land' ? 0.10 : 0.20)
-          : (candidate.access === 'land' ? 0.72 : 0.90)
+          ? (candidate.access === 'land' ? 0.10 : 0.14)
+          : (candidate.access === 'land' ? 0.72 : 0.78)
         : federation && candidate.targetId === state.humanPlayerId && resistance.level > 0
-        ? (candidate.access === 'land' ? 0.98 : 1.18)
-        : (candidate.access === 'land' ? 1.03 : 1.25)
+        ? (candidate.access === 'land' ? 0.98 : 1.05)
+        : (candidate.access === 'land' ? 1.03 : 1.10)
           + 0.30 * candidate.rivalInvaderCount
           + (state.tick < AI_MAJOR_POWER_AVOIDANCE_TICKS
             ? 0.30 * majorPowerDrive * clamp(((content.nations[candidate.targetId]?.real.powerIndex ?? 0) - 45) / 55, 0, 1)
@@ -698,7 +698,7 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
       // viable targets instead of paralysing every cautious country.
       const minimumChance = candidate.regionalEscalation?.defensiveAid ? 0
         : candidate.regionalEscalation ? 20
-          : 30 + ownWars.length * 6 + candidate.rivalInvaderCount * 12 + (candidate.access === 'naval' ? 5 : 0);
+          : 30 + ownWars.length * 6 + candidate.rivalInvaderCount * 12 + (candidate.access === 'naval' ? 1 : 0);
       return candidate.forecast.winChance >= minimumChance;
     }).sort((left, right) => right.priority - left.priority || left.targetId.localeCompare(right.targetId));
     const candidate = forecastedCandidates[0];

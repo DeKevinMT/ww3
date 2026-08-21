@@ -1,29 +1,43 @@
 import { describe, expect, it } from 'vitest';
 import {
   CONQUEST_INITIAL_INTEGRATION_SHARE,
-  CONQUEST_INTEGRATION_MAX_YEARS,
-  CONQUEST_INTEGRATION_MIN_YEARS,
   WEEKS_PER_YEAR,
 } from './balance';
 import { WORLD_CONTENT_V2 } from './content';
 import {
   advanceTerritoryIntegrationV2,
   territoryIntegrationDurationWeeksV2,
+  territoryIntegrationSizeV2,
 } from './integration';
 import { territoryIdV2 } from './types';
 
 describe('V2 country-size integration calendar', () => {
-  it('assigns every playable country a deterministic duration inside ten to twenty years', () => {
-    const durations = WORLD_CONTENT_V2.territoryIds.map((territoryId) => (
-      territoryIntegrationDurationWeeksV2(WORLD_CONTENT_V2, territoryId)
-    ));
-    expect(Math.min(...durations)).toBeGreaterThanOrEqual(
-      CONQUEST_INTEGRATION_MIN_YEARS * WEEKS_PER_YEAR,
-    );
-    expect(Math.max(...durations)).toBeLessThanOrEqual(
-      CONQUEST_INTEGRATION_MAX_YEARS * WEEKS_PER_YEAR,
-    );
-    expect(new Set(durations).size).toBeGreaterThan(50);
+  it('anchors Luxembourg at 12.5 years, Belgium near 25.5 and China near 170', () => {
+    const years = (id: string) => territoryIntegrationDurationWeeksV2(
+      WORLD_CONTENT_V2,
+      territoryIdV2(id),
+    ) / WEEKS_PER_YEAR;
+
+    expect(years('lux')).toBe(12.5);
+    expect(years('bel')).toBeGreaterThanOrEqual(25);
+    expect(years('bel')).toBeLessThanOrEqual(26);
+    expect(years('chn')).toBeGreaterThanOrEqual(165);
+    expect(years('chn')).toBeLessThanOrEqual(175);
+  });
+
+  it('never gives a larger country-size score a shorter calendar', () => {
+    const ordered = WORLD_CONTENT_V2.territoryIds
+      .map((territoryId) => ({
+        territoryId,
+        size: territoryIntegrationSizeV2(WORLD_CONTENT_V2, territoryId),
+        duration: territoryIntegrationDurationWeeksV2(WORLD_CONTENT_V2, territoryId),
+      }))
+      .sort((left, right) => left.size - right.size || left.territoryId.localeCompare(right.territoryId));
+
+    for (let index = 1; index < ordered.length; index += 1) {
+      expect(ordered[index]!.duration).toBeGreaterThanOrEqual(ordered[index - 1]!.duration);
+    }
+    expect(new Set(ordered.map((entry) => entry.duration)).size).toBeGreaterThan(50);
   });
 
   it('unlocks smoothly from ten percent to one hundred percent on the promised calendar', () => {

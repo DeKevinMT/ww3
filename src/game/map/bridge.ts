@@ -5,9 +5,9 @@
 export interface MapArmyState {
   manpower: number;
   capacity: number;
-  /** Deployed soldiers including veteran durability, in effective millions. */
+  /** Deployed soldiers available to the local force, in millions. */
   combatStrength: number;
-  /** Exact local Combat Power, including condition, quality and veterans. */
+  /** Exact local Combat Power, including condition, quality and national experience. */
   power: number;
   attack: number;
   defense: number;
@@ -23,6 +23,12 @@ export interface MapForeignControlState {
 export interface MapTerritoryState {
   id: string;
   ownerId: string;
+  /** Political homeland identity retained while a conquest is integrating. */
+  coreOwnerId: string;
+  /** Share of local population, output and military capacity unlocked for the owner. */
+  integration: number;
+  /** Fixed calendar endpoint for an active integration program. */
+  integrationCompletesTick?: number;
   army: MapArmyState;
   foreignControl?: MapForeignControlState;
 }
@@ -72,7 +78,6 @@ export interface MapLogisticsMovement {
   targetId: string;
   manpower: number;
   capacity: number;
-  veteranManpower: number;
 }
 
 export interface WorldMapEngineContract {

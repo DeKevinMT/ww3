@@ -5,10 +5,7 @@ import type {
   NationalAiPlanV2,
 } from './types';
 import {
-  AI_CRISIS_DEFENSIVE_ARMY_FLOOR,
   AI_HEALTHY_ARMY_TARGET,
-  AI_PEACE_DEFENSIVE_ARMY_FLOOR,
-  AI_SEVERE_DEBT_REVENUE_WEEKS,
   SUPER_AI_EFFICIENCY,
   SUPER_AI_RESPONSIVENESS,
   SUPER_AI_WAR_BASE_RUNWAY_WEEKS,
@@ -95,13 +92,6 @@ export function optimizeNationalAiPlanV2(inputs: NationalAiInputsV2): NationalAi
   const survivalStress = Math.max(foodStress, populationStress, reserveStress);
   const survivalEmergency = inputs.activeWars === 0
     && (foodStress > 0.02 || populationStress > 0 || reserveStress > 0 || inputs.treasuryWeeks < 0);
-  const severeSurvivalEmergency = inputs.activeWars === 0 && (
-    (inputs.foodSecurity ?? 1) < 0.65
-    || (inputs.foodReserveWeeks ?? 6) < 0.5
-    || inputs.treasuryWeeks < -AI_SEVERE_DEBT_REVENUE_WEEKS
-  );
-  const defensiveFloor = severeSurvivalEmergency
-    ? AI_CRISIS_DEFENSIVE_ARMY_FLOOR : AI_PEACE_DEFENSIVE_ARMY_FLOOR;
 
   if (inputs.activeWars > 0) {
     mode = 'war';
@@ -133,9 +123,8 @@ export function optimizeNationalAiPlanV2(inputs: NationalAiInputsV2): NationalAi
         : 'Debt recovery: protecting essential services and rebuilding a positive treasury.';
     boost(activeBudget, 'development', (18 + 30 * survivalStress) * responsiveness);
     boost(activeBudget, 'research', (4 + 8 * Math.max(foodStress, populationStress)) * responsiveness);
-    if (inputs.fillRatio < defensiveFloor) {
-      boost(activeBudget, 'military', (10 + 24 * (defensiveFloor - inputs.fillRatio)) * responsiveness);
-      explanation += ` Defensive forces are rebuilding toward ${Math.round(defensiveFloor * 100)}% readiness.`;
+    if (inputs.fillRatio < AI_HEALTHY_ARMY_TARGET - 0.005) {
+      explanation += ' Existing forces stay mobilized; recruitment resumes as soon as the crisis permits.';
     }
   } else if (inputs.fillRatio < AI_HEALTHY_ARMY_TARGET - 0.005) {
     mode = 'rebuild';

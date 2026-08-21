@@ -5,8 +5,11 @@ export {
   initialArmyCapacityRatioV2,
   initialNationArmyCapacityBenchmarkV2,
   initialTerritoryArmyCapacityV2,
+  EMPIRE_SUPPORT_LOCAL_CAP_MULTIPLIER_V2,
   nationalArmyCapacityTargetV2,
   stateArmyCapacityTargetsV2,
+  stateTerritoryArmyDeploymentLimitV2,
+  stateTerritoryArmySupportCeilingV2,
   stateTerritoryArmyCapacityTargetV2,
   territoryArmyCapacityTargetV2,
 } from './capacity';

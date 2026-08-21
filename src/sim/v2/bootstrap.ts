@@ -73,6 +73,7 @@ function createNationState(id: PlayerId, content: WorldContentV2): NationStateV2
     propagandaAvailableTick: 0,
     propagandaProgram: null,
     warFatigue: 0,
+    combatExperience: 0,
     capitalId: definition.initialCapitalId,
   };
 }
@@ -91,6 +92,7 @@ function createTerritoryState(id: TerritoryId, content: WorldContentV2): Territo
   const openingFill = initialArmyCapacityRatioV2(content, definition.initialOwnerId);
   return {
     owner: definition.initialOwnerId,
+    coreOwner: definition.initialOwnerId,
     population: definition.baseline.population,
     economy: definition.baseline.gdp,
     condition: round(condition, 6),
@@ -100,8 +102,6 @@ function createTerritoryState(id: TerritoryId, content: WorldContentV2): Territo
       capacity,
       baseAttack: origin.militaryAttackRating ?? origin.militaryQuality ?? 1,
       baseDefense: origin.militaryDefenseRating ?? origin.militaryQuality ?? 1,
-      veteranManpower: 0,
-      veteranExperience: 0,
     },
   };
 }
@@ -251,7 +251,7 @@ export function createWorldStateV2(
     content.territoryIds.map((id) => [id, createTerritoryState(id, content)]),
   );
   const state: WorldStateV2 = {
-    schemaVersion: 17,
+    schemaVersion: 19,
     rulesVersion: V2_RULES_VERSION,
     contentVersion: V2_CONTENT_VERSION,
     mapId: V2_MAP_ID,

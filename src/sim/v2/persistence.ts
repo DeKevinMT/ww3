@@ -1,12 +1,20 @@
-import { V2_CONTENT_VERSION, V2_MAP_ID, V2_RULES_VERSION } from './balance';
+import {
+  CONQUEST_INITIAL_INTEGRATION_SHARE,
+  V2_CONTENT_VERSION,
+  V2_MAP_ID,
+  V2_RULES_VERSION,
+  clamp,
+} from './balance';
 import { createWorldStateV2 } from './bootstrap';
 import { synchronizeArmyCapacityV2 } from './capacity';
 import type { WorldContentV2 } from './content';
+import { territoryIntegrationDurationWeeksV2 } from './integration';
 import { assertInvariantsV2 } from './invariants';
 import type {
   AiEscalationStateV2,
   CeasefireObligationV2,
   FrontOperationV2,
+  IntegrationProgramStateV2,
   NationStateV2,
   PeaceOfferV2,
   PlayerId,
@@ -18,7 +26,7 @@ import type {
 } from './types';
 
 export interface SaveGameV2 {
-  schemaVersion: 17;
+  schemaVersion: 19;
   rulesVersion: string;
   contentVersion: string;
   mapId: string;
@@ -44,7 +52,10 @@ const LEGACY_RULES_VERSION_V13 = 'frontier-command-v2.48-canonical-tax';
 const LEGACY_RULES_VERSION_V14 = 'frontier-command-v2.49-veteran-forces';
 const LEGACY_RULES_VERSION_V15 = 'frontier-command-v2.50-mixed-armies';
 const LEGACY_RULES_VERSION_V16 = 'frontier-command-v2.51-fixed-manual-actions';
+const LEGACY_RULES_VERSION_V17 = 'frontier-command-v2.52-integration-multifront';
+const LEGACY_RULES_VERSION_V18 = 'frontier-command-v2.53-combat-experience';
 const LEGACY_CONTENT_VERSION_V16 = 'natural-earth-countries-2026-v6-naval';
+const LEGACY_CONTENT_VERSION_V17 = 'natural-earth-countries-2026-v7-greenland';
 const LEGACY_BOT_MANPOWER_PER_UNIT = 0.10;
 const LEGACY_BOT_TECH_STRENGTH_MULTIPLIER = 1.22;
 
@@ -71,18 +82,48 @@ interface LegacyArmyV14 {
   veteranExperience: number;
 }
 
-type LegacyNationV15 = Omit<NationStateV2, 'manualActionUses'>;
+interface LegacyArmyV17 extends LegacyArmyV14 {
+  baseAttack: number;
+  baseDefense: number;
+}
+
+type LegacyNationV17 = Omit<NationStateV2, 'combatExperience'>;
+type LegacyNationV15 = Omit<LegacyNationV17, 'manualActionUses'>;
 type LegacyNationV13 = LegacyNationV15 & { battleBots: LegacyBattleBotProgramV13 };
-type LegacyTerritoryV13 = Omit<TerritoryStateV2, 'army'> & { army: LegacyArmyV13 };
-type LegacyTerritoryV14 = Omit<TerritoryStateV2, 'army'> & { army: LegacyArmyV14 };
+type LegacyTerritoryBaseV17 = Omit<TerritoryStateV2, 'army' | 'coreOwner' | 'integrationProgram'>;
+type LegacyTerritoryV13 = LegacyTerritoryBaseV17 & { army: LegacyArmyV13 };
+type LegacyTerritoryV14 = LegacyTerritoryBaseV17 & { army: LegacyArmyV14 };
+type LegacyTerritoryV17 = LegacyTerritoryBaseV17 & { army: LegacyArmyV17 };
+type LegacyIntegrationProgramV18 = Omit<IntegrationProgramStateV2, 'fromOwnerId'>;
+type LegacyTerritoryV18 = Omit<TerritoryStateV2, 'integrationProgram'> & {
+  integrationProgram?: LegacyIntegrationProgramV18;
+};
 
 type LegacyWarStateV16 = Omit<WarStateV2, 'attackerOperations' | 'defenderOperations'> & {
   attackerOperation?: FrontOperationV2;
   defenderOperation?: FrontOperationV2;
 };
 
+/** Read-only compatibility shape for the original long integration calendar. */
+export interface LegacySaveGameV18 extends Omit<SaveGameV2,
+  'schemaVersion' | 'rulesVersion' | 'territories'> {
+  schemaVersion: 18;
+  rulesVersion: typeof LEGACY_RULES_VERSION_V18;
+  territories: Record<TerritoryId, LegacyTerritoryV18>;
+}
+
+/** Read-only compatibility shape for the final veteran/multi-front format. */
+export interface LegacySaveGameV17 extends Omit<SaveGameV2,
+  'schemaVersion' | 'rulesVersion' | 'contentVersion' | 'players' | 'territories'> {
+  schemaVersion: 17;
+  rulesVersion: typeof LEGACY_RULES_VERSION_V17;
+  contentVersion: typeof LEGACY_CONTENT_VERSION_V17;
+  players: Record<PlayerId, LegacyNationV17>;
+  territories: Record<TerritoryId, LegacyTerritoryV17>;
+}
+
 /** Read-only compatibility shape for the last single-front save format. */
-export interface LegacySaveGameV16 extends Omit<SaveGameV2,
+export interface LegacySaveGameV16 extends Omit<LegacySaveGameV17,
   'schemaVersion' | 'rulesVersion' | 'contentVersion' | 'wars'> {
   schemaVersion: 16;
   rulesVersion: typeof LEGACY_RULES_VERSION_V16;
@@ -115,7 +156,16 @@ export interface LegacySaveGameV13 extends Omit<LegacySaveGameV14,
   territories: Record<TerritoryId, LegacyTerritoryV13>;
 }
 
-interface LegacyWorldStateV16 extends Omit<WorldStateV2,
+interface LegacyWorldStateV17 extends Omit<WorldStateV2,
+  'schemaVersion' | 'rulesVersion' | 'contentVersion' | 'players' | 'territories'> {
+  schemaVersion: 17;
+  rulesVersion: typeof LEGACY_RULES_VERSION_V17;
+  contentVersion: typeof LEGACY_CONTENT_VERSION_V17;
+  players: Record<PlayerId, LegacyNationV17>;
+  territories: Record<TerritoryId, LegacyTerritoryV17>;
+}
+
+interface LegacyWorldStateV16 extends Omit<LegacyWorldStateV17,
   'schemaVersion' | 'rulesVersion' | 'contentVersion' | 'wars'> {
   schemaVersion: 16;
   rulesVersion: typeof LEGACY_RULES_VERSION_V16;
@@ -149,9 +199,20 @@ const LEGACY_NATION_KEYS_V13 = [
   'propagandaAvailableTick', 'propagandaProgram', 'rapidRecruitmentAvailableTick', 'research',
   'researchSurgeAvailableTick', 'treasury', 'warFatigue',
 ].sort();
+const LEGACY_NATION_KEYS_V17 = [
+  'budget', 'capitalId', 'ceasefiresRequested', 'empireName', 'foodSecurity', 'foodStock',
+  'manualActionUses', 'propagandaAvailableTick', 'propagandaProgram', 'rapidRecruitmentAvailableTick',
+  'research', 'researchSurgeAvailableTick', 'treasury', 'warFatigue',
+].sort();
 const LEGACY_TERRITORY_KEYS = ['army', 'condition', 'control', 'economy', 'integration', 'owner', 'population'];
 const LEGACY_ARMY_KEYS_V13 = ['battleBotCapacity', 'battleBotWear', 'battleBots', 'capacity', 'manpower'];
 const LEGACY_ARMY_KEYS_V14 = ['capacity', 'manpower', 'veteranExperience', 'veteranManpower'];
+const LEGACY_ARMY_KEYS_V17 = [
+  'baseAttack', 'baseDefense', 'capacity', 'manpower', 'veteranExperience', 'veteranManpower',
+];
+const LEGACY_INTEGRATION_PROGRAM_KEYS_V18 = [
+  'completesTick', 'fromCoreOwnerId', 'startedTick', 'toOwnerId',
+];
 const LEGACY_BOT_PROGRAM_KEYS = [
   'capacityProgress', 'productionProgress', 'researchProgress', 'technologyLevel', 'unlocked',
 ];
@@ -192,7 +253,7 @@ export function canonicalStateHashV2(value: object): string {
 export function createSaveV2(state: WorldStateV2, content: WorldContentV2): SaveGameV2 {
   assertInvariantsV2(state, content);
   const payload: Omit<SaveGameV2, 'canonicalStateHash'> = {
-    schemaVersion: 17,
+    schemaVersion: 19,
     rulesVersion: state.rulesVersion,
     contentVersion: state.contentVersion,
     mapId: state.mapId,
@@ -286,6 +347,36 @@ function assertLegacyCanonicalShapeV14(
   }
 }
 
+function assertLegacyCanonicalShapeV17(
+  value: {
+    players: Record<PlayerId, LegacyNationV17>;
+    territories: Record<TerritoryId, LegacyTerritoryV17>;
+  },
+): void {
+  for (const [playerId, nation] of Object.entries(value.players)) {
+    if (!nation || typeof nation !== 'object' || !exactKeys(nation, LEGACY_NATION_KEYS_V17)) {
+      throw new Error(`Legacy V2 nation ${playerId} has non-canonical veteran state.`);
+    }
+  }
+  for (const [territoryId, territory] of Object.entries(value.territories)) {
+    if (!territory || typeof territory !== 'object' || !exactKeys(territory, LEGACY_TERRITORY_KEYS)
+      || !territory.army || typeof territory.army !== 'object'
+      || !exactKeys(territory.army, LEGACY_ARMY_KEYS_V17)) {
+      throw new Error(`Legacy V2 territory ${territoryId} has non-canonical veteran army state.`);
+    }
+    const army = territory.army;
+    if (![army.manpower, army.capacity, army.baseAttack, army.baseDefense,
+      army.veteranManpower, army.veteranExperience]
+      .every((item) => Number.isFinite(item) && item >= 0)
+      || army.baseAttack <= 0 || army.baseDefense <= 0
+      || army.manpower > army.capacity
+      || army.veteranManpower > army.manpower
+      || (army.veteranManpower === 0 && army.veteranExperience !== 0)) {
+      throw new Error(`Legacy V2 territory ${territoryId} has invalid veteran army state.`);
+    }
+  }
+}
+
 function roundMigrationValue(value: number): number {
   return Math.round((value + Number.EPSILON) * 1_000_000_000) / 1_000_000_000;
 }
@@ -299,7 +390,7 @@ function migrateLegacySaveV13(save: LegacySaveGameV13): LegacyWorldStateV14 {
   const players = Object.fromEntries(Object.entries(save.players).map(([id, legacyNation]) => {
     const { battleBots: _retiredProgram, ...nation } = legacyNation;
     return [id, nation];
-  })) as Record<PlayerId, NationStateV2>;
+  })) as Record<PlayerId, LegacyNationV15>;
 
   const territories = Object.fromEntries(Object.entries(save.territories).map(([id, legacyTerritory]) => {
     const program = save.players[legacyTerritory.owner]?.battleBots;
@@ -480,7 +571,7 @@ function migrateLegacyStateV14(
       defense: originDefinition?.militaryDefenseRating ?? originDefinition?.militaryQuality ?? ownerRating.defense,
     };
     const rating = legacyTerritory.army.manpower > 0 ? ownerRating : localRating;
-    const territory: TerritoryStateV2 = {
+    const territory: LegacyTerritoryV17 = {
       owner: legacyTerritory.owner,
       population: legacyTerritory.population,
       economy: legacyTerritory.economy,
@@ -497,7 +588,7 @@ function migrateLegacyStateV14(
       ...(legacyTerritory.control ? { control: { ...legacyTerritory.control } } : {}),
     };
     return [territoryId, territory];
-  })) as Record<TerritoryId, TerritoryStateV2>;
+  })) as Record<TerritoryId, LegacyTerritoryV17>;
 
   const state: LegacyWorldStateV15 = {
     ...legacyState,
@@ -523,7 +614,7 @@ function migrateLegacyStateV15(legacyState: LegacyWorldStateV15): LegacyWorldSta
   const players = Object.fromEntries(Object.entries(legacyState.players).map(([id, nation]) => [id, {
     ...nation,
     manualActionUses: { rapidRecruitment: 0, researchSurge: 0, propaganda: 0 },
-  }])) as Record<PlayerId, NationStateV2>;
+  }])) as Record<PlayerId, LegacyNationV17>;
   return {
     ...legacyState,
     schemaVersion: 16,
@@ -542,11 +633,45 @@ function legacyStateFromSaveV16(save: LegacySaveGameV16): LegacyWorldStateV16 {
   };
 }
 
-function cloneTerritoryStateV2(territory: TerritoryStateV2): TerritoryStateV2 {
+function cloneLegacyTerritoryV17(territory: LegacyTerritoryV17): LegacyTerritoryV17 {
   return {
     ...territory,
     army: { ...territory.army },
     ...(territory.control ? { control: { ...territory.control } } : {}),
+  };
+}
+
+function legacyTerritoryFromCurrentV2(territory: TerritoryStateV2): LegacyTerritoryV17 {
+  const {
+    coreOwner: _coreOwner,
+    integrationProgram: _integrationProgram,
+    ...legacyTerritory
+  } = territory;
+  return {
+    ...legacyTerritory,
+    army: {
+      ...territory.army,
+      veteranManpower: 0,
+      veteranExperience: 0,
+    },
+    ...(territory.control ? { control: { ...territory.control } } : {}),
+  };
+}
+
+function legacyNationFromCurrentV2(nation: NationStateV2): LegacyNationV17 {
+  const { combatExperience: _combatExperience, ...legacy } = nation;
+  return {
+    ...legacy,
+    budget: { ...legacy.budget },
+    research: {
+      ...legacy.research,
+      allocations: { ...legacy.research.allocations },
+      progress: { ...legacy.research.progress },
+      effectLevels: { ...legacy.research.effectLevels },
+      breakthroughs: { ...legacy.research.breakthroughs },
+    },
+    manualActionUses: { ...legacy.manualActionUses },
+    propagandaProgram: legacy.propagandaProgram ? { ...legacy.propagandaProgram } : null,
   };
 }
 
@@ -558,7 +683,7 @@ function cloneTerritoryStateV2(territory: TerritoryStateV2): TerritoryStateV2 {
 function migrateLegacyStateV16(
   legacyState: LegacyWorldStateV16,
   content: WorldContentV2,
-): WorldStateV2 {
+): LegacyWorldStateV17 {
   const fresh = createWorldStateV2(legacyState.seed, content);
   const players = Object.fromEntries(Object.entries(legacyState.players).map(([id, nation]) => [id, {
     ...nation,
@@ -572,15 +697,15 @@ function migrateLegacyStateV16(
     },
     manualActionUses: { ...nation.manualActionUses },
     propagandaProgram: nation.propagandaProgram ? { ...nation.propagandaProgram } : null,
-  }])) as Record<PlayerId, NationStateV2>;
+  }])) as Record<PlayerId, LegacyNationV17>;
   for (const playerId of content.nationIds) {
-    if (!players[playerId]) players[playerId] = fresh.players[playerId]!;
+    if (!players[playerId]) players[playerId] = legacyNationFromCurrentV2(fresh.players[playerId]!);
   }
 
   const territories = Object.fromEntries(Object.entries(legacyState.territories).map(([id, territory]) => [id, {
-    ...cloneTerritoryStateV2(territory),
+    ...cloneLegacyTerritoryV17(territory),
     integration: 1,
-  }])) as Record<TerritoryId, TerritoryStateV2>;
+  }])) as Record<TerritoryId, LegacyTerritoryV17>;
 
   const denmarkId = content.territoryIds.find((id) => String(id) === 'dnk');
   const greenlandId = content.territoryIds.find((id) => String(id) === 'grl');
@@ -603,7 +728,7 @@ function migrateLegacyStateV16(
       denmark.army.manpower = roundMigrationValue(denmark.army.manpower - greenlandManpower);
       denmark.army.veteranManpower = roundMigrationValue(denmark.army.veteranManpower - greenlandVeterans);
       territories[greenlandId] = {
-        ...cloneTerritoryStateV2(greenlandFresh),
+        ...legacyTerritoryFromCurrentV2(greenlandFresh),
         owner: denmark.owner,
         population: greenlandPopulation,
         economy: greenlandEconomy,
@@ -622,14 +747,16 @@ function migrateLegacyStateV16(
     }
   }
   for (const territoryId of content.territoryIds) {
-    if (!territories[territoryId]) territories[territoryId] = cloneTerritoryStateV2(fresh.territories[territoryId]!);
+    if (!territories[territoryId]) {
+      territories[territoryId] = legacyTerritoryFromCurrentV2(fresh.territories[territoryId]!);
+    }
   }
 
-  const state: WorldStateV2 = {
+  const state: LegacyWorldStateV17 = {
     ...legacyState,
     schemaVersion: 17,
-    rulesVersion: V2_RULES_VERSION,
-    contentVersion: V2_CONTENT_VERSION,
+    rulesVersion: LEGACY_RULES_VERSION_V17,
+    contentVersion: LEGACY_CONTENT_VERSION_V17,
     players,
     territories,
     wars: legacyState.wars.map((war) => {
@@ -641,7 +768,6 @@ function migrateLegacyStateV16(
       };
     }),
   };
-  synchronizeArmyCapacityV2(state, content);
   for (const war of state.wars) {
     war.attackerOperations = war.attackerOperations.filter((operation) => (
       (state.territories[operation.sourceId]?.army.manpower ?? 0) > 0
@@ -650,6 +776,116 @@ function migrateLegacyStateV16(
       (state.territories[operation.sourceId]?.army.manpower ?? 0) > 0
     ));
   }
+  return state;
+}
+
+function legacyStateFromSaveV17(save: LegacySaveGameV17): LegacyWorldStateV17 {
+  assertLegacyCanonicalShapeV17(save);
+  return {
+    ...payloadWithoutHash(save),
+    players: sortedRecord(save.players) as Record<PlayerId, LegacyNationV17>,
+    territories: sortedRecord(save.territories) as Record<TerritoryId, LegacyTerritoryV17>,
+    wars: save.wars.map((war) => ({
+      ...war,
+      attackerOperations: war.attackerOperations.map((operation) => ({ ...operation })),
+      defenderOperations: war.defenderOperations.map((operation) => ({ ...operation })),
+    })),
+    speed: 0,
+    events: [],
+    winnerId: undefined,
+    gameOver: false,
+  };
+}
+
+/**
+ * Converts local veteran cohorts into one empire-wide institutional score.
+ * Score mass is preserved exactly: veteran headcount times sqrt(cohort XP),
+ * diluted across the nation's whole surviving army before squaring back to XP.
+ */
+function migrateLegacyStateV17(
+  legacyState: LegacyWorldStateV17,
+  content: WorldContentV2,
+): WorldStateV2 {
+  assertLegacyCanonicalShapeV17(legacyState);
+  const experienceByPlayer = new Map<PlayerId, number>();
+  for (const playerId of Object.keys(legacyState.players) as PlayerId[]) {
+    let totalManpower = 0;
+    let scoreMass = 0;
+    for (const territory of Object.values(legacyState.territories)) {
+      if (territory.owner !== playerId) continue;
+      totalManpower += territory.army.manpower;
+      scoreMass += territory.army.veteranManpower
+        * Math.sqrt(territory.army.veteranExperience);
+    }
+    const nationalScore = totalManpower > 0 ? scoreMass / totalManpower : 0;
+    experienceByPlayer.set(playerId, roundMigrationValue(nationalScore ** 2));
+  }
+
+  const players = Object.fromEntries(Object.entries(legacyState.players).map(([rawId, nation]) => {
+    const playerId = rawId as PlayerId;
+    return [playerId, {
+      ...nation,
+      budget: { ...nation.budget },
+      research: {
+        ...nation.research,
+        allocations: { ...nation.research.allocations },
+        progress: { ...nation.research.progress },
+        effectLevels: { ...nation.research.effectLevels },
+        breakthroughs: { ...nation.research.breakthroughs },
+      },
+      manualActionUses: { ...nation.manualActionUses },
+      propagandaProgram: nation.propagandaProgram ? { ...nation.propagandaProgram } : null,
+      combatExperience: experienceByPlayer.get(playerId) ?? 0,
+    }];
+  })) as Record<PlayerId, NationStateV2>;
+
+  const territories = Object.fromEntries(Object.entries(legacyState.territories).map(([rawId, territory]) => {
+    const territoryId = rawId as TerritoryId;
+    const originalOwnerId = content.territories[territoryId]?.initialOwnerId ?? territory.owner;
+    const integratingForeignCore = originalOwnerId !== territory.owner && territory.integration < 1;
+    const remainingIntegrationShare = Math.max(0, Math.min(
+      1,
+      (1 - territory.integration) / Math.max(0.000001, 1 - CONQUEST_INITIAL_INTEGRATION_SHARE),
+    ));
+    const remainingDuration = Math.max(1, Math.ceil(
+      territoryIntegrationDurationWeeksV2(content, territoryId) * remainingIntegrationShare,
+    ));
+    const {
+      veteranManpower: _veteranManpower,
+      veteranExperience: _veteranExperience,
+      ...army
+    } = territory.army;
+    return [territoryId, {
+      ...territory,
+      coreOwner: integratingForeignCore ? originalOwnerId : territory.owner,
+      ...(integratingForeignCore ? {
+        integrationProgram: {
+          fromOwnerId: originalOwnerId,
+          fromCoreOwnerId: originalOwnerId,
+          toOwnerId: territory.owner,
+          startedTick: legacyState.tick,
+          completesTick: legacyState.tick + remainingDuration,
+        },
+      } : {}),
+      army: { ...army },
+      ...(territory.control ? { control: { ...territory.control } } : {}),
+    }];
+  })) as Record<TerritoryId, TerritoryStateV2>;
+
+  const state: WorldStateV2 = {
+    ...legacyState,
+    schemaVersion: 19,
+    rulesVersion: V2_RULES_VERSION,
+    contentVersion: V2_CONTENT_VERSION,
+    players,
+    territories,
+    wars: legacyState.wars.map((war) => ({
+      ...war,
+      attackerOperations: war.attackerOperations.map((operation) => ({ ...operation })),
+      defenderOperations: war.defenderOperations.map((operation) => ({ ...operation })),
+    })),
+  };
+  synchronizeArmyCapacityV2(state, content);
   return state;
 }
 
@@ -668,8 +904,77 @@ function currentStateFromSave(save: SaveGameV2): WorldStateV2 {
   };
 }
 
+/**
+ * Schema 19 halves the country-size calendar. An authenticated schema-18 save
+ * keeps its exact visible integration share, but receives the shorter
+ * remaining promise once. Subsequent saves are schema 19, so the endpoint can
+ * never be shortened again by another round-trip.
+ */
+function migrateLegacyStateV18(
+  save: LegacySaveGameV18,
+  content: WorldContentV2,
+): WorldStateV2 {
+  const canonicalTerritories = Object.fromEntries(Object.entries(save.territories).map(([rawId, territory]) => {
+    const { integrationProgram: program, ...territoryWithoutProgram } = territory;
+    if (program !== undefined
+      && (!program || typeof program !== 'object'
+        || !exactKeys(program, LEGACY_INTEGRATION_PROGRAM_KEYS_V18))) {
+      throw new Error(`Legacy V2 territory ${rawId} has non-canonical integration state.`);
+    }
+    return [rawId, {
+      ...territoryWithoutProgram,
+      ...(program ? {
+        integrationProgram: {
+          ...program,
+          // Schema 18 did not retain the displaced sovereign separately. Its
+          // stored former core is the only deterministic compatibility value.
+          fromOwnerId: program.fromCoreOwnerId,
+        },
+      } : {}),
+      army: { ...territory.army },
+      ...(territory.control ? { control: { ...territory.control } } : {}),
+    }];
+  })) as Record<TerritoryId, TerritoryStateV2>;
+  const legacyState: WorldStateV2 = {
+    ...currentStateFromSave(save as unknown as SaveGameV2),
+    schemaVersion: 19,
+    rulesVersion: V2_RULES_VERSION,
+    territories: canonicalTerritories,
+  };
+  // Validate the authenticated old payload before the new calendar is allowed
+  // to normalize its endpoint.
+  assertInvariantsV2(legacyState, content);
+  const territories = Object.fromEntries(Object.entries(legacyState.territories).map(([rawId, territory]) => {
+    const territoryId = rawId as TerritoryId;
+    const program = territory.integrationProgram;
+    if (!program) return [territoryId, {
+      ...territory,
+      army: { ...territory.army },
+      ...(territory.control ? { control: { ...territory.control } } : {}),
+    }];
+    const remainingShare = clamp(
+      (1 - territory.integration) / Math.max(0.000001, 1 - CONQUEST_INITIAL_INTEGRATION_SHARE),
+      0,
+      1,
+    );
+    const remainingDuration = Math.max(1, Math.ceil(
+      territoryIntegrationDurationWeeksV2(content, territoryId) * remainingShare,
+    ));
+    return [territoryId, {
+      ...territory,
+      integrationProgram: {
+        ...program,
+        completesTick: legacyState.tick + remainingDuration,
+      },
+      army: { ...territory.army },
+      ...(territory.control ? { control: { ...territory.control } } : {}),
+    }];
+  })) as Record<TerritoryId, TerritoryStateV2>;
+  return { ...legacyState, territories };
+}
+
 export function loadSaveV2(
-  input: string | SaveGameV2 | LegacySaveGameV16 | LegacySaveGameV15 | LegacySaveGameV14 | LegacySaveGameV13,
+  input: string | SaveGameV2 | LegacySaveGameV18 | LegacySaveGameV17 | LegacySaveGameV16 | LegacySaveGameV15 | LegacySaveGameV14 | LegacySaveGameV13,
   content: WorldContentV2,
 ): WorldStateV2 {
   const unknownSave = typeof input === 'string' ? JSON.parse(input) as unknown : input;
@@ -683,16 +988,18 @@ export function loadSaveV2(
   }
 
   const schemaVersion = parsed.schemaVersion;
-  if (schemaVersion !== 17 && schemaVersion !== 16 && schemaVersion !== 15 && schemaVersion !== 14 && schemaVersion !== 13) {
-    throw new Error(`Unsupported V2 schemaVersion: ${String(schemaVersion)}. Current saves use schema 17; canonical schema 13–16 saves can be migrated.`);
+  if (schemaVersion !== 19 && schemaVersion !== 18 && schemaVersion !== 17 && schemaVersion !== 16 && schemaVersion !== 15 && schemaVersion !== 14 && schemaVersion !== 13) {
+    throw new Error(`Unsupported V2 schemaVersion: ${String(schemaVersion)}. Current saves use schema 19; canonical schema 13–18 saves can be migrated.`);
   }
-  const expectedRules = schemaVersion === 17 ? V2_RULES_VERSION
-    : schemaVersion === 16 ? LEGACY_RULES_VERSION_V16
-      : schemaVersion === 15 ? LEGACY_RULES_VERSION_V15
-        : schemaVersion === 14 ? LEGACY_RULES_VERSION_V14
-          : LEGACY_RULES_VERSION_V13;
+  const expectedRules = schemaVersion === 19 ? V2_RULES_VERSION
+    : schemaVersion === 18 ? LEGACY_RULES_VERSION_V18
+      : schemaVersion === 17 ? LEGACY_RULES_VERSION_V17
+      : schemaVersion === 16 ? LEGACY_RULES_VERSION_V16
+        : schemaVersion === 15 ? LEGACY_RULES_VERSION_V15
+          : schemaVersion === 14 ? LEGACY_RULES_VERSION_V14
+            : LEGACY_RULES_VERSION_V13;
   if (parsed.rulesVersion !== expectedRules) throw new Error(`Unsupported V2 rulesVersion: ${String(parsed.rulesVersion)}.`);
-  const expectedContent = schemaVersion === 17 ? V2_CONTENT_VERSION : LEGACY_CONTENT_VERSION_V16;
+  const expectedContent = schemaVersion >= 17 ? V2_CONTENT_VERSION : LEGACY_CONTENT_VERSION_V16;
   if (parsed.contentVersion !== expectedContent) throw new Error(`Unsupported V2 contentVersion: ${String(parsed.contentVersion)}.`);
   if (parsed.mapId !== V2_MAP_ID) throw new Error(`Unsupported V2 mapId: ${String(parsed.mapId)}.`);
   if (typeof parsed.canonicalStateHash !== 'string') throw new Error('V2 canonical hash is missing.');
@@ -704,18 +1011,22 @@ export function loadSaveV2(
     throw new Error(`V2 canonical hash mismatch: expected ${parsed.canonicalStateHash}, got ${hash}.`);
   }
 
-  const state = schemaVersion === 17
+  const state = schemaVersion === 19
     ? currentStateFromSave(parsed as unknown as SaveGameV2)
-    : migrateLegacyStateV16(schemaVersion === 16
-      ? legacyStateFromSaveV16(parsed as unknown as LegacySaveGameV16)
-      : migrateLegacyStateV15(schemaVersion === 15
-        ? legacyStateFromSaveV15(parsed as unknown as LegacySaveGameV15)
-        : migrateLegacyStateV14(
-          schemaVersion === 14
-            ? legacyStateFromSaveV14(parsed as unknown as LegacySaveGameV14)
-            : migrateLegacySaveV13(parsed as unknown as LegacySaveGameV13),
-          content,
-        )), content);
+    : schemaVersion === 18
+      ? migrateLegacyStateV18(parsed as unknown as LegacySaveGameV18, content)
+      : migrateLegacyStateV17(schemaVersion === 17
+        ? legacyStateFromSaveV17(parsed as unknown as LegacySaveGameV17)
+        : migrateLegacyStateV16(schemaVersion === 16
+          ? legacyStateFromSaveV16(parsed as unknown as LegacySaveGameV16)
+          : migrateLegacyStateV15(schemaVersion === 15
+            ? legacyStateFromSaveV15(parsed as unknown as LegacySaveGameV15)
+            : migrateLegacyStateV14(
+              schemaVersion === 14
+                ? legacyStateFromSaveV14(parsed as unknown as LegacySaveGameV14)
+                : migrateLegacySaveV13(parsed as unknown as LegacySaveGameV13),
+              content,
+            )), content), content);
   assertInvariantsV2(state, content);
   const owners = [...new Set(Object.values(state.territories).map((territory) => territory.owner))];
   if (owners.length === 1 && Object.keys(state.territories).length === content.territoryIds.length) {
