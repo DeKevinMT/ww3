@@ -51,7 +51,7 @@ export interface BudgetPolicyV2 {
 
 export interface NationalAiPlanV2 {
   mode: NationalAiModeV2;
-  /** The AI's live allocation after adapting the player's strategic intent. */
+  /** Normalized base plan after adapting intent; emergency food transfers happen in finance. */
   activeBudget: BudgetPolicyV2;
   /** Visible multiplier for the player country's unique super-AI advantage. */
   efficiency: number;
@@ -119,6 +119,8 @@ export interface NationStateV2 {
   treasury: number;
   /** Million-person-weeks of edible reserves. */
   foodStock: number;
+  /** Fundable domestic output in million-person-weeks per week; changes only through the slow capacity ramp. */
+  domesticFoodCapacity: number;
   /** Share of last week's national food demand actually supplied. */
   foodSecurity: number;
   budget: BudgetPolicyV2;
@@ -178,6 +180,8 @@ export interface IntegrationProgramStateV2 {
   toOwnerId: PlayerId;
   startedTick: number;
   completesTick: number;
+  /** Fixed billions per year, quoted from local GDP at the capture tick. */
+  annualCost: number;
 }
 
 /** Exact canonical territory payload; geometry and presentation are static. */
@@ -222,6 +226,10 @@ export interface WarStateV2 {
   battles: number;
   attackerLosses: number;
   defenderLosses: number;
+  /** Cumulative civilian population lost by the formal attacker, in millions. */
+  attackerCivilianLosses?: number;
+  /** Cumulative civilian population lost by the formal defender, in millions. */
+  defenderCivilianLosses?: number;
   lastPeaceOfferTick: number;
   /** Stable, source-unique active fronts for each belligerent. */
   attackerOperations: FrontOperationV2[];
@@ -357,6 +365,7 @@ export interface WorldStateV2 {
 }
 
 export interface WeeklyFinanceBreakdownV2 {
+  /** Realized domain shares; Development may reach 0 and the sum may fall below 100 while it is redirected to food. */
   activeBudget: BudgetPolicyV2;
   aiMode: NationalAiModeV2;
   aiEfficiency: number;
@@ -364,20 +373,28 @@ export interface WeeklyFinanceBreakdownV2 {
   foodDemand: number;
   foodLandCapacity: number;
   foodStorageCapacity: number;
-  /** Maximum demand share reachable through the current economy and logistics network. */
+  /** Structural food-system efficiency used for capacity, reserve targets and cost; never a coverage cap. */
   foodAccessCeiling: number;
   foodProduced: number;
   foodDomesticProduced: number;
   foodImported: number;
+  /** Domestic-only surplus sold after current demand and physical storage are fully covered. */
+  foodExported: number;
+  /** Gross weekly export receipt; domestic production remains fully recorded as an expense. */
+  foodExportIncome: number;
   foodConsumed: number;
   foodBalance: number;
   /** Actual change in stored million-person-weeks after consumption and the storage cap. */
   foodStockChange: number;
   foodProduction: number;
+  /** Development funding actually redirected to food during a live shortage. */
+  foodDevelopmentTransfer: number;
   foodCoverage: number;
   foodTargetStock: number;
   ceasefirePayment: number;
   ceasefireIncome: number;
+  /** Mandatory weekly administration and reconstruction cost for unfinished integrations. */
+  integrationCost: number;
   /** Principal newly borrowed this week because committed payments exceeded liquidity. */
   newBorrowing: number;
   /** One-time 10% premium added to newly borrowed principal. */
@@ -458,13 +475,14 @@ export interface RapidRecruitmentTermsV2 {
   capacity: number;
 }
 
-/** One costly, player-directed APEX breakthrough for the normal research portfolio. */
+/** One costly, player-directed push for exactly one normal research program. */
 export interface ResearchSurgeTermsV2 {
   playerId: PlayerId;
+  targetBranch: ResearchBranchV2;
   allowed: boolean;
   reason?: string;
   cooldownRemaining: number;
-  /** Smaller spillover applied to every unfinished national program. */
+  /** Normal funded weeks applied only to the selected program. */
   progressWeeks: number;
   progressAdded: number;
   /** Explicit expansion premium on top of structural empire revenue. */
@@ -716,6 +734,10 @@ export interface WarOutcomeV2 {
   warScore: number;
   ownLosses: number;
   enemyLosses: number;
+  /** Civilian population lost by the human side during this war, in millions. */
+  ownCivilianLosses: number;
+  /** Civilian population lost by the opposing side during this war, in millions. */
+  enemyCivilianLosses: number;
   survivingManpower: number;
   territoriesGained: TerritoryId[];
   territoriesLost: TerritoryId[];
@@ -760,7 +782,7 @@ export type WorldCommandV2 =
   | { type: 'adjust-budget'; playerId: PlayerId; domain: BudgetDomainV2; delta: number }
   | { type: 'set-budget-policy'; playerId: PlayerId; budget: BudgetPolicyV2 }
   | { type: 'rapid-recruitment'; playerId: PlayerId }
-  | { type: 'research-surge'; playerId: PlayerId }
+  | { type: 'research-surge'; playerId: PlayerId; targetBranch: ResearchBranchV2 }
   | { type: 'launch-propaganda'; playerId: PlayerId }
   | { type: 'set-empire-name'; playerId: PlayerId; name: string }
   | { type: 'declare-war'; attackerId: PlayerId; defenderId: PlayerId; escalatedFromWarId?: string }

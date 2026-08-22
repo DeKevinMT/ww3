@@ -149,9 +149,9 @@ describe('V2 six-program Development portfolio', () => {
     expect(firstCompletion).toBeGreaterThanOrEqual(30);
     expect(firstCompletion).toBeLessThanOrEqual(104);
     expect(at52).toBeLessThanOrEqual(1);
-    // The simple two-priority model concentrates visible progress without
-    // flooding the country with passive upgrades across all six branches.
-    expect(at260).toBeGreaterThanOrEqual(3);
+    // The learning-outcome IQ calibration keeps progress visible without
+    // restoring the old rich-country research acceleration.
+    expect(at260).toBeGreaterThanOrEqual(2);
     expect(at260).toBeLessThanOrEqual(6);
   }, 15_000);
 });

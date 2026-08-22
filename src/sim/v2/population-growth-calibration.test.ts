@@ -27,7 +27,9 @@ describe('V2 population-growth balancing', () => {
     expect(rate('jpn')).toBeGreaterThan(0);
     expect(rate('chn')).toBeGreaterThan(0);
     expect(rate('bel')).toBeCloseTo(0.8505, 3);
-    expect(rate('nga')).toBeCloseTo(1.539, 3);
-    expect(rate('ner')).toBeCloseTo(2.1365, 3);
+    // Current source rates are 2.084% and 3.275%; the balancing rule moves
+    // each exactly halfway toward the neutral 1% baseline.
+    expect(rate('nga')).toBeCloseTo(1.542, 3);
+    expect(rate('ner')).toBeCloseTo(2.1375, 3);
   });
 });

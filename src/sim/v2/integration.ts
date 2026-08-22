@@ -1,5 +1,6 @@
 import {
   CONQUEST_INITIAL_INTEGRATION_SHARE,
+  INTEGRATION_ADMINISTRATION_ANNUAL_OUTPUT_SHARE,
   RESEARCH_BRANCH_EFFECTS,
   RESEARCH_BRANCHES,
   WEEKS_PER_YEAR,
@@ -27,6 +28,21 @@ const SMALL_COUNTRY_INTEGRATION_YEARS = 12.5;
 const INTEGRATION_LINEAR_YEARS = 25;
 const INTEGRATION_QUADRATIC_YEARS = 50;
 const INTEGRATION_LARGE_COUNTRY_YEARS = 100;
+
+/**
+ * Administration price frozen from the territory's live output at conquest.
+ * Later growth or war damage never changes this promised annual bill.
+ */
+export function territoryIntegrationAnnualCostV2(
+  economyBillions: number,
+): number {
+  return round(Math.max(0, economyBillions)
+    * INTEGRATION_ADMINISTRATION_ANNUAL_OUTPUT_SHARE, 9);
+}
+
+export function territoryIntegrationWeeklyCostV2(economyBillions: number): number {
+  return round(territoryIntegrationAnnualCostV2(economyBillions) / WEEKS_PER_YEAR, 9);
+}
 
 function logarithmicSize(value: number): number {
   return Math.log1p(Math.max(0, value));
@@ -160,6 +176,7 @@ export function beginTerritoryIntegrationV2(
     toOwnerId: newOwnerId,
     startedTick: state.tick,
     completesTick: state.tick + territoryIntegrationDurationWeeksV2(content, territoryId),
+    annualCost: territoryIntegrationAnnualCostV2(territory.economy),
   };
 }
 

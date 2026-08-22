@@ -3,6 +3,7 @@ import {
   WAR_ACCESS_ASSAULT_MULTIPLIER,
   WAR_ACCESS_COST_MULTIPLIER,
   WAR_ACCESS_SUPPLY_MULTIPLIER,
+  WAR_MOBILIZATION_TICKS,
 } from './balance';
 import { createWorldStateV2, openingConflictScheduleV2 } from './bootstrap';
 import { WORLD_CONTENT_V2 } from './content';
@@ -76,7 +77,7 @@ describe('2026 conflicts and strategic naval warfare', () => {
     const navalSupply = supplyFactorV2(state, WORLD_CONTENT_V2, bel, capital, 'naval');
     expect(navalSupply).toBeLessThan(landSupply);
     expect(declareWarV2(state, WORLD_CONTENT_V2, bel, gbr).accepted).toBe(true);
-    state.tick = 4;
+    state.tick = WAR_MOBILIZATION_TICKS;
     const battles = processWarsV2(state, WORLD_CONTENT_V2);
     expect(battles).toHaveLength(1);
     expect(state.wars[0]?.attackerOperations[0]?.access).toBe('naval');

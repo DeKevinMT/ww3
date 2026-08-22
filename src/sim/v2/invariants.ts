@@ -10,7 +10,7 @@ import {
 } from './selectors';
 import type { PlayerId, TerritoryId, WorldStateV2 } from './types';
 
-const NATION_KEYS = ['budget', 'capitalId', 'ceasefiresRequested', 'combatExperience', 'empireName', 'foodSecurity', 'foodStock', 'manualActionUses', 'propagandaAvailableTick', 'propagandaProgram', 'rapidRecruitmentAvailableTick', 'research', 'researchSurgeAvailableTick', 'treasury', 'warFatigue'];
+const NATION_KEYS = ['budget', 'capitalId', 'ceasefiresRequested', 'combatExperience', 'domesticFoodCapacity', 'empireName', 'foodSecurity', 'foodStock', 'manualActionUses', 'propagandaAvailableTick', 'propagandaProgram', 'rapidRecruitmentAvailableTick', 'research', 'researchSurgeAvailableTick', 'treasury', 'warFatigue'];
 const TERRITORY_KEYS = ['army', 'condition', 'control', 'coreOwner', 'economy', 'integration', 'integrationProgram', 'owner', 'population'];
 const RESEARCH_KEYS = ['allocations', 'breakthroughs', 'effectLevels', 'progress'];
 const BUDGET_KEYS = ['development', 'military', 'research'];
@@ -41,8 +41,8 @@ const BREAKTHROUGH_KEYS = [
 const ARMY_KEYS = ['baseAttack', 'baseDefense', 'capacity', 'manpower'];
 const PROPAGANDA_PROGRAM_KEYS = ['endsTick', 'startedTick', 'totalSuspicionReduction', 'weeklySuspicionReduction'];
 const CONTROL_KEYS = ['controller', 'share'];
-const INTEGRATION_PROGRAM_KEYS = ['completesTick', 'fromCoreOwnerId', 'fromOwnerId', 'startedTick', 'toOwnerId'];
-const WAR_KEYS = ['attackerId', 'attackerLosses', 'attackerOperations', 'battles', 'defenderId', 'defenderLosses', 'defenderOperations', 'id', 'lastBattleTick', 'lastPeaceOfferTick', 'startedTick', 'warScore'];
+const INTEGRATION_PROGRAM_KEYS = ['annualCost', 'completesTick', 'fromCoreOwnerId', 'fromOwnerId', 'startedTick', 'toOwnerId'];
+const WAR_KEYS = ['attackerCivilianLosses', 'attackerId', 'attackerLosses', 'attackerOperations', 'battles', 'defenderCivilianLosses', 'defenderId', 'defenderLosses', 'defenderOperations', 'id', 'lastBattleTick', 'lastPeaceOfferTick', 'startedTick', 'warScore'];
 const OPERATION_KEYS = ['access', 'commanderId', 'doctrine', 'holdUntilTick', 'lastBattleTick', 'momentum', 'sourceId', 'startedTick', 'targetId'];
 const TRUCE_KEYS = ['expiresTick', 'leftId', 'rightId'];
 const CEASEFIRE_OBLIGATION_KEYS = ['expiresTick', 'payeeId', 'payerId', 'startsTick', 'warId', 'weeklyCost'];
@@ -113,6 +113,7 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
     if (nation.empireName.length > 36 || /[<>\r\n]/.test(nation.empireName)) errors.push(`Nation ${id} has an invalid empire name.`);
     if (!Number.isFinite(nation.treasury)
       || !Number.isFinite(nation.combatExperience) || nation.combatExperience < 0
+      || !Number.isFinite(nation.domesticFoodCapacity) || nation.domesticFoodCapacity < 0
       || nation.foodStock < 0 || nation.foodSecurity < 0 || nation.foodSecurity > 1
       || !Number.isInteger(nation.ceasefiresRequested) || nation.ceasefiresRequested < 0
       || !Number.isInteger(nation.rapidRecruitmentAvailableTick) || nation.rapidRecruitmentAvailableTick < 0
@@ -164,6 +165,7 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
         || program.fromCoreOwnerId === program.toOwnerId
         || program.fromCoreOwnerId !== territory.coreOwner
         || program.toOwnerId !== territory.owner
+        || !Number.isFinite(program.annualCost) || program.annualCost <= 0
         || !Number.isInteger(program.startedTick) || !Number.isInteger(program.completesTick)
         || program.startedTick < 0 || program.completesTick <= program.startedTick
         || program.completesTick <= state.tick || territory.integration >= 1) {
@@ -177,7 +179,22 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
   for (const war of state.wars) {
     if (!hasOnlyKeys(war, WAR_KEYS)) errors.push(`War ${war.id} has non-canonical keys.`);
     if (!state.players[war.attackerId] || !state.players[war.defenderId] || war.attackerId === war.defenderId) errors.push(`War ${war.id} has invalid parties.`);
-    if (![war.startedTick, war.lastBattleTick, war.warScore, war.battles, war.attackerLosses, war.defenderLosses, war.lastPeaceOfferTick].every(Number.isFinite)) errors.push(`War ${war.id} has invalid numeric state.`);
+    const numericWarState = [
+      war.startedTick,
+      war.lastBattleTick,
+      war.warScore,
+      war.battles,
+      war.attackerLosses,
+      war.defenderLosses,
+      war.attackerCivilianLosses ?? 0,
+      war.defenderCivilianLosses ?? 0,
+      war.lastPeaceOfferTick,
+    ];
+    if (!numericWarState.every(Number.isFinite)
+      || (war.attackerCivilianLosses ?? 0) < 0
+      || (war.defenderCivilianLosses ?? 0) < 0) {
+      errors.push(`War ${war.id} has invalid numeric state.`);
+    }
     const key = relationKeyV2(war.attackerId, war.defenderId);
     if (warPairs.has(key)) errors.push(`Duplicate active war: ${key}.`);
     warPairs.add(key);

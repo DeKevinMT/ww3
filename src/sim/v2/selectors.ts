@@ -24,12 +24,12 @@ import {
   FOOD_ARMY_LOGISTICS_POWER,
   FOOD_ARMY_LOGISTICS_RATE,
   FOOD_ARMY_LOGISTICS_SCALE,
+  FOOD_COST_GLOBAL_MULTIPLIER,
   FOOD_DOMESTIC_COST_PER_MILLION,
-  FOOD_ECONOMY_YIELD_FLOOR,
-  FOOD_ECONOMY_YIELD_WEIGHT,
+  FOOD_EMPTY_RESERVE_ANNUAL_MORTALITY_MAX,
+  FOOD_EXPORT_MARKET_PRICE_LEVEL,
+  FOOD_EXPORT_PRICE_MULTIPLIER,
   FOOD_IMPORT_COST_PER_MILLION,
-  FOOD_INDIA_ORIGIN_YIELD_MULTIPLIER,
-  FOOD_PEOPLE_MILLIONS_PER_KM2,
   FOOD_POPULATION_PRESSURE_POWER,
   FOOD_POPULATION_PRESSURE_RATE,
   FOOD_POPULATION_PRESSURE_SCALE,
@@ -42,8 +42,14 @@ import {
   FOOD_STORAGE_MILLIONS_PER_KM2,
   FOOD_MAX_STOCK_WEEKS,
   FOOD_TARGET_WEEKS,
+  FOOD_WAR_DEMAND_SHARE_OF_PRESSURE,
+  FOOD_WAR_LOGISTICS_PRESSURE_MAX,
+  FOOD_WAR_LOGISTICS_PRESSURE_PER_LOAD,
+  FOOD_WAR_SUPPLY_RELIEF_PER_LEVEL,
   NATIONAL_IQ_ECONOMY_GROWTH_PER_POINT,
   NATIONAL_IQ_GDP_PER_CAPITA_FLOOR,
+  NATIONAL_IQ_INSTITUTIONAL_CAPACITY_CEILING,
+  NATIONAL_IQ_INSTITUTIONAL_CAPACITY_FLOOR,
   NATIONAL_IQ_LOGISTICS_PER_POINT,
   NATIONAL_IQ_POPULATION_GROWTH_PER_POINT,
   NATIONAL_IQ_RESEARCH_PER_POINT,
@@ -69,7 +75,16 @@ import {
   RESEARCH_BRANCH_BASE_RP,
   RESEARCH_BRANCH_EFFECTS,
   RESEARCH_BASE_COST_SCALE,
+  RESEARCH_CATCH_UP_FULL_GAP,
+  RESEARCH_CATCH_UP_MAX_BONUS,
+  RESEARCH_COST_CAPACITY_MAX_MULTIPLIER,
+  RESEARCH_COST_CAPACITY_MIN_MULTIPLIER,
+  RESEARCH_COST_CAPACITY_REFERENCE,
   RESEARCH_COST_GROWTH,
+  RESEARCH_INSTITUTION_CAPACITY_BASE_MAX,
+  RESEARCH_INSTITUTION_CAPACITY_BASE_MIN,
+  RESEARCH_INSTITUTION_MULTIPLIER_MAX,
+  RESEARCH_INSTITUTION_MULTIPLIER_MIN,
   RESEARCH_MASTERY_POWER,
   RIVAL_AI_PEACE_RESERVE_WEEKS,
   SUPER_AI_PEACE_RESERVE_WEEKS,
@@ -100,7 +115,11 @@ import {
   nationalArmyCapacityTargetV2,
   stateArmyCapacityTargetsV2,
 } from './capacity';
-import { nationalAiEfficiencyV2, optimizeNationalAiPlanV2 } from './nationalAi';
+import {
+  nationalAiEfficiencyV2,
+  optimizeNationalAiPlanV2,
+  redirectDevelopmentFundingToFoodV2,
+} from './nationalAi';
 import { initialManualActionCostV2, manualActionUseMultiplierV2 } from './manualActions';
 import {
   nationIdV2,
@@ -125,7 +144,6 @@ import {
   ResearchPortfolioV2,
   ResearchSurgeTermsV2,
   TerritoryId,
-  TerrainType,
   TerritoryStateV2,
   TerritoryViewV2,
   TotalManpowerV2,
@@ -143,16 +161,6 @@ interface TerritoryIndexV2 {
   controlled: Map<PlayerId, TerritoryId[]>;
 }
 const territoryIndexCache = new WeakMap<WorldStateV2, TerritoryIndexV2>();
-
-const FOOD_TERRAIN_YIELD: Readonly<Record<TerrainType, number>> = {
-  plains: 1.20,
-  coastal: 1.00,
-  urban: 0.78,
-  jungle: 0.72,
-  mountain: 0.58,
-  desert: 0.36,
-  arctic: 0.16,
-};
 
 /** Ephemeral derived values for one simulation phase; never stored in canonical state. */
 export interface PowerSnapshotV2 {
@@ -259,7 +267,7 @@ export function selectMilitaryBaseRatingsV2(
 
 export interface NationalIqViewV2 {
   score: number;
-  source: 'gdp-institution-gameplay-proxy';
+  source: 'country-learning-gameplay-baseline';
   combatQualityMultiplier: number;
   economyGrowthMultiplier: number;
   researchMultiplier: number;
@@ -287,7 +295,7 @@ export function selectNationalIqViewV2(
     : NATIONAL_IQ_GDP_PER_CAPITA_FLOOR;
   return {
     score: round(score, 3),
-    source: 'gdp-institution-gameplay-proxy',
+    source: 'country-learning-gameplay-baseline',
     combatQualityMultiplier: definition
       ? openingCombatQualityMultiplierV2(gdpPerCapita, score) : 1,
     economyGrowthMultiplier: round(1 + delta * NATIONAL_IQ_ECONOMY_GROWTH_PER_POINT, 9),
@@ -655,12 +663,18 @@ export function selectCatchUpFactorV2(
 
 /** Technology-specific catch-up, deliberately independent of AI ambition. */
 export function selectResearchCatchUpFactorV2(
-  _state: WorldStateV2,
+  state: WorldStateV2,
   _content: WorldContentV2,
-  _playerId: PlayerId,
-  _powerSnapshot?: PowerSnapshotV2,
+  playerId: PlayerId,
+  powerSnapshot: PowerSnapshotV2 = createPowerSnapshotV2(state, _content),
 ): number {
-  return 1;
+  const nation = state.players[playerId];
+  if (!nation) return 1;
+  const ownBreakthroughs = Object.values(nation.research.breakthroughs)
+    .reduce((sum, value) => sum + value, 0);
+  const technologyGap = Math.max(0, powerSnapshot.leaderBreakthroughs - ownBreakthroughs);
+  return round(1 + RESEARCH_CATCH_UP_MAX_BONUS
+    * clamp(technologyGap / RESEARCH_CATCH_UP_FULL_GAP, 0, 1));
 }
 
 /**
@@ -670,11 +684,25 @@ export function selectResearchCatchUpFactorV2(
  * levels. Other effects remain the clear +1% baseline.
  */
 export function selectResearchEffectImpactV2(
-  _state: WorldStateV2,
-  _content: WorldContentV2,
-  _playerId: PlayerId,
-  _effect: ResearchEffectV2,
+  state: WorldStateV2,
+  content: WorldContentV2,
+  playerId: PlayerId,
+  effect: ResearchEffectV2,
 ): number {
+  if (effect === 'population-growth') {
+    const population = Math.max(0.01, selectControlledPopulationV2(state, playerId));
+    // Small countries can translate a breakthrough across their whole
+    // population quickly; continental-scale systems gain less per level.
+    return round(clamp(2.4 / (1 + Math.sqrt(population / 25)), 0.25, 2.4));
+  }
+  if (effect === 'economy-growth') {
+    const wealthPerPerson = Math.max(0, selectNationalEconomyV2(
+      state, content, playerId,
+    ).wealthPerPerson);
+    // Catch-up is strongest in low-output economies, while rich economies
+    // still receive a useful but bounded improvement from every level.
+    return round(clamp(2.4 / (1 + wealthPerPerson / 40), 0.40, 2.4));
+  }
   return 1;
 }
 
@@ -815,37 +843,56 @@ export function selectFoodLandCapacityV2(
   if (!nation) return 0;
   const yieldResearch = 1 + 0.005 * nation.research.effectLevels['economy-growth'];
   const warDisruption = clamp(1 - 1.50 * selectWarPressureV2(state, playerId).outputPenalty, 0.35, 1);
-  return round(selectTerritoriesOfV2(state, playerId).reduce((sum, view) => {
+  const demand = selectFoodDemandV2(state, playerId);
+  let productivePopulation = 0;
+  let calibratedProduction = 0;
+  for (const view of selectTerritoriesOfV2(state, playerId)) {
     const territory = state.territories[view.id]!;
     const definition = content.territories[view.id]!;
-    const terrainYield = FOOD_TERRAIN_YIELD[definition.terrain];
-    const conditionYield = 0.55 + 0.45 * territory.condition;
     const integrationYield = clamp(territory.integration, 0, 1);
+    const population = territory.population * integrationYield;
+    if (population <= 0) continue;
+    const openingCondition = clamp(
+      0.66 + Math.log10(definition.baseline.gdp + 1) * 0.055
+        + definition.baseline.powerIndex / 1_200,
+      0.62,
+      0.96,
+    );
+    const conditionYield = clamp(
+      territory.condition / Math.max(0.01, openingCondition),
+      0.20,
+      1.10,
+    );
     const liveEconomicStrength = clamp(
       territory.economy / Math.max(0.10, definition.baseline.gdp),
       0.25,
       1.50,
     );
-    const economicYield = FOOD_ECONOMY_YIELD_FLOOR
-      + FOOD_ECONOMY_YIELD_WEIGHT * Math.sqrt(liveEconomicStrength);
-    const foodSystemEfficiency = clamp(
-      1 - 1.25 * definition.baseline.foodInsecurityRate
-        + 0.0075 * nation.research.effectLevels['economy-growth'],
-      0.35,
-      1.10,
-    );
-    const originYield = definition.initialOwnerId === nationIdV2('ind')
-      ? FOOD_INDIA_ORIGIN_YIELD_MULTIPLIER : 1;
-    return sum + definition.baseline.landArea * FOOD_PEOPLE_MILLIONS_PER_KM2
-      * terrainYield * conditionYield * integrationYield * economicYield
-      * foodSystemEfficiency * originYield;
-  }, 0) * yieldResearch * warDisruption);
+    const economicYield = clamp(Math.sqrt(liveEconomicStrength), 0.50, 1.20);
+    const calibratedRatio = definition.baseline.foodSelfSufficiencyRatio;
+    // Synthetic test/mod content created before the FAOSTAT field existed is
+    // neutral rather than non-finite; official playable content fails fast in
+    // content.ts and therefore always takes the calibrated path.
+    const selfSufficiency = Number.isFinite(calibratedRatio)
+      ? clamp(calibratedRatio, 0.001, 3)
+      : 1;
+    productivePopulation += population;
+    calibratedProduction += population * selfSufficiency
+      * conditionYield * economicYield;
+  }
+  if (productivePopulation <= 0) return 0;
+  // FAOSTAT's calorie-based self-sufficiency ratio is the immutable opening
+  // anchor. Live damage, integration, the economy, research and war then move
+  // actual capacity without confusing agricultural supply with food access.
+  return round(demand * calibratedProduction / productivePopulation
+    * yieldResearch * warDisruption);
 }
 
 /**
- * Maximum share of the population the current food network can actually
- * reach. Owning farmland is not enough: poverty, conflict and weak logistics
- * can leave food inaccessible even while aggregate supply exists.
+ * Structural efficiency of the national food system. This influences how
+ * much food can be produced locally and how expensive the remaining supply is;
+ * it never directly decides how many people eat. Actual coverage is derived
+ * only from funded supply plus reserves.
  */
 export function selectFoodAccessCeilingV2(
   state: WorldStateV2,
@@ -886,8 +933,8 @@ export function selectFoodAccessCeilingV2(
       + conditionPenalty + warPenalty);
   const rawAccess = clamp(1 - remainingVulnerability, 0.20, 0.995);
   // Essential food networks soften real-world vulnerability without erasing
-  // it: fragile countries remain import-dependent, but do not begin in an
-  // unrecoverable famine spiral.
+  // its financial and productive burden. This value is deliberately not a
+  // hard cap on food coverage.
   return round(clamp(0.65 + 0.35 * rawAccess, 0.70, 0.995));
 }
 
@@ -938,6 +985,7 @@ interface FoodPlanV2 {
   demand: number;
   landCapacity: number;
   accessCeiling: number;
+  importThroughput: number;
   storageCapacity: number;
   targetStock: number;
   domesticTarget: number;
@@ -947,18 +995,77 @@ interface FoodPlanV2 {
   request: number;
 }
 
-function selectFoodPlanV2(state: WorldStateV2, content: WorldContentV2, playerId: PlayerId): FoodPlanV2 {
+interface FoodCapacityPlanV2 {
+  demand: number;
+  landCapacity: number;
+  accessCeiling: number;
+  importThroughput: number;
+  storageCapacity: number;
+  targetStock: number;
+  desiredProduction: number;
+}
+
+interface FundedFoodPlanV2 {
+  foodProduction: number;
+  foodProduced: number;
+  foodDomesticProduced: number;
+  foodImported: number;
+  foodExported: number;
+  foodExportIncome: number;
+  foodConsumed: number;
+  foodCoverage: number;
+  foodStockChange: number;
+}
+
+/**
+ * Converts live land/naval operations into one bounded food-logistics load.
+ * Before armies have selected their first operation, the declared route is
+ * used so border mobilisation already carries a real supply burden.
+ */
+function selectWartimeFoodLogisticsPressureV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  playerId: PlayerId,
+): number {
+  const operationalLoad = selectWarsOfV2(state, playerId).reduce((sum, war) => {
+    const opponentId = war.attackerId === playerId ? war.defenderId : war.attackerId;
+    const operations = war.attackerId === playerId ? war.attackerOperations : war.defenderOperations;
+    if (operations.length === 0) {
+      const inferredAccess = selectWarAccessTypeV2(state, content, playerId, opponentId);
+      const access = inferredAccess === 'none' ? 'land' : inferredAccess;
+      return sum + WAR_ACCESS_OPERATION_MULTIPLIER[access];
+    }
+    return sum + operations.reduce((fronts, operation) => (
+      fronts + WAR_ACCESS_OPERATION_MULTIPLIER[operation.access]
+    ), 0);
+  }, 0);
+  if (operationalLoad <= 0) return 0;
   const nation = state.players[playerId]!;
-  const demand = Math.max(0.01, selectFoodDemandV2(state, playerId));
+  const supplyRelief = 1 / (1 + FOOD_WAR_SUPPLY_RELIEF_PER_LEVEL
+    * diminishingResearchLevelV2(nation.research.effectLevels.supply));
+  const fatiguePressure = clamp(nation.warFatigue, 0, 100) * 0.001;
+  return round(clamp(
+    (operationalLoad * FOOD_WAR_LOGISTICS_PRESSURE_PER_LOAD + fatiguePressure) * supplyRelief,
+    0,
+    FOOD_WAR_LOGISTICS_PRESSURE_MAX,
+  ));
+}
+
+function selectFoodCapacityPlanV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  playerId: PlayerId,
+): FoodCapacityPlanV2 {
+  const nation = state.players[playerId]!;
+  const wartimeLogisticsPressure = selectWartimeFoodLogisticsPressureV2(state, content, playerId);
+  const demand = Math.max(0.01, selectFoodDemandV2(state, playerId)
+    * (1 + FOOD_WAR_DEMAND_SHARE_OF_PRESSURE * wartimeLogisticsPressure));
   const physicalLandCapacity = selectFoodLandCapacityV2(state, content, playerId);
   const accessCeiling = selectFoodAccessCeilingV2(state, content, playerId);
-  // Every country has a basic domestic food economy (urban food systems,
-  // greenhouse production and local processing). Land and terrain can lift it
-  // much higher, but a microstate never displays zero meaningful production.
-  const landCapacity = Math.max(
-    physicalLandCapacity,
-    demand * (0.45 + 0.35 * accessCeiling),
-  );
+  const importThroughput = clamp(1 - wartimeLogisticsPressure, 0.45, 1);
+  // Domestic capacity is data-calibrated. Import-dependent microstates remain
+  // genuinely import-dependent instead of receiving an artificial 70-80% floor.
+  const landCapacity = physicalLandCapacity;
   const storageCapacity = selectFoodStorageCapacityV2(state, content, playerId, demand);
   const targetStock = Math.min(storageCapacity, demand * FOOD_TARGET_WEEKS * accessCeiling);
   // A healthy country never deliberately produces less than this week's needs.
@@ -968,37 +1075,146 @@ function selectFoodPlanV2(state: WorldStateV2, content: WorldContentV2, playerId
   // Weekly supply may exceed 100% of demand while reserves are rebuilding.
   // Citizens consume at most one week of demand; the surplus is stored.
   const desiredProduction = Math.max(0, demand + restock);
-  const domesticTarget = Math.min(desiredProduction, landCapacity);
-  const importTarget = Math.max(0, desiredProduction - domesticTarget);
+  return {
+    demand: round(demand),
+    landCapacity: round(landCapacity),
+    accessCeiling: round(accessCeiling),
+    importThroughput: round(importThroughput),
+    storageCapacity: round(storageCapacity),
+    targetStock: round(targetStock),
+    desiredProduction: round(desiredProduction),
+  };
+}
+
+/**
+ * The long-run domestic food-system target. Actual capacity is canonical
+ * nation state and moves toward this value only in the weekly economy phase.
+ */
+export function selectFoodDomesticCapacityTargetV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  playerId: PlayerId,
+): number {
+  if (!state.players[playerId] || selectTerritoriesOfV2(state, playerId).length === 0) return 0;
+  const plan = selectFoodCapacityPlanV2(state, content, playerId);
+  // Keep the whole calibrated sector online. Once reserves are full, every
+  // funded domestic unit above national demand becomes an export.
+  return round(plan.landCapacity);
+}
+
+function selectFoodPlanV2(state: WorldStateV2, content: WorldContentV2, playerId: PlayerId): FoodPlanV2 {
+  const nation = state.players[playerId]!;
+  const capacityPlan = selectFoodCapacityPlanV2(state, content, playerId);
+  const domesticTarget = Number.isFinite(nation.domesticFoodCapacity)
+    ? Math.max(0, nation.domesticFoodCapacity)
+    : Math.min(capacityPlan.desiredProduction, capacityPlan.landCapacity);
+  // Imports are the responsive channel: they immediately fill the gap left by
+  // slowly changing domestic farms, processing and distribution capacity.
+  // When old capacity temporarily exceeds demand it remains funded and may be
+  // stored or exported rather than switching off in a single week.
+  const usefulSupplyLimit = capacityPlan.demand + Math.max(
+    0,
+    capacityPlan.storageCapacity - nation.foodStock,
+  );
+  const importTarget = Math.max(
+    0,
+    Math.min(capacityPlan.desiredProduction, usefulSupplyLimit) - domesticTarget,
+  );
   const economy = selectNationalEconomyV2(state, content, playerId);
   const outputPerPerson = economy.output / Math.max(0.01, economy.population);
-  const dependency = clamp(importTarget / demand, 0, 1);
-  const vulnerability = 1 - accessCeiling;
+  const dependency = clamp(importTarget / capacityPlan.demand, 0, 1);
+  // The public efficiency view is deliberately compressed into a 70–99.5%
+  // range. Expand that range again for actual costs so fragile systems carry a
+  // meaningful bill without turning the value into a coverage cap.
+  const systemInefficiency = clamp((1 - capacityPlan.accessCeiling) / 0.35, 0, 1);
   const warPressure = selectWarPressureV2(state, playerId).outputPenalty;
   const debtStress = nation.treasury < 0 ? 1.25 : 1;
   const localPriceLevel = FOOD_PRICE_LEVEL_FLOOR
     + FOOD_PRICE_LEVEL_PER_WEALTH_THOUSAND
       * Math.min(FOOD_PRICE_LEVEL_WEALTH_CAP, outputPerPerson);
   const domesticUnitCost = FOOD_DOMESTIC_COST_PER_MILLION
-    * localPriceLevel * (1 + 0.80 * vulnerability) * (1 + 1.5 * warPressure);
+    * FOOD_COST_GLOBAL_MULTIPLIER
+    * localPriceLevel * (1 + 0.80 * systemInefficiency) * (1 + 1.5 * warPressure);
   const importUnitCost = FOOD_IMPORT_COST_PER_MILLION
+    * FOOD_COST_GLOBAL_MULTIPLIER
     * localPriceLevel
     // Low income already reduces public revenue, so charging a second poverty
     // penalty here made India-like economies structurally unable to recover.
     // Import dependence and actual access vulnerability remain the visible risks.
-    * (1 + 0.70 * dependency + 1.50 * vulnerability)
+    * (1 + 0.70 * dependency + 1.50 * systemInefficiency)
     * (1 + 2 * warPressure) * debtStress;
   return {
-    demand: round(demand),
-    landCapacity: round(landCapacity),
-    accessCeiling: round(accessCeiling),
-    storageCapacity: round(storageCapacity),
-    targetStock: round(targetStock),
+    demand: capacityPlan.demand,
+    landCapacity: capacityPlan.landCapacity,
+    accessCeiling: capacityPlan.accessCeiling,
+    importThroughput: capacityPlan.importThroughput,
+    storageCapacity: capacityPlan.storageCapacity,
+    targetStock: capacityPlan.targetStock,
     domesticTarget: round(domesticTarget),
     importTarget: round(importTarget),
     domesticUnitCost: round(domesticUnitCost, 9),
     importUnitCost: round(importUnitCost, 9),
     request: round(domesticTarget * domesticUnitCost + importTarget * importUnitCost),
+  };
+}
+
+/** Fund one immutable food plan and account for storage before exports. */
+function fundFoodPlanV2(
+  nation: NationStateV2,
+  plan: FoodPlanV2,
+  funding: number,
+): FundedFoodPlanV2 {
+  const foodProduction = Math.min(plan.request, Math.max(0, funding));
+  const domesticCost = plan.domesticTarget * plan.domesticUnitCost;
+  const foodDomesticProduced = Math.min(
+    plan.domesticTarget,
+    foodProduction / plan.domesticUnitCost,
+  );
+  const foodFundingAfterDomestic = Math.max(
+    0,
+    foodProduction - Math.min(foodProduction, domesticCost),
+  );
+  // Import bills cover cargo loaded at origin; wartime route loss means only
+  // part of that paid shipment reaches the domestic food network.
+  const foodImported = Math.min(
+    plan.importTarget,
+    foodFundingAfterDomestic / plan.importUnitCost,
+  ) * plan.importThroughput;
+  const foodProduced = foodDomesticProduced + foodImported;
+  const storageRoom = Math.max(0, plan.storageCapacity - nation.foodStock);
+  // Exports come exclusively from domestic output remaining after a complete
+  // week of national demand and every empty physical storage slot. Imports and
+  // reserves can therefore never be re-exported.
+  const foodExported = foodImported <= 0.000000001 ? Math.max(
+    0,
+    foodDomesticProduced - plan.demand - storageRoom,
+  ) : 0;
+  // Exporters face one bounded world market price. War disruption, debt and
+  // inefficient domestic systems still raise their own production cost, so
+  // only genuinely efficient producers retain a positive margin.
+  const exportUnitPrice = FOOD_DOMESTIC_COST_PER_MILLION
+    * FOOD_COST_GLOBAL_MULTIPLIER
+    * FOOD_EXPORT_MARKET_PRICE_LEVEL
+    * FOOD_EXPORT_PRICE_MULTIPLIER;
+  const foodExportIncome = foodExported * exportUnitPrice;
+  const foodAvailable = nation.foodStock + foodProduced - foodExported;
+  const foodConsumed = Math.min(plan.demand, foodAvailable);
+  const foodCoverage = clamp(foodConsumed / Math.max(0.01, plan.demand), 0, 1);
+  const foodStockChange = clamp(
+    foodAvailable - foodConsumed,
+    0,
+    plan.storageCapacity,
+  ) - nation.foodStock;
+  return {
+    foodProduction,
+    foodProduced,
+    foodDomesticProduced,
+    foodImported,
+    foodExported,
+    foodExportIncome,
+    foodConsumed,
+    foodCoverage,
+    foodStockChange,
   };
 }
 
@@ -1016,11 +1232,17 @@ function researchBranchCostForCompletionsV2(
 ): number {
   const nation = state.players[playerId];
   if (!nation) return 0;
-  void content;
   void powerSnapshot;
   const efficiency = diminishingResearchLevelV2(nation.research.effectLevels['research-efficiency']);
+  const researchCapacity = Math.max(0, content.nations[playerId]?.real.researchCapacity ?? 0);
+  const capacityCostMultiplier = clamp(
+    researchCapacity / RESEARCH_COST_CAPACITY_REFERENCE,
+    RESEARCH_COST_CAPACITY_MIN_MULTIPLIER,
+    RESEARCH_COST_CAPACITY_MAX_MULTIPLIER,
+  );
   return round(RESEARCH_BRANCH_BASE_RP[branch]
     * RESEARCH_BASE_COST_SCALE
+    * capacityCostMultiplier
     * (completions + 1) ** RESEARCH_MASTERY_POWER
     * RESEARCH_COST_GROWTH ** completions
     * (1 - 0.01 * efficiency));
@@ -1069,7 +1291,23 @@ export function selectResearchInstitutionalCapacityV2(
   content: WorldContentV2,
   playerId: PlayerId,
 ): number {
-  return selectNationalIqViewV2(content, playerId).researchMultiplier;
+  const researchCapacity = content.nations[playerId]?.real.researchCapacity
+    ?? NATIONAL_IQ_INSTITUTIONAL_CAPACITY_FLOOR;
+  const capacityShare = clamp(
+    (researchCapacity - NATIONAL_IQ_INSTITUTIONAL_CAPACITY_FLOOR)
+      / (NATIONAL_IQ_INSTITUTIONAL_CAPACITY_CEILING
+        - NATIONAL_IQ_INSTITUTIONAL_CAPACITY_FLOOR),
+    0,
+    1,
+  );
+  const capacityBase = RESEARCH_INSTITUTION_CAPACITY_BASE_MIN
+    + (RESEARCH_INSTITUTION_CAPACITY_BASE_MAX
+      - RESEARCH_INSTITUTION_CAPACITY_BASE_MIN) * capacityShare;
+  return round(clamp(
+    capacityBase * selectNationalIqViewV2(content, playerId).researchMultiplier,
+    RESEARCH_INSTITUTION_MULTIPLIER_MIN,
+    RESEARCH_INSTITUTION_MULTIPLIER_MAX,
+  ));
 }
 
 export function selectNationalAiPlanV2(
@@ -1205,12 +1443,12 @@ export function selectResearchSurgeTermsV2(
   state: WorldStateV2,
   content: WorldContentV2,
   playerId: PlayerId,
+  targetBranch: ResearchBranchV2,
 ): ResearchSurgeTermsV2 {
   const nation = state.players[playerId];
   const cooldownRemaining = nation
     ? Math.max(0, nation.researchSurgeAvailableTick - state.tick) : 0;
   const finance = nation ? selectWeeklyFinanceBreakdownV2(state, content, playerId) : undefined;
-  const economy = nation ? selectNationalEconomyV2(state, content, playerId) : undefined;
   const openingQuote = initialManualActionCostV2(content, playerId, 'researchSurge');
   const empireScale = openingQuote.openingScale;
   const useCount = nation?.manualActionUses.researchSurge ?? 0;
@@ -1218,18 +1456,18 @@ export function selectResearchSurgeTermsV2(
   const cost = round(openingQuote.baseCost * useMultiplier);
   const portfolio = nation && finance
     ? selectResearchPortfolioV2(state, content, playerId, finance) : [];
-  const progressAdded = round(portfolio.reduce(
-    (sum, branch) => sum + branch.weeklyProgress * RESEARCH_SURGE_PROGRESS_WEEKS,
-    0,
-  ));
+  const target = portfolio.find((branch) => branch.branch === targetBranch);
+  const progressAdded = round((target?.weeklyProgress ?? 0) * RESEARCH_SURGE_PROGRESS_WEEKS);
   let reason: string | undefined;
   if (!nation || selectTerritoriesOfV2(state, playerId).length === 0) reason = 'Country is unavailable.';
+  else if (!target) reason = 'Research program is unavailable.';
   else if (cooldownRemaining > 0) reason = `Research Surge returns in ${cooldownRemaining} weeks.`;
   else if (nation.treasury <= 0) reason = 'Research Surge is locked while the treasury is in debt.';
-  else if (progressAdded <= 0.0000001) reason = 'No research program can advance.';
+  else if (target.maxed || progressAdded <= 0.0000001) reason = 'Selected research program cannot advance.';
   else if (nation.treasury + 0.0000001 < cost) reason = `Requires $${cost.toFixed(2)}B in cash.`;
   return {
     playerId,
+    targetBranch,
     allowed: reason === undefined,
     reason,
     cooldownRemaining,
@@ -1272,10 +1510,13 @@ export function selectWeeklyFinanceBreakdownV2(
   const ceasefirePayment = activeObligations
     .filter((obligation) => obligation.payerId === playerId)
     .reduce((sum, obligation) => sum + obligation.weeklyCost, 0);
+  const integrationCost = selectTerritoriesOfV2(state, playerId)
+    .reduce((sum, territory) => sum
+      + (territory.integrationProgram?.annualCost ?? 0) / 52, 0);
   // A negative treasury is debt, not the disappearance of the country's new
   // weekly revenue. Positive reserves can fund a surge; debt cannot.
   const cashAfterRevenue = Math.max(0, nation.treasury) + economy.weeklyRevenue + ceasefireIncome;
-  const cashAfterCeasefire = Math.max(0, cashAfterRevenue - ceasefirePayment);
+  const cashAfterMandatory = Math.max(0, cashAfterRevenue - ceasefirePayment - integrationCost);
   const foodPlan = selectFoodPlanV2(state, content, playerId);
   // Food remains first priority, but it cannot consume several years of a
   // fragile country's public revenue in one week. Severe access crises may
@@ -1283,8 +1524,9 @@ export function selectWeeklyFinanceBreakdownV2(
   // real food shortage instead of silently draining all reserves and every
   // other national system.
   const foodFundingStress = clamp((0.98 - nation.foodSecurity) / 0.58, 0, 1);
+  const foodSystemInefficiency = clamp((1 - foodPlan.accessCeiling) / 0.35, 0, 1);
   const foodBudgetShare = clamp(
-    0.12 + 0.95 * (1 - foodPlan.accessCeiling) + 0.35 * foodFundingStress,
+    0.12 + 0.40 * foodSystemInefficiency + 0.35 * foodFundingStress,
     0.12,
     0.72,
   );
@@ -1298,26 +1540,18 @@ export function selectWeeklyFinanceBreakdownV2(
     ? Math.min(Math.max(0, nation.treasury), Math.max(0, foodPlan.request - ordinaryFoodAllowance))
     : 0;
   const foodSpendable = Math.min(
-    cashAfterCeasefire,
+    cashAfterMandatory,
     ordinaryFoodAllowance + emergencyReserveDraw,
   );
-  const foodProduction = Math.min(foodPlan.request, foodSpendable);
-  const domesticCost = foodPlan.domesticTarget * foodPlan.domesticUnitCost;
-  const foodDomesticProduced = Math.min(foodPlan.domesticTarget,
-    foodProduction / foodPlan.domesticUnitCost);
-  const foodFundingAfterDomestic = Math.max(0, foodProduction - Math.min(foodProduction, domesticCost));
-  const foodImported = Math.min(foodPlan.importTarget,
-    foodFundingAfterDomestic / foodPlan.importUnitCost);
-  const foodProduced = foodDomesticProduced + foodImported;
-  const foodAvailable = nation.foodStock + foodProduced;
-  const foodConsumed = Math.min(foodPlan.demand, foodAvailable);
-  const foodCoverage = clamp(foodConsumed / Math.max(0.01, foodPlan.demand), 0, 1);
-  const foodStockChange = clamp(
-    nation.foodStock + foodProduced - foodConsumed,
+  const ordinaryFoodProduction = Math.min(foodPlan.request, foodSpendable);
+  const ordinaryFood = fundFoodPlanV2(nation, foodPlan, ordinaryFoodProduction);
+  // A healthy export receipt is ordinary public income and can finance the
+  // same week's national programs. Crisis transfers are resolved later and do
+  // not create a circular promise here; shortages cannot export in practice.
+  const discretionaryRevenue = Math.max(
     0,
-    foodPlan.storageCapacity,
-  ) - nation.foodStock;
-  const discretionaryRevenue = Math.max(0, economy.weeklyRevenue - foodProduction);
+    economy.weeklyRevenue + ordinaryFood.foodExportIncome - ordinaryFoodProduction,
+  );
   const treasuryWeeks = nation.treasury / Math.max(0.001, economy.weeklyRevenue);
   // Large economies have equally large structural obligations. Without this
   // normalization, a fixed percentage surplus gives the USA/China hundreds
@@ -1340,11 +1574,12 @@ export function selectWeeklyFinanceBreakdownV2(
     ? SUPER_AI_WAR_BASE_RUNWAY_WEEKS + activeWars * SUPER_AI_WAR_FRONT_RUNWAY_WEEKS
     : 3 + activeWars * 1.5;
   const reserveProgress = clamp(treasuryWeeks / Math.max(0.25, peaceReserveWeeks), 0, 1);
-  const treatyRevenueShare = ceasefirePayment / Math.max(0.001, economy.weeklyRevenue);
+  const mandatoryPaymentShare = (ceasefirePayment + integrationCost)
+    / Math.max(0.001, economy.weeklyRevenue);
   const envelopeRate = nation.treasury < 0
     // Debt recovery cuts the discretionary envelope sharply, especially
     // while a peace contract is already consuming national revenue.
-    ? clamp((atWar ? 0.92 : 0.80) - treatyRevenueShare, 0.10, atWar ? 0.86 : 0.70)
+    ? clamp((atWar ? 0.92 : 0.80) - mandatoryPaymentShare, 0.10, atWar ? 0.86 : 0.70)
     : atWar
       ? treasuryWeeks < warReserveWeeks ? 0.92
       : treasuryWeeks < warReserveWeeks + 2 ? 1
@@ -1413,9 +1648,44 @@ export function selectWeeklyFinanceBreakdownV2(
     };
   }
   const military = envelope * budget.military / 100;
-  // The six-program portfolio divides this committed pot once; capped shares remain spent.
+  // Research remains fully financed in food crises because its logistics,
+  // medicine and economy programs are the durable route out of shortages.
   const research = envelope * budget.research / 100;
-  const development = envelope * budget.development / 100;
+  const plannedDevelopment = envelope * budget.development / 100;
+  // The national AI may suspend even the last Development dollar only when the ordinary
+  // food plan is presently short, draining a low reserve, or unable to refill
+  // a critically low stock. The transfer cannot exceed either planned
+  // Development or the actual food bill, so it creates no additional borrowing.
+  const foodDevelopmentRedirect = redirectDevelopmentFundingToFoodV2({
+    baseBudget: budget,
+    plannedDevelopment,
+    foodFundingGap: foodPlan.request - ordinaryFoodProduction,
+    foodCoverage: ordinaryFood.foodCoverage,
+    foodReserveWeeks: reserveWeeks,
+    foodStockChange: ordinaryFood.foodStockChange,
+    foodDemand: foodPlan.demand,
+    superAi: playerId === state.humanPlayerId,
+  });
+  budget = foodDevelopmentRedirect.activeBudget;
+  const development = foodDevelopmentRedirect.development;
+  const foodDevelopmentTransfer = foodDevelopmentRedirect.transfer;
+  const fundedFood = fundFoodPlanV2(
+    nation,
+    foodPlan,
+    ordinaryFoodProduction + foodDevelopmentTransfer,
+  );
+  const {
+    foodProduction,
+    foodProduced,
+    foodDomesticProduced,
+    foodImported,
+    foodExported,
+    foodExportIncome,
+    foodConsumed,
+    foodCoverage,
+    foodStockChange,
+  } = fundedFood;
+  // The six-program portfolio divides this actually funded pot once; capped shares remain spent.
   // Front operations are paid directly below. They do not consume the Armed
   // Forces envelope a second time or masquerade as ordinary standing upkeep.
   const mandatoryRequest = armyUpkeep;
@@ -1474,8 +1744,9 @@ export function selectWeeklyFinanceBreakdownV2(
     aiPlan.efficiency,
     warPressure.economyGrowthDrag,
   );
-  const actuallySpent = ceasefirePayment + foodProduction + envelope + warOperations;
-  const operatingNet = economy.weeklyRevenue + ceasefireIncome - actuallySpent;
+  const actuallySpent = ceasefirePayment + integrationCost + foodProduction
+    + military + research + development + warOperations;
+  const operatingNet = economy.weeklyRevenue + ceasefireIncome + foodExportIncome - actuallySpent;
   const prePremiumTreasury = nation.treasury + operatingNet;
   const debtBefore = Math.max(0, -nation.treasury);
   const debtAfterBeforePremium = Math.max(0, -prePremiumTreasury);
@@ -1494,14 +1765,18 @@ export function selectWeeklyFinanceBreakdownV2(
     foodProduced,
     foodDomesticProduced,
     foodImported,
+    foodExported,
+    foodExportIncome,
     foodConsumed,
-    foodBalance: foodProduced - foodPlan.demand,
+    foodBalance: foodProduced - foodConsumed - foodExported,
     foodStockChange,
     foodProduction,
+    foodDevelopmentTransfer,
     foodCoverage,
     foodTargetStock: foodPlan.targetStock,
     ceasefirePayment,
     ceasefireIncome,
+    integrationCost,
     newBorrowing,
     debtPremium,
     armyUpkeep,
@@ -1540,6 +1815,33 @@ export function selectWeeklyFinanceBreakdownV2(
     mode: atWar ? 'war' : nation.treasury <= 0.000001 ? 'insolvent'
       : nation.treasury < peaceReserveTarget ? 'conserving' : 'normal',
   });
+}
+
+/**
+ * Compare opening candidates from the same perspective. Bootstrap nominates
+ * one temporary human country before the player chooses, but that country
+ * must not be the only candidate receiving APEX efficiency and budget logic
+ * in the nation picker. One shared power snapshot keeps the batch projection
+ * deterministic and avoids rebuilding global power for every country.
+ */
+export function selectOpeningCandidateFinancePlansV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  powerSnapshot: PowerSnapshotV2 = createPowerSnapshotV2(state, content),
+): ReadonlyMap<PlayerId, WeeklyFinanceBreakdownV2> {
+  const candidateState: WorldStateV2 = { ...state };
+  const plans = new Map<PlayerId, WeeklyFinanceBreakdownV2>();
+  for (const playerId of sortedNationIdsV2(state)) {
+    if (selectTerritoriesOfV2(state, playerId).length === 0) continue;
+    candidateState.humanPlayerId = playerId;
+    plans.set(playerId, selectWeeklyFinanceBreakdownV2(
+      candidateState,
+      content,
+      playerId,
+      powerSnapshot,
+    ));
+  }
+  return plans;
 }
 
 export function selectWeeklyRecruitmentV2(state: WorldStateV2, content: WorldContentV2, playerId: PlayerId): number {
@@ -1748,7 +2050,11 @@ export function selectPopulationDynamicsV2(
   const medicalReduction = 0.20 * nation.research.effectLevels.recovery
     / (nation.research.effectLevels.recovery + 46.67);
   const foodCrisis = clamp((0.90 - foodSecurity) / 0.50, 0, 1);
-  const foodMortality = FOOD_SHORTAGE_POPULATION_LOSS * 52 * foodCrisis;
+  const foodReserveWeeks = nation.foodStock / Math.max(0.01, selectFoodDemandV2(state, playerId));
+  const depletedReserve = clamp((0.50 - foodReserveWeeks) / 0.50, 0, 1);
+  const acuteShortage = clamp((0.95 - foodSecurity) / 0.45, 0, 1);
+  const foodMortality = FOOD_SHORTAGE_POPULATION_LOSS * 52 * foodCrisis
+    + FOOD_EMPTY_RESERVE_ANNUAL_MORTALITY_MAX * depletedReserve * acuteShortage;
   const conditionMortality = Math.max(0, 0.65 - averageCondition) * 0.015;
   const annualDeathRate = Math.max(0,
     baselineDeathRate * (1 - medicalReduction) + foodMortality + conditionMortality);
@@ -1896,6 +2202,7 @@ export function finiteStateNumbersV2(state: WorldStateV2): boolean {
   for (const nation of Object.values(state.players)) values.push(
     nation.treasury,
     nation.foodStock,
+    nation.domesticFoodCapacity,
     nation.foodSecurity,
     nation.warFatigue,
     nation.combatExperience,
@@ -1914,6 +2221,7 @@ export function finiteStateNumbersV2(state: WorldStateV2): boolean {
     territory.army.baseAttack, territory.army.baseDefense,
     territory.integrationProgram?.startedTick ?? 0,
     territory.integrationProgram?.completesTick ?? 0,
+    territory.integrationProgram?.annualCost ?? 0,
     territory.control?.share ?? 0);
   return values.every(Number.isFinite);
 }

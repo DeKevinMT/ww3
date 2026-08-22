@@ -10,6 +10,7 @@ import {
   synchronizeArmyCapacityV2,
 } from './capacity';
 import { WORLD_CONTENT_V2 } from './content';
+import { territoryIntegrationAnnualCostV2 } from './integration';
 import { assertInvariantsV2 } from './invariants';
 import {
   projectFinanceManpowerPhaseV2,
@@ -37,6 +38,7 @@ describe('population and research army cap', () => {
       toOwnerId: bel,
       startedTick: state.tick,
       completesTick: state.tick + 52,
+      annualCost: territoryIntegrationAnnualCostV2(state.territories[luxTerritory].economy),
     };
     state.players[bel].treasury = -1_000;
     synchronizeArmyCapacityV2(state, WORLD_CONTENT_V2);

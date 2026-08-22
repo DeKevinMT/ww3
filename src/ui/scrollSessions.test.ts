@@ -21,14 +21,14 @@ describe('DOM scroll sessions', () => {
     expect(after.scrollTop).toBe(438);
   });
 
-  it('preserves the position while switching between command subtabs', () => {
+  it('starts a different command subtab at the top', () => {
     const war = target(drawerScrollSessionId('war'), 281);
     const snapshot = captureScrollSessions([war]);
     const economy = target(drawerScrollSessionId('economy'), 0);
 
     restoreScrollSessions([economy], snapshot);
 
-    expect(economy.scrollTop).toBe(281);
+    expect(economy.scrollTop).toBe(0);
   });
 
   it('resets when a different full panel replaces the drawer', () => {

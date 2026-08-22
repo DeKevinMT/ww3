@@ -35,6 +35,7 @@ import {
   selectNuclearPowerV2,
   selectPopulationDynamicsV2,
   selectRapidRecruitmentTermsV2,
+  selectResearchPortfolioV2,
   selectResearchSurgeTermsV2,
   selectTerritoriesOfV2,
   selectTotalManpowerV2,
@@ -87,6 +88,19 @@ interface RegionalEscalationCandidateV2 {
  * aid is exceptional and does not consume this roll.
  */
 export const AI_EXPANSION_ROLLS_PER_DECISION = 1;
+
+/** Pick the strongest AI priority only from programs that can still advance. */
+export function selectAiResearchSurgeTargetV2(
+  allocations: ResearchAllocationsV2,
+  breakthroughs: Readonly<Record<ResearchBranchV2, number>>,
+  availableBranches: readonly ResearchBranchV2[],
+): ResearchBranchV2 | undefined {
+  return [...availableBranches].sort((left, right) => (
+    allocations[right] - allocations[left]
+      || breakthroughs[left] - breakthroughs[right]
+      || left.localeCompare(right)
+  ))[0];
+}
 
 /** Ordinary countries fight one war at a time; mature great powers may sustain two. */
 export function aiConcurrentWarLimitV2(majorPowerDrive: number, tick: number): number {
@@ -356,13 +370,16 @@ export function selectAiResearchAllocationsV2(
   const ambition = clamp(nation.ambition, 0, 1);
   const fatigue = clamp(player.warFatigue / 70, 0, 1);
   const foodStress = clamp((0.98 - player.foodSecurity) / 0.58, 0, 1);
+  const foodReserveWeeks = player.foodStock / Math.max(0.01, selectFoodDemandV2(state, playerId));
+  const foodReserveStress = clamp((2 - foodReserveWeeks) / 2, 0, 1);
+  const foodRecoveryStress = Math.max(foodStress, foodReserveStress);
   const deterrence = selectNuclearPowerV2(state, content, playerId);
   const deterrenceResearchValue = deterrence.level === 0
     ? wealth * elitePotential : deterrence.maxed ? 0 : 0.25 * elitePotential;
 
   const scores: Record<ResearchBranchV2, number> = {
     'population-recruitment': Math.max(0.10, 0.75 + 2.4 * fillGap + 1.0 * smallPopulation
-      + 1.25 * populationDecline + 0.35 * warPressure - 2.50 * foodStress),
+      + 1.25 * populationDecline + 0.35 * warPressure - 2.50 * foodRecoveryStress),
     'military-industry': 0.80 + 0.95 * fillGap + 0.55 * activeWars.length
       + 0.40 * ambition,
     'advanced-weapons': 0.80 + 0.85 * wealth + 0.70 * elitePotential + 0.70 * lowQuality
@@ -370,9 +387,9 @@ export function selectAiResearchAllocationsV2(
       + (activeWars.length > 0 ? 1.0 * (1 - warPressure) : 0.35 * ambition),
     'defensive-systems': 0.75 + 2.0 * warPressure + 0.75 * damage + 0.45 * fatigue + 0.40 * multipleFronts,
     'logistics-medicine': 0.80 + 1.15 * activeWars.length + 1.15 * multipleFronts + 1.0 * damage
-      + 0.45 * overseasFronts + 0.45 * fillGap + 4.50 * foodStress,
+      + 0.45 * overseasFronts + 0.45 * fillGap + 7.0 * foodRecoveryStress,
     'economy-science': 0.95 + 2.15 * poverty + 1.35 * researchGap + (activeWars.length === 0 ? 0.65 : 0)
-      + 0.45 * (1 - elitePotential) + 6.0 * foodStress,
+      + 0.45 * (1 - elitePotential) + 5.0 * foodRecoveryStress,
   };
   for (const branch of RESEARCH_BRANCHES) {
     // Repeating the same branch becomes exponentially harder in the research
@@ -399,7 +416,10 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
       - (content.nations[left]?.real.powerIndex ?? 0) || left.localeCompare(right))
     .slice(0, 8);
   const majorInitiativeOffset = persistentMajorPowers.length > 0
-    ? Math.floor(state.tick / (AI_GLOBAL_WAR_COOLDOWN * 2)) % persistentMajorPowers.length
+    // Major-only windows occur every other global window. Advance two places
+    // each time so one viable power cannot repeatedly sit directly behind an
+    // ineligible leader and consume every reserved declaration.
+    ? Math.floor(state.tick / AI_GLOBAL_WAR_COOLDOWN) % persistentMajorPowers.length
     : 0;
   const rotatingMajorPowers = [
     ...persistentMajorPowers.slice(majorInitiativeOffset),
@@ -520,11 +540,23 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
         && warInitiative.has(playerId)
         && player.researchSurgeAvailableTick <= state.tick
         && player.treasury >= economy.weeklyRevenue * 10) {
-        const researchSurge = selectResearchSurgeTermsV2(state, content, playerId);
-        if (researchSurge.allowed
-          && player.treasury - researchSurge.cost >= economy.weeklyRevenue * 8
-          && nextRandom(state) < clamp(0.015 + researchGap * 0.002, 0.015, 0.045)) {
-          commands.push({ type: 'research-surge', playerId });
+        // A surge is program-specific: follow the nation's strongest current
+        // research priority, then favour the least-developed branch on ties.
+        const availableBranches = selectResearchPortfolioV2(state, content, playerId)
+          .filter((program) => !program.maxed)
+          .map((program) => program.branch);
+        const targetBranch = selectAiResearchSurgeTargetV2(
+          player.research.allocations,
+          player.research.breakthroughs,
+          availableBranches,
+        );
+        if (targetBranch) {
+          const researchSurge = selectResearchSurgeTermsV2(state, content, playerId, targetBranch);
+          if (researchSurge.allowed
+            && player.treasury - researchSurge.cost >= economy.weeklyRevenue * 8
+            && nextRandom(state) < clamp(0.015 + researchGap * 0.002, 0.015, 0.045)) {
+            commands.push({ type: 'research-surge', playerId, targetBranch });
+          }
         }
       }
     }

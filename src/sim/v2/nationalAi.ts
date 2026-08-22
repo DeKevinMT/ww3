@@ -6,6 +6,10 @@ import type {
 } from './types';
 import {
   AI_HEALTHY_ARMY_TARGET,
+  FOOD_DEVELOPMENT_PAUSE_COVERAGE,
+  FOOD_DEVELOPMENT_PAUSE_CRITICAL_RESERVE_WEEKS,
+  FOOD_DEVELOPMENT_PAUSE_DRAIN_SHARE,
+  FOOD_DEVELOPMENT_PAUSE_RESERVE_WEEKS,
   SUPER_AI_EFFICIENCY,
   SUPER_AI_RESPONSIVENESS,
   SUPER_AI_WAR_BASE_RUNWAY_WEEKS,
@@ -30,6 +34,23 @@ export interface NationalAiInputsV2 {
   /** Current strategic food stock measured in weeks of national demand. */
   foodReserveWeeks?: number;
   superAi: boolean;
+}
+
+export interface FoodDevelopmentRedirectInputsV2 {
+  baseBudget: BudgetPolicyV2;
+  plannedDevelopment: number;
+  foodFundingGap: number;
+  foodCoverage: number;
+  foodReserveWeeks: number;
+  foodStockChange: number;
+  foodDemand: number;
+  superAi: boolean;
+}
+
+export interface FoodDevelopmentRedirectV2 {
+  activeBudget: BudgetPolicyV2;
+  development: number;
+  transfer: number;
 }
 
 function normalizePolicy(source: BudgetPolicyV2): BudgetPolicyV2 {
@@ -74,6 +95,45 @@ function boost(
 
 export function nationalAiEfficiencyV2(superAi: boolean): number {
   return superAi ? SUPER_AI_EFFICIENCY : 1;
+}
+
+/**
+ * Applies the last, live survival override after the ordinary budget has
+ * been costed. It never alters saved policy and never creates a new spending
+ * commitment: every food dollar returned here is removed from Development.
+ */
+export function redirectDevelopmentFundingToFoodV2(
+  inputs: FoodDevelopmentRedirectInputsV2,
+): FoodDevelopmentRedirectV2 {
+  const plannedDevelopment = Math.max(0, inputs.plannedDevelopment);
+  const fundingGap = Math.max(0, inputs.foodFundingGap);
+  const stockDraining = inputs.foodStockChange < -Math.max(
+    0.000001,
+    inputs.foodDemand * FOOD_DEVELOPMENT_PAUSE_DRAIN_SHARE,
+  );
+  const shortage = inputs.foodCoverage < FOOD_DEVELOPMENT_PAUSE_COVERAGE;
+  const reserveAtRisk = inputs.foodReserveWeeks < FOOD_DEVELOPMENT_PAUSE_RESERVE_WEEKS
+    && stockDraining;
+  const criticallyLowReserve = inputs.foodReserveWeeks
+    < FOOD_DEVELOPMENT_PAUSE_CRITICAL_RESERVE_WEEKS
+    && inputs.foodStockChange < inputs.foodDemand * 0.05;
+  const response = inputs.superAi ? 1 : 0.50;
+  const transfer = fundingGap > 0.0000001
+    && (shortage || reserveAtRisk || criticallyLowReserve)
+    ? Math.min(plannedDevelopment, fundingGap) * response
+    : 0;
+  const development = Math.max(0, plannedDevelopment - transfer);
+  const developmentShare = plannedDevelopment > 0
+    ? inputs.baseBudget.development * development / plannedDevelopment
+    : 0;
+  return {
+    activeBudget: {
+      ...inputs.baseBudget,
+      development: developmentShare,
+    },
+    development,
+    transfer,
+  };
 }
 
 /**

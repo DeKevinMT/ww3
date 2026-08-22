@@ -2,9 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { FOOD_TARGET_WEEKS } from './balance';
 import { createWorldStateV2 } from './bootstrap';
 import { WORLD_CONTENT_V2 } from './content';
-import { createFinancePlansV2, processEconomyV2 } from './economy';
+import { createFinancePlansV2, processEconomyV2, processFinanceMilitaryV2 } from './economy';
 import {
   invalidateTerritoryIndexV2,
+  selectControlledPopulationV2,
   selectFoodAccessCeilingV2,
   selectFoodDemandV2,
   selectFoodLandCapacityV2,
@@ -13,7 +14,41 @@ import {
   selectPopulationDynamicsV2,
   selectWeeklyFinanceBreakdownV2,
 } from './selectors';
-import { nationIdV2, territoryIdV2 } from './types';
+import { nationIdV2, territoryIdV2, type WorldStateV2 } from './types';
+
+function addFoodWar(
+  state: WorldStateV2,
+  index: number,
+  opponent: 'nld' | 'gbr',
+  access: 'land' | 'naval',
+): void {
+  const belgium = nationIdV2('bel');
+  const opponentId = nationIdV2(opponent);
+  state.wars.push({
+    id: `food-war-${index}`,
+    attackerId: belgium,
+    defenderId: opponentId,
+    startedTick: 0,
+    lastBattleTick: 0,
+    warScore: 0,
+    battles: 0,
+    attackerLosses: 0,
+    defenderLosses: 0,
+    lastPeaceOfferTick: -1,
+    attackerOperations: [{
+      commanderId: belgium,
+      sourceId: territoryIdV2('bel'),
+      targetId: territoryIdV2(opponent),
+      doctrine: 'pressure',
+      access,
+      startedTick: 0,
+      lastBattleTick: 0,
+      holdUntilTick: 0,
+      momentum: 0,
+    }],
+    defenderOperations: [],
+  });
+}
 
 describe('V2 automated food security', () => {
   it('gives larger controlled landmasses more physical food storage', () => {
@@ -31,7 +66,8 @@ describe('V2 automated food security', () => {
     const state = createWorldStateV2(2_101);
     const belgium = nationIdV2('bel');
     const plan = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, belgium);
-    expect(state.players[belgium].foodStock / plan.foodDemand).toBeGreaterThan(FOOD_TARGET_WEEKS * 0.95);
+    expect(state.players[belgium].foodStock / plan.foodDemand).toBeGreaterThan(FOOD_TARGET_WEEKS * 0.80);
+    expect(state.players[belgium].foodStock).toBeLessThanOrEqual(plan.foodStorageCapacity);
     expect(plan.foodCoverage).toBeGreaterThan(0.99);
     expect(plan.foodProduced).toBeGreaterThan(0);
     expect(plan.foodProduction).toBeGreaterThan(0);
@@ -41,7 +77,76 @@ describe('V2 automated food security', () => {
     );
   });
 
-  it('starts Nigeria fed but with a smaller buffer and a real structural burden', () => {
+  it('never starts a country with more food than its live storage can hold', () => {
+    const state = createWorldStateV2(2_113);
+    for (const playerId of WORLD_CONTENT_V2.nationIds) {
+      const capacity = selectFoodStorageCapacityV2(state, WORLD_CONTENT_V2, playerId);
+      expect(state.players[playerId]!.foodStock, String(playerId)).toBeLessThanOrEqual(capacity + 0.000001);
+    }
+  });
+
+  it('caps opening food without leaving a stale ownership index behind', () => {
+    const state = createWorldStateV2(2_116);
+    const belgium = nationIdV2('bel');
+    const netherlands = territoryIdV2('nld');
+    const homePopulation = state.territories[territoryIdV2('bel')]!.population;
+    const annexedPopulation = state.territories[netherlands]!.population;
+    // Scenario/test setup may legally adjust the freshly returned state before
+    // any selector runs; bootstrap must not leak its temporary storage cache.
+    state.territories[netherlands]!.owner = belgium;
+    state.territories[netherlands]!.integration = 1;
+    expect(selectControlledPopulationV2(state, belgium)).toBeCloseTo(
+      homePopulation + annexedPopulation,
+      6,
+    );
+  });
+
+  it('turns land, naval and multiple wars into progressively harder food logistics', () => {
+    const peace = createWorldStateV2(2_114);
+    const landWar = structuredClone(peace);
+    const navalWar = structuredClone(peace);
+    const multipleWars = structuredClone(peace);
+    const belgium = nationIdV2('bel');
+    addFoodWar(landWar, 1, 'nld', 'land');
+    addFoodWar(navalWar, 1, 'gbr', 'naval');
+    addFoodWar(multipleWars, 1, 'nld', 'land');
+    addFoodWar(multipleWars, 2, 'gbr', 'naval');
+
+    const peacePlan = selectWeeklyFinanceBreakdownV2(peace, WORLD_CONTENT_V2, belgium);
+    const landPlan = selectWeeklyFinanceBreakdownV2(landWar, WORLD_CONTENT_V2, belgium);
+    const navalPlan = selectWeeklyFinanceBreakdownV2(navalWar, WORLD_CONTENT_V2, belgium);
+    const multiplePlan = selectWeeklyFinanceBreakdownV2(multipleWars, WORLD_CONTENT_V2, belgium);
+
+    expect(peacePlan.foodCoverage).toBe(1);
+    expect(landPlan.foodCoverage).toBe(1);
+    expect(navalPlan.foodCoverage).toBe(1);
+    expect(multiplePlan.foodCoverage).toBe(1);
+    expect(landPlan.foodDemand).toBeGreaterThan(peacePlan.foodDemand);
+    expect(navalPlan.foodDemand).toBeGreaterThan(landPlan.foodDemand);
+    expect(multiplePlan.foodDemand).toBeGreaterThan(navalPlan.foodDemand);
+    expect(multiplePlan.foodImported / multiplePlan.foodDemand)
+      .toBeLessThan(landPlan.foodImported / landPlan.foodDemand);
+  });
+
+  it('draws wartime reserves gradually while peace keeps a full opening store', () => {
+    const peace = createWorldStateV2(2_115);
+    const war = structuredClone(peace);
+    const belgium = nationIdV2('bel');
+    addFoodWar(war, 1, 'gbr', 'naval');
+    const peacePlan = selectWeeklyFinanceBreakdownV2(peace, WORLD_CONTENT_V2, belgium);
+    const warPlan = selectWeeklyFinanceBreakdownV2(war, WORLD_CONTENT_V2, belgium);
+
+    expect(peacePlan.foodStockChange).toBeGreaterThanOrEqual(-0.0001);
+    expect(warPlan.foodStockChange).toBeLessThan(peacePlan.foodStockChange);
+    expect(warPlan.foodStockChange).toBeLessThan(0);
+    expect(warPlan.foodCoverage).toBeGreaterThan(0.95);
+
+    const stockBefore = war.players[belgium]!.foodStock;
+    processFinanceMilitaryV2(war, WORLD_CONTENT_V2, new Map([[belgium, warPlan]]));
+    expect(war.players[belgium]!.foodStock).toBeCloseTo(stockBefore + warPlan.foodStockChange, 5);
+  });
+
+  it('starts Nigeria fed but with a smaller buffer and a real structural financial burden', () => {
     const state = createWorldStateV2(2_105);
     const nigeria = nationIdV2('nga');
     const plan = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, nigeria);
@@ -50,8 +155,10 @@ describe('V2 automated food security', () => {
     expect(stockWeeks).toBeGreaterThan(2);
     expect(stockWeeks).toBeLessThan(3);
     expect(plan.foodCoverage).toBe(1);
-    expect(plan.foodProduced).toBeGreaterThan(plan.foodDemand);
-    expect(state.players[nigeria].foodSecurity).toBeCloseTo(0.854, 3);
+    expect(plan.foodProduced).toBeLessThan(plan.foodDemand);
+    expect(plan.foodStockChange).toBeLessThan(0);
+    expect(plan.foodProduction / plan.revenue).toBeGreaterThan(0.10);
+    expect(state.players[nigeria].foodSecurity).toBe(1);
   });
 
   it('makes unsupported population growth worsen food access and raise the food bill', () => {
@@ -110,8 +217,7 @@ describe('V2 automated food security', () => {
     const baseline = WORLD_CONTENT_V2.nations[nigeria].real;
     const dynamics = selectPopulationDynamicsV2(state, WORLD_CONTENT_V2, nigeria);
     expect(baseline.deathRatePerThousand).toBeCloseTo(11.641, 3);
-    expect(dynamics.annualDeathRate).toBeGreaterThan(baseline.deathRatePerThousand / 1_000);
-    expect(dynamics.annualNetRate).toBeLessThan(baseline.populationGrowthRate / 100);
+    expect(dynamics.annualDeathRate).toBeCloseTo(baseline.deathRatePerThousand / 1_000, 6);
     expect(dynamics.weeklyDeaths).toBeGreaterThan(0);
 
     state.players[nigeria].foodSecurity = 1;
@@ -126,6 +232,22 @@ describe('V2 automated food security', () => {
       (baselineDeathRate + baselineNetRate) * iqPopulationMultiplier - baselineDeathRate,
       5,
     );
+  });
+
+  it('turns an empty reserve during a live shortage into population decline', () => {
+    const state = createWorldStateV2(2_117);
+    const nigeria = nationIdV2('nga');
+    const demand = selectFoodDemandV2(state, nigeria);
+    state.players[nigeria].foodSecurity = 0.80;
+    state.players[nigeria].foodStock = demand * 2;
+    const buffered = selectPopulationDynamicsV2(state, WORLD_CONTENT_V2, nigeria, 0);
+
+    state.players[nigeria].foodStock = 0;
+    const empty = selectPopulationDynamicsV2(state, WORLD_CONTENT_V2, nigeria, 0);
+
+    expect(empty.annualDeathRate).toBeGreaterThan(buffered.annualDeathRate + 0.015);
+    expect(empty.annualNetRate).toBeLessThan(0);
+    expect(empty.weeklyNet).toBeLessThan(0);
   });
 
   it('makes more land materially increase domestic food capacity', () => {
