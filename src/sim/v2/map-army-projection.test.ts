@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { projectMapArmyV2 } from '../../ui/mapArmyProjection';
+import { createMapSnapshot } from '../../ui/WorldUIV2';
 import { WorldEngineV2 } from './WorldEngineV2';
 import { nationIdV2, territoryIdV2 } from './types';
 
@@ -20,5 +21,21 @@ describe('map military projection', () => {
     expect(after.combatStrength).toBeCloseTo(before.combatStrength, 8);
     expect(after.attack).toBeGreaterThan(before.attack);
     expect(after.defense).toBeGreaterThan(before.defense);
+  });
+
+  it('builds a whole map from one shared military-quality snapshot', () => {
+    const engine = new WorldEngineV2(8_802);
+    const snapshot = vi.spyOn(engine, 'militaryBaseSnapshot');
+    const attack = vi.spyOn(engine, 'effectiveAttack');
+    const defense = vi.spyOn(engine, 'effectiveDefense');
+    const projected = createMapSnapshot(engine);
+    const territoryCount = Object.keys(engine.state.territories).length;
+
+    expect(Object.keys(projected.territories)).toHaveLength(territoryCount);
+    expect(snapshot).toHaveBeenCalledTimes(1);
+    expect(attack).toHaveBeenCalledTimes(territoryCount);
+    expect(defense).toHaveBeenCalledTimes(territoryCount);
+    expect(attack.mock.calls.every((call) => call[2] === snapshot.mock.results[0]?.value)).toBe(true);
+    expect(defense.mock.calls.every((call) => call[2] === snapshot.mock.results[0]?.value)).toBe(true);
   });
 });

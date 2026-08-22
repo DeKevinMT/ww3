@@ -7,16 +7,58 @@ import {
 } from './balance';
 import {
   AI_EXPANSION_ROLLS_PER_DECISION,
+  aiExpansionDeclarationChanceV2,
   aiConcurrentWarLimitV2,
   aiTargetWarLimitV2,
+  aiWarCandidateForecastScoreV2,
+  aiWarDisciplineV2,
 } from './ai';
 
 describe('quiet but active AI war pacing', () => {
-  it('uses one ordinary expansion roll and a yearly global cadence', () => {
+  it('uses one ordinary expansion roll and a yearly global cooldown', () => {
     expect(AI_EXPANSION_ROLLS_PER_DECISION).toBe(1);
     expect(AI_GLOBAL_WAR_COOLDOWN).toBe(52);
     expect(AI_REGIONAL_ESCALATION_COOLDOWN).toBe(52);
     expect(AI_DEFENSIVE_AID_COOLDOWN).toBe(26);
+  });
+
+  it('keeps the commitment roll modest and sharply discourages opportunistic dogpiles', () => {
+    const ordinary = aiExpansionDeclarationChanceV2({
+      ratio: 1.2,
+      expansionChance: 0.08,
+      regionalEscalation: false,
+      rivalInvaderCount: 0,
+    });
+    const regional = aiExpansionDeclarationChanceV2({
+      ratio: 1.2,
+      expansionChance: 0.08,
+      regionalEscalation: true,
+      rivalInvaderCount: 0,
+    });
+    const dogpile = aiExpansionDeclarationChanceV2({
+      ratio: 1.2,
+      expansionChance: 0.08,
+      regionalEscalation: false,
+      rivalInvaderCount: 1,
+    });
+
+    expect(ordinary).toBeCloseTo(0.212, 6);
+    expect(regional).toBeCloseTo(0.262, 6);
+    expect(dogpile).toBeLessThanOrEqual(0.08);
+  });
+
+  it('uses IQ for safer target selection and timing, never for a larger war roll', () => {
+    const low = aiWarDisciplineV2(80);
+    const high = aiWarDisciplineV2(108);
+    const lowForecastEdge = aiWarCandidateForecastScoreV2(70, 1, 80)
+      - aiWarCandidateForecastScoreV2(45, 1, 80);
+    const highForecastEdge = aiWarCandidateForecastScoreV2(70, 1, 108)
+      - aiWarCandidateForecastScoreV2(45, 1, 108);
+
+    expect(high.forecastWeight).toBeGreaterThan(low.forecastWeight);
+    expect(high.minimumWinChance).toBeGreaterThan(low.minimumWinChance);
+    expect(high.additionalRunwayWeeks).toBeGreaterThan(low.additionalRunwayWeeks);
+    expect(highForecastEdge).toBeGreaterThan(lowForecastEdge);
   });
 
   it('keeps ordinary countries on one front and mature great powers on at most two', () => {

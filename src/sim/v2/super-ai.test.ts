@@ -5,6 +5,11 @@ import { createWorldStateV2 } from './bootstrap';
 import { stateTerritoryArmyCapacityTargetV2 } from './capacity';
 import { WORLD_CONTENT_V2 } from './content';
 import {
+  advanceTerritoryIntegrationProgramsV2,
+  FEDERATION_INTEGRATION_DURATION_FACTOR_V2,
+  territoryIntegrationDurationWeeksV2,
+} from './integration';
+import {
   moveBudgetTowardTargetV2,
   moveResearchTowardTargetV2,
   nationalAiAllocationStepLimitV2,
@@ -12,6 +17,7 @@ import {
   optimizeNationalAiPlanV2,
 } from './nationalAi';
 import {
+  absorbFederationMemberV2,
   resistanceCombatMultiplierV2,
   selectDefensiveFederationPolicyV2,
   selectGlobalResistanceV2,
@@ -382,7 +388,7 @@ describe('V2 dynamic containment coalition', () => {
     expect(selectGlobalResistanceV2(state).level).toBe(1);
   });
 
-  it('keeps loose containment defensive while a merged federation can coordinate a counteroffensive', () => {
+  it('never grants containment or federation a selected-opponent combat multiplier', () => {
     const state = createWorldStateV2(704);
     state.aiEscalation.globalThreat = 80;
     state.aiEscalation.coalitionMembers = WORLD_CONTENT_V2.nationIds
@@ -392,12 +398,13 @@ describe('V2 dynamic containment coalition', () => {
     const enemy = state.aiEscalation.coalitionMembers[0]!;
     const third = WORLD_CONTENT_V2.nationIds.find((id) => id !== human && id !== enemy
       && !state.aiEscalation.coalitionMembers.includes(id))!;
-    expect(resistanceCombatMultiplierV2(state, human, enemy).defender).toBeGreaterThan(1);
+    expect(resistanceCombatMultiplierV2(state, human, enemy)).toEqual({ attacker: 1, defender: 1 });
     expect(resistanceCombatMultiplierV2(state, enemy, human).attacker).toBe(1);
     expect(resistanceCombatMultiplierV2(state, enemy, third)).toEqual({ attacker: 1, defender: 1 });
 
     state.players[enemy].empireName = 'European Defense Federation';
-    expect(resistanceCombatMultiplierV2(state, enemy, human).attacker).toBeGreaterThan(1);
+    expect(resistanceCombatMultiplierV2(state, enemy, human)).toEqual({ attacker: 1, defender: 1 });
+    expect(selectGlobalResistanceV2(state)).toMatchObject({ defenseBonus: 0, offensiveBonus: 0 });
   });
 
   it('does not turn every loose coalition member into an automatic player attacker', () => {
@@ -587,6 +594,21 @@ describe('V2 dynamic containment coalition', () => {
     for (const [index, id] of livingOwnersBefore.entries()) {
       state.players[id].trainedReserves = (index + 1) / 1_000;
     }
+    const reservesBefore = new Map(livingOwnersBefore.map((id) => [
+      id,
+      state.players[id].trainedReserves,
+    ]));
+    const territoryStatsBefore = new Map(Object.entries(state.territories).map(([id, territory]) => [
+      id,
+      {
+        population: territory.population,
+        economy: territory.economy,
+        condition: territory.condition,
+        manpower: territory.army.manpower,
+        baseAttack: territory.army.baseAttack,
+        baseDefense: territory.army.baseDefense,
+      },
+    ]));
     const livingReservesBefore = livingOwnersBefore
       .reduce((sum, id) => sum + state.players[id].trainedReserves, 0);
     const home = state.territories[state.players[human].capitalId];
@@ -609,15 +631,35 @@ describe('V2 dynamic containment coalition', () => {
     expect(federation).toBeDefined();
     const livingOwnersAfter = new Set(Object.values(state.territories)
       .map((territory) => territory.owner));
-    const livingReservesAfter = [...livingOwnersAfter]
-      .reduce((sum, id) => sum + state.players[id].trainedReserves, 0);
+    const livingReservesAfter = Object.values(state.players)
+      .reduce((sum, nation) => sum + nation.trainedReserves, 0);
     const absorbedMembers = livingOwnersBefore.filter((id) => !livingOwnersAfter.has(id));
     expect(absorbedMembers).toHaveLength(livingBefore - livingAfter);
     expect(livingReservesAfter).toBeCloseTo(livingReservesBefore, 6);
-    for (const id of absorbedMembers) expect(state.players[id].trainedReserves).toBe(0);
+    for (const id of absorbedMembers) {
+      expect(state.players[id].trainedReserves).toBe(reservesBefore.get(id));
+    }
     const firstFederationSize = selectTerritoriesOfV2(state, federation!).length;
     expect(firstFederationSize).toBe(2);
-    expect(selectTerritoriesOfV2(state, federation!).every((territory) => territory.integration === 1)).toBe(true);
+    const joiningTerritories = selectTerritoriesOfV2(state, federation!)
+      .filter((territory) => absorbedMembers.includes(territory.coreOwner));
+    expect(joiningTerritories).not.toHaveLength(0);
+    for (const territory of joiningTerritories) {
+      expect(territory.integration).toBe(0.10);
+      expect(territory.integrationProgram).toBeDefined();
+      expect(territory.integrationProgram!.completesTick - territory.integrationProgram!.startedTick).toBe(
+        Math.round(territoryIntegrationDurationWeeksV2(WORLD_CONTENT_V2, territory.id)
+          * FEDERATION_INTEGRATION_DURATION_FACTOR_V2),
+      );
+      expect({
+        population: territory.population,
+        economy: territory.economy,
+        condition: territory.condition,
+        manpower: territory.army.manpower,
+        baseAttack: territory.army.baseAttack,
+        baseDefense: territory.army.baseDefense,
+      }).toEqual(territoryStatsBefore.get(territory.id));
+    }
     const rivalTreasuryAfter = Object.entries(state.players)
       .filter(([id]) => id !== human)
       .reduce((sum, [, nation]) => sum + nation.treasury, 0);
@@ -630,12 +672,25 @@ describe('V2 dynamic containment coalition', () => {
       ), 8);
     }
     expect(rivalTreasuryAfter).toBeCloseTo(rivalTreasuryBefore, 8);
-    expect(state.events.some((event) => /permanently merged/i.test(event.message))).toBe(true);
+    expect(state.events.some((event) => /accelerated integration/i.test(event.message))).toBe(true);
 
     // A federation cannot absorb another country in the same instant. Growth
     // requires another full cooldown and therefore remains visible/gradual.
     expect(updateGlobalResistanceV2(state, WORLD_CONTENT_V2)).toBeUndefined();
     expect(selectTerritoriesOfV2(state, federation!).length).toBe(firstFederationSize);
+
+    // National stores and identity move exactly once when the last peaceful
+    // program completes; until then the former country remains recoverable.
+    state.tick = Math.max(...joiningTerritories.map((territory) => (
+      territory.integrationProgram!.completesTick
+    )));
+    advanceTerritoryIntegrationProgramsV2(state, WORLD_CONTENT_V2);
+    for (const id of absorbedMembers) expect(state.players[id]).toBeUndefined();
+    expect(state.players[federation!].trainedReserves).toBeCloseTo(
+      (reservesBefore.get(federation!) ?? 0)
+        + absorbedMembers.reduce((sum, id) => sum + (reservesBefore.get(id) ?? 0), 0),
+      6,
+    );
   });
 
   it('lets gradual federations contain an expanding AI major power too', () => {
@@ -663,5 +718,32 @@ describe('V2 dynamic containment coalition', () => {
     expect(selectTerritoriesOfV2(state, federations[0]!)).toHaveLength(2);
     expect(state.aiEscalation.coalitionMembers).toHaveLength(0);
     expect(state.events.some((event) => /contain Russia|Russia's expansion/i.test(event.message))).toBe(true);
+  });
+
+  it('retires an exiled federation member whose only holding is the leader core', () => {
+    const state = createWorldStateV2(715);
+    const luxembourg = nationIdV2('lux');
+    const netherlands = nationIdV2('nld');
+    state.wars = [];
+    state.aiEscalation.coalitionMembers = [luxembourg, netherlands];
+    state.players[netherlands].empireName = 'Low Countries Defense Federation';
+    // Luxembourg survives only on the Netherlands core. Its own former core
+    // is already permanent Dutch territory, so joining is an immediate core
+    // restoration with no integration program to retain a zombie identity.
+    state.territories[territoryIdV2('lux')].owner = netherlands;
+    state.territories[territoryIdV2('lux')].coreOwner = netherlands;
+    state.territories[territoryIdV2('lux')].integration = 1;
+    state.territories[territoryIdV2('nld')].owner = luxembourg;
+    state.territories[territoryIdV2('nld')].coreOwner = netherlands;
+    state.territories[territoryIdV2('nld')].integration = 1;
+    invalidateTerritoryIndexV2(state);
+
+    absorbFederationMemberV2(state, WORLD_CONTENT_V2, netherlands, luxembourg);
+    expect(state.territories[territoryIdV2('nld')]).toMatchObject({
+      owner: netherlands,
+      coreOwner: netherlands,
+      integration: 1,
+    });
+    expect(state.players[luxembourg]).toBeUndefined();
   });
 });

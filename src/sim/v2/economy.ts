@@ -41,6 +41,10 @@ export function createFinancePlansV2(
   powerSnapshot: PowerSnapshotV2 = createPowerSnapshotV2(state, content),
 ): Map<PlayerId, WeeklyFinanceBreakdownV2> {
   return new Map(sortedNationIdsV2(state)
+    // Defeated identities stay referenced while their old cores integrate, but
+    // they own no economy and every commit phase already skips them. Avoid a
+    // full finance projection for these dormant records in long campaigns.
+    .filter((id) => selectTerritoriesOfV2(state, id).length > 0)
     .map((id) => [id, selectWeeklyFinanceBreakdownV2(state, content, id, powerSnapshot)]));
 }
 
@@ -114,7 +118,6 @@ export function processFinanceMilitaryV2(
   content: WorldContentV2,
   financePlans: FinancePlansV2,
 ): IntegrationCompletionV2[] {
-  const integrationCompletions = advanceTerritoryIntegrationProgramsV2(state, content);
   synchronizeArmyCapacityV2(state, content);
   // Snapshot every target before nation finance mutates stocks, armies and
   // conditions. Capacity then takes one slow step after the current week's
@@ -156,6 +159,11 @@ export function processFinanceMilitaryV2(
     .filter((obligation) => obligation.expiresTick > state.tick
       && selectTerritoriesOfV2(state, obligation.payerId).length > 0
       && selectTerritoriesOfV2(state, obligation.payeeId).length > 0);
+  // Complete fusion after this week's precomputed finance has been committed.
+  // Otherwise the old plan would overwrite reserves or national stores that
+  // have just transferred from the retired country.
+  const integrationCompletions = advanceTerritoryIntegrationProgramsV2(state, content);
+  synchronizeArmyCapacityV2(state, content);
   return integrationCompletions;
 }
 

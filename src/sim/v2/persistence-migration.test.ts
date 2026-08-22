@@ -272,7 +272,7 @@ describe('V2 legacy save migration', () => {
     const luxTerritory = territoryIdV2('lux');
     const newDuration = territoryIntegrationDurationWeeksV2(WORLD_CONTENT_V2, luxTerritory);
     const migratedRemainingDuration = Math.ceil(newDuration / 2);
-    const schema18RemainingDuration = Math.round(newDuration / 1.5);
+    const schema18RemainingDuration = Math.round(newDuration / 1.2);
     beginTerritoryIntegrationV2(state, WORLD_CONTENT_V2, luxTerritory, bel);
     invalidateTerritoryIndexV2(state);
     state.tick = 200;
@@ -294,7 +294,7 @@ describe('V2 legacy save migration', () => {
       delete nation.trainedReserves;
       nation.combatExperience = 3;
     }
-    // The current 1.5x calendar is 25% shorter than schema 18 at this share.
+    // The current 1.2x calendar is 40% shorter than schema 18 at this share.
     // Migration shortens that old promise once without moving visible progress.
     legacy.territories[luxTerritory].integrationProgram.completesTick = state.tick
       + schema18RemainingDuration;

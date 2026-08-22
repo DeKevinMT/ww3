@@ -11,6 +11,8 @@ import {
   AI_REGIONAL_ESCALATION_EXTRA_WAR_CAP,
   AI_REGIONAL_ESCALATION_MIN_AGE,
   AI_REGIONAL_ESCALATION_MIN_BATTLES,
+  NATIONAL_IQ_SCORE_MAX,
+  NATIONAL_IQ_SCORE_MIN,
   aiActiveWarCapV2,
   PEACE_REQUEST_MIN_WAR_AGE_TICKS,
   RESEARCH_BRANCHES,
@@ -21,7 +23,6 @@ import type { WorldContentV2 } from './content';
 import {
   moveBudgetTowardTargetV2,
   moveResearchTowardTargetV2,
-  nationalAiEfficiencyV2,
 } from './nationalAi';
 import {
   campaignStrategicVariationV2,
@@ -37,9 +38,6 @@ import {
   selectNationalEconomyV2,
   selectNuclearPowerV2,
   selectPopulationDynamicsV2,
-  selectRapidRecruitmentTermsV2,
-  selectResearchPortfolioV2,
-  selectResearchSurgeTermsV2,
   selectTerritoriesOfV2,
   selectTotalManpowerV2,
   selectWarAccessTypeV2,
@@ -92,17 +90,65 @@ interface RegionalEscalationCandidateV2 {
  */
 export const AI_EXPANSION_ROLLS_PER_DECISION = 1;
 
-/** Pick the strongest AI priority only from programs that can still advance. */
-export function selectAiResearchSurgeTargetV2(
-  allocations: ResearchAllocationsV2,
-  breakthroughs: Readonly<Record<ResearchBranchV2, number>>,
-  availableBranches: readonly ResearchBranchV2[],
-): ResearchBranchV2 | undefined {
-  return [...availableBranches].sort((left, right) => (
-    allocations[right] - allocations[left]
-      || breakthroughs[left] - breakthroughs[right]
-      || left.localeCompare(right)
-  ))[0];
+export interface AiWarDisciplineV2 {
+  forecastWeight: number;
+  minimumWinChance: number;
+  additionalRunwayWeeks: number;
+}
+
+/**
+ * IQ improves judgement rather than appetite: capable planners trust the
+ * combat forecast more, reject marginal campaigns and preserve more cash.
+ * None of these values raises the declaration probability.
+ */
+export function aiWarDisciplineV2(iqScore: number): AiWarDisciplineV2 {
+  const judgement = clamp(
+    (iqScore - NATIONAL_IQ_SCORE_MIN)
+      / Math.max(1, NATIONAL_IQ_SCORE_MAX - NATIONAL_IQ_SCORE_MIN),
+    0,
+    1,
+  );
+  return {
+    forecastWeight: 0.75 + 0.80 * judgement,
+    minimumWinChance: 34 + 12 * judgement,
+    additionalRunwayWeeks: 0.25 + 1.75 * judgement,
+  };
+}
+
+export function aiWarCandidateForecastScoreV2(
+  forecastWinChance: number,
+  lossTrade: number,
+  iqScore: number,
+): number {
+  const discipline = aiWarDisciplineV2(iqScore);
+  return (forecastWinChance - 50) * discipline.forecastWeight
+    + (3 + 3 * ((discipline.forecastWeight - 0.75) / 0.80))
+      * Math.log(Math.max(0.25, lossTrade));
+}
+
+interface AiExpansionChanceInputsV2 {
+  ratio: number;
+  expansionChance: number;
+  regionalEscalation: boolean;
+  rivalInvaderCount: number;
+}
+
+/**
+ * A single, IQ-neutral commitment roll. IQ already improves target choice and
+ * timing above; it never turns intelligence into a higher appetite for war.
+ */
+export function aiExpansionDeclarationChanceV2({
+  ratio,
+  expansionChance,
+  regionalEscalation,
+  rivalInvaderCount,
+}: AiExpansionChanceInputsV2): number {
+  const baseChance = clamp(0.14 + 0.10 * Math.max(0, ratio - 1)
+    + 0.65 * expansionChance
+    + (regionalEscalation ? 0.05 : 0), 0.10, regionalEscalation ? 0.48 : 0.42);
+  return rivalInvaderCount > 0 && !regionalEscalation
+    ? Math.min(0.08, baseChance * 0.15)
+    : baseChance;
 }
 
 /** Ordinary countries fight one war at a time; mature great powers may sustain two. */
@@ -149,9 +195,9 @@ export interface DefensiveAidAssessmentV2 {
 }
 
 /**
- * Shared weak-defender assessment. Selection never improves eligibility or
- * odds; the only skill input is the supporter's same bounded national IQ.
- * A player-led aggression remains on the separate resistance/diplomacy path.
+ * Shared weak-defender assessment. Selection and IQ never improve eligibility
+ * or odds. A player-led aggression remains on the separate
+ * resistance/diplomacy path.
  */
 export function selectDefensiveAidAssessmentV2(
   state: WorldStateV2,
@@ -187,14 +233,10 @@ export function selectDefensiveAidAssessmentV2(
     + Math.max(0, alignmentEdge) * 1.4
     + Math.min(18, (aggressorRatio - AI_DEFENSIVE_AID_AGGRESSOR_RATIO) * 8)
     - (access === 'naval' ? 2 : 0);
-  const iqEfficiency = nationalAiEfficiencyV2(
-    content.nations[supporterId]?.iqScore ?? 100,
-  );
   const interventionChance = clamp(0.16
     + Math.min(0.16, Math.max(0, alignmentEdge) * 0.015)
     + Math.min(0.16, Math.max(0, aggressorRatio - AI_DEFENSIVE_AID_AGGRESSOR_RATIO) * 0.08)
-    + (access === 'land' ? 0.06 : 0)
-    + 0.20 * (iqEfficiency - 1), 0.12, 0.54);
+    + (access === 'land' ? 0.06 : 0), 0.12, 0.54);
   return { linkedWarId: war.id, priority, interventionChance };
 }
 
@@ -514,19 +556,12 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
     if (!sameResearchAllocationsV2(player.research.allocations, allocations)) {
       commands.push({ type: 'set-research-allocations', playerId, allocations });
     }
+    // Recurring budgets, research and the reserve-training pipeline are the
+    // complete AI spending path. Manual one-off purchase commands stay
+    // player-facing, so neither selected-country APEX nor rivals can turn a
+    // cash windfall into a sudden army or research spike.
     const army = selectArmyStrengthV2(state, content, playerId);
     const wars = selectWarsOfV2(state, playerId);
-    // The selected country's APEX uses the same peacetime emergency-rebuild
-    // decision as every rival. War declarations remain the player's choice.
-    if (wars.length === 0) {
-      const terms = selectRapidRecruitmentTermsV2(state, content, playerId);
-      const cashAfter = player.treasury - terms.cost;
-      if (terms.allowed && army.fillRatio < 0.28
-        && cashAfter >= selectNationalEconomyV2(state, content, playerId).weeklyRevenue * 2
-        && nextRandom(state) < 0.025) {
-        commands.push({ type: 'rapid-recruitment', playerId });
-      }
-    }
     if (playerId !== state.humanPlayerId) {
       const incomingOffer = state.offers.filter((offer) => (
         offer.toId === playerId && offer.status === 'pending' && offer.expiresTick > state.tick
@@ -571,34 +606,6 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
           continue;
         }
       }
-      const economy = selectNationalEconomyV2(state, content, playerId);
-      // Rival planners can use the same costly accelerator as the player,
-      // but only from a large peacetime surplus and for a real technology gap.
-      const researchGap = Math.max(0, powerSnapshot.leaderBreakthroughs
-        - Object.values(player.research.breakthroughs).reduce((sum, value) => sum + value, 0));
-      if (wars.length === 0 && researchGap >= 5
-        && warInitiative.has(playerId)
-        && player.researchSurgeAvailableTick <= state.tick
-        && player.treasury >= economy.weeklyRevenue * 10) {
-        // A surge is program-specific: follow the nation's strongest current
-        // research priority, then favour the least-developed branch on ties.
-        const availableBranches = selectResearchPortfolioV2(state, content, playerId)
-          .filter((program) => !program.maxed)
-          .map((program) => program.branch);
-        const targetBranch = selectAiResearchSurgeTargetV2(
-          player.research.allocations,
-          player.research.breakthroughs,
-          availableBranches,
-        );
-        if (targetBranch) {
-          const researchSurge = selectResearchSurgeTermsV2(state, content, playerId, targetBranch);
-          if (researchSurge.allowed
-            && player.treasury - researchSurge.cost >= economy.weeklyRevenue * 8
-            && nextRandom(state) < clamp(0.015 + researchGap * 0.002, 0.015, 0.045)) {
-            commands.push({ type: 'research-surge', playerId, targetBranch });
-          }
-        }
-      }
     }
     if (playerId === state.humanPlayerId) continue;
     // Emergency neighbours review aid independently of the rotating expansion
@@ -608,6 +615,7 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
     const coalitionMember = resistance.memberIds.includes(playerId);
     const federation = isDefensiveFederationV2(state, playerId);
     const nation = content.nations[playerId]!;
+    const warDiscipline = aiWarDisciplineV2(nation.iqScore);
     const expansionAmbition = clamp(nation.ambition, 0, 1);
     const majorPowerDrive = clamp((nation.real.powerIndex - 35) / 65, 0, 1);
     const ownWars = selectWarsOfV2(state, playerId);
@@ -687,25 +695,23 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
       const cost = selectWarMobilizationCostV2(state, content, playerId, targetId);
       const costWeeks = cost / Math.max(0.01, ownEconomy.weeklyRevenue);
       // A rational AI never spends its final payroll reserve on mobilisation.
-      // Coalition emergencies accept a smaller cushion; ordinary expansion must
-      // retain a growing runway for every war the country is already financing.
-      const federationCounteroffensive = federation && targetId === state.humanPlayerId && resistance.level > 0;
-      const requiredRunway = federationCounteroffensive
-        ? 2 + ownWars.length * 2
-        : Math.max(3, 4 + ownWars.length * 4 - 1.5 * majorPowerDrive + (access === 'naval' ? 0.5 : 0));
+      // Every federation uses the same runway and real-power assessment as any
+      // other country; merging grants no selected-opponent superiority.
+      const requiredRunway = Math.max(
+        3,
+        4 + ownWars.length * 4 - 1.5 * majorPowerDrive + (access === 'naval' ? 0.5 : 0),
+      )
+        + (regionalEscalation ? 0.50 : 1) * warDiscipline.additionalRunwayWeeks;
       const remainingRunway = treasuryWeeks - costWeeks;
-      const coalitionFactor = federationCounteroffensive ? 1 + resistance.offensiveBonus : 1;
-      const effectiveRatio = ratio * coalitionFactor;
       return {
         targetId,
         access,
-        ratio: effectiveRatio,
-        priority: 42 * Math.log(Math.max(0.15, effectiveRatio))
+        ratio,
+        priority: 42 * Math.log(Math.max(0.15, ratio))
           + 5 * Math.log10(1 + targetEconomy.controlledOutput)
           + 0.35 * state.players[targetId]!.warFatigue
           - 9 * ownWars.length
           + expansionPriority
-          + (federationCounteroffensive ? 46 * resistance.level : 0)
           + (regionalEscalation?.priority ?? 0)
           - majorPeerWarRisk
           - nuclearDeterrence
@@ -750,8 +756,6 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
         ? candidate.regionalEscalation.defensiveAid
           ? (candidate.access === 'land' ? 0.10 : 0.14)
           : (candidate.access === 'land' ? 0.72 : 0.78)
-        : federation && candidate.targetId === state.humanPlayerId && resistance.level > 0
-        ? (candidate.access === 'land' ? 0.98 : 1.05)
         : (candidate.access === 'land' ? 1.03 : 1.10)
           + 0.30 * candidate.rivalInvaderCount
           + (state.tick < AI_MAJOR_POWER_AVOIDANCE_TICKS
@@ -767,8 +771,11 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
       return {
         ...candidate,
         forecast,
-        priority: candidate.priority + (forecast.winChance - 50) * 1.15
-          + 5 * Math.log(Math.max(0.25, lossTrade)),
+        priority: candidate.priority + aiWarCandidateForecastScoreV2(
+          forecast.winChance,
+          lossTrade,
+          nation.iqScore,
+        ),
       };
     }).filter((candidate) => {
       // Aid supports an existing defender and need not win alone. Expansion
@@ -776,7 +783,8 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
       // viable targets instead of paralysing every cautious country.
       const minimumChance = candidate.regionalEscalation?.defensiveAid ? 0
         : candidate.regionalEscalation ? 20
-          : 30 + ownWars.length * 6 + candidate.rivalInvaderCount * 12 + (candidate.access === 'naval' ? 1 : 0);
+          : warDiscipline.minimumWinChance + ownWars.length * 6
+            + candidate.rivalInvaderCount * 12 + (candidate.access === 'naval' ? 1 : 0);
       return candidate.forecast.winChance >= minimumChance;
     }).sort((left, right) => right.priority - left.priority || left.targetId.localeCompare(right.targetId));
     const candidate = forecastedCandidates[0];
@@ -784,16 +792,14 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
     const defensiveAid = candidate.regionalEscalation?.defensiveAid === true;
     if (!defensiveAid && expansionRollsUsed >= AI_EXPANSION_ROLLS_PER_DECISION) continue;
     if (!defensiveAid) expansionRollsUsed += 1;
-    const federationCounteroffensive = federation && candidate.targetId === state.humanPlayerId;
-    const baseChance = candidate.regionalEscalation?.defensiveAid
-      ? candidate.regionalEscalation.interventionChance
-      : clamp(0.30 + 0.15 * Math.max(0, candidate.ratio - 1)
-      + (federationCounteroffensive ? 0.06 * resistance.level : 0)
-      + candidate.expansionChance
-      + (candidate.regionalEscalation ? 0.10 : 0), 0.24, candidate.regionalEscalation ? 0.76 : 0.68);
-    const chance = candidate.rivalInvaderCount > 0 && !candidate.regionalEscalation
-      ? Math.min(0.14, baseChance * 0.20)
-      : baseChance;
+    const chance = defensiveAid
+      ? candidate.regionalEscalation!.interventionChance
+      : aiExpansionDeclarationChanceV2({
+        ratio: candidate.ratio,
+        expansionChance: candidate.expansionChance,
+        regionalEscalation: Boolean(candidate.regionalEscalation),
+        rivalInvaderCount: candidate.rivalInvaderCount,
+      });
     if (nextRandom(state) >= chance) continue;
     commands.push({
       type: 'declare-war',

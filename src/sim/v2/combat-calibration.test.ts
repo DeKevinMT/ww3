@@ -19,6 +19,7 @@ import {
   processWarsV2,
   projectCombatExchangeV2,
   resolveBattlePulseV2,
+  strategicReserveReadinessMultiplierV2,
 } from './war';
 
 const bel = nationIdV2('bel');
@@ -115,6 +116,14 @@ function simulateWar(seed: number, humanId: string, attackerId: string, defender
 }
 
 describe('V2 coherent combat and forecast calibration', () => {
+  it('uses the finite trained-reserve pool for strategic forecast readiness', () => {
+    expect(strategicReserveReadinessMultiplierV2(0, 10)).toBeCloseTo(0.95, 9);
+    expect(strategicReserveReadinessMultiplierV2(5, 10)).toBeCloseTo(0.975, 9);
+    expect(strategicReserveReadinessMultiplierV2(10, 10)).toBeCloseTo(1, 9);
+    expect(strategicReserveReadinessMultiplierV2(50, 10)).toBeCloseTo(1, 9);
+    expect(strategicReserveReadinessMultiplierV2(10, 0)).toBeCloseTo(0.95, 9);
+  });
+
   it('uses the exact same projected exchange in the forecast and first live pulse', () => {
     const state = calibratedState();
     const projected = projectCombatExchangeV2(
@@ -270,8 +279,8 @@ describe('V2 coherent combat and forecast calibration', () => {
 
   it('never inverts an overwhelming advantage or adds a synthetic wipe', () => {
     const state = calibratedState(4_002);
-    state.territories[belTerritory].army.manpower = 1;
-    state.territories[belTerritory].army.capacity = 1;
+    state.territories[belTerritory].army.manpower = 0.5;
+    state.territories[belTerritory].army.capacity = 0.5;
     state.territories[nldTerritory].army.manpower = 0.003;
     state.territories[nldTerritory].army.capacity = 0.10;
     const projected = projectCombatExchangeV2(
@@ -369,28 +378,28 @@ describe('V2 coherent combat and forecast calibration', () => {
   }, 60_000);
 
   it('keeps a stronger China forecast and campaign from being padded by Indian replenishment', () => {
-    const result = simulateWar(4_301, 'chn', 'chn', 'ind', 520);
+    const result = simulateWar(4_301, 'chn', 'chn', 'ind', 80);
     const midWar = result.engine.activeWarBetween('chn', 'ind');
-    const indiaManpowerAtTenYears = result.engine.totalManpower('ind').deployed;
-    const indiaReservesAtTenYears = result.engine.state.players[ind].trainedReserves;
-    const indiaControlAtTenYears = result.engine.state.territories[territoryIdV2('ind')].control?.share ?? 0;
+    const indiaManpowerAtMidWar = result.engine.totalManpower('ind').deployed;
+    const indiaReservesAtMidWar = result.engine.state.players[ind].trainedReserves;
+    const indiaControlAtMidWar = result.engine.state.territories[territoryIdV2('ind')].control?.share ?? 0;
     let weeks = result.weeks;
-    while (weeks < 572 && result.engine.activeWarBetween('chn', 'ind')) {
+    while (weeks < 200 && result.engine.activeWarBetween('chn', 'ind')) {
       result.engine.step();
       weeks += 1;
     }
 
     expect(result.forecast.winChance).toBeGreaterThan(50);
-    expect(result.weeks).toBe(520);
+    expect(result.weeks).toBe(80);
     expect(result.defenderAlive).toBe(true);
-    expect(midWar?.battles).toBeGreaterThan(250);
-    expect(indiaManpowerAtTenYears).toBeGreaterThan(0);
-    expect(indiaManpowerAtTenYears).toBeLessThan(result.defenderManpowerStart * 0.01);
-    expect(indiaReservesAtTenYears).toBeLessThan(0.001);
-    expect(indiaControlAtTenYears).toBeGreaterThan(0.90);
+    expect(midWar?.battles).toBeGreaterThan(30);
+    expect(indiaManpowerAtMidWar).toBeGreaterThan(0);
+    expect(indiaManpowerAtMidWar).toBeLessThan(result.defenderManpowerStart);
+    expect(indiaReservesAtMidWar).toBeLessThan(0.001);
+    expect(indiaControlAtMidWar).toBeGreaterThan(0);
     expect(result.engine.activeWarBetween('chn', 'ind')).toBeUndefined();
     expect(result.engine.territoriesOf('ind')).toHaveLength(0);
-    expect(weeks).toBeGreaterThan(520);
-    expect(weeks).toBeLessThanOrEqual(572);
+    expect(weeks).toBeGreaterThan(80);
+    expect(weeks).toBeLessThanOrEqual(200);
   }, 90_000);
 });

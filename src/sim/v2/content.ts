@@ -10,6 +10,9 @@ import rawFoodSelfSufficiencyData from '../../assets/fao_food_self_sufficiency.j
 import rawTaxRevenueData from '../../assets/imf_tax_revenue.json?raw';
 import {
   ARMY_CAPACITY_STRUCTURAL_POPULATION_SHARE,
+  NATIONAL_COMBAT_GDP_PER_CAPITA_CEILING,
+  NATIONAL_COMBAT_GDP_PER_CAPITA_FLOOR,
+  NATIONAL_COMBAT_SYSTEM_QUALITY_SPAN,
   NATIONAL_IQ_GDP_PER_CAPITA_CEILING,
   NATIONAL_IQ_GDP_PER_CAPITA_FLOOR,
   NATIONAL_IQ_INSTITUTIONAL_CAPACITY_CEILING,
@@ -485,6 +488,29 @@ export function openingCombatQualityMultiplierV2(
 ): number {
   return round(1 + NATIONAL_QUALITY_COMBAT_SPAN
     * (nationalQualityIndexV2(gdpPerCapita, iqScore) - 0.5), 9);
+}
+
+/**
+ * Live national equipment, institutions and doctrine. Unlike the small local
+ * opening-quality imprint carried by each army, this owner-wide layer follows
+ * current GDP per capita and leaves room for rich countries to keep improving.
+ */
+export function nationalCombatSystemQualityMultiplierV2(
+  gdpPerCapita: number,
+  iqScore: number,
+): number {
+  const income = normalizedLogRangeV2(
+    gdpPerCapita,
+    NATIONAL_COMBAT_GDP_PER_CAPITA_FLOOR,
+    NATIONAL_COMBAT_GDP_PER_CAPITA_CEILING,
+  );
+  const iq = clamp(
+    (iqScore - NATIONAL_IQ_SCORE_MIN) / (NATIONAL_IQ_SCORE_MAX - NATIONAL_IQ_SCORE_MIN),
+    0,
+    1,
+  );
+  const quality = NATIONAL_QUALITY_GDP_WEIGHT * income + NATIONAL_QUALITY_IQ_WEIGHT * iq;
+  return round(1 + NATIONAL_COMBAT_SYSTEM_QUALITY_SPAN * (quality - 0.5), 9);
 }
 
 /**

@@ -1,12 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import {
-  NATIONAL_AI_WAR_BASE_RUNWAY_WEEKS,
-  NATIONAL_AI_WAR_FRONT_RUNWAY_WEEKS,
-} from './balance';
+import { clamp } from './balance';
 import { createWorldStateV2 } from './bootstrap';
 import { nationalArmyCapacityTargetV2, synchronizeArmyCapacityV2 } from './capacity';
 import { WORLD_CONTENT_V2 } from './content';
 import { createFinancePlansV2, processFinanceMilitaryV2 } from './economy';
+import { nationalAiTreasuryPolicyV2 } from './nationalAi';
 import { drawResearchEffectV2, processResearchV2 } from './research';
 import { selectResearchBranchCostV2, selectWeeklyFinanceBreakdownV2 } from './selectors';
 import { nationIdV2, territoryIdV2 } from './types';
@@ -67,13 +65,20 @@ describe('V2 finance and research', () => {
   it('protects the peace floor and manages wartime cash as an adaptive runway', () => {
     const peace = createWorldStateV2(11);
     const bel = nationIdV2('bel');
-    peace.players[bel].treasury = 4.99;
+    peace.players[bel].treasury = 0;
     const peacePlan = selectWeeklyFinanceBreakdownV2(peace, WORLD_CONTENT_V2, bel);
-    expect(peacePlan.closingTreasury).toBeGreaterThanOrEqual(Math.min(5, 4.99 + peacePlan.revenue) - 1e-6);
+    const peacePolicy = nationalAiTreasuryPolicyV2(
+      WORLD_CONTENT_V2.nations[bel]!.iqScore,
+      0,
+      clamp(Math.log10(peacePlan.revenue + 1) / 2, 0, 1),
+    );
+    expect(peacePlan.reserveTarget).toBeCloseTo(peacePlan.revenue * peacePolicy.reserveWeeks, 5);
+    expect(peacePlan.net).toBeGreaterThan(0);
+    expect(peacePlan.closingTreasury).toBeGreaterThan(peace.players[bel].treasury);
 
     const war = createWorldStateV2(11);
     const nld = nationIdV2('nld');
-    war.players[bel].treasury = 4;
+    war.players[bel].treasury = 0;
     war.wars.push({
       id: 'war-test', attackerId: bel, defenderId: nld, startedTick: 0, lastBattleTick: 0,
       warScore: 0, battles: 0, attackerLosses: 0, defenderLosses: 0,
@@ -81,32 +86,64 @@ describe('V2 finance and research', () => {
       attackerOperations: [], defenderOperations: [],
     });
     const warPlan = selectWeeklyFinanceBreakdownV2(war, WORLD_CONTENT_V2, bel);
-    expect(warPlan.reserveTarget).toBeCloseTo(warPlan.revenue
-      * (NATIONAL_AI_WAR_BASE_RUNWAY_WEEKS + NATIONAL_AI_WAR_FRONT_RUNWAY_WEEKS), 5);
-    expect(warPlan.closingTreasury).toBeLessThan(5);
-    expect(warPlan.closingTreasury).toBeGreaterThanOrEqual(0);
-    const warDiscretionary = warPlan.revenue - warPlan.baseOperatingCost - warPlan.foodProduction;
-    expect(warPlan.expenses).toBeCloseTo(warPlan.baseOperatingCost + warPlan.foodProduction
-      + warDiscretionary * 0.92 + warPlan.warOperations, 5);
+    const warPolicy = nationalAiTreasuryPolicyV2(WORLD_CONTENT_V2.nations[bel]!.iqScore, 1);
+    expect(warPlan.reserveTarget).toBeCloseTo(warPlan.revenue * warPolicy.reserveWeeks, 5);
+    const warDiscretionary = warPlan.revenue + warPlan.foodExportIncome
+      - warPlan.baseOperatingCost - warPlan.foodProduction + warPlan.foodDevelopmentTransfer;
+    expect(warPlan.military + warPlan.research + warPlan.development
+      + warPlan.foodDevelopmentTransfer).toBeCloseTo(
+      warDiscretionary * (1 - warPolicy.freeCashflowShare),
+      5,
+    );
     expect(warPlan.net).toBeCloseTo(
-      warDiscretionary * 0.08 - warPlan.warOperations, 5,
+      warDiscretionary * warPolicy.freeCashflowShare - warPlan.warOperations, 5,
     );
 
     war.players[bel].treasury = 100;
     const fundedOffensive = selectWeeklyFinanceBreakdownV2(war, WORLD_CONTENT_V2, bel);
-    const fundedDiscretionary = fundedOffensive.revenue
-      - fundedOffensive.baseOperatingCost - fundedOffensive.foodProduction;
-    expect(fundedOffensive.expenses).toBeCloseTo(fundedOffensive.baseOperatingCost
-      + fundedOffensive.foodProduction + fundedDiscretionary * 1.08
-      + fundedOffensive.warOperations, 5);
+    const fundedDiscretionary = fundedOffensive.revenue + fundedOffensive.foodExportIncome
+      - fundedOffensive.baseOperatingCost - fundedOffensive.foodProduction
+      + fundedOffensive.foodDevelopmentTransfer;
+    expect(fundedOffensive.military + fundedOffensive.research + fundedOffensive.development
+      + fundedOffensive.foodDevelopmentTransfer).toBeCloseTo(fundedDiscretionary * 1.02, 5);
     expect(fundedOffensive.net).toBeCloseTo(
-      -fundedDiscretionary * 0.08
+      -fundedDiscretionary * 0.02
         - fundedOffensive.warOperations,
       5,
     );
   });
 
-  it('normalizes great-power free cashflow while preserving their economic scale', () => {
+  it('changes wartime spending continuously around the cash-runway boundaries', () => {
+    const state = createWorldStateV2(1_102);
+    const bel = nationIdV2('bel');
+    const nld = nationIdV2('nld');
+    state.wars.push({
+      id: 'war-smooth-cash', attackerId: bel, defenderId: nld, startedTick: 0,
+      lastBattleTick: 0, warScore: 0, battles: 0, attackerLosses: 0,
+      defenderLosses: 0, lastPeaceOfferTick: -1,
+      attackerOperations: [], defenderOperations: [],
+    });
+    const baseline = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, bel);
+    const policy = nationalAiTreasuryPolicyV2(WORLD_CONTENT_V2.nations[bel]!.iqScore, 1);
+    const rateAt = (treasuryWeeks: number): number => {
+      state.players[bel].treasury = baseline.revenue * treasuryWeeks;
+      const plan = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, bel);
+      const discretionary = plan.revenue + plan.foodExportIncome
+        - plan.baseOperatingCost - plan.foodProduction + plan.foodDevelopmentTransfer;
+      return (plan.military + plan.research + plan.development
+        + plan.foodDevelopmentTransfer) / discretionary;
+    };
+
+    const epsilon = 0.0001;
+    expect(Math.abs(rateAt(policy.reserveWeeks - epsilon)
+      - rateAt(policy.reserveWeeks + epsilon))).toBeLessThan(0.0001);
+    expect(Math.abs(rateAt(policy.reserveWeeks + 6 - epsilon)
+      - rateAt(policy.reserveWeeks + 6 + epsilon))).toBeLessThan(0.0001);
+    expect(rateAt(policy.reserveWeeks + 3)).toBeGreaterThan(rateAt(policy.reserveWeeks));
+    expect(rateAt(policy.reserveWeeks + 6)).toBeCloseTo(1.02, 5);
+  });
+
+  it('retains free cash at every scale while preserving great-power economic weight', () => {
     const state = createWorldStateV2(1101);
     const usa = nationIdV2('usa');
     const bel = nationIdV2('bel');
@@ -115,9 +152,11 @@ describe('V2 finance and research', () => {
     const usaSavingsRate = usaPlan.net / usaPlan.revenue;
     const belgiumSavingsRate = belgiumPlan.net / belgiumPlan.revenue;
     expect(usaPlan.revenue).toBeGreaterThan(belgiumPlan.revenue * 20);
-    expect(usaSavingsRate).toBeGreaterThanOrEqual(0);
-    expect(usaSavingsRate).toBeLessThanOrEqual(0.03);
-    expect(Math.abs(usaSavingsRate - belgiumSavingsRate)).toBeLessThan(0.01);
+    expect(usaPlan.net).toBeGreaterThan(belgiumPlan.net * 10);
+    expect(usaSavingsRate).toBeGreaterThan(0);
+    expect(belgiumSavingsRate).toBeGreaterThan(0);
+    expect(usaSavingsRate).toBeLessThan(0.20);
+    expect(belgiumSavingsRate).toBeLessThan(0.20);
   });
 
   it('allows sovereign debt, adds a 10% premium to new borrowing and automatically repays it', () => {
@@ -162,8 +201,8 @@ describe('V2 finance and research', () => {
       });
     }
     const plan = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, bel);
-    expect(plan.reserveTarget).toBeCloseTo(plan.revenue
-      * (NATIONAL_AI_WAR_BASE_RUNWAY_WEEKS + 2 * NATIONAL_AI_WAR_FRONT_RUNWAY_WEEKS), 5);
+    const treasuryPolicy = nationalAiTreasuryPolicyV2(WORLD_CONTENT_V2.nations[bel]!.iqScore, 2);
+    expect(plan.reserveTarget).toBeCloseTo(plan.revenue * treasuryPolicy.reserveWeeks, 5);
     expect(plan.net).toBeLessThan(0);
     expect(plan.closingTreasury).toBeLessThan(state.players[bel].treasury);
     expect(plan.mandatoryFundingRatio).toBeCloseTo(1, 6);

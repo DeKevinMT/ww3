@@ -15,7 +15,14 @@ import {
   NATIONAL_AI_ALLOCATION_STEP_MAX,
   NATIONAL_AI_ALLOCATION_STEP_MIN,
   NATIONAL_AI_EFFICIENCY_PER_IQ_POINT,
+  NATIONAL_AI_PEACE_FREE_CASHFLOW_SHARE_MAX,
+  NATIONAL_AI_PEACE_FREE_CASHFLOW_SHARE_MIN,
+  NATIONAL_AI_PEACE_RESERVE_WEEKS,
+  NATIONAL_AI_RESERVE_IQ_MULTIPLIER_MAX,
+  NATIONAL_AI_RESERVE_IQ_MULTIPLIER_MIN,
   NATIONAL_AI_WAR_BASE_RUNWAY_WEEKS,
+  NATIONAL_AI_WAR_FREE_CASHFLOW_SHARE_MAX,
+  NATIONAL_AI_WAR_FREE_CASHFLOW_SHARE_MIN,
   NATIONAL_AI_WAR_FRONT_RUNWAY_WEEKS,
   NATIONAL_IQ_SCORE_MAX,
   NATIONAL_IQ_SCORE_MIN,
@@ -59,6 +66,13 @@ export interface FoodDevelopmentRedirectV2 {
   activeBudget: BudgetPolicyV2;
   development: number;
   transfer: number;
+}
+
+export interface NationalAiTreasuryPolicyV2 {
+  /** Target liquid treasury measured in ordinary weekly tax revenue. */
+  reserveWeeks: number;
+  /** Share of otherwise discretionary weekly cash retained in the treasury. */
+  freeCashflowShare: number;
 }
 
 function normalizePolicy(source: BudgetPolicyV2): BudgetPolicyV2 {
@@ -114,6 +128,42 @@ function normalizedIqV2(iqScore: number): number {
 export function nationalAiEfficiencyV2(iqScore: number): number {
   const bounded = Math.max(NATIONAL_IQ_SCORE_MIN, Math.min(NATIONAL_IQ_SCORE_MAX, iqScore));
   return 1 + (bounded - NATIONAL_IQ_SCORE_NEUTRAL) * NATIONAL_AI_EFFICIENCY_PER_IQ_POINT;
+}
+
+/**
+ * One shared, selection-independent treasury policy. Higher-IQ administrations
+ * preserve a modestly deeper emergency buffer and retain free cash a little
+ * more consistently; they never receive additional money or cheaper rules.
+ */
+export function nationalAiTreasuryPolicyV2(
+  iqScore: number,
+  activeWars: number,
+  economyScale = 0,
+): NationalAiTreasuryPolicyV2 {
+  const decisionQuality = normalizedIqV2(iqScore);
+  const reserveIqMultiplier = NATIONAL_AI_RESERVE_IQ_MULTIPLIER_MIN
+    + (NATIONAL_AI_RESERVE_IQ_MULTIPLIER_MAX
+      - NATIONAL_AI_RESERVE_IQ_MULTIPLIER_MIN) * decisionQuality;
+  const atWar = activeWars > 0;
+  const baseReserveWeeks = atWar
+    ? NATIONAL_AI_WAR_BASE_RUNWAY_WEEKS
+      + Math.max(0, activeWars) * NATIONAL_AI_WAR_FRONT_RUNWAY_WEEKS
+    : NATIONAL_AI_PEACE_RESERVE_WEEKS;
+  // Large economies still target slightly fewer weeks because each week is an
+  // enormous absolute war chest. The damping is deliberately much smaller
+  // than before so free cash remains a meaningful emergency reserve.
+  const sizeMultiplier = atWar ? 1 : 1 - 0.15 * Math.max(0, Math.min(1, economyScale));
+  const minimumFreeCashflow = atWar
+    ? NATIONAL_AI_WAR_FREE_CASHFLOW_SHARE_MIN
+    : NATIONAL_AI_PEACE_FREE_CASHFLOW_SHARE_MIN;
+  const maximumFreeCashflow = atWar
+    ? NATIONAL_AI_WAR_FREE_CASHFLOW_SHARE_MAX
+    : NATIONAL_AI_PEACE_FREE_CASHFLOW_SHARE_MAX;
+  return {
+    reserveWeeks: baseReserveWeeks * reserveIqMultiplier * sizeMultiplier,
+    freeCashflowShare: minimumFreeCashflow
+      + (maximumFreeCashflow - minimumFreeCashflow) * decisionQuality,
+  };
 }
 
 /**
@@ -240,8 +290,10 @@ export function optimizeNationalAiPlanV2(inputs: NationalAiInputsV2): NationalAi
 
   if (inputs.activeWars > 0) {
     mode = 'war';
-    const targetRunway = NATIONAL_AI_WAR_BASE_RUNWAY_WEEKS
-      + inputs.activeWars * NATIONAL_AI_WAR_FRONT_RUNWAY_WEEKS;
+    const targetRunway = nationalAiTreasuryPolicyV2(
+      inputs.iqScore,
+      inputs.activeWars,
+    ).reserveWeeks;
     explanation = inputs.treasuryWeeks < targetRunway
       ? 'Emergency war economy: protecting payroll and rebuilding cash runway.'
       : inputs.fillRatio < 0.58

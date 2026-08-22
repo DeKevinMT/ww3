@@ -421,7 +421,7 @@ export interface WeeklyFinanceBreakdownV2 {
   /** Extra soldiers trained through the AI's paid mobilization fast-track. */
   acceleratedRecruitment: number;
   recruitmentAccelerationCost: number;
-  /** Maximum trained reserve pool at the live 2x active-capacity rule. */
+  /** Maximum trained reserve pool at the live 1x active-capacity rule. */
   trainedReserveCapacity: number;
   trainedReservesBefore: number;
   trainedReservesAfter: number;
@@ -814,4 +814,7 @@ export interface CommandResultV2 {
 export interface RankingEntryV2 {
   player: NationViewV2;
   score: number;
+  /** Cached components from the same ranking snapshot, for cheap UI detail. */
+  combatPower: number;
+  economicOutput: number;
 }

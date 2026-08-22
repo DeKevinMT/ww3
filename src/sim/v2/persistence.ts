@@ -9,6 +9,8 @@ import { createWorldStateV2 } from './bootstrap';
 import { synchronizeArmyCapacityV2 } from './capacity';
 import type { WorldContentV2 } from './content';
 import {
+  absorbedNationSuccessorV2,
+  retireDormantAbsorbedNationsV2,
   territoryIntegrationAnnualCostV2,
   territoryIntegrationDurationWeeksV2,
 } from './integration';
@@ -1009,7 +1011,7 @@ function currentStateFromSave(
 /**
  * Schema 18 used twice the V2.54 country-size calendar. An authenticated old
  * save keeps its exact visible integration share, but receives the current
- * 1.5x-calendar remainder once. Subsequent saves keep that endpoint, so it can
+ * 1.2x-calendar remainder once. Subsequent saves keep that endpoint, so it can
  * never be shortened again by another round-trip. Schema-19 programs bypass
  * this migration and retain their already promised endpoint exactly.
  */
@@ -1132,6 +1134,19 @@ export function loadSaveV2(
                   : migrateLegacySaveV13(parsed as unknown as LegacySaveGameV13),
                 content,
               )), content), content);
+  // Normalize authenticated legacy/current saves at the load boundary. This
+  // never mutates the caller's live state or changes the authenticated input.
+  retireDormantAbsorbedNationsV2(state, content);
+  // winnerId/gameOver are transient and intentionally omitted from saves.
+  // A missing selected nation proves its final integration completed.
+  if (!state.players[state.humanPlayerId]) {
+    const successorId = absorbedNationSuccessorV2(state, content, state.humanPlayerId);
+    if (successorId && state.players[successorId]) {
+      state.winnerId = successorId;
+      state.gameOver = true;
+      state.speed = 0;
+    }
+  }
   assertInvariantsV2(state, content);
   const owners = [...new Set(Object.values(state.territories).map((territory) => territory.owner))];
   if (owners.length === 1 && Object.keys(state.territories).length === content.territoryIds.length) {

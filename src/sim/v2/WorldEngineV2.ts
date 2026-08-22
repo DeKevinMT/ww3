@@ -14,6 +14,7 @@ import { synchronizeArmyCapacityV2 } from './capacity';
 import { WORLD_CONTENT_V2, type WorldContentV2 } from './content';
 import { createFinancePlansV2, processDevelopmentPhaseV2, processFinanceMilitaryV2 } from './economy';
 import { pruneWorldHistoryV2 } from './events';
+import { retireAbsorbedNationV2 } from './integration';
 import { assertInvariantsV2 } from './invariants';
 import { createSaveV2, loadSaveV2, serializeSaveV2, type SaveGameV2 } from './persistence';
 import { processPropagandaProgramsV2, selectPropagandaTermsV2 } from './propaganda';
@@ -568,8 +569,8 @@ export class WorldEngineV2 {
     return selectStrategicScoreV2(this.state, this.content, nationIdV2(playerId));
   }
 
-  currentPower(playerId: string): number {
-    return selectCurrentPowerV2(this.state, this.content, nationIdV2(playerId));
+  currentPower(playerId: string, militaryBaseSnapshot?: MilitaryBaseSnapshotV2): number {
+    return selectCurrentPowerV2(this.state, this.content, nationIdV2(playerId), militaryBaseSnapshot);
   }
 
   territoryPower(territoryId: string): number {
@@ -868,6 +869,15 @@ export class WorldEngineV2 {
   }
 
   private deriveVictory(): void {
+    // Full integration may retire the selected country's backend record before
+    // global conquest. Preserve that terminal defeat while other AI owners
+    // continue to exist on the map.
+    if (!this.state.players[this.state.humanPlayerId]
+      && this.state.winnerId && this.state.players[this.state.winnerId]) {
+      this.state.gameOver = true;
+      this.state.speed = 0;
+      return;
+    }
     let soleOwner: PlayerId | undefined;
     let territoryCount = 0;
     for (const territoryId in this.state.territories) {
@@ -905,6 +915,12 @@ export class WorldEngineV2 {
         defeatedId: completion.formerCoreOwnerId,
         critical: completion.ownerId === this.state.humanPlayerId,
       });
+      if (this.state.gameOver) {
+        pruneWorldHistoryV2(this.state);
+        assertInvariantsV2(this.state, this.content);
+        this.emit({ reason: 'tick', critical: true });
+        return;
+      }
       const researchPowers = createPowerSnapshotV2(this.state, this.content);
       processResearchV2(this.state, this.content, finance, researchPowers);
       processDevelopmentPhaseV2(this.state, this.content, finance);
@@ -932,7 +948,33 @@ export class WorldEngineV2 {
           if (victorId !== defeatedId) conquerors.set(victorId, (conquerors.get(victorId) ?? 0) + 1);
         }
         const victorId = [...conquerors].sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))[0]?.[0];
-        if (victorId) this.emit({ reason: 'nation-defeated', victorId, defeatedId, critical: true });
+        if (victorId) {
+          // Notify while the defeated identity is still available for labels,
+          // then retire an exile whose last foreign holding was restored
+          // directly to its sovereign core. Ordinary conquests remain alive
+          // because their unfinished integration still references them.
+          this.emit({ reason: 'nation-defeated', victorId, defeatedId, critical: true });
+          retireAbsorbedNationV2(this.state, this.content, defeatedId, victorId);
+        }
+      }
+      // An exile can enter the week without land while an older war still
+      // references it. Once that final war concludes, retirement resolves its
+      // deterministic home-core successor (falling back to the opponent).
+      for (const { war } of conclusions) {
+        for (const [candidateId, successorId] of [
+          [war.attackerId, war.defenderId],
+          [war.defenderId, war.attackerId],
+        ] as const) {
+          if (!livingOwners.has(candidateId)) {
+            retireAbsorbedNationV2(this.state, this.content, candidateId, successorId);
+          }
+        }
+      }
+      if (this.state.gameOver) {
+        pruneWorldHistoryV2(this.state);
+        assertInvariantsV2(this.state, this.content);
+        this.emit({ reason: 'tick', critical: true });
+        return;
       }
       // Battles may have changed surviving manpower, local army quality and
       // ownership. Resistance decisions need fresh additive post-war power.

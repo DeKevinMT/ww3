@@ -2253,6 +2253,108 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
 .world-ui-v2 .war-tracker__operation > div:last-child b,
 .world-ui-v2 .war-tracker__cost b { font-size: 10px; }
 
+/* One honest, compact readout of existing war pressure. It sits above the
+   detailed war cards so the map centre remains clear. */
+.world-ui-v2 .war-strain-meter {
+  --strain-color: #68dfa9;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, var(--strain-color) 32%, transparent);
+  border-radius: 9px;
+  background: linear-gradient(105deg, color-mix(in srgb, var(--strain-color) 8%, rgba(4, 16, 27, .93)), rgba(4, 16, 27, .92));
+}
+.world-ui-v2 .war-tracker > .war-strain-meter { margin-bottom: 9px; }
+.world-ui-v2 .war-strain-meter--stretched,
+.world-ui-v2 .war-strain-meter--recovering { --strain-color: #e8bc67; }
+.world-ui-v2 .war-strain-meter--overextended { --strain-color: #f18b63; }
+.world-ui-v2 .war-strain-meter--critical { --strain-color: #ff625c; }
+.world-ui-v2 .war-strain-meter--standalone {
+  position: absolute;
+  top: 80px;
+  left: 50%;
+  z-index: 24;
+  width: min(470px, calc(100vw - 440px));
+  min-width: 410px;
+  transform: translateX(-50%);
+  pointer-events: auto;
+  box-shadow: 0 14px 38px rgba(0,0,0,.46), 0 0 22px color-mix(in srgb, var(--strain-color) 12%, transparent);
+}
+.world-ui-v2 .war-strain-meter__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.world-ui-v2 .war-strain-meter__head > span {
+  color: #aec5cb;
+  font-size: 9px;
+  font-weight: 850;
+  letter-spacing: .7px;
+}
+.world-ui-v2 .war-strain-meter__head > strong {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--strain-color);
+  font-size: 10px;
+  letter-spacing: .4px;
+}
+.world-ui-v2 .war-strain-meter__head > strong b {
+  padding: 2px 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--strain-color) 13%, transparent);
+  font-size: 9px;
+}
+.world-ui-v2 .war-strain-meter__track {
+  height: 7px;
+  margin: 7px 0;
+  display: block;
+  overflow: hidden;
+  border-radius: 99px;
+  background: rgba(255,255,255,.065);
+}
+.world-ui-v2 .war-strain-meter__track b {
+  height: 100%;
+  display: block;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #68dfa9 0%, #e8bc67 42%, #f18b63 67%, #ff625c 100%);
+  transition: width .35s ease;
+}
+.world-ui-v2 .war-strain-meter__summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 12px;
+  align-items: center;
+}
+.world-ui-v2 .war-strain-meter__summary p {
+  margin: 0;
+  color: #dbe8eb;
+  font-size: 9.5px;
+  line-height: 1.35;
+}
+.world-ui-v2 .war-strain-meter__summary small {
+  color: #9fb5bc;
+  font-size: 8.5px;
+  text-align: right;
+}
+.world-ui-v2 .war-strain-meter__effects {
+  margin-top: 7px;
+  padding-top: 7px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 5px;
+  border-top: 1px solid rgba(255,255,255,.06);
+}
+.world-ui-v2 .war-strain-meter__effects span {
+  min-width: 0;
+  display: flex;
+  justify-content: space-between;
+  gap: 4px;
+  color: #91aab2;
+  font-size: 8px;
+  white-space: nowrap;
+}
+.world-ui-v2 .war-strain-meter__effects b { color: var(--strain-color); font-size: 8.5px; }
+
 .world-ui-v2 #tooltip,
 #tooltip { width: 244px; padding: 13px 14px; border-color: rgba(174,222,233,.32); background: rgba(3, 15, 25, .985); }
 #tooltip strong { color: #f6fbfc; font-size: 14px; }
@@ -2344,6 +2446,9 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
   .world-ui-v2 .world-panel.command-drawer,
   .world-ui-v2 .war-tracker { top: 126px; }
   .world-ui-v2 .war-tracker { right: 8px; left: 8px; width: auto; min-width: 0; }
+  .world-ui-v2 .war-strain-meter--standalone { top: 126px; right: 8px; left: 8px; width: auto; min-width: 0; transform: none; }
+  .world-ui-v2 .war-strain-meter__summary { grid-template-columns: 1fr; }
+  .world-ui-v2 .war-strain-meter__summary small { text-align: left; }
   .country-select__head p { font-size: 13px; }
   .world-ui-v2 .command-dock { right: 8px; left: 8px; width: auto; }
 }
@@ -2360,6 +2465,8 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
   .world-ui-v2 .command-dock b { font-size: 9px; }
   .world-ui-v2 .command-dock small { font-size: 8px; }
   .progress-summary,.progress-milestones { grid-template-columns: 1fr; }
+  .world-ui-v2 .war-strain-meter__summary p { display: none; }
+  .world-ui-v2 .war-strain-meter__effects { grid-template-columns: repeat(2,minmax(0,1fr)); }
 }
 
 /* Economy truth sheet ---------------------------------------------------- */
