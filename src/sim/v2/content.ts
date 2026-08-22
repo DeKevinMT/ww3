@@ -77,9 +77,9 @@ export interface NationContentV2 {
   /** Bounded gameplay proxy, not a scientific real-world psychometric claim. */
   iqScore: number;
   militaryQuality: number;
-  /** Data-calibrated baseline ATK before research and Combat Experience. */
+  /** Data-calibrated baseline ATK before research. */
   militaryAttackRating?: number;
-  /** Data-calibrated baseline DEF before research and Combat Experience. */
+  /** Data-calibrated baseline DEF before research. */
   militaryDefenseRating?: number;
   /** 2026 strategic-deterrence tier; this is a power modifier, never a strike action. */
   nuclearPowerLevel: number;

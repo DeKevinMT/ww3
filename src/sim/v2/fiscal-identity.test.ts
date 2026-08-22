@@ -5,9 +5,11 @@ import {
   FULL_STRENGTH_WEALTH_PER_PERSON_V2,
   MAX_NORMALIZED_TAX_RATE_V2,
   MIN_NORMALIZED_TAX_RATE_V2,
+  calculateBlendedFiscalCapacityV2,
   calculateFiscalCapacityV2,
 } from './fiscal';
 import {
+  selectEconomicOutputLedgerV2,
   selectNationalEconomyV2,
   selectWeeklyFinanceBreakdownV2,
 } from './selectors';
@@ -67,16 +69,23 @@ describe('V2 fiscal identity and population-linked income', () => {
     }
   });
 
-  it('derives weekly income from live population, live wealth and the visible country rate', () => {
+  it('preserves opening calibration while exposing GDP and taxable output separately', () => {
     const state = createWorldStateV2(4_201, WORLD_CONTENT_V2);
     state.wars = [];
     const economy = selectNationalEconomyV2(state, WORLD_CONTENT_V2, bel);
     expect(economy.weeklyRevenue).toBeCloseTo(
-      economy.population * economy.wealthPerPerson * economy.taxRate / 52,
+      economy.taxableOutput * economy.taxRate / 52,
       5,
     );
     expect(economy.effectivePopulation).toBe(economy.population);
-    expect(economy.taxRate).toBeCloseTo(expectedTaxRate(economy.wealthPerPerson), 8);
+    expect(economy.baselineProductivePopulation).toBe(economy.population);
+    expect(economy.productivePopulationFactor).toBe(1);
+    expect(economy.taxableOutput).toBeCloseTo(economy.controlledOutput, 8);
+    expect(economy.fiscalReferenceWealthPerPerson).toBeCloseTo(economy.wealthPerPerson, 8);
+    expect(economy.taxRate).toBeCloseTo(
+      expectedTaxRate(economy.fiscalReferenceWealthPerPerson),
+      8,
+    );
     expect(economy.taxRate).toBeGreaterThanOrEqual(MIN_NORMALIZED_TAX_RATE_V2);
     expect(economy.taxRate).toBeLessThanOrEqual(MAX_NORMALIZED_TAX_RATE_V2);
 
@@ -88,15 +97,54 @@ describe('V2 fiscal identity and population-linked income', () => {
     expect(highTax.weeklyRevenue).toBeCloseTo(lowTax.weeklyRevenue, 8);
   });
 
-  it('does not create free GDP when population grows by itself', () => {
-    const state = createWorldStateV2(4_202, WORLD_CONTENT_V2);
-    state.wars = [];
-    const before = selectNationalEconomyV2(state, WORLD_CONTENT_V2, bel);
-    state.territories[belTerritory]!.population *= 1.10;
-    const after = selectNationalEconomyV2(state, WORLD_CONTENT_V2, bel);
-    expect(after.output).toBeCloseTo(before.output, 6);
-    expect(after.wealthPerPerson).toBeCloseTo(before.wealthPerPerson / 1.10, 8);
-    expect(after.weeklyRevenue).toBeLessThan(before.weeklyRevenue);
+  it('moves tax monotonically with live population without changing GDP or eliminating recovery income', () => {
+    const baselineState = createWorldStateV2(4_202, WORLD_CONTENT_V2);
+    baselineState.wars = [];
+    const grownState = structuredClone(baselineState);
+    const reducedState = structuredClone(baselineState);
+    const collapsedState = structuredClone(baselineState);
+    grownState.territories[belTerritory]!.population *= 1.10;
+    reducedState.territories[belTerritory]!.population *= 0.80;
+    collapsedState.territories[belTerritory]!.population *= 0.01;
+
+    const baseline = selectNationalEconomyV2(baselineState, WORLD_CONTENT_V2, bel);
+    const grown = selectNationalEconomyV2(grownState, WORLD_CONTENT_V2, bel);
+    const reduced = selectNationalEconomyV2(reducedState, WORLD_CONTENT_V2, bel);
+    const collapsed = selectNationalEconomyV2(collapsedState, WORLD_CONTENT_V2, bel);
+
+    for (const economy of [grown, reduced, collapsed]) {
+      expect(economy.controlledOutput).toBeCloseTo(baseline.controlledOutput, 8);
+      expect(economy.output).toBeCloseTo(baseline.output, 8);
+      expect(economy.taxRate).toBeCloseTo(baseline.taxRate, 8);
+    }
+    expect(grown.wealthPerPerson).toBeCloseTo(baseline.wealthPerPerson / 1.10, 8);
+    expect(grown.productivePopulationFactor).toBeCloseTo(1.10, 8);
+    expect(reduced.productivePopulationFactor).toBeCloseTo(0.80, 8);
+    expect(collapsed.productivePopulationFactor).toBeCloseTo(0.01, 8);
+    expect(grown.taxableOutput).toBeCloseTo(baseline.controlledOutput * 1.05, 6);
+    expect(reduced.taxableOutput).toBeCloseTo(baseline.controlledOutput * 0.90, 6);
+    expect(collapsed.taxableOutput).toBeCloseTo(baseline.controlledOutput * 0.505, 6);
+    expect(grown.weeklyRevenue).toBeGreaterThan(baseline.weeklyRevenue);
+    expect(reduced.weeklyRevenue).toBeLessThan(baseline.weeklyRevenue);
+    expect(collapsed.weeklyRevenue).toBeLessThan(reduced.weeklyRevenue);
+    expect(collapsed.weeklyRevenue).toBeGreaterThan(0);
+    expect(collapsed.weeklyRevenue).toBeCloseTo(baseline.weeklyRevenue * 0.505, 5);
+  });
+
+  it('still raises tax when real GDP grows at fixed population', () => {
+    const baselineState = createWorldStateV2(4_207, WORLD_CONTENT_V2);
+    const richerState = structuredClone(baselineState);
+    richerState.territories[belTerritory]!.economy *= 1.10;
+
+    const baseline = selectNationalEconomyV2(baselineState, WORLD_CONTENT_V2, bel);
+    const richer = selectNationalEconomyV2(richerState, WORLD_CONTENT_V2, bel);
+    expect(richer.productivePopulationFactor).toBe(1);
+    expect(richer.controlledOutput).toBeCloseTo(baseline.controlledOutput * 1.10, 6);
+    expect(richer.taxableOutput).toBeCloseTo(richer.controlledOutput, 6);
+    expect(richer.fiscalReferenceWealthPerPerson)
+      .toBeGreaterThan(baseline.fiscalReferenceWealthPerPerson);
+    expect(richer.taxRate).toBeGreaterThanOrEqual(baseline.taxRate);
+    expect(richer.weeklyRevenue).toBeGreaterThan(baseline.weeklyRevenue);
   });
 
   it('scales exactly with population and gives stronger economies a higher bounded rate', () => {
@@ -110,6 +158,14 @@ describe('V2 fiscal identity and population-linked income', () => {
     expect(richer.dynamicTaxRate).toBeGreaterThan(baseline.dynamicTaxRate);
     expect(twicePopulation.weeklyTaxRevenue).toBeCloseTo(baseline.weeklyTaxRevenue * 2, 8);
     expect(richer.weeklyTaxRevenue).toBeGreaterThan(baseline.weeklyTaxRevenue * 2);
+
+    const blended = calculateBlendedFiscalCapacityV2(200, 8, 10);
+    expect(blended.productivePopulationFactor).toBe(0.8);
+    expect(blended.taxableOutput).toBe(180);
+    expect(blended.weeklyTaxRevenue).toBeCloseTo(
+      blended.taxableOutput * blended.dynamicTaxRate / 52,
+      8,
+    );
   });
 
   it('keeps every country rate between 10% and 20% and every result finite', () => {
@@ -120,10 +176,16 @@ describe('V2 fiscal identity and population-linked income', () => {
     const state = createWorldStateV2(4_206, WORLD_CONTENT_V2);
     for (const id of WORLD_CONTENT_V2.nationIds) {
       const economy = selectNationalEconomyV2(state, WORLD_CONTENT_V2, id);
+      const ledger = selectEconomicOutputLedgerV2(state, WORLD_CONTENT_V2, id);
       expect(Number.isFinite(economy.effectivePopulation), String(id)).toBe(true);
+      expect(Number.isFinite(economy.baselineProductivePopulation), String(id)).toBe(true);
+      expect(Number.isFinite(economy.productivePopulationFactor), String(id)).toBe(true);
       expect(Number.isFinite(economy.wealthPerPerson), String(id)).toBe(true);
+      expect(Number.isFinite(economy.fiscalReferenceWealthPerPerson), String(id)).toBe(true);
+      expect(Number.isFinite(economy.taxableOutput), String(id)).toBe(true);
       expect(Number.isFinite(economy.dynamicTaxRate), String(id)).toBe(true);
       expect(Number.isFinite(economy.weeklyRevenue), String(id)).toBe(true);
+      expect(economy.controlledOutput, String(id)).toBe(ledger.integratedOutput);
       expect(economy.dynamicTaxRate, String(id)).toBeGreaterThanOrEqual(MIN_NORMALIZED_TAX_RATE_V2);
       expect(economy.dynamicTaxRate, String(id)).toBeLessThanOrEqual(MAX_NORMALIZED_TAX_RATE_V2);
     }
@@ -133,7 +195,7 @@ describe('V2 fiscal identity and population-linked income', () => {
     const state = createWorldStateV2(4_203, WORLD_CONTENT_V2);
     for (const id of WORLD_CONTENT_V2.nationIds) {
       const real = WORLD_CONTENT_V2.nations[id]!.real;
-      const fiscal = calculateFiscalCapacityV2(real.population, real.gdp / real.population);
+      const fiscal = calculateBlendedFiscalCapacityV2(real.gdp, real.population, real.population);
       const weeklyRevenue = fiscal.weeklyTaxRevenue;
       const gdpPerCapita = real.gdp / Math.max(0.01, real.population) * 1_000;
       const wealthTier = Math.min(4, Math.max(0, Math.log2(Math.max(10_000, gdpPerCapita) / 10_000)));
@@ -143,14 +205,16 @@ describe('V2 fiscal identity and population-linked income', () => {
       expect(state.players[id]!.treasury, String(id)).toBe(expected);
     }
     const qatarWeeks = state.players[qat]!.treasury
-      / calculateFiscalCapacityV2(
+      / calculateBlendedFiscalCapacityV2(
+        WORLD_CONTENT_V2.nations[qat]!.real.gdp,
         WORLD_CONTENT_V2.nations[qat]!.real.population,
-        WORLD_CONTENT_V2.nations[qat]!.real.gdp / WORLD_CONTENT_V2.nations[qat]!.real.population,
+        WORLD_CONTENT_V2.nations[qat]!.real.population,
       ).weeklyTaxRevenue;
     const usaWeeks = state.players[usa]!.treasury
-      / calculateFiscalCapacityV2(
+      / calculateBlendedFiscalCapacityV2(
+        WORLD_CONTENT_V2.nations[usa]!.real.gdp,
         WORLD_CONTENT_V2.nations[usa]!.real.population,
-        WORLD_CONTENT_V2.nations[usa]!.real.gdp / WORLD_CONTENT_V2.nations[usa]!.real.population,
+        WORLD_CONTENT_V2.nations[usa]!.real.population,
       ).weeklyTaxRevenue;
     expect(qatarWeeks).toBeGreaterThan(usaWeeks * 2);
     expect(usaWeeks).toBeLessThan(4);

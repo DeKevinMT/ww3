@@ -6,23 +6,48 @@ import {
 import { WORLD_CONTENT_V2 } from './content';
 import {
   advanceTerritoryIntegrationV2,
+  INTEGRATION_DURATION_MULTIPLIER_V2,
   territoryIntegrationDurationWeeksV2,
   territoryIntegrationSizeV2,
 } from './integration';
-import { territoryIdV2 } from './types';
+import { territoryIdV2, type TerritoryId } from './types';
+
+function previousCalendarDurationWeeks(territoryId: TerritoryId): number {
+  const luxembourgSize = territoryIntegrationSizeV2(
+    WORLD_CONTENT_V2,
+    territoryIdV2('lux'),
+  );
+  const size = territoryIntegrationSizeV2(WORLD_CONTENT_V2, territoryId);
+  const relativeSize = Math.max(0, Math.min(1,
+    (size - luxembourgSize) / Math.max(0.000001, 1 - luxembourgSize),
+  ));
+  return Math.round((12.5
+    + 25 * relativeSize
+    + 50 * relativeSize ** 2
+    + 100 * relativeSize ** 4) * WEEKS_PER_YEAR);
+}
 
 describe('V2 country-size integration calendar', () => {
-  it('anchors Luxembourg at 12.5 years, Belgium near 25.5 and China near 170', () => {
+  it('extends every territory calendar to exactly 1.5x its previous duration', () => {
+    expect(INTEGRATION_DURATION_MULTIPLIER_V2).toBe(1.5);
+    for (const territoryId of WORLD_CONTENT_V2.territoryIds) {
+      expect(territoryIntegrationDurationWeeksV2(WORLD_CONTENT_V2, territoryId)).toBe(
+        Math.round(previousCalendarDurationWeeks(territoryId) * 1.5),
+      );
+    }
+  });
+
+  it('anchors Luxembourg at 18.75 years, Belgium near 38 and China near 255', () => {
     const years = (id: string) => territoryIntegrationDurationWeeksV2(
       WORLD_CONTENT_V2,
       territoryIdV2(id),
     ) / WEEKS_PER_YEAR;
 
-    expect(years('lux')).toBe(12.5);
-    expect(years('bel')).toBeGreaterThanOrEqual(25);
-    expect(years('bel')).toBeLessThanOrEqual(26);
-    expect(years('chn')).toBeGreaterThanOrEqual(165);
-    expect(years('chn')).toBeLessThanOrEqual(175);
+    expect(years('lux')).toBe(18.75);
+    expect(years('bel')).toBeGreaterThanOrEqual(37.5);
+    expect(years('bel')).toBeLessThanOrEqual(39);
+    expect(years('chn')).toBeGreaterThanOrEqual(247.5);
+    expect(years('chn')).toBeLessThanOrEqual(262.5);
   });
 
   it('never gives a larger country-size score a shorter calendar', () => {

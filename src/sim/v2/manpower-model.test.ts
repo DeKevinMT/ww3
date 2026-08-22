@@ -81,7 +81,7 @@ function equalPulse(
 describe('V2 one-source manpower combat', () => {
   it('stores army manpower only on territories and derives national totals/views', () => {
     const state = createWorldStateV2(301);
-    expect(state.schemaVersion).toBe(19);
+    expect(state.schemaVersion).toBe(20);
     expect(state.players[bel]).not.toHaveProperty('manpower');
     expect(Object.keys(state.territories[belTerritory].army).sort()).toEqual([
       'baseAttack', 'baseDefense', 'capacity', 'manpower',
@@ -167,14 +167,14 @@ describe('V2 one-source manpower combat', () => {
     expect(event.controlShare).toBeGreaterThan(0);
   });
 
-  it('applies the same capacity-based pulse damage to equally matched full and half-filled armies', () => {
+  it('bases equally matched pulse damage on the troops actually present', () => {
     const full = equalPulse(3052);
     const half = equalPulse(3052, (state) => {
       state.territories[belTerritory].army.manpower *= 0.5;
       state.territories[nldTerritory].army.manpower *= 0.5;
     });
-    expect(half.attackerLosses).toBeCloseTo(full.attackerLosses, 6);
-    expect(half.defenderLosses).toBeCloseTo(full.defenderLosses, 6);
+    expect(half.attackerLosses * 2).toBeCloseTo(full.attackerLosses, 5);
+    expect(half.defenderLosses * 2).toBeCloseTo(full.defenderLosses, 5);
   });
 
   it('clears an operation immediately when its source army is exhausted by the pulse', () => {
@@ -278,9 +278,38 @@ describe('V2 one-source manpower combat', () => {
     activeWar(engine.state);
     const war = engine.rapidRecruitmentTerms(bel);
     expect(war.atWar).toBe(true);
+    expect(war.allowed).toBe(false);
+    expect(war.reason).toMatch(/war.*reserve/i);
     expect(war.cost).toBe(peace.cost);
+    const treasuryBeforeRejectedAction = engine.state.players[bel].treasury;
+    expect(engine.rapidRecruitment(bel).accepted).toBe(false);
+    expect(engine.state.players[bel].treasury).toBe(treasuryBeforeRejectedAction);
+    expect(engine.state.players[bel].manualActionUses.rapidRecruitment).toBe(0);
     engine.state.players[bel].manualActionUses.rapidRecruitment = 1;
     expect(engine.rapidRecruitmentTerms(bel).cost).toBeGreaterThan(peace.cost);
+  });
+
+  it('rejects a queued peacetime surge if war starts before the action is applied', () => {
+    const engine = new WorldEngineV2(30_911);
+    const control = new WorldEngineV2(30_911);
+    for (const candidate of [engine, control]) {
+      for (const territory of candidate.territoriesOf(bel)) {
+        territory.army.manpower = territory.army.capacity * 0.40;
+      }
+      candidate.state.players[bel].treasury = 10_000;
+    }
+
+    expect(engine.rapidRecruitment(bel).accepted).toBe(true);
+    activeWar(engine.state);
+    activeWar(control.state);
+    engine.step();
+    control.step();
+
+    expect(engine.state.players[bel].manualActionUses.rapidRecruitment).toBe(0);
+    expect(engine.state.players[bel].rapidRecruitmentAvailableTick).toBe(0);
+    expect(engine.state.players[bel].treasury).toBe(control.state.players[bel].treasury);
+    expect(engine.state.players[bel].trainedReserves).toBe(control.state.players[bel].trainedReserves);
+    expect(engine.totalManpower(bel)).toEqual(control.totalManpower(bel));
   });
 
   it('prices emergency recruitment by batch size and ATK/DEF quality instead of national income', () => {

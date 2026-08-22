@@ -16,13 +16,13 @@ const bel = nationIdV2('bel');
 
 describe('route-aware empire logistics', () => {
   it('gives small armies a larger movable share while large empires retain diminishing absolute throughput', () => {
-    const miniShare = logisticsThroughputShareV2(0.03, 0, false);
-    const regionalShare = logisticsThroughputShareV2(0.25, 0, false);
-    const empireShare = logisticsThroughputShareV2(5, 0, false);
+    const miniShare = logisticsThroughputShareV2(0.03, 0);
+    const regionalShare = logisticsThroughputShareV2(0.25, 0);
+    const empireShare = logisticsThroughputShareV2(5, 0);
     expect(miniShare).toBeGreaterThan(regionalShare);
     expect(regionalShare).toBeGreaterThan(empireShare);
     expect(5 * empireShare).toBeGreaterThan(0.03 * miniShare);
-    expect(logisticsThroughputShareV2(0.25, 20, false)).toBeGreaterThan(regionalShare);
+    expect(logisticsThroughputShareV2(0.25, 20)).toBeGreaterThan(regionalShare);
   });
 
   it('moves real forces one owned hop at a time from safe interior land to an active frontier', () => {
@@ -52,7 +52,6 @@ describe('route-aware empire logistics', () => {
     capital.army.manpower = capital.army.capacity * 0.90;
     relay.army.manpower = relay.army.capacity * 0.90;
     frontier.army.manpower = frontier.army.capacity * 0.01;
-    state.players[bel]!.combatExperience = 9;
     const operation: FrontOperationV2 = {
       commanderId: bel, sourceId: secondId, targetId: enemyEdge.targetId,
       doctrine: 'pressure', access: 'land', startedTick: 0, lastBattleTick: 0,
@@ -68,7 +67,6 @@ describe('route-aware empire logistics', () => {
       .reduce((sum, territory) => sum + territory.army.manpower, 0);
     const capacityBefore = selectTerritoriesOfV2(state, bel)
       .reduce((sum, territory) => sum + territory.army.capacity, 0);
-    const combatExperienceBefore = state.players[bel]!.combatExperience;
     const attackQualityMassBefore = selectTerritoriesOfV2(state, bel)
       .reduce((sum, territory) => sum + territory.army.manpower * territory.army.baseAttack, 0);
     const defenseQualityMassBefore = selectTerritoriesOfV2(state, bel)
@@ -84,7 +82,6 @@ describe('route-aware empire logistics', () => {
       manpowerBefore * logisticsThroughputShareV2(
         manpowerBefore,
         20,
-        true,
         selectNationalIqViewV2(WORLD_CONTENT_V2, bel).logisticsMultiplier,
       ) + 1e-9,
     );
@@ -105,7 +102,6 @@ describe('route-aware empire logistics', () => {
       .toBeCloseTo(manpowerBefore, 7);
     expect(selectTerritoriesOfV2(state, bel).reduce((sum, territory) => sum + territory.army.capacity, 0))
       .toBeCloseTo(capacityBefore, 7);
-    expect(state.players[bel]!.combatExperience).toBe(combatExperienceBefore);
     expect(selectTerritoriesOfV2(state, bel).reduce((sum, territory) => sum
       + territory.army.manpower * territory.army.baseAttack, 0))
       .toBeCloseTo(attackQualityMassBefore, 7);
@@ -133,7 +129,6 @@ describe('route-aware empire logistics', () => {
       overshootEmpireManpower * logisticsThroughputShareV2(
         overshootEmpireManpower,
         state.players[bel]!.research.effectLevels.supply,
-        bel === state.humanPlayerId,
         selectNationalIqViewV2(WORLD_CONTENT_V2, bel).logisticsMultiplier,
       ) + 1e-9,
     );

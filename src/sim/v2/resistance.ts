@@ -265,13 +265,15 @@ function absorbFederationMemberV2(
   }
   leader.treasury = round(leader.treasury + member.treasury);
   leader.foodStock = round(leader.foodStock + member.foodStock);
+  // A federation is a permanent sovereign merger. Trained reserves are real
+  // personnel, so move the whole pool even when the combined value is above
+  // the new leader's current reserve cap; ordinary finance already preserves
+  // such an over-cap pool without creating any additional soldiers.
+  leader.trainedReserves = round(leader.trainedReserves + member.trainedReserves);
   member.treasury = 0;
   member.foodStock = 0;
+  member.trainedReserves = 0;
   member.warFatigue = 100;
-  leader.combatExperience = round(Math.max(
-    leader.combatExperience,
-    member.combatExperience,
-  ));
   for (const branch of RESEARCH_BRANCHES) {
     leader.research.progress[branch] = round(Math.max(
       leader.research.progress[branch], member.research.progress[branch],

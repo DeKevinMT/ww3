@@ -7,7 +7,7 @@ import type {
   TerrainType,
 } from './types';
 
-export const V2_RULES_VERSION = 'frontier-command-v2.54-faster-integration';
+export const V2_RULES_VERSION = 'frontier-command-v2.55-combat-rebalance';
 export const V2_CONTENT_VERSION = 'natural-earth-countries-2026-v7-greenland';
 export const V2_MAP_ID = 'natural-earth-countries-2026';
 export const V2_TICK_DURATION_MS = 1_000;
@@ -48,6 +48,12 @@ export const EXTREME_CRISIS_DEMOBILIZATION_RATE = 0.0005;
 /** Normal training is slow and predictable; Training research improves the pipeline. */
 export const PASSIVE_RECRUITMENT_CAPACITY_RATE = 0.001;
 export const PASSIVE_RECRUITMENT_TRAINING_BONUS = 0.02;
+/** A finite trained pool: at most twice live active capacity, built only after the peacetime army is ready. */
+export const TRAINED_RESERVE_CAPACITY_MULTIPLIER = 2;
+export const TRAINED_RESERVE_ACTIVE_READY_RATIO = 0.999999;
+/** War keeps only a paid 5% training trickle while normal replacement draw remains much faster. */
+export const TRAINED_RESERVE_WARTIME_TRAINING_FACTOR = 0.05;
+export const TRAINED_RESERVE_TRAINING_COST_MULTIPLIER = 1.25;
 /** Extra AI mobilization is paid above upkeep; wartime speed carries a much steeper premium. */
 export const PEACE_RECRUITMENT_ACCELERATION_MULTIPLIER = 1.5;
 export const WAR_RECRUITMENT_ACCELERATION_MULTIPLIER = 3;
@@ -58,26 +64,35 @@ export const DEFENDER_POSITION_MULTIPLIER = 1.25;
 export const DEFENDER_COUNTERFIRE_MULTIPLIER = 1.15;
 /**
  * Civilian harm follows the total violence of a battle, not only the winning
- * side's damage. The invaded territory bears the direct fighting while the
- * attacker's home/front population suffers a much smaller indirect toll.
+ * side's damage. Both populations pay a substantial price; the invaded
+ * territory remains more exposed because the fighting happens on its land.
  */
-export const DEFENDER_CIVILIAN_LOSS_INTENSITY = 0.45;
-export const DEFENDER_CIVILIAN_LOSS_POPULATION_CAP = 0.002;
-export const ATTACKER_CIVILIAN_LOSS_INTENSITY = 0.08;
-export const ATTACKER_CIVILIAN_LOSS_POPULATION_CAP = 0.0004;
-export const ATTACKER_CIVILIAN_LOSS_DEFENDER_SHARE = 0.20;
+export const DEFENDER_CIVILIAN_LOSS_INTENSITY = 0.90;
+export const DEFENDER_CIVILIAN_LOSS_POPULATION_CAP = 0.004;
+export const ATTACKER_CIVILIAN_LOSS_INTENSITY = 0.55;
+export const ATTACKER_CIVILIAN_LOSS_POPULATION_CAP = 0.0025;
+/** Keeps comparable battles near a 1.6:1 defender/attacker civilian-loss floor. */
+export const ATTACKER_CIVILIAN_LOSS_DEFENDER_SHARE = 0.625;
+/** Battle displacement is additional to deaths but conserves world population. */
+export const DEFENDER_REFUGEE_DISPLACEMENT_DEATH_SHARE = 0.50;
+export const DEFENDER_REFUGEE_DISPLACEMENT_POPULATION_CAP = 0.0005;
+export const ATTACKER_REFUGEE_DISPLACEMENT_DEATH_SHARE = 0.35;
+export const ATTACKER_REFUGEE_DISPLACEMENT_POPULATION_CAP = 0.00025;
+/** Only stable, uncontested third-country territory can receive refugees. */
+export const REFUGEE_HOST_MIN_CONDITION = 0.70;
 /**
  * Casualties scale linearly with committed combat pressure. A sub-linear
  * exponent made a huge army take more absolute losses merely because its
  * own percentage-loss floor was multiplied by more soldiers.
  */
 export const COMBAT_POWER_RATIO_EXPONENT = 1;
-/** Baseline share of an equally matched force lost in one battle pulse. */
-/** Sustained two-week attrition at half the former 3.2% baseline. */
-export const COMBAT_BASE_CASUALTY_RATE = 0.016;
-/** No local formation may lose more than 5% of its supported maximum per pulse. */
-export const COMBAT_MAX_CASUALTY_RATE = 0.05;
-/** A local force below five percent of its opponent is routed after the exchange. */
+/**
+ * Converts effective opposing combat pressure into real manpower damage.
+ * Every soldier present contributes; the former per-pulse casualty ceiling is
+ * deliberately gone. At 0.4% this is one quarter of the previous baseline.
+ */
+export const COMBAT_DAMAGE_EFFECTIVENESS = 0.004;
+/** Front-planning threshold for viability and initiative reassessment; it never adds casualties. */
 export const COMBAT_ROUTE_STRENGTH_RATIO = 0.05;
 /** Defensive research saturates at +20%; level 20 reaches +10%. */
 export const DEFENSE_RESEARCH_MAX_BONUS = 0.20;
@@ -223,14 +238,6 @@ export const WAR_ACCESS_CASUALTY_MULTIPLIER = {
   land: 1,
   naval: 1,
 } as const;
-/** Empire-wide combat experience has diminishing returns and bounded military effects. */
-export const COMBAT_EXPERIENCE_PER_WAR = 1;
-export const COMBAT_EXPERIENCE_ATTACK_BONUS_PER_SCORE = 0.01;
-export const COMBAT_EXPERIENCE_DEFENSE_BONUS_PER_SCORE = 0.01;
-export const COMBAT_EXPERIENCE_CASUALTY_REDUCTION_PER_SCORE = 0.0075;
-export const COMBAT_EXPERIENCE_MAX_ATTACK_BONUS = 0.20;
-export const COMBAT_EXPERIENCE_MAX_DEFENSE_BONUS = 0.20;
-export const COMBAT_EXPERIENCE_MAX_CASUALTY_REDUCTION = 0.15;
 /** Strategic deterrence affects conventional attack power; nuclear strikes are not simulated. */
 export const NUCLEAR_POWER_ATTACK_BONUS_PER_LEVEL = 0.04;
 /** First researched tier cost; later tiers compound so established nuclear powers still progress slowly. */
@@ -274,22 +281,19 @@ export function aiActiveWarCapV2(livingNations: number, tick: number): number {
   return Math.min(4, Math.max(2, Math.ceil(Math.max(1, livingNations) / 70)) + eraBonus);
 }
 
-/** The chosen country's APEX intelligence compounds every funded national action. */
-export const SUPER_AI_EFFICIENCY = 1.35;
-/** It moves budget more decisively when the live situation changes. */
-export const SUPER_AI_RESPONSIVENESS = 1.50;
-/** When invaded, APEX turns information superiority into a real defensive edge. */
-export const SUPER_AI_DEFENSE_COORDINATION = 1.55;
-export const SUPER_AI_DEFENSIVE_COUNTERATTACK = 1.25;
-export const SUPER_AI_DEFENDER_CASUALTY_MULTIPLIER = 0.75;
-/** APEX reassesses its six-program research portfolio every eight weeks. */
-export const SUPER_AI_RESEARCH_REVIEW_TICKS = 8;
-export const RIVAL_AI_RESEARCH_REVIEW_TICKS = 32;
-/** APEX protects a longer treasury runway before and during multi-front wars. */
-export const SUPER_AI_WAR_BASE_RUNWAY_WEEKS = 5;
-export const SUPER_AI_WAR_FRONT_RUNWAY_WEEKS = 2;
-export const SUPER_AI_PEACE_RESERVE_WEEKS = 6;
-export const RIVAL_AI_PEACE_RESERVE_WEEKS = 4;
+/** Every country reviews the same stored budget and research mix every eight weeks. */
+export const NATIONAL_AI_REVIEW_TICKS = AI_DECISION_INTERVAL;
+/** IQ only changes response by a few percentage points per review. */
+export const NATIONAL_AI_ALLOCATION_STEP_MIN = 2;
+export const NATIONAL_AI_ALLOCATION_STEP_MAX = 4;
+/** Small, bounded execution gain or loss per point around IQ 100. */
+export const NATIONAL_AI_EFFICIENCY_PER_IQ_POINT = 0.0025;
+/** Shared cash-runway policy; selecting a country grants no reserve advantage. */
+export const NATIONAL_AI_PEACE_RESERVE_WEEKS = 5;
+/** Universal public administration and operating burden: exactly 20% of ordinary tax revenue. */
+export const BASE_OPERATING_COST_TAX_REVENUE_SHARE = 0.20;
+export const NATIONAL_AI_WAR_BASE_RUNWAY_WEEKS = 4;
+export const NATIONAL_AI_WAR_FRONT_RUNWAY_WEEKS = 1.5;
 
 /** A conquest exposes ten percent of its surviving potential immediately. */
 export const CONQUEST_INITIAL_INTEGRATION_SHARE = 0.10;

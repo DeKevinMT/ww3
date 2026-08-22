@@ -201,6 +201,7 @@ describe('V2 integrated research programs and army economy', () => {
         expect(
           finance.armyUpkeep * finance.mandatoryFundingRatio
           + finance.recruitment
+          + finance.reserveTrainingCost
           + finance.standingOperations,
           String(id),
         ).toBeCloseTo(finance.military, 5);
@@ -210,7 +211,7 @@ describe('V2 integrated research programs and army economy', () => {
     }
   });
 
-  it('spends recruitment directly into local manpower without a national reserve pool', () => {
+  it('fills an active-army shortage before training the national reserve pool', () => {
     const state = createWorldStateV2(410);
     const target = selectArmyCapacityTargetV2(state, WORLD_CONTENT_V2, bel);
     state.territories[belTerritory].army.capacity = target;
@@ -224,18 +225,20 @@ describe('V2 integrated research programs and army economy', () => {
     expect(state.territories[belTerritory].army.capacity).toBe(before.capacity);
     expect(state.territories[belTerritory].army.manpower).toBeGreaterThan(before.manpower);
     expect(state.players[bel]).not.toHaveProperty('manpower');
+    expect(state.players[bel].trainedReserves).toBe(0);
   });
 
-  it('keeps the finance projection free of duplicate recovery/training pools', () => {
+  it('exposes one canonical finance projection including operating and reserve flows', () => {
     const finance = selectWeeklyFinanceBreakdownV2(createWorldStateV2(411), WORLD_CONTENT_V2, bel);
     expect(Object.keys(finance).sort()).toEqual([
-      'acceleratedDemobilization', 'acceleratedRecruitment', 'activeBudget', 'aiEfficiency', 'aiMode', 'annualEconomyGrowthRate', 'armyUpkeep',
+      'acceleratedDemobilization', 'acceleratedRecruitment', 'activeBudget', 'aiEfficiency', 'aiMode', 'annualEconomyGrowthRate', 'armyUpkeep', 'baseOperatingCost',
       'ceasefireIncome', 'ceasefirePayment', 'closingTreasury', 'condition', 'conditionFundingRatio', 'debtPremium', 'demobilizationCost', 'development',
       'economyBaseGrowthRate', 'economyFoodGrowthRate', 'economyGrowth', 'economyInvestmentGrowthRate', 'economyResearchGrowthRate', 'expenses',
       'foodAccessCeiling', 'foodBalance', 'foodConsumed', 'foodCoverage', 'foodDemand', 'foodDevelopmentTransfer', 'foodDomesticProduced', 'foodExportIncome', 'foodExported', 'foodImported', 'foodLandCapacity', 'foodProduced',
       'foodProduction', 'foodStockChange', 'foodStorageCapacity', 'foodTargetStock', 'fundedArmyUpkeep',
       'integrationCost', 'mandatoryFundingRatio', 'military', 'mode', 'net', 'newBorrowing', 'passiveRecruitment', 'populationGrowth', 'recruitment',
-      'recruitmentAccelerationCost', 'recruitmentFundingRatio', 'research', 'reserveTarget', 'revenue', 'standingOperations', 'totalMilitaryCost',
+      'recruitmentAccelerationCost', 'recruitmentFundingRatio', 'research', 'reserveDeployment', 'reserveTarget', 'reserveTraining', 'reserveTrainingCost', 'revenue', 'standingOperations', 'totalMilitaryCost',
+      'trainedReserveCapacity', 'trainedReservesAfter', 'trainedReservesBefore',
       'warEconomicPenalty', 'warEconomyGrowthDrag', 'warOperations', 'warPopulationDrag', 'warResearchPenalty',
     ]);
   });

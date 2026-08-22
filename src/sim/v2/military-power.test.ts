@@ -8,6 +8,8 @@ import {
   selectCurrentPowerV2,
   selectGlobalRankingV2,
   selectMilitaryBaseRatingsV2,
+  selectNationalEconomyV2,
+  selectStrategicScoreV2,
   selectTerritoryPowerV2,
   selectTotalManpowerV2,
 } from './selectors';
@@ -39,7 +41,7 @@ describe('V2 real-world military power calibration', () => {
     expect(indiaPower).toBeLessThan(usaPower * 0.80);
   });
 
-  it('starts from a credible data-calibrated Combat Power ranking', () => {
+  it('starts from a credible combined military-economic global ranking', () => {
     const state = createWorldStateV2(2026);
     const ranking = selectGlobalRankingV2(state, WORLD_CONTENT_V2);
     const rankedIds = ranking.map((entry) => entry.player.id);
@@ -47,16 +49,36 @@ describe('V2 real-world military power calibration', () => {
     expect(rankedIds.slice(0, 10)).toEqual([
       nationIdV2('usa'),
       nationIdV2('chn'),
-      nationIdV2('rus'),
-      nationIdV2('ind'),
       nationIdV2('deu'),
+      nationIdV2('jpn'),
+      nationIdV2('ind'),
       nationIdV2('gbr'),
       nationIdV2('fra'),
-      nationIdV2('jpn'),
-      nationIdV2('sau'),
+      nationIdV2('rus'),
       nationIdV2('ita'),
+      nationIdV2('can'),
     ]);
-    expect(ranking[0]!.score).toBeLessThanOrEqual(selectCurrentPowerV2(state, WORLD_CONTENT_V2, nationIdV2('usa')) * 1.10 + 1e-6);
+    expect(ranking[0]!.score).toBe(
+      selectStrategicScoreV2(state, WORLD_CONTENT_V2, ranking[0]!.player.id),
+    );
+  });
+
+  it('weights current military power and controlled economic output exactly 50/50', () => {
+    const state = createWorldStateV2(2_026);
+    const usa = nationIdV2('usa');
+    const power = selectCurrentPowerV2(state, WORLD_CONTENT_V2, usa);
+    const output = selectNationalEconomyV2(state, WORLD_CONTENT_V2, usa).controlledOutput;
+    const expected = Math.sqrt(Math.max(0, power) * Math.max(0, output));
+
+    expect(selectStrategicScoreV2(state, WORLD_CONTENT_V2, usa)).toBeCloseTo(expected, 6);
+
+    const baseline = selectStrategicScoreV2(state, WORLD_CONTENT_V2, usa);
+    state.players[usa].warFatigue = 100;
+    expect(selectStrategicScoreV2(state, WORLD_CONTENT_V2, usa)).toBe(baseline);
+
+    // Equal relative growth in either dimension has exactly the same effect on
+    // the geometric score, documenting the intended 50/50 weighting.
+    expect(Math.sqrt(2 * power * output)).toBeCloseTo(Math.sqrt(power * 2 * output), 12);
   });
 
   it('keeps opening ratings exact and reports conquered armies by deployed manpower, never population', () => {
@@ -108,7 +130,7 @@ describe('V2 real-world military power calibration', () => {
         + selectTerritoryPowerV2(state, WORLD_CONTENT_V2, dutchTerritory),
       8,
     );
-    expect(state.schemaVersion).toBe(19);
+    expect(state.schemaVersion).toBe(20);
     expect('militaryBaseRatings' in state.players[belgium]).toBe(false);
   });
 
@@ -131,7 +153,6 @@ describe('V2 real-world military power calibration', () => {
     territory.army.manpower = 0.10;
     territory.army.baseAttack = 5;
     territory.army.baseDefense = 5;
-    state.players[belgium].combatExperience = 100;
     const before = selectCurrentPowerV2(state, WORLD_CONTENT_V2, belgium);
     const attackMassBefore = territory.army.manpower * territory.army.baseAttack;
 

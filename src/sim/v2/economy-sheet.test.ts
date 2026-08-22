@@ -10,26 +10,26 @@ import {
 import { nationIdV2, territoryIdV2 } from './types';
 
 describe('V2 economic truth sheet', () => {
-  it('derives public income from live owned people, wealth and the fixed tax take', () => {
+  it('derives public income from the blended tax base while preserving real GDP', () => {
     const state = createWorldStateV2(8_201);
     const belgium = nationIdV2('bel');
     const ledger = selectEconomicOutputLedgerV2(state, WORLD_CONTENT_V2, belgium);
     const economy = selectNationalEconomyV2(state, WORLD_CONTENT_V2, belgium);
 
     expect(ledger.weeklyTaxRevenue).toBeCloseTo(
-      ledger.population * ledger.wealthPerPerson * ledger.taxRate / 52,
+      ledger.taxableOutput * ledger.taxRate / 52,
       5,
     );
-    expect(ledger.taxableOutput).toBeCloseTo(
-      ledger.effectivePopulation * ledger.wealthPerPerson,
-      5,
-    );
+    expect(ledger.baselineProductivePopulation).toBeCloseTo(ledger.productivePopulation, 6);
+    expect(ledger.productivePopulationFactor).toBe(1);
+    expect(ledger.taxableOutput).toBeCloseTo(ledger.integratedOutput, 6);
     expect(ledger.taxRate).toBe(ledger.dynamicTaxRate);
     expect(economy.population).toBeCloseTo(ledger.population, 6);
     expect(economy.effectivePopulation).toBeCloseTo(ledger.effectivePopulation, 6);
     expect(economy.wealthPerPerson).toBeCloseTo(ledger.wealthPerPerson, 6);
     expect(economy.output).toBeCloseTo(ledger.demographicOutput, 6);
-    expect(economy.controlledOutput).toBeCloseTo(ledger.taxableOutput, 6);
+    expect(economy.controlledOutput).toBeCloseTo(ledger.integratedOutput, 6);
+    expect(economy.taxableOutput).toBeCloseTo(ledger.taxableOutput, 6);
     expect(economy.weeklyRevenue).toBeCloseTo(ledger.weeklyTaxRevenue, 6);
   });
 

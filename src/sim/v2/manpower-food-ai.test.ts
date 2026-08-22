@@ -17,7 +17,7 @@ const belgium = nationIdV2('bel');
 const nigeria = nationIdV2('nga');
 
 describe('V2 authoritative manpower projection', () => {
-  it('uses paid AI fast-tracks in peace and a faster, dearer emergency track in war', () => {
+  it('uses a paid peace fast-track and finite trained reserves for wartime replacement', () => {
     const peace = createWorldStateV2(2_398);
     peace.wars = [];
     peace.players[belgium]!.budget = { military: 70, research: 10, development: 20 };
@@ -27,6 +27,7 @@ describe('V2 authoritative manpower projection', () => {
     }
     const peaceFinance = selectWeeklyFinanceBreakdownV2(peace, WORLD_CONTENT_V2, belgium);
     const war = structuredClone(peace);
+    war.players[belgium]!.trainedReserves = selectTotalManpowerV2(war, belgium).capacity * 2;
     war.wars = [{
       id: 'mobilization-war', attackerId: belgium, defenderId: nationIdV2('nld'),
       startedTick: 0, lastBattleTick: 0, warScore: 0, battles: 0,
@@ -37,9 +38,12 @@ describe('V2 authoritative manpower projection', () => {
 
     expect(peaceFinance.passiveRecruitment).toBeGreaterThan(0);
     expect(peaceFinance.acceleratedRecruitment).toBeGreaterThan(0);
-    expect(warFinance.acceleratedRecruitment).toBeGreaterThan(peaceFinance.acceleratedRecruitment);
-    expect(warFinance.recruitmentAccelerationCost / warFinance.acceleratedRecruitment)
-      .toBeGreaterThan(peaceFinance.recruitmentAccelerationCost / peaceFinance.acceleratedRecruitment);
+    expect(warFinance.passiveRecruitment).toBe(0);
+    expect(warFinance.acceleratedRecruitment).toBe(0);
+    expect(warFinance.reserveDeployment).toBeGreaterThan(0);
+    expect(warFinance.reserveTraining).toBeGreaterThan(0);
+    expect(warFinance.trainedReservesAfter).toBeLessThan(warFinance.trainedReservesBefore);
+    expect(warFinance.recruitmentAccelerationCost).toBeGreaterThan(0);
   });
 
   it('does not demobilize a healthy post-war army merely because territory needs repair', () => {
@@ -55,7 +59,8 @@ describe('V2 authoritative manpower projection', () => {
     const finance = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, belgium);
     const projection = projectFinanceManpowerPhaseV2(state, WORLD_CONTENT_V2, belgium, finance);
 
-    expect(finance.mandatoryFundingRatio).toBe(1);
+    expect(finance.mandatoryFundingRatio).toBeGreaterThan(0);
+    expect(finance.mandatoryFundingRatio).toBeLessThan(1);
     expect(finance.acceleratedDemobilization).toBe(0);
     expect(finance.demobilizationCost).toBe(0);
     expect(projection.demobilized).toBeCloseTo(0, 12);
@@ -193,7 +198,7 @@ describe('V2 food-aware national AI', () => {
       averageCondition: 1,
       researchGap: 0,
       treasuryWeeks: 8,
-      superAi: false,
+      iqScore: 100,
     };
     const healthy = optimizeNationalAiPlanV2({ ...common, foodSecurity: 1 });
     const strained = optimizeNationalAiPlanV2({ ...common, foodSecurity: 0.72 });

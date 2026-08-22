@@ -9,15 +9,14 @@ import {
 import { nationIdV2 } from './types';
 
 describe('V2 opening candidate finance projections', () => {
-  it('evaluates every candidate with the same selected-country APEX perspective', () => {
+  it('evaluates every candidate with the same shared national AI', () => {
     const state = createWorldStateV2(8_228);
     const snapshot = createPowerSnapshotV2(state, WORLD_CONTENT_V2);
     const plans = selectOpeningCandidateFinancePlansV2(state, WORLD_CONTENT_V2, snapshot);
 
     for (const playerId of [nationIdV2('bel'), nationIdV2('che'), nationIdV2('usa')]) {
-      const candidateState = { ...state, humanPlayerId: playerId };
       const direct = selectWeeklyFinanceBreakdownV2(
-        candidateState,
+        state,
         WORLD_CONTENT_V2,
         playerId,
         snapshot,

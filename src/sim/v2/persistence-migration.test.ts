@@ -25,6 +25,7 @@ function legacySaveV16(seed: number): Record<string, any> {
   for (const nation of Object.values(current.players) as Array<Record<string, any>>) {
     delete nation.combatExperience;
     delete nation.domesticFoodCapacity;
+    delete nation.trainedReserves;
   }
   for (const territory of Object.values(current.territories) as Array<Record<string, any>>) {
     delete territory.coreOwner;
@@ -61,12 +62,25 @@ function legacySaveV17(seed: number): Record<string, any> {
   for (const nation of Object.values(current.players) as Array<Record<string, any>>) {
     delete nation.combatExperience;
     delete nation.domesticFoodCapacity;
+    delete nation.trainedReserves;
   }
   for (const territory of Object.values(current.territories) as Array<Record<string, any>>) {
     delete territory.coreOwner;
     delete territory.integrationProgram;
     territory.army.veteranManpower = 0;
     territory.army.veteranExperience = 0;
+  }
+  current.canonicalStateHash = canonicalStateHashV2(current);
+  return current;
+}
+
+function legacySaveV19(seed: number): Record<string, any> {
+  const current = structuredClone(createSaveV2(createWorldStateV2(seed), WORLD_CONTENT_V2)) as Record<string, any>;
+  current.schemaVersion = 19;
+  current.rulesVersion = 'frontier-command-v2.54-faster-integration';
+  for (const nation of Object.values(current.players) as Array<Record<string, any>>) {
+    delete nation.trainedReserves;
+    nation.combatExperience = 7.25;
   }
   current.canonicalStateHash = canonicalStateHashV2(current);
   return current;
@@ -130,6 +144,86 @@ function legacySaveV14(): Record<string, any> {
 }
 
 describe('V2 legacy save migration', () => {
+  it('authenticates schema 19 and permanently retires Combat Experience', () => {
+    const legacy = legacySaveV19(86);
+    const belgium = nationIdV2('bel');
+
+    const loaded = loadSaveV2(legacy as never, WORLD_CONTENT_V2);
+    expect(loaded.schemaVersion).toBe(20);
+    expect(loaded.rulesVersion).toBe(V2_RULES_VERSION);
+    expect(loaded.players[belgium]).not.toHaveProperty('combatExperience');
+    expect(Object.values(loaded.players).every((nation) => nation.trainedReserves === 0)).toBe(true);
+
+    const reloaded = loadSaveV2(createSaveV2(loaded, WORLD_CONTENT_V2), WORLD_CONTENT_V2);
+    expect(reloaded.players[belgium]).not.toHaveProperty('combatExperience');
+  });
+
+  it('preserves an active schema 19 integration share and promised endpoint across migration and roundtrip', () => {
+    const state = createWorldStateV2(87);
+    const belgium = nationIdV2('bel');
+    const luxembourgTerritory = territoryIdV2('lux');
+    beginTerritoryIntegrationV2(state, WORLD_CONTENT_V2, luxembourgTerritory, belgium);
+    state.tick = 200;
+    state.territories[luxembourgTerritory].integration = 0.55;
+    const promisedEndpoint = state.tick + 321;
+    state.territories[luxembourgTerritory].integrationProgram!.completesTick = promisedEndpoint;
+    invalidateTerritoryIndexV2(state);
+    synchronizeArmyCapacityV2(state, WORLD_CONTENT_V2);
+
+    const legacy = structuredClone(createSaveV2(state, WORLD_CONTENT_V2)) as Record<string, any>;
+    legacy.schemaVersion = 19;
+    legacy.rulesVersion = 'frontier-command-v2.54-faster-integration';
+    for (const nation of Object.values(legacy.players) as Array<Record<string, any>>) {
+      delete nation.trainedReserves;
+      nation.combatExperience = 7.25;
+    }
+    legacy.canonicalStateHash = canonicalStateHashV2(legacy);
+
+    const loaded = loadSaveV2(legacy as never, WORLD_CONTENT_V2);
+    expect(loaded.territories[luxembourgTerritory].integration).toBe(0.55);
+    expect(loaded.territories[luxembourgTerritory].integrationProgram?.completesTick)
+      .toBe(promisedEndpoint);
+
+    const reloaded = loadSaveV2(createSaveV2(loaded, WORLD_CONTENT_V2), WORLD_CONTENT_V2);
+    expect(reloaded.territories[luxembourgTerritory].integration).toBe(0.55);
+    expect(reloaded.territories[luxembourgTerritory].integrationProgram?.completesTick)
+      .toBe(promisedEndpoint);
+  });
+
+  it('rejects Combat Experience when it is injected into a current schema save', () => {
+    const current = structuredClone(
+      createSaveV2(createWorldStateV2(8_601), WORLD_CONTENT_V2),
+    ) as Record<string, any>;
+    current.players[nationIdV2('bel')].combatExperience = 7.25;
+    current.canonicalStateHash = canonicalStateHashV2(current);
+
+    expect(() => loadSaveV2(current as never, WORLD_CONTENT_V2))
+      .toThrow(/non-canonical keys/i);
+  });
+
+  it('requires trained reserves in current saves and round-trips them through the canonical hash', () => {
+    const state = createWorldStateV2(8_602);
+    const belgium = nationIdV2('bel');
+    state.players[belgium].trainedReserves = 1.234567;
+    const save = createSaveV2(state, WORLD_CONTENT_V2);
+    const loaded = loadSaveV2(save, WORLD_CONTENT_V2);
+    expect(loaded.players[belgium].trainedReserves).toBe(1.234567);
+    expect(createSaveV2(loaded, WORLD_CONTENT_V2).canonicalStateHash)
+      .toBe(save.canonicalStateHash);
+
+    const missing = structuredClone(save) as Record<string, any>;
+    delete missing.players[belgium].trainedReserves;
+    missing.canonicalStateHash = canonicalStateHashV2(missing);
+    expect(() => loadSaveV2(missing as never, WORLD_CONTENT_V2))
+      .toThrow(/non-canonical keys|invalid scalar/i);
+
+    const leakedLegacy = legacySaveV19(8_603);
+    leakedLegacy.players[belgium].trainedReserves = 1;
+    leakedLegacy.canonicalStateHash = canonicalStateHashV2(leakedLegacy);
+    expect(() => loadSaveV2(leakedLegacy as never, WORLD_CONTENT_V2))
+      .toThrow(/non-canonical Combat Experience state/i);
+  });
+
   it('initializes missing same-schema domestic food capacity only after authentication', () => {
     const state = createWorldStateV2(87);
     const belgium = nationIdV2('bel');
@@ -177,6 +271,8 @@ describe('V2 legacy save migration', () => {
     const lux = nationIdV2('lux');
     const luxTerritory = territoryIdV2('lux');
     const newDuration = territoryIntegrationDurationWeeksV2(WORLD_CONTENT_V2, luxTerritory);
+    const migratedRemainingDuration = Math.ceil(newDuration / 2);
+    const schema18RemainingDuration = Math.round(newDuration / 1.5);
     beginTerritoryIntegrationV2(state, WORLD_CONTENT_V2, luxTerritory, bel);
     invalidateTerritoryIndexV2(state);
     state.tick = 200;
@@ -186,7 +282,7 @@ describe('V2 legacy save migration', () => {
       fromCoreOwnerId: lux,
       toOwnerId: bel,
       startedTick: 0,
-      completesTick: state.tick + newDuration / 2,
+      completesTick: state.tick + migratedRemainingDuration,
       annualCost: territoryIntegrationAnnualCostV2(state.territories[luxTerritory].economy),
     };
     synchronizeArmyCapacityV2(state, WORLD_CONTENT_V2);
@@ -195,10 +291,13 @@ describe('V2 legacy save migration', () => {
     legacy.rulesVersion = 'frontier-command-v2.53-combat-experience';
     for (const nation of Object.values(legacy.players) as Array<Record<string, any>>) {
       delete nation.domesticFoodCapacity;
+      delete nation.trainedReserves;
+      nation.combatExperience = 3;
     }
-    // The old curve was exactly twice as long, so 55% left one full new
-    // Luxembourg duration on its original endpoint.
-    legacy.territories[luxTerritory].integrationProgram.completesTick = state.tick + newDuration;
+    // The current 1.5x calendar is 25% shorter than schema 18 at this share.
+    // Migration shortens that old promise once without moving visible progress.
+    legacy.territories[luxTerritory].integrationProgram.completesTick = state.tick
+      + schema18RemainingDuration;
     delete legacy.territories[luxTerritory].integrationProgram.fromOwnerId;
     delete legacy.territories[luxTerritory].integrationProgram.annualCost;
     legacy.canonicalStateHash = canonicalStateHashV2(legacy);
@@ -206,7 +305,9 @@ describe('V2 legacy save migration', () => {
 
     const loaded = loadSaveV2(legacy as never, WORLD_CONTENT_V2);
     const migratedProgram = loaded.territories[luxTerritory].integrationProgram!;
-    expect(loaded.schemaVersion).toBe(19);
+    expect(loaded.schemaVersion).toBe(20);
+    expect(Object.values(loaded.players).every((nation) => nation.trainedReserves === 0)).toBe(true);
+    expect(loaded.players[bel]).not.toHaveProperty('combatExperience');
     expect(loaded.territories[luxTerritory].integration).toBe(0.55);
     expect(migratedProgram.startedTick).toBe(0);
     expect(migratedProgram.fromOwnerId).toBe(lux);
@@ -214,7 +315,7 @@ describe('V2 legacy save migration', () => {
       territoryIntegrationAnnualCostV2(state.territories[luxTerritory].economy),
       8,
     );
-    expect(migratedProgram.completesTick).toBe(state.tick + newDuration / 2);
+    expect(migratedProgram.completesTick).toBe(state.tick + migratedRemainingDuration);
     expect(migratedProgram.completesTick).toBeLessThan(legacyEndpoint);
     expect(legacy.territories[luxTerritory].integrationProgram.completesTick).toBe(legacyEndpoint);
 
@@ -224,7 +325,7 @@ describe('V2 legacy save migration', () => {
     expect(reloaded.territories[luxTerritory].integration).toBe(0.55);
   });
 
-  it('preserves schema 17 veteran score mass as one national combat experience value', () => {
+  it('retires schema 17 veteran cohorts without changing canonical armies', () => {
     const legacy = legacySaveV17(90);
     const bel = nationIdV2('bel');
     const belTerritory = territoryIdV2('bel');
@@ -235,15 +336,12 @@ describe('V2 legacy save migration', () => {
     legacy.territories[belTerritory].army.veteranExperience = 9;
     legacy.territories[luxTerritory].army.veteranManpower = legacy.territories[luxTerritory].army.manpower * 0.25;
     legacy.territories[luxTerritory].army.veteranExperience = 4;
-    const totalManpower = legacy.territories[belTerritory].army.manpower
-      + legacy.territories[luxTerritory].army.manpower;
-    const scoreMass = legacy.territories[belTerritory].army.veteranManpower * 3
-      + legacy.territories[luxTerritory].army.veteranManpower * 2;
     legacy.canonicalStateHash = canonicalStateHashV2(legacy);
 
     const loaded = loadSaveV2(legacy as never, WORLD_CONTENT_V2);
-    expect(loaded.schemaVersion).toBe(19);
-    expect(loaded.players[bel].combatExperience).toBeCloseTo((scoreMass / totalManpower) ** 2, 8);
+    expect(loaded.schemaVersion).toBe(20);
+    expect(Object.values(loaded.players).every((nation) => nation.trainedReserves === 0)).toBe(true);
+    expect(loaded.players[bel]).not.toHaveProperty('combatExperience');
     expect(loaded.territories[belTerritory].army).not.toHaveProperty('veteranManpower');
     expect(loaded.territories[luxTerritory].coreOwner).toBe(nationIdV2('lux'));
     expect(loaded.territories[luxTerritory].integrationProgram).toMatchObject({
@@ -255,15 +353,13 @@ describe('V2 legacy save migration', () => {
     expect(loaded.territories[luxTerritory].integrationProgram!.completesTick).toBeGreaterThan(legacy.tick);
   });
 
-  it('authenticates and migrates Battle Bots into an existing veteran subset', () => {
+  it('authenticates and retires legacy Battle Bots and veteran fields', () => {
     const legacy = legacySaveV13();
     const usa = nationIdV2('usa');
     const usaTerritory = territoryIdV2('usa');
-    const oldManpower = legacy.territories[usaTerritory].army.manpower as number;
-    const expectedVeterans = Math.min(oldManpower, 2 * 0.10 * 1.22 ** 2);
-
     const loaded = loadSaveV2(legacy as never, WORLD_CONTENT_V2);
-    expect(loaded.schemaVersion).toBe(19);
+    expect(loaded.schemaVersion).toBe(20);
+    expect(Object.values(loaded.players).every((nation) => nation.trainedReserves === 0)).toBe(true);
     expect(loaded.rulesVersion).toBe(V2_RULES_VERSION);
     expect(loaded.players[usa]).not.toHaveProperty('battleBots');
     expect(Object.keys(loaded.territories[usaTerritory].army).sort()).toEqual([
@@ -272,10 +368,7 @@ describe('V2 legacy save migration', () => {
     expect(loaded.territories[usaTerritory].army.manpower).toBeLessThanOrEqual(
       loaded.territories[usaTerritory].army.capacity,
     );
-    expect(loaded.players[usa].combatExperience).toBeCloseTo(
-      (expectedVeterans * Math.sqrt(3) / oldManpower) ** 2,
-      8,
-    );
+    expect(loaded.players[usa]).not.toHaveProperty('combatExperience');
     expect(loaded.territories[usaTerritory].army.baseAttack).toBe(
       WORLD_CONTENT_V2.nations[usa].militaryAttackRating,
     );
@@ -329,7 +422,8 @@ describe('V2 legacy save migration', () => {
     legacy.canonicalStateHash = canonicalStateHashV2(legacy);
 
     const loaded = loadSaveV2(legacy as never, WORLD_CONTENT_V2);
-    expect(loaded.schemaVersion).toBe(19);
+    expect(loaded.schemaVersion).toBe(20);
+    expect(Object.values(loaded.players).every((nation) => nation.trainedReserves === 0)).toBe(true);
     expect(loaded.rulesVersion).toBe(V2_RULES_VERSION);
     expect(loaded.territories[belTerritory].army.baseAttack).toBe(expectedAttack);
     expect(loaded.territories[belTerritory].army.baseDefense).toBe(expectedDefense);
@@ -359,7 +453,8 @@ describe('V2 legacy save migration', () => {
     legacy.canonicalStateHash = canonicalStateHashV2(legacy);
 
     const loaded = loadSaveV2(legacy as never, WORLD_CONTENT_V2);
-    expect(loaded.schemaVersion).toBe(19);
+    expect(loaded.schemaVersion).toBe(20);
+    expect(Object.values(loaded.players).every((nation) => nation.trainedReserves === 0)).toBe(true);
     expect(loaded.players[nationIdV2('bel')].manualActionUses).toEqual({
       rapidRecruitment: 0,
       researchSurge: 0,
@@ -394,7 +489,8 @@ describe('V2 legacy save migration', () => {
     legacy.canonicalStateHash = canonicalStateHashV2(legacy);
 
     const loaded = loadSaveV2(legacy as never, WORLD_CONTENT_V2);
-    expect(loaded.schemaVersion).toBe(19);
+    expect(loaded.schemaVersion).toBe(20);
+    expect(Object.values(loaded.players).every((nation) => nation.trainedReserves === 0)).toBe(true);
     expect(loaded.territories[territoryIdV2('grl')].owner).toBe(nationIdV2('dnk'));
     expect(loaded.territories[territoryIdV2('dnk')].population
       + loaded.territories[territoryIdV2('grl')].population).toBeCloseTo(populationBefore, 8);

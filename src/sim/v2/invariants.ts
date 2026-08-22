@@ -10,7 +10,7 @@ import {
 } from './selectors';
 import type { PlayerId, TerritoryId, WorldStateV2 } from './types';
 
-const NATION_KEYS = ['budget', 'capitalId', 'ceasefiresRequested', 'combatExperience', 'domesticFoodCapacity', 'empireName', 'foodSecurity', 'foodStock', 'manualActionUses', 'propagandaAvailableTick', 'propagandaProgram', 'rapidRecruitmentAvailableTick', 'research', 'researchSurgeAvailableTick', 'treasury', 'warFatigue'];
+const NATION_KEYS = ['budget', 'capitalId', 'ceasefiresRequested', 'domesticFoodCapacity', 'empireName', 'foodSecurity', 'foodStock', 'manualActionUses', 'propagandaAvailableTick', 'propagandaProgram', 'rapidRecruitmentAvailableTick', 'research', 'researchSurgeAvailableTick', 'trainedReserves', 'treasury', 'warFatigue'];
 const TERRITORY_KEYS = ['army', 'condition', 'control', 'coreOwner', 'economy', 'integration', 'integrationProgram', 'owner', 'population'];
 const RESEARCH_KEYS = ['allocations', 'breakthroughs', 'effectLevels', 'progress'];
 const BUDGET_KEYS = ['development', 'military', 'research'];
@@ -63,7 +63,7 @@ function hasOnlyKeys(value: object, allowed: readonly string[]): boolean {
 
 export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2): string[] {
   const errors: string[] = [];
-  if (state.schemaVersion !== 19) errors.push('Canonical state must use schema version 19.');
+  if (state.schemaVersion !== 20) errors.push('Canonical state must use schema version 20.');
   if (!finiteStateNumbersV2(state)) errors.push('Canonical state contains a non-finite number.');
   const playerIds = Object.keys(state.players) as PlayerId[];
   const territoryIds = Object.keys(state.territories) as TerritoryId[];
@@ -112,8 +112,8 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
       || budget.military + budget.research + budget.development !== 100) errors.push(`Nation ${id} has an invalid budget.`);
     if (nation.empireName.length > 36 || /[<>\r\n]/.test(nation.empireName)) errors.push(`Nation ${id} has an invalid empire name.`);
     if (!Number.isFinite(nation.treasury)
-      || !Number.isFinite(nation.combatExperience) || nation.combatExperience < 0
       || !Number.isFinite(nation.domesticFoodCapacity) || nation.domesticFoodCapacity < 0
+      || !Number.isFinite(nation.trainedReserves) || nation.trainedReserves < 0
       || nation.foodStock < 0 || nation.foodSecurity < 0 || nation.foodSecurity > 1
       || !Number.isInteger(nation.ceasefiresRequested) || nation.ceasefiresRequested < 0
       || !Number.isInteger(nation.rapidRecruitmentAvailableTick) || nation.rapidRecruitmentAvailableTick < 0

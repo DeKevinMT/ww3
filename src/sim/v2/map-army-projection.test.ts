@@ -4,14 +4,15 @@ import { WorldEngineV2 } from './WorldEngineV2';
 import { nationIdV2, territoryIdV2 } from './types';
 
 describe('map military projection', () => {
-  it('shows higher local quality but unchanged headcount when the empire gains combat experience', () => {
+  it('shows higher local quality without changing headcount', () => {
     const engine = new WorldEngineV2(8_801);
     const belgium = nationIdV2('bel');
     const territoryId = territoryIdV2('bel');
     const territory = engine.territoriesOf(belgium)[0]!;
     const before = projectMapArmyV2(engine, territoryId, territory);
 
-    engine.state.players[belgium].combatExperience = 25;
+    engine.state.territories[territoryId].army.baseAttack *= 1.05;
+    engine.state.territories[territoryId].army.baseDefense *= 1.05;
     const after = projectMapArmyV2(engine, territoryId, territory);
 
     expect(after.power).toBe(engine.territoryPower(territoryId));

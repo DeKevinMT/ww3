@@ -1,5 +1,5 @@
 import {
-  AI_DECISION_INTERVAL,
+  NATIONAL_AI_REVIEW_TICKS,
   AI_DEFENSIVE_AID_AGGRESSOR_RATIO,
   AI_DEFENSIVE_AID_COOLDOWN,
   AI_DEFENSIVE_AID_MIN_AGE,
@@ -14,12 +14,15 @@ import {
   aiActiveWarCapV2,
   PEACE_REQUEST_MIN_WAR_AGE_TICKS,
   RESEARCH_BRANCHES,
-  RIVAL_AI_RESEARCH_REVIEW_TICKS,
-  SUPER_AI_RESEARCH_REVIEW_TICKS,
   clamp,
 } from './balance';
 import { nextRandom } from '../../game/random';
 import type { WorldContentV2 } from './content';
+import {
+  moveBudgetTowardTargetV2,
+  moveResearchTowardTargetV2,
+  nationalAiEfficiencyV2,
+} from './nationalAi';
 import {
   campaignStrategicVariationV2,
   geopoliticalTargetGuidanceV2,
@@ -139,11 +142,67 @@ function interventionAffinityV2(content: WorldContentV2, leftId: PlayerId, right
     + strategicAlignmentScoreV2(leftId, rightId);
 }
 
+export interface DefensiveAidAssessmentV2 {
+  linkedWarId: string;
+  priority: number;
+  interventionChance: number;
+}
+
+/**
+ * Shared weak-defender assessment. Selection never improves eligibility or
+ * odds; the only skill input is the supporter's same bounded national IQ.
+ * A player-led aggression remains on the separate resistance/diplomacy path.
+ */
+export function selectDefensiveAidAssessmentV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  supporterId: PlayerId,
+  war: WarStateV2,
+  access: Exclude<WarAccessV2, 'none'>,
+  powerSnapshot: PowerSnapshotV2 = createPowerSnapshotV2(state, content),
+): DefensiveAidAssessmentV2 | undefined {
+  if (supporterId === state.humanPlayerId
+    || war.attackerId === state.humanPlayerId
+    || supporterId === war.attackerId
+    || supporterId === war.defenderId
+    || state.tick - war.lastBattleTick > 12
+    || state.tick - war.startedTick < AI_DEFENSIVE_AID_MIN_AGE
+    || war.battles < AI_DEFENSIVE_AID_MIN_BATTLES) return undefined;
+  const alignmentEdge = interventionAffinityV2(content, supporterId, war.defenderId)
+    - interventionAffinityV2(content, supporterId, war.attackerId);
+  const aggressorPower = powerSnapshot.byNation.get(war.attackerId) ?? 0;
+  const defenderPower = powerSnapshot.byNation.get(war.defenderId) ?? 0;
+  const aggressorRatio = aggressorPower / Math.max(1, defenderPower);
+  const neighboursDefender = selectWarAccessTypeV2(
+    state,
+    content,
+    supporterId,
+    war.defenderId,
+  ) === 'land';
+  if (!neighboursDefender || aggressorRatio < AI_DEFENSIVE_AID_AGGRESSOR_RATIO
+    || alignmentEdge < -2) return undefined;
+  const priority = 34
+    + Math.min(20, (state.tick - war.startedTick - AI_DEFENSIVE_AID_MIN_AGE) * 0.45)
+    + Math.min(16, war.battles)
+    + Math.max(0, alignmentEdge) * 1.4
+    + Math.min(18, (aggressorRatio - AI_DEFENSIVE_AID_AGGRESSOR_RATIO) * 8)
+    - (access === 'naval' ? 2 : 0);
+  const iqEfficiency = nationalAiEfficiencyV2(
+    content.nations[supporterId]?.iqScore ?? 100,
+  );
+  const interventionChance = clamp(0.16
+    + Math.min(0.16, Math.max(0, alignmentEdge) * 0.015)
+    + Math.min(0.16, Math.max(0, aggressorRatio - AI_DEFENSIVE_AID_AGGRESSOR_RATIO) * 0.08)
+    + (access === 'land' ? 0.06 : 0)
+    + 0.20 * (iqEfficiency - 1), 0.12, 0.54);
+  return { linkedWarId: war.id, priority, interventionChance };
+}
+
 /**
  * Finds a regional crisis around the proposed target. Normal AI-vs-AI wars
  * retain the opportunistic escalation model. A separate, tightly bounded
- * exception lets a neighbour aid the human defender against a much stronger
- * aggressor; human offensives remain excluded so this cannot create a dogpile.
+ * exception lets a neighbour aid any much weaker defender; player offensives
+ * remain on the explicit global-resistance path.
  */
 function regionalEscalationCandidateV2(
   state: WorldStateV2,
@@ -166,32 +225,11 @@ function regionalEscalationCandidateV2(
     const partnerAffinity = interventionAffinityV2(content, supporterId, partnerId);
     const targetAffinity = interventionAffinityV2(content, supporterId, targetId);
     const alignmentEdge = partnerAffinity - targetAffinity;
-    const defensiveAid = war.defenderId === state.humanPlayerId
-      && partnerId === state.humanPlayerId
-      && war.attackerId === targetId;
-    const aggressorPower = powerSnapshot.byNation.get(targetId) ?? 0;
-    const defenderPower = powerSnapshot.byNation.get(partnerId) ?? 0;
-    const aggressorRatio = aggressorPower / Math.max(1, defenderPower);
-    const neighboursDefender = selectWarAccessTypeV2(
-      state,
-      content,
-      supporterId,
-      partnerId,
-    ) === 'land';
-    if (defensiveAid) {
-      if (!neighboursDefender || aggressorRatio < AI_DEFENSIVE_AID_AGGRESSOR_RATIO
-        || alignmentEdge < -2) return undefined;
-      const priority = 34
-        + Math.min(20, (state.tick - war.startedTick - AI_DEFENSIVE_AID_MIN_AGE) * 0.45)
-        + Math.min(16, war.battles)
-        + Math.max(0, alignmentEdge) * 1.4
-        + Math.min(18, (aggressorRatio - AI_DEFENSIVE_AID_AGGRESSOR_RATIO) * 8)
-        - (access === 'naval' ? 2 : 0);
-      const interventionChance = clamp(0.16
-        + Math.min(0.16, Math.max(0, alignmentEdge) * 0.015)
-        + Math.min(0.16, Math.max(0, aggressorRatio - AI_DEFENSIVE_AID_AGGRESSOR_RATIO) * 0.08)
-        + (access === 'land' ? 0.06 : 0), 0.12, 0.54);
-      return { linkedWarId: war.id, priority, defensiveAid: true, interventionChance };
+    if (war.attackerId === targetId && war.defenderId === partnerId) {
+      const defensiveAid = selectDefensiveAidAssessmentV2(
+        state, content, supporterId, war, access, powerSnapshot,
+      );
+      if (defensiveAid) return { ...defensiveAid, defensiveAid: true };
     }
     const targetScore = war.attackerId === targetId ? war.warScore : -war.warScore;
     const alignedIntervention = alignmentEdge >= 4;
@@ -217,22 +255,28 @@ function regionalWarsByTargetV2(state: WorldStateV2): ReadonlyMap<PlayerId, read
   const result = new Map<PlayerId, WarStateV2[]>();
   for (const war of state.wars) {
     if (war.attackerId === state.humanPlayerId || state.tick - war.lastBattleTick > 12) continue;
-    const humanDefense = war.defenderId === state.humanPlayerId;
-    if (state.tick - war.startedTick < (humanDefense ? AI_DEFENSIVE_AID_MIN_AGE : AI_REGIONAL_ESCALATION_MIN_AGE)
-      || war.battles < (humanDefense ? AI_DEFENSIVE_AID_MIN_BATTLES : AI_REGIONAL_ESCALATION_MIN_BATTLES)) continue;
-    if (humanDefense) {
+    const age = state.tick - war.startedTick;
+    if (age >= AI_DEFENSIVE_AID_MIN_AGE && war.battles >= AI_DEFENSIVE_AID_MIN_BATTLES) {
       result.set(war.attackerId, [...(result.get(war.attackerId) ?? []), war]);
-      continue;
     }
-    result.set(war.attackerId, [...(result.get(war.attackerId) ?? []), war]);
-    result.set(war.defenderId, [...(result.get(war.defenderId) ?? []), war]);
+    if (age >= AI_REGIONAL_ESCALATION_MIN_AGE && war.battles >= AI_REGIONAL_ESCALATION_MIN_BATTLES) {
+      result.set(war.defenderId, [...(result.get(war.defenderId) ?? []), war]);
+    }
   }
   return result;
 }
 
-function budgetCommands(playerId: PlayerId, current: BudgetPolicyV2, target: BudgetPolicyV2): WorldCommandV2[] {
-  return current.military === target.military && current.research === target.research && current.development === target.development
-    ? [] : [{ type: 'set-budget-policy', playerId, budget: target }];
+function budgetCommands(
+  playerId: PlayerId,
+  current: BudgetPolicyV2,
+  target: BudgetPolicyV2,
+  iqScore: number,
+): WorldCommandV2[] {
+  const next = moveBudgetTowardTargetV2(current, target, iqScore);
+  return current.military === next.military
+      && current.research === next.research
+      && current.development === next.development
+    ? [] : [{ type: 'set-budget-policy', playerId, budget: next }];
 }
 
 function weightedBudgetPolicyV2(scores: Readonly<BudgetPolicyV2>): BudgetPolicyV2 {
@@ -401,14 +445,14 @@ export function selectAiResearchAllocationsV2(
 }
 
 export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): WorldCommandV2[] {
-  if (state.tick === 0 || state.tick % AI_DECISION_INTERVAL !== 0 || state.gameOver) return [];
+  if (state.tick === 0 || state.tick % NATIONAL_AI_REVIEW_TICKS !== 0 || state.gameOver) return [];
   const commands: WorldCommandV2[] = [];
   const living = sortedNationIdsV2(state).filter((id) => !selectIsEliminatedV2(state, id));
   const powerSnapshot = createPowerSnapshotV2(state, content);
   // Rotate strategic initiative so every country gets credible expansion
   // windows instead of alphabetically early nations consuming the war slot.
   const initiativeOffset = living.length > 0
-    ? (Math.floor(state.tick / AI_DECISION_INTERVAL) + state.seed) % living.length : 0;
+    ? (Math.floor(state.tick / NATIONAL_AI_REVIEW_TICKS) + state.seed) % living.length : 0;
   const rotatingOrder = [...living.slice(initiativeOffset), ...living.slice(0, initiativeOffset)];
   const rotatingInitiative = rotatingOrder.filter((id) => id !== state.humanPlayerId).slice(0, 16);
   const persistentMajorPowers = [...living].filter((id) => id !== state.humanPlayerId)
@@ -425,6 +469,7 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
     ...persistentMajorPowers.slice(majorInitiativeOffset),
     ...persistentMajorPowers.slice(0, majorInitiativeOffset),
   ];
+  const activeWarCap = aiActiveWarCapV2(living.length, state.tick);
   // Reserve every other global expansion window for the powers able to reshape
   // a region. Previously a rotating minor almost always consumed the single
   // declaration slot before a major power was evaluated, making the top states
@@ -434,13 +479,15 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
     ? [...rotatingMajorPowers, ...rotatingOrder.filter((id) => !persistentMajorPowers.includes(id))]
     : rotatingOrder;
   const warInitiative = new Set<PlayerId>([...rotatingInitiative, ...persistentMajorPowers]);
-  const activeWarCap = aiActiveWarCapV2(living.length, state.tick);
   const escalationWarCap = activeWarCap + AI_REGIONAL_ESCALATION_EXTRA_WAR_CAP;
   const resistance = selectGlobalResistanceV2(state);
   const regionalWarsByTarget = regionalWarsByTargetV2(state);
   const defensiveAidSupporters = new Set<PlayerId>();
   for (const war of state.wars) {
-    if (war.defenderId !== state.humanPlayerId || war.attackerId === state.humanPlayerId) continue;
+    if (war.attackerId === state.humanPlayerId) continue;
+    const aggressorPower = powerSnapshot.byNation.get(war.attackerId) ?? 0;
+    const defenderPower = powerSnapshot.byNation.get(war.defenderId) ?? 0;
+    if (aggressorPower / Math.max(1, defenderPower) < AI_DEFENSIVE_AID_AGGRESSOR_RATIO) continue;
     for (const supporterId of living) {
       if (supporterId === war.attackerId || supporterId === war.defenderId) continue;
       if (selectWarAccessTypeV2(state, content, supporterId, war.defenderId) === 'land') {
@@ -457,18 +504,30 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
       content,
       playerId,
       powerSnapshot.leaderBreakthroughs,
-    )));
-    const researchReviewTicks = playerId === state.humanPlayerId
-      ? SUPER_AI_RESEARCH_REVIEW_TICKS : RIVAL_AI_RESEARCH_REVIEW_TICKS;
-    if (state.tick % researchReviewTicks === 0) {
-      const allocations = selectAiResearchAllocationsV2(state, content, playerId, powerSnapshot);
-      if (!sameResearchAllocationsV2(player.research.allocations, allocations)) {
-        commands.push({ type: 'set-research-allocations', playerId, allocations });
+    ), content.nations[playerId]?.iqScore ?? 100));
+    const targetAllocations = selectAiResearchAllocationsV2(state, content, playerId, powerSnapshot);
+    const allocations = moveResearchTowardTargetV2(
+      player.research.allocations,
+      targetAllocations,
+      content.nations[playerId]?.iqScore ?? 100,
+    );
+    if (!sameResearchAllocationsV2(player.research.allocations, allocations)) {
+      commands.push({ type: 'set-research-allocations', playerId, allocations });
+    }
+    const army = selectArmyStrengthV2(state, content, playerId);
+    const wars = selectWarsOfV2(state, playerId);
+    // The selected country's APEX uses the same peacetime emergency-rebuild
+    // decision as every rival. War declarations remain the player's choice.
+    if (wars.length === 0) {
+      const terms = selectRapidRecruitmentTermsV2(state, content, playerId);
+      const cashAfter = player.treasury - terms.cost;
+      if (terms.allowed && army.fillRatio < 0.28
+        && cashAfter >= selectNationalEconomyV2(state, content, playerId).weeklyRevenue * 2
+        && nextRandom(state) < 0.025) {
+        commands.push({ type: 'rapid-recruitment', playerId });
       }
     }
     if (playerId !== state.humanPlayerId) {
-      const army = selectArmyStrengthV2(state, content, playerId);
-      const wars = selectWarsOfV2(state, playerId);
       const incomingOffer = state.offers.filter((offer) => (
         offer.toId === playerId && offer.status === 'pending' && offer.expiresTick > state.tick
       )).sort((left, right) => left.createdTick - right.createdTick || left.id.localeCompare(right.id))[0];
@@ -512,31 +571,12 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
           continue;
         }
       }
-      const terms = selectRapidRecruitmentTermsV2(state, content, playerId);
       const economy = selectNationalEconomyV2(state, content, playerId);
-      const defending = wars.some((war) => war.defenderId === playerId);
-      const hostilePower = wars.reduce((sum, war) => {
-        const enemyId = war.attackerId === playerId ? war.defenderId : war.attackerId;
-        return sum + (powerSnapshot.byNation.get(enemyId) ?? 0);
-      }, 0);
-      const ownPower = powerSnapshot.byNation.get(playerId) ?? 0;
-      const severeNeed = terms.atWar
-        ? defending && army.fillRatio < 0.20 && hostilePower > ownPower * 1.10
-        : army.fillRatio < 0.28;
-      const cashAfter = player.treasury - terms.cost;
-      const safeRunway = terms.atWar ? 3 : 2;
-      const rareChance = terms.atWar ? 0.06 : 0.025;
-      if (terms.allowed && severeNeed
-        && cashAfter >= economy.weeklyRevenue * safeRunway
-        && nextRandom(state) < rareChance) {
-        commands.push({ type: 'rapid-recruitment', playerId });
-      }
       // Rival planners can use the same costly accelerator as the player,
       // but only from a large peacetime surplus and for a real technology gap.
       const researchGap = Math.max(0, powerSnapshot.leaderBreakthroughs
         - Object.values(player.research.breakthroughs).reduce((sum, value) => sum + value, 0));
-      if (state.tick % RIVAL_AI_RESEARCH_REVIEW_TICKS === 0
-        && wars.length === 0 && researchGap >= 5
+      if (wars.length === 0 && researchGap >= 5
         && warInitiative.has(playerId)
         && player.researchSurgeAvailableTick <= state.tick
         && player.treasury >= economy.weeklyRevenue * 10) {

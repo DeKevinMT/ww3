@@ -14,7 +14,7 @@ import {
 } from './balance';
 import { WORLD_CONTENT_V2, type WorldContentV2 } from './content';
 import { initialArmyCapacityRatioV2, initialTerritoryArmyCapacityV2 } from './capacity';
-import { calculateFiscalCapacityV2 } from './fiscal';
+import { calculateBlendedFiscalCapacityV2 } from './fiscal';
 import {
   invalidateTerritoryIndexV2,
   selectFoodDomesticCapacityTargetV2,
@@ -42,11 +42,10 @@ function createNationState(id: PlayerId, content: WorldContentV2): NationStateV2
   const definition = content.nations[id];
   if (!definition) throw new Error(`Missing V2 nation content for ${id}.`);
   const structuralPopulation = Math.max(0, definition.real.population);
-  const structuralWealthPerPerson = structuralPopulation > 0
-    ? definition.real.gdp / structuralPopulation : 0;
-  const fiscalCapacity = calculateFiscalCapacityV2(
+  const fiscalCapacity = calculateBlendedFiscalCapacityV2(
+    definition.real.gdp,
     structuralPopulation,
-    structuralWealthPerPerson,
+    structuralPopulation,
   );
   const weeklyRevenue = fiscalCapacity.weeklyTaxRevenue;
   // Small, wealthy states commonly hold a much deeper liquid buffer than two
@@ -68,6 +67,7 @@ function createNationState(id: PlayerId, content: WorldContentV2): NationStateV2
     // vulnerability still starts fragile systems with a smaller buffer and a
     // higher production/import burden below.
     foodSecurity: 1,
+    trainedReserves: 0,
     budget: { ...DEFAULT_BUDGET_V2 },
     research: {
       allocations: { ...DEFAULT_RESEARCH_ALLOCATIONS_V2 },
@@ -82,7 +82,6 @@ function createNationState(id: PlayerId, content: WorldContentV2): NationStateV2
     propagandaAvailableTick: 0,
     propagandaProgram: null,
     warFatigue: 0,
-    combatExperience: 0,
     capitalId: definition.initialCapitalId,
   };
 }
@@ -262,7 +261,7 @@ export function createWorldStateV2(
     content.territoryIds.map((id) => [id, createTerritoryState(id, content)]),
   );
   const state: WorldStateV2 = {
-    schemaVersion: 19,
+    schemaVersion: 20,
     rulesVersion: V2_RULES_VERSION,
     contentVersion: V2_CONTENT_VERSION,
     mapId: V2_MAP_ID,

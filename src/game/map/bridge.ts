@@ -7,7 +7,7 @@ export interface MapArmyState {
   capacity: number;
   /** Deployed soldiers available to the local force, in millions. */
   combatStrength: number;
-  /** Exact local Combat Power, including condition, quality and national experience. */
+  /** Exact local Combat Power, including condition and per-soldier quality. */
   power: number;
   attack: number;
   defense: number;

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  SUPER_AI_WAR_BASE_RUNWAY_WEEKS,
-  SUPER_AI_WAR_FRONT_RUNWAY_WEEKS,
+  NATIONAL_AI_WAR_BASE_RUNWAY_WEEKS,
+  NATIONAL_AI_WAR_FRONT_RUNWAY_WEEKS,
 } from './balance';
 import { createWorldStateV2 } from './bootstrap';
 import { nationalArmyCapacityTargetV2, synchronizeArmyCapacityV2 } from './capacity';
@@ -18,25 +18,24 @@ describe('V2 finance and research', () => {
     const bel = nationIdV2('bel');
     state.players[bel].treasury = 100;
     const plan = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, bel);
-    expect(plan.expenses).toBeCloseTo(plan.foodProduction
-      + (plan.revenue - plan.foodProduction) * 0.995, 5);
-    expect(plan.expenses).toBeCloseTo(plan.foodProduction + plan.military + plan.research + plan.development, 5);
+    expect(plan.expenses).toBeCloseTo(plan.baseOperatingCost + plan.foodProduction
+      + plan.military + plan.research + plan.development, 5);
     expect(plan.standingOperations).toBeCloseTo(
       plan.military
         - Math.min(plan.military, plan.armyUpkeep)
-        - plan.recruitment,
+        - plan.recruitment
+        - plan.reserveTrainingCost,
       5,
     );
     const mandatoryFunded = Math.min(plan.military, plan.armyUpkeep);
-    expect(mandatoryFunded + plan.recruitment + plan.standingOperations)
+    expect(mandatoryFunded + plan.recruitment + plan.reserveTrainingCost + plan.standingOperations)
       .toBeCloseTo(plan.military, 5);
     expect(plan.condition + plan.economyGrowth + plan.populationGrowth).toBeCloseTo(plan.development, 5);
-    expect(plan.foodProduction + plan.military + plan.research + plan.development).toBeCloseTo(plan.expenses, 5);
-    expect(plan.net).toBeCloseTo((plan.revenue - plan.foodProduction) * 0.005, 5);
+    expect(plan.net).toBeCloseTo(plan.revenue + plan.foodExportIncome - plan.expenses, 5);
     expect(plan.closingTreasury).toBeCloseTo(state.players[bel].treasury + plan.net, 5);
-    expect(plan.activeBudget.military).toBeLessThan(state.players[bel].budget.military);
-    expect(plan.activeBudget.research + plan.activeBudget.development)
-      .toBeGreaterThan(state.players[bel].budget.research + state.players[bel].budget.development);
+    expect(plan.activeBudget).toEqual(state.players[bel].budget);
+    expect(plan.military / (plan.military + plan.research + plan.development))
+      .toBeCloseTo(state.players[bel].budget.military / 100, 6);
   });
 
   it('keeps a mature branch improving beyond the former level-20 limit', () => {
@@ -57,7 +56,8 @@ describe('V2 finance and research', () => {
     const beforeLevels = state.players[bel].research.effectLevels.attack
       + state.players[bel].research.effectLevels.control;
     expect(plan.research).toBeGreaterThan(0);
-    expect(plan.foodProduction + plan.military + plan.research + plan.development).toBeCloseTo(plan.expenses, 5);
+    expect(plan.baseOperatingCost + plan.foodProduction + plan.military + plan.research + plan.development)
+      .toBeCloseTo(plan.expenses, 5);
     processResearchV2(state, WORLD_CONTENT_V2, plans);
     expect(state.players[bel].research.effectLevels.attack
       + state.players[bel].research.effectLevels.control).toBe(beforeLevels + 1);
@@ -82,22 +82,25 @@ describe('V2 finance and research', () => {
     });
     const warPlan = selectWeeklyFinanceBreakdownV2(war, WORLD_CONTENT_V2, bel);
     expect(warPlan.reserveTarget).toBeCloseTo(warPlan.revenue
-      * (SUPER_AI_WAR_BASE_RUNWAY_WEEKS + SUPER_AI_WAR_FRONT_RUNWAY_WEEKS), 5);
+      * (NATIONAL_AI_WAR_BASE_RUNWAY_WEEKS + NATIONAL_AI_WAR_FRONT_RUNWAY_WEEKS), 5);
     expect(warPlan.closingTreasury).toBeLessThan(5);
     expect(warPlan.closingTreasury).toBeGreaterThanOrEqual(0);
-    expect(warPlan.expenses).toBeCloseTo(warPlan.foodProduction
-      + (warPlan.revenue - warPlan.foodProduction) * 0.92 + warPlan.warOperations, 5);
+    const warDiscretionary = warPlan.revenue - warPlan.baseOperatingCost - warPlan.foodProduction;
+    expect(warPlan.expenses).toBeCloseTo(warPlan.baseOperatingCost + warPlan.foodProduction
+      + warDiscretionary * 0.92 + warPlan.warOperations, 5);
     expect(warPlan.net).toBeCloseTo(
-      (warPlan.revenue - warPlan.foodProduction) * 0.08 - warPlan.warOperations, 5,
+      warDiscretionary * 0.08 - warPlan.warOperations, 5,
     );
 
     war.players[bel].treasury = 100;
     const fundedOffensive = selectWeeklyFinanceBreakdownV2(war, WORLD_CONTENT_V2, bel);
-    expect(fundedOffensive.expenses).toBeCloseTo(fundedOffensive.foodProduction
-      + (fundedOffensive.revenue - fundedOffensive.foodProduction) * 1.08
+    const fundedDiscretionary = fundedOffensive.revenue
+      - fundedOffensive.baseOperatingCost - fundedOffensive.foodProduction;
+    expect(fundedOffensive.expenses).toBeCloseTo(fundedOffensive.baseOperatingCost
+      + fundedOffensive.foodProduction + fundedDiscretionary * 1.08
       + fundedOffensive.warOperations, 5);
     expect(fundedOffensive.net).toBeCloseTo(
-      -(fundedOffensive.revenue - fundedOffensive.foodProduction) * 0.08
+      -fundedDiscretionary * 0.08
         - fundedOffensive.warOperations,
       5,
     );
@@ -114,7 +117,7 @@ describe('V2 finance and research', () => {
     expect(usaPlan.revenue).toBeGreaterThan(belgiumPlan.revenue * 20);
     expect(usaSavingsRate).toBeGreaterThanOrEqual(0);
     expect(usaSavingsRate).toBeLessThanOrEqual(0.03);
-    expect(usaSavingsRate).toBeLessThanOrEqual(belgiumSavingsRate + 0.0001);
+    expect(Math.abs(usaSavingsRate - belgiumSavingsRate)).toBeLessThan(0.01);
   });
 
   it('allows sovereign debt, adds a 10% premium to new borrowing and automatically repays it', () => {
@@ -160,7 +163,7 @@ describe('V2 finance and research', () => {
     }
     const plan = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, bel);
     expect(plan.reserveTarget).toBeCloseTo(plan.revenue
-      * (SUPER_AI_WAR_BASE_RUNWAY_WEEKS + 2 * SUPER_AI_WAR_FRONT_RUNWAY_WEEKS), 5);
+      * (NATIONAL_AI_WAR_BASE_RUNWAY_WEEKS + 2 * NATIONAL_AI_WAR_FRONT_RUNWAY_WEEKS), 5);
     expect(plan.net).toBeLessThan(0);
     expect(plan.closingTreasury).toBeLessThan(state.players[bel].treasury);
     expect(plan.mandatoryFundingRatio).toBeCloseTo(1, 6);

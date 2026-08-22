@@ -82,14 +82,6 @@ describe('targeted Research Surge', () => {
     expect(selectResearchSurgeTermsV2(state, WORLD_CONTENT_V2, bel, targetBranch).cost).toBeGreaterThan(damaged.cost);
   });
 
-  it('does not charge more merely because Combat Experience increased', () => {
-    const state = belgiumState(2_403);
-    const before = selectResearchSurgeTermsV2(state, WORLD_CONTENT_V2, bel, targetBranch);
-    state.players[bel].combatExperience = 100;
-    const after = selectResearchSurgeTermsV2(state, WORLD_CONTENT_V2, bel, targetBranch);
-    expect(after.cost).toBeCloseTo(before.cost, 6);
-  });
-
   it('queues the chosen program, advances no other program, and starts a 208-week cooldown', () => {
     const surgeState = belgiumState(2_404);
     surgeState.players[bel].treasury = 1_000_000;

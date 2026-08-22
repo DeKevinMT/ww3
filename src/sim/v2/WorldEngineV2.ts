@@ -24,7 +24,6 @@ import {
   selectActiveWarBetweenV2,
   selectArmyCapacityTargetV2,
   selectArmyStrengthV2,
-  selectCombatExperienceV2,
   selectControlledPopulationV2,
   selectConquestForecastV2,
   selectConventionalPowerV2,
@@ -57,6 +56,7 @@ import {
   selectWeeklyRecruitmentV2,
   selectWeeklyPopulationTrendV2,
   type MilitaryBaseSnapshotV2,
+  type PowerSnapshotV2,
 } from './selectors';
 import { selectGlobalResistanceV2, updateGlobalResistanceV2 } from './resistance';
 import {
@@ -79,7 +79,6 @@ import type {
   BudgetPolicyV2,
   CeasefireTermsV2,
   CommandResultV2,
-  CombatExperienceViewV2,
   ConquestForecastV2,
   ArmyStateV2,
   ArmyStrengthV2,
@@ -218,12 +217,13 @@ export class WorldEngineV2 {
     };
   }
 
-  private trackHumanWars(baseline = this.captureHumanNationBaseline()): void {
+  private trackHumanWars(baseline?: HumanNationBaselineV2): void {
     const humanId = this.state.humanPlayerId;
-    const source = baseline.humanId === humanId ? baseline : this.captureHumanNationBaseline();
+    let source = baseline?.humanId === humanId ? baseline : undefined;
     for (const war of this.state.wars) {
       if (war.attackerId !== humanId && war.defenderId !== humanId) continue;
       if (this.humanWarBaselines.has(war.id)) continue;
+      source ??= this.captureHumanNationBaseline();
       this.humanWarBaselines.set(war.id, {
         humanId,
         opponentId: war.attackerId === humanId ? war.defenderId : war.attackerId,
@@ -285,7 +285,6 @@ export class WorldEngineV2 {
       const sumTerritories = (territoryIds: readonly TerritoryId[], field: 'population' | 'economy'): number => round(
         territoryIds.reduce((sum, territoryId) => sum + (this.state.territories[territoryId]?.[field] ?? 0), 0),
       );
-      const humanExperience = conclusion.experience.find((entry) => entry.playerId === humanId)!;
       const ratingsAfter = createMilitaryBaseSnapshotV2(this.state, this.content).byNation.get(humanId);
       const reparationsReceived = settlement?.kind === 'reparations' && settlement.payeeId === humanId
         ? settlement.amount ?? 0 : 0;
@@ -340,12 +339,6 @@ export class WorldEngineV2 {
         reparationsPaid,
         treatyWeeklyPayment,
         treatyPaymentWeeks: settlement?.kind === 'ceasefire' ? settlement.paymentWeeks ?? 0 : 0,
-        combatExperienceBefore: humanExperience.experienceBefore,
-        combatExperienceAfter: humanExperience.experienceAfter,
-        combatExperienceGained: round(Math.max(
-          0,
-          humanExperience.experienceAfter - humanExperience.experienceBefore,
-        )),
         baseAttackBefore: baseline.baseAttackBefore,
         baseAttackAfter: ratingsAfter?.attack ?? baseline.baseAttackBefore,
         baseDefenseBefore: baseline.baseDefenseBefore,
@@ -470,10 +463,6 @@ export class WorldEngineV2 {
     return selectTotalManpowerV2(this.state, nationIdV2(playerId));
   }
 
-  combatExperience(playerId: string): CombatExperienceViewV2 {
-    return selectCombatExperienceV2(this.state, nationIdV2(playerId));
-  }
-
   /** Ephemeral one-week map telemetry; never part of saves or deterministic hashes. */
   recentLogisticsMovements(): readonly LogisticsMovementV2[] {
     return this.logisticsMovements;
@@ -486,6 +475,9 @@ export class WorldEngineV2 {
   rapidRecruitment(playerId: string): CommandResultV2 {
     const id = nationIdV2(playerId);
     const terms = this.rapidRecruitmentTerms(id);
+    // Re-evaluate this rule when queued commands are applied as well as when
+    // they are requested, so a war starting in between cannot bypass reserves.
+    if (terms.atWar) return { accepted: false, reason: terms.reason ?? 'Rapid Recruitment is unavailable during war.' };
     if (!terms.allowed) return { accepted: false, reason: terms.reason };
     if (!this.applyingCommand) return this.queue({ type: 'rapid-recruitment', playerId: id });
 
@@ -528,8 +520,10 @@ export class WorldEngineV2 {
     return selectWeeklyFinanceBreakdownV2(this.state, this.content, nationIdV2(playerId));
   }
 
-  openingCandidateFinancePlans(): ReadonlyMap<PlayerId, WeeklyFinanceBreakdownV2> {
-    return selectOpeningCandidateFinancePlansV2(this.state, this.content);
+  openingCandidateFinancePlans(
+    powerSnapshot?: PowerSnapshotV2,
+  ): ReadonlyMap<PlayerId, WeeklyFinanceBreakdownV2> {
+    return selectOpeningCandidateFinancePlansV2(this.state, this.content, powerSnapshot);
   }
 
   /** Pure authoritative preview; does not queue or mutate the proposed budget. */
@@ -556,13 +550,18 @@ export class WorldEngineV2 {
     return selectGlobalResistanceV2(this.state);
   }
 
-  globalRanking(): RankingEntryV2[] {
-    return selectGlobalRankingV2(this.state, this.content);
+  globalRanking(powerSnapshot?: PowerSnapshotV2): RankingEntryV2[] {
+    return selectGlobalRankingV2(this.state, this.content, powerSnapshot);
   }
 
   /** One fresh derived blend for bulk UI/map reads; never retained in saves. */
   militaryBaseSnapshot(): MilitaryBaseSnapshotV2 {
     return createMilitaryBaseSnapshotV2(this.state, this.content);
+  }
+
+  /** One shared conventional-power view for bulk finance and ranking reads. */
+  powerSnapshot(militaryBaseSnapshot?: MilitaryBaseSnapshotV2): PowerSnapshotV2 {
+    return createPowerSnapshotV2(this.state, this.content, militaryBaseSnapshot);
   }
 
   strategicScore(playerId: string): number {
@@ -846,7 +845,9 @@ export class WorldEngineV2 {
   }
 
   private flushQueuedActions(): void {
-    const actions = this.pendingActions.splice(0).sort((a, b) => a.sequence - b.sequence);
+    if (this.pendingActions.length === 0) return;
+    const actions = this.pendingActions.splice(0);
+    if (actions.length > 1) actions.sort((a, b) => a.sequence - b.sequence);
     this.applyingCommand = true;
     this.sequenceAlreadyAssigned = true;
     try {
@@ -867,8 +868,21 @@ export class WorldEngineV2 {
   }
 
   private deriveVictory(): void {
-    const owners = [...new Set(Object.values(this.state.territories).map((territory) => territory.owner))];
-    const winner = owners.length === 1 && Object.keys(this.state.territories).length === this.content.territoryIds.length ? owners[0] : undefined;
+    let soleOwner: PlayerId | undefined;
+    let territoryCount = 0;
+    for (const territoryId in this.state.territories) {
+      if (!Object.prototype.hasOwnProperty.call(this.state.territories, territoryId)) continue;
+      const owner = this.state.territories[territoryIdV2(territoryId)]!.owner;
+      territoryCount += 1;
+      if (soleOwner === undefined) soleOwner = owner;
+      else if (owner !== soleOwner) {
+        this.state.winnerId = undefined;
+        this.state.gameOver = false;
+        return;
+      }
+    }
+    const winner = territoryCount === this.content.territoryIds.length
+      ? soleOwner : undefined;
     this.state.winnerId = winner;
     this.state.gameOver = Boolean(winner);
     if (winner) this.state.speed = 0;

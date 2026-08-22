@@ -28,6 +28,8 @@ const SMALL_COUNTRY_INTEGRATION_YEARS = 12.5;
 const INTEGRATION_LINEAR_YEARS = 25;
 const INTEGRATION_QUADRATIC_YEARS = 50;
 const INTEGRATION_LARGE_COUNTRY_YEARS = 100;
+/** New captures use a calendar exactly 50% longer than the V2.54 curve. */
+export const INTEGRATION_DURATION_MULTIPLIER_V2 = 1.5;
 
 /**
  * Administration price frozen from the territory's live output at conquest.
@@ -103,9 +105,10 @@ export function territoryIntegrationDurationWeeksV2(
   content: WorldContentV2,
   territoryId: TerritoryId,
 ): number {
-  // Luxembourg anchors the compact-country calendar at 12.5 years. The fourth-
-  // power tail keeps medium countries demanding while making the largest
-  // countries a multi-century project without a hard country-specific rule.
+  // The underlying size curve remains unchanged; new captures receive the
+  // universal 1.5x calendar after its old whole-week promise is calculated.
+  // This makes the extension exact for every territory and avoids changing
+  // the relative ordering through fractional-week rounding.
   const luxembourgId = territoryIdV2('lux');
   const luxembourgSize = content.territories[luxembourgId]
     ? territoryIntegrationSizeV2(content, luxembourgId) : 0;
@@ -119,7 +122,8 @@ export function territoryIntegrationDurationWeeksV2(
     + INTEGRATION_LINEAR_YEARS * relativeSize
     + INTEGRATION_QUADRATIC_YEARS * relativeSize ** 2
     + INTEGRATION_LARGE_COUNTRY_YEARS * relativeSize ** 4;
-  return Math.round(years * WEEKS_PER_YEAR);
+  const previousCalendarWeeks = Math.round(years * WEEKS_PER_YEAR);
+  return Math.round(previousCalendarWeeks * INTEGRATION_DURATION_MULTIPLIER_V2);
 }
 
 export function territoryIntegrationGainPerWeekV2(
@@ -186,17 +190,22 @@ function mergeEliminatedNationKnowledgeV2(
   ownerId: PlayerId,
 ): void {
   if (formerNationId === ownerId) return;
-  // A country that still controls land remains a separate institution. Once it
-  // has no sovereign territory, its strongest durable knowledge becomes part
-  // of the empire, without summing duplicate bonuses into free power.
-  if (Object.values(state.territories).some((territory) => territory.owner === formerNationId)) return;
+  // A country that still controls land or survives as the visible core of an
+  // unfinished integration remains a separate institution. Only its final
+  // permanent disappearance transfers durable knowledge, without summing
+  // duplicate research into free progress.
+  if (Object.values(state.territories).some((territory) => (
+    territory.owner === formerNationId || territory.coreOwner === formerNationId
+  ))) return;
   const former = state.players[formerNationId];
   const owner = state.players[ownerId];
   if (!former || !owner) return;
-  owner.combatExperience = round(Math.max(
-    owner.combatExperience,
-    former.combatExperience,
-  ));
+  // The final disappearance of a sovereign transfers its remaining trained
+  // personnel exactly once. Clearing the dormant record keeps repeated or
+  // multi-core completions idempotent, while the owner may retain an over-cap
+  // pool under the ordinary reserve rules.
+  owner.trainedReserves = round(owner.trainedReserves + former.trainedReserves);
+  former.trainedReserves = 0;
   for (const branch of RESEARCH_BRANCHES) {
     owner.research.progress[branch] = round(Math.max(
       owner.research.progress[branch],
