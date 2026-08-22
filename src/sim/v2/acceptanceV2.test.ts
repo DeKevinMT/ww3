@@ -55,6 +55,7 @@ function nation(id: PlayerId, capitalId: TerritoryId, name: string): NationConte
     sigil: id === A ? 'A' : 'B',
     profile: 'acceptance fixture',
     influenceTags: [],
+    iqScore: 100,
     militaryQuality: 1,
     nuclearPowerLevel: 0,
     ambition: 0.5,

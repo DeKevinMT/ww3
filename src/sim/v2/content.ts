@@ -7,7 +7,22 @@ import {
 } from '../../game/data/worldMap';
 import rawDeathRateData from '../../assets/wb_death_rate.json?raw';
 import rawTaxRevenueData from '../../assets/imf_tax_revenue.json?raw';
-import { ARMY_CAPACITY_STRUCTURAL_POPULATION_SHARE, clamp, round } from './balance';
+import {
+  ARMY_CAPACITY_STRUCTURAL_POPULATION_SHARE,
+  NATIONAL_IQ_GDP_PER_CAPITA_CEILING,
+  NATIONAL_IQ_GDP_PER_CAPITA_FLOOR,
+  NATIONAL_IQ_INSTITUTIONAL_CAPACITY_CEILING,
+  NATIONAL_IQ_INSTITUTIONAL_CAPACITY_FLOOR,
+  NATIONAL_IQ_PROXY_GDP_WEIGHT,
+  NATIONAL_IQ_PROXY_INSTITUTION_WEIGHT,
+  NATIONAL_IQ_SCORE_MAX,
+  NATIONAL_IQ_SCORE_MIN,
+  NATIONAL_QUALITY_COMBAT_SPAN,
+  NATIONAL_QUALITY_GDP_WEIGHT,
+  NATIONAL_QUALITY_IQ_WEIGHT,
+  clamp,
+  round,
+} from './balance';
 import {
   nationIdV2,
   territoryIdV2,
@@ -56,6 +71,8 @@ export interface NationContentV2 {
   sigil: string;
   profile: string;
   influenceTags: readonly string[];
+  /** Bounded gameplay proxy, not a scientific real-world psychometric claim. */
+  iqScore: number;
   militaryQuality: number;
   /** Data-calibrated baseline ATK before research and Combat Experience. */
   militaryAttackRating?: number;
@@ -273,19 +290,85 @@ function calibratedMilitaryPowerIndex(
   ));
 }
 
+function normalizedLogRangeV2(value: number, floor: number, ceiling: number): number {
+  const safeFloor = Math.max(0.000001, floor);
+  const safeCeiling = Math.max(safeFloor + 0.000001, ceiling);
+  return clamp(
+    Math.log(Math.max(safeFloor, value) / safeFloor)
+      / Math.log(safeCeiling / safeFloor),
+    0,
+    1,
+  );
+}
+
 /**
- * Translate the strategic power baseline into per-soldier ATK and DEF without
- * changing the population-only army cap. The 55/45 combat blend remains equal
- * to `combined`: SIPRI spending per deployed soldier merely tilts that value
- * slightly toward ATK (equipment reach) or DEF (force depth).
+ * Produce one stable national IQ gameplay proxy from data already shipped in
+ * the game. This deliberately does not claim to measure real-world cognition.
+ */
+export function calibratedNationalIqScoreV2(
+  gdpPerCapita: number,
+  institutionalCapacity: number,
+): number {
+  const income = normalizedLogRangeV2(
+    gdpPerCapita,
+    NATIONAL_IQ_GDP_PER_CAPITA_FLOOR,
+    NATIONAL_IQ_GDP_PER_CAPITA_CEILING,
+  );
+  const institutions = clamp(
+    (institutionalCapacity - NATIONAL_IQ_INSTITUTIONAL_CAPACITY_FLOOR)
+      / (NATIONAL_IQ_INSTITUTIONAL_CAPACITY_CEILING
+        - NATIONAL_IQ_INSTITUTIONAL_CAPACITY_FLOOR),
+    0,
+    1,
+  );
+  const proxy = NATIONAL_IQ_PROXY_GDP_WEIGHT * income
+    + NATIONAL_IQ_PROXY_INSTITUTION_WEIGHT * institutions;
+  return round(NATIONAL_IQ_SCORE_MIN
+    + (NATIONAL_IQ_SCORE_MAX - NATIONAL_IQ_SCORE_MIN) * proxy, 3);
+}
+
+/** GDP per capita is the primary opening quality input; IQ is a bounded refinement. */
+export function nationalQualityIndexV2(gdpPerCapita: number, iqScore: number): number {
+  const income = normalizedLogRangeV2(
+    gdpPerCapita,
+    NATIONAL_IQ_GDP_PER_CAPITA_FLOOR,
+    NATIONAL_IQ_GDP_PER_CAPITA_CEILING,
+  );
+  const iq = clamp(
+    (iqScore - NATIONAL_IQ_SCORE_MIN) / (NATIONAL_IQ_SCORE_MAX - NATIONAL_IQ_SCORE_MIN),
+    0,
+    1,
+  );
+  return round(NATIONAL_QUALITY_GDP_WEIGHT * income + NATIONAL_QUALITY_IQ_WEIGHT * iq, 9);
+}
+
+export function openingCombatQualityMultiplierV2(
+  gdpPerCapita: number,
+  iqScore: number,
+): number {
+  return round(1 + NATIONAL_QUALITY_COMBAT_SPAN
+    * (nationalQualityIndexV2(gdpPerCapita, iqScore) - 0.5), 9);
+}
+
+/**
+ * Translate strategic readiness into per-soldier ATK and DEF. GDP per capita
+ * plus the IQ gameplay proxy form the national quality input; strategic power
+ * and force size retain the readiness calibration that keeps opening armies
+ * and the global order credible. Spending per soldier only tilts the common
+ * quality toward ATK or DEF. The 55/45 blend remains equal to `combined`, so
+ * ATK/DEF do not secretly add a second power source.
  */
 export function calibratedMilitaryRatingsV2(
   powerIndex: number,
   defenceSpending: number,
   deployedManpower: number,
+  gdpPerCapita?: number,
+  iqScore?: number,
 ): { combined: number; attack: number; defense: number } {
   const manpower = Math.max(0.0001, deployedManpower);
-  const combined = clamp(powerIndex / (100 * manpower), 0.35, 14);
+  const combatQualityMultiplier = gdpPerCapita === undefined || iqScore === undefined
+    ? 1 : openingCombatQualityMultiplierV2(gdpPerCapita, iqScore);
+  const combined = clamp(powerIndex / (100 * manpower) * combatQualityMultiplier, 0.35, 14);
   const equipmentPerSoldier = Math.max(0, defenceSpending) / manpower;
   const equipmentScore = clamp(Math.log10(equipmentPerSoldier + 1) / Math.log10(2_500), 0, 1);
   const attackTilt = 0.10 * (equipmentScore - 0.50);
@@ -331,6 +414,11 @@ function makeNationContent(country: (typeof COUNTRIES)[number]): NationContentV2
   const powerIndex = calibratedMilitaryPowerIndex(country.population, country.gdp, defenceSpending);
   const fiscal = fiscalBaseline(country);
   const militaryBurden = defenceSpending / Math.max(0.1, country.gdp);
+  const wealthScore = Math.log10(Math.max(1, country.gdpPerCapita) + 1) / 5;
+  const researchCapacity = Math.max(0.2, Math.log10(country.gdp + 1) * 3.1 + wealthScore * 7.5 - 3.5);
+  const iqScore = calibratedNationalIqScoreV2(country.gdpPerCapita, researchCapacity);
+  const qualityIndex = nationalQualityIndexV2(country.gdpPerCapita, iqScore);
+  const militaryQuality = clamp(0.75 + 1.55 * qualityIndex, 0.75, 2.30);
   const provisionalManpower = Math.max(
     0.00025,
     Math.min(
@@ -341,20 +429,11 @@ function makeNationContent(country: (typeof COUNTRIES)[number]): NationContentV2
         + powerIndex * 0.001,
     ),
   );
-  const wealthScore = Math.log10(Math.max(1, country.gdpPerCapita) + 1) / 5;
-  const qualityFor = (manpower: number) => Math.max(0.75, Math.min(2.30,
-    0.60
-      + Math.log1p(defenceSpending / Math.max(0.00025, manpower) / 25) * 0.45
-      + wealthScore * 0.10
-      + powerIndex / 1_250,
-  ));
-  const provisionalQuality = qualityFor(provisionalManpower);
   const mobilizationInstitution = 1 + Math.min(1.25, militaryBurden * 15);
   const capacityPotential = country.population * 0.004
-    * (0.85 + 0.15 * provisionalQuality) * mobilizationInstitution;
+    * (0.85 + 0.15 * militaryQuality) * mobilizationInstitution;
   const deploymentRatio = Math.max(0.58, Math.min(0.93, 0.55 + 0.004 * powerIndex));
   const initialManpower = Math.max(0.0001, Math.min(provisionalManpower, capacityPotential * deploymentRatio));
-  const militaryQuality = qualityFor(initialManpower);
   const openingDeployedManpower = Math.min(
     initialManpower,
     Math.max(0.0001, country.population * ARMY_CAPACITY_STRUCTURAL_POPULATION_SHARE),
@@ -363,11 +442,12 @@ function makeNationContent(country: (typeof COUNTRIES)[number]): NationContentV2
     powerIndex,
     defenceSpending,
     openingDeployedManpower,
+    country.gdpPerCapita,
+    iqScore,
   );
   const landArea = approximateLandAreaKm2(country);
   const foodInsecurityRate = initialFoodInsecurityRate(country);
   const populationGrowthRate = balancedPopulationGrowthRateV2(country.populationGrowthRate);
-  const researchCapacity = Math.max(0.2, Math.log10(country.gdp + 1) * 3.1 + wealthScore * 7.5 - 3.5);
   return {
     id: nationIdV2(country.id),
     iso3: country.code.toUpperCase(),
@@ -384,6 +464,7 @@ function makeNationContent(country: (typeof COUNTRIES)[number]): NationContentV2
       `subregion:${country.subregion.toLowerCase()}`,
       ...realWorldAlignmentTags(country.iso3),
     ]),
+    iqScore,
     militaryQuality,
     militaryAttackRating: militaryRatings.attack,
     militaryDefenseRating: militaryRatings.defense,
