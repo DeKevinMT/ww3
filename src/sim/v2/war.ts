@@ -302,6 +302,8 @@ export function declareWarV2(
       battles: 0,
       attackerLosses: 0,
       defenderLosses: 0,
+      attackerCivilianLosses: 0,
+      defenderCivilianLosses: 0,
       lastPeaceOfferTick: -1_000_000,
       attackerOperations: [],
       defenderOperations: [],
@@ -1087,21 +1089,27 @@ export function resolveBattlePulseV2(
   const battleIntensity = damageToAttacker + damageToDefender;
   const defenderPopulationExposure = civilianPopulationExposureV2(target.population);
   const attackerPopulationExposure = civilianPopulationExposureV2(source.population);
-  const defenderPopulationLoss = Math.min(
+  const requestedDefenderPopulationLoss = Math.min(
     target.population * DEFENDER_CIVILIAN_LOSS_POPULATION_CAP * defenderPopulationExposure,
     battleIntensity * DEFENDER_CIVILIAN_LOSS_INTENSITY
       * defenderPopulationExposure * civilianRisk * civilianProtection,
   );
-  const attackerPopulationLoss = Math.min(
+  const requestedAttackerPopulationLoss = Math.min(
     source.population * ATTACKER_CIVILIAN_LOSS_POPULATION_CAP * attackerPopulationExposure,
-    defenderPopulationLoss * ATTACKER_CIVILIAN_LOSS_DEFENDER_SHARE,
+    requestedDefenderPopulationLoss * ATTACKER_CIVILIAN_LOSS_DEFENDER_SHARE,
     battleIntensity * ATTACKER_CIVILIAN_LOSS_INTENSITY
       * attackerPopulationExposure * sourceCivilianRisk * attackerCivilianProtection,
   );
-  const populationLoss = defenderPopulationLoss;
   const economyLoss = Math.min(target.economy * 0.00150, damageToDefender * 1.50 * civilianRisk);
-  source.population = round(Math.max(0.01, source.population - attackerPopulationLoss));
-  target.population = round(Math.max(0.01, target.population - populationLoss));
+  const sourcePopulationBefore = source.population;
+  const targetPopulationBefore = target.population;
+  source.population = round(Math.max(0.01, sourcePopulationBefore - requestedAttackerPopulationLoss));
+  target.population = round(Math.max(0.01, targetPopulationBefore - requestedDefenderPopulationLoss));
+  // Report and accumulate only the loss actually applied after the canonical
+  // territory population floor, never the larger pre-clamp request.
+  const attackerPopulationLoss = round(Math.max(0, sourcePopulationBefore - source.population));
+  const defenderPopulationLoss = round(Math.max(0, targetPopulationBefore - target.population));
+  const populationLoss = defenderPopulationLoss;
   target.economy = round(Math.max(0.10, target.economy - economyLoss));
   source.condition = round(clamp(source.condition - (0.004 + damageToAttacker / Math.max(0.000001, sourceCapacity) * 0.08), 0.15, 1));
   target.condition = round(clamp(target.condition - (0.005 + damageToDefender / Math.max(0.000001, targetCapacity) * 0.10), 0.15, 1));
@@ -1190,10 +1198,22 @@ export function resolveBattlePulseV2(
   if (attackerFormal) {
     war.attackerLosses = round(war.attackerLosses + damageToAttacker);
     war.defenderLosses = round(war.defenderLosses + damageToDefender);
+    war.attackerCivilianLosses = round(
+      (war.attackerCivilianLosses ?? 0) + attackerPopulationLoss,
+    );
+    war.defenderCivilianLosses = round(
+      (war.defenderCivilianLosses ?? 0) + defenderPopulationLoss,
+    );
     war.warScore = round(war.warScore + damageToDefender - damageToAttacker + (conquered ? 15 : 0));
   } else {
     war.defenderLosses = round(war.defenderLosses + damageToAttacker);
     war.attackerLosses = round(war.attackerLosses + damageToDefender);
+    war.defenderCivilianLosses = round(
+      (war.defenderCivilianLosses ?? 0) + attackerPopulationLoss,
+    );
+    war.attackerCivilianLosses = round(
+      (war.attackerCivilianLosses ?? 0) + defenderPopulationLoss,
+    );
     war.warScore = round(war.warScore - (damageToDefender - damageToAttacker + (conquered ? 15 : 0)));
   }
   const attackerCapacity = selectTotalManpowerV2(state, attackerId).capacity;

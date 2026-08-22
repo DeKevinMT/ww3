@@ -16,9 +16,10 @@ export const V2_MAX_CATCH_UP_TICKS = 8;
 export const RAPID_RECRUITMENT_COOLDOWN_TICKS = 104;
 /** Emergency recruiting is priced per million soldiers before ATK/DEF quality and wartime multipliers. */
 export const RAPID_RECRUITMENT_COST_MULTIPLIER = 400;
-export const RESEARCH_SURGE_COOLDOWN_TICKS = 52;
-/** One costly push advances every unfinished national research branch equally. */
-export const RESEARCH_SURGE_PROGRESS_WEEKS = 12;
+/** A targeted Research Surge is a rare four-year national effort. */
+export const RESEARCH_SURGE_COOLDOWN_TICKS = 208;
+/** One costly push advances exactly one chosen national research program. */
+export const RESEARCH_SURGE_PROGRESS_WEEKS = 52;
 /** A Surge consumes more than half a year of structural public revenue before empire scaling. */
 export const RESEARCH_SURGE_COST_REVENUE_WEEKS = 8;
 export const RESEARCH_SURGE_TERRITORY_SCALE = 0.12;
@@ -88,8 +89,8 @@ export const COLLAPSED_OCCUPATION_CAPTURE_SHARE = 0.60;
 /** A rival occupation must be displaced before a second attacker can establish control. */
 export const CONTESTED_CONTROL_EROSION_PER_PULSE = 0.05;
 export const BATTLE_INTERVAL_TICKS = 2;
-/** Declared wars spend their first month mobilising at the border before combat begins. */
-export const WAR_MOBILIZATION_TICKS = 4;
+/** Declared wars spend their first two months mobilising at the border before combat begins. */
+export const WAR_MOBILIZATION_TICKS = 8;
 export const STALE_WAR_TICKS = 26;
 export const TRUCE_TICKS = 26;
 /** No side can ask to end a war before it has run for one full year. */
@@ -115,15 +116,28 @@ export const FOOD_TARGET_WEEKS = 6;
 export const FOOD_STORAGE_BASE_WEEKS = 5;
 export const FOOD_STORAGE_MILLIONS_PER_KM2 = 0.00002;
 export const FOOD_MAX_STOCK_WEEKS = 18;
-/** One productive square kilometre supports roughly 400 people in this abstraction. */
-export const FOOD_PEOPLE_MILLIONS_PER_KM2 = 0.0004;
 export const FOOD_DOMESTIC_COST_PER_MILLION = 0.0006;
 export const FOOD_IMPORT_COST_PER_MILLION = 0.0018;
+/** Food is a material public expense without overwhelming the wider economy. */
+export const FOOD_COST_GLOBAL_MULTIPLIER = 1.20;
+/** National farm/processing capacity takes five years to complete a full-scale transition. */
+export const FOOD_DOMESTIC_CAPACITY_RAMP_WEEKS = 260;
+/** Genuine food danger may temporarily redirect every live development dollar. */
+export const FOOD_DEVELOPMENT_PAUSE_COVERAGE = 0.98;
+export const FOOD_DEVELOPMENT_PAUSE_RESERVE_WEEKS = 2;
+export const FOOD_DEVELOPMENT_PAUSE_DRAIN_SHARE = 0.02;
+export const FOOD_DEVELOPMENT_PAUSE_CRITICAL_RESERVE_WEEKS = 0.50;
+/** Export receipts carry a small premium over the stable world-market baseline. */
+export const FOOD_EXPORT_PRICE_MULTIPLIER = 1.08;
+/** Stable world-market reference, independent of the exporter's war and inefficiency costs. */
+export const FOOD_EXPORT_MARKET_PRICE_LEVEL = 1.20;
 /** Local price levels keep food meaningful in rich economies without crushing low-income ones. */
 export const FOOD_PRICE_LEVEL_FLOOR = 0.75;
 export const FOOD_PRICE_LEVEL_PER_WEALTH_THOUSAND = 0.03;
 export const FOOD_PRICE_LEVEL_WEALTH_CAP = 75;
 export const FOOD_SHORTAGE_POPULATION_LOSS = 0.0008;
+/** Empty reserves can add up to six percentage points of annual mortality in a live shortage. */
+export const FOOD_EMPTY_RESERVE_ANNUAL_MORTALITY_MAX = 0.06;
 /**
  * National IQ is a bounded gameplay proxy derived from existing economic and
  * institutional content. It is not a scientific psychometric claim.
@@ -168,11 +182,15 @@ export const FOOD_ARMY_LOGISTICS_SCALE = 2;
 export const FOOD_ARMY_LOGISTICS_POWER = 1.35;
 /** Deep economy/logistics research can move the ceiling, never erase it. */
 export const FOOD_PRESSURE_RESEARCH_RELIEF_PER_LEVEL = 0.05;
-/** Live economic strength raises farm, storage and distribution productivity. */
-export const FOOD_ECONOMY_YIELD_FLOOR = 0.70;
-export const FOOD_ECONOMY_YIELD_WEIGHT = 0.30;
-/** India's large agricultural base gets a modest structural yield uplift. */
-export const FOOD_INDIA_ORIGIN_YIELD_MULTIPLIER = 1.30;
+/**
+ * Each land-equivalent active operation disrupts twelve percent of the food
+ * logistics chain before supply research. The same bounded pressure raises
+ * demand, wastes imports and slightly reduces last-mile civilian delivery.
+ */
+export const FOOD_WAR_LOGISTICS_PRESSURE_PER_LOAD = 0.12;
+export const FOOD_WAR_LOGISTICS_PRESSURE_MAX = 0.55;
+export const FOOD_WAR_DEMAND_SHARE_OF_PRESSURE = 0.20;
+export const FOOD_WAR_SUPPLY_RELIEF_PER_LEVEL = 0.025;
 /** Civilian population drives military volume; quality remains a separate per-soldier stat. */
 export const ARMY_CAPACITY_STRUCTURAL_POPULATION_SHARE = 0.00145;
 /** Existing real armies fit with a modest 25% professional expansion ceiling. */
@@ -275,6 +293,8 @@ export const RIVAL_AI_PEACE_RESERVE_WEEKS = 4;
 
 /** A conquest exposes ten percent of its surviving potential immediately. */
 export const CONQUEST_INITIAL_INTEGRATION_SHARE = 0.10;
+/** Every unfinished integration costs 2% of that territory's live GDP per year. */
+export const INTEGRATION_ADMINISTRATION_ANNUAL_OUTPUT_SHARE = 0.02;
 export const WEEKS_PER_YEAR = 52;
 /** Only a light slice of the field army crosses the border as an occupation force. */
 export const CONQUEST_OCCUPATION_FORCE_TRANSFER_SHARE = 0.02;
@@ -306,6 +326,18 @@ export const RESEARCH_ALLOCATED_FUNDING_SHARE = 0.70;
 export const RESEARCH_COST_GROWTH = 1.18;
 export const RESEARCH_BASE_COST_SCALE = 0.45;
 export const RESEARCH_MASTERY_POWER = 1;
+/** Larger research systems need proportionally larger programs, within a firm band. */
+export const RESEARCH_COST_CAPACITY_REFERENCE = 12;
+export const RESEARCH_COST_CAPACITY_MIN_MULTIPLIER = 0.55;
+export const RESEARCH_COST_CAPACITY_MAX_MULTIPLIER = 1.50;
+/** Institutional output blends national research capacity with the smaller IQ modifier. */
+export const RESEARCH_INSTITUTION_CAPACITY_BASE_MIN = 0.90;
+export const RESEARCH_INSTITUTION_CAPACITY_BASE_MAX = 1.13;
+export const RESEARCH_INSTITUTION_MULTIPLIER_MIN = 0.85;
+export const RESEARCH_INSTITUTION_MULTIPLIER_MAX = 1.15;
+/** A twelve-upgrade technology gap earns the complete bounded catch-up bonus. */
+export const RESEARCH_CATCH_UP_FULL_GAP = 12;
+export const RESEARCH_CATCH_UP_MAX_BONUS = 0.35;
 
 export const DEFAULT_RESEARCH_ALLOCATIONS_V2: Readonly<ResearchAllocationsV2> = {
   'population-recruitment': 0,

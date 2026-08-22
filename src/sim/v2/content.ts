@@ -6,6 +6,7 @@ import {
   terrainForTerritory,
 } from '../../game/data/worldMap';
 import rawDeathRateData from '../../assets/wb_death_rate.json?raw';
+import rawFoodSelfSufficiencyData from '../../assets/fao_food_self_sufficiency.json?raw';
 import rawTaxRevenueData from '../../assets/imf_tax_revenue.json?raw';
 import {
   ARMY_CAPACITY_STRUCTURAL_POPULATION_SHARE,
@@ -38,6 +39,8 @@ export interface NationRealDataV2 {
   deathRatePerThousand: number;
   /** Share of people initially exposed to acute/chronic food insecurity. */
   foodInsecurityRate: number;
+  /** Calorie-weighted domestic food self-sufficiency; 1 means 100% of availability. */
+  foodSelfSufficiencyRatio: number;
   /** Approximate polygon land area in square kilometres. */
   landArea: number;
   gdp: number;
@@ -138,6 +141,10 @@ interface ImfTaxRevenueAsset {
   countries?: Record<string, ImfTaxRevenueRecord>;
 }
 
+interface FaoFoodSelfSufficiencyAsset {
+  ratios?: Record<string, number>;
+}
+
 function latestDeathRates(): Map<string, number> {
   const parsed = JSON.parse(rawDeathRateData) as [unknown, WorldBankDeathRateRow[]];
   const rates = new Map<string, number>();
@@ -149,6 +156,15 @@ function latestDeathRates(): Map<string, number> {
 }
 
 const WORLD_BANK_DEATH_RATES = latestDeathRates();
+
+const FAO_FOOD_SELF_SUFFICIENCY = (() => {
+  const parsed = JSON.parse(rawFoodSelfSufficiencyData) as FaoFoodSelfSufficiencyAsset;
+  return new Map(Object.entries(parsed.ratios ?? {}).flatMap(([countryId, ratio]) => (
+    Number.isFinite(ratio)
+      ? [[countryId.toLowerCase(), Number(ratio)] as const]
+      : []
+  )));
+})();
 
 const IMF_TAX_REVENUE = (() => {
   const parsed = JSON.parse(rawTaxRevenueData) as ImfTaxRevenueAsset;
@@ -302,12 +318,110 @@ function normalizedLogRangeV2(value: number, floor: number, ceiling: number): nu
 }
 
 /**
- * Produce one stable national IQ gameplay proxy from data already shipped in
- * the game. This deliberately does not claim to measure real-world cognition.
+ * IQ-like gameplay baselines for countries with a strong, recognisable signal
+ * in international learning assessments. These are deliberately rounded game
+ * values, not claims about innate intelligence or a psychometric census.
+ *
+ * The explicit values stop raw income from automatically making the richest
+ * country the smartest. Countries without an explicit value use the regional
+ * fallback below plus a small institutions/income adjustment.
+ */
+const NATIONAL_IQ_COUNTRY_BASELINES_V2: Readonly<Record<string, number>> = Object.freeze({
+  // East-Asian education systems are the clear opening leaders.
+  sgp: 106.5,
+  twn: 105.8,
+  jpn: 105.4,
+  kor: 105.1,
+  chn: 103.5,
+  mng: 97.4,
+  prk: 91.0,
+
+  // High-performing European and Anglosphere systems.
+  est: 102.2,
+  fin: 101.6,
+  irl: 101.3,
+  can: 101.1,
+  che: 100.9,
+  nld: 100.8,
+  pol: 100.7,
+  gbr: 100.4,
+  deu: 100.3,
+  swe: 100.2,
+  dnk: 100.1,
+  cze: 100.0,
+  aus: 99.9,
+  bel: 99.8,
+  nor: 99.8,
+  nzl: 99.7,
+  svn: 99.6,
+  lva: 99.5,
+  ltu: 99.5,
+  aut: 99.4,
+  fra: 99.3,
+  usa: 99.1,
+  ita: 98.9,
+  esp: 98.8,
+  prt: 98.4,
+  isl: 98.4,
+
+  // Strong country-level exceptions to broad regional fallbacks.
+  vnm: 100.1,
+  isr: 100.0,
+  rus: 97.7,
+  ukr: 96.8,
+  arm: 96.5,
+  kaz: 95.7,
+  mys: 95.6,
+  tha: 94.3,
+  tur: 94.0,
+  are: 93.8,
+  irn: 93.4,
+  chl: 93.3,
+  ury: 93.1,
+  cri: 92.8,
+  arg: 92.5,
+  mex: 90.6,
+  bra: 90.4,
+  idn: 89.6,
+  ind: 88.9,
+  zaf: 88.1,
+});
+
+const NATIONAL_IQ_SUBREGION_BASELINES_V2: Readonly<Record<string, number>> = Object.freeze({
+  'Eastern Asia': 101.5,
+  'Northern Europe': 99.4,
+  'Western Europe': 99.2,
+  'Australia and New Zealand': 99.0,
+  'Eastern Europe': 97.0,
+  'Southern Europe': 97.5,
+  'Northern America': 98.7,
+  'South-Eastern Asia': 93.0,
+  'Central Asia': 93.0,
+  'Western Asia': 92.0,
+  'Southern Asia': 88.0,
+  'South America': 90.5,
+  'Central America': 88.0,
+  Caribbean: 87.5,
+  'Northern Africa': 87.0,
+  'Southern Africa': 86.0,
+  'Eastern Africa': 83.5,
+  'Middle Africa': 82.5,
+  'Western Africa': 82.5,
+  Melanesia: 84.0,
+  Micronesia: 85.0,
+  Polynesia: 85.5,
+});
+
+/**
+ * Produce one stable IQ-like gameplay score. Explicit country baselines keep
+ * the visible ordering recognisable; the old GDP/institution proxy is retained
+ * only as a gentle fallback adjustment for countries without a baseline.
  */
 export function calibratedNationalIqScoreV2(
   gdpPerCapita: number,
   institutionalCapacity: number,
+  countryId?: string,
+  subregion?: string,
 ): number {
   const income = normalizedLogRangeV2(
     gdpPerCapita,
@@ -321,10 +435,33 @@ export function calibratedNationalIqScoreV2(
     0,
     1,
   );
-  const proxy = NATIONAL_IQ_PROXY_GDP_WEIGHT * income
+  const economicInstitutionProxy = NATIONAL_IQ_PROXY_GDP_WEIGHT * income
     + NATIONAL_IQ_PROXY_INSTITUTION_WEIGHT * institutions;
+  const explicitBaseline = countryId
+    ? NATIONAL_IQ_COUNTRY_BASELINES_V2[countryId.toLowerCase()]
+    : undefined;
+  if (explicitBaseline !== undefined) {
+    return round(clamp(explicitBaseline, NATIONAL_IQ_SCORE_MIN, NATIONAL_IQ_SCORE_MAX), 1);
+  }
+
+  const regionalBaseline = subregion
+    ? NATIONAL_IQ_SUBREGION_BASELINES_V2[subregion]
+    : undefined;
+  if (regionalBaseline !== undefined) {
+    // At most +/-1.5 points: enough to distinguish regional peers without
+    // recreating the previous 'richest country wins' behaviour.
+    const fallbackAdjustment = 3 * (economicInstitutionProxy - 0.5);
+    return round(clamp(
+      regionalBaseline + fallbackAdjustment,
+      NATIONAL_IQ_SCORE_MIN,
+      NATIONAL_IQ_SCORE_MAX,
+    ), 1);
+  }
+
+  // Retain the original deterministic two-input behaviour for isolated callers
+  // and future content that has neither a country nor a regional calibration.
   return round(NATIONAL_IQ_SCORE_MIN
-    + (NATIONAL_IQ_SCORE_MAX - NATIONAL_IQ_SCORE_MIN) * proxy, 3);
+    + (NATIONAL_IQ_SCORE_MAX - NATIONAL_IQ_SCORE_MIN) * economicInstitutionProxy, 1);
 }
 
 /** GDP per capita is the primary opening quality input; IQ is a bounded refinement. */
@@ -416,7 +553,12 @@ function makeNationContent(country: (typeof COUNTRIES)[number]): NationContentV2
   const militaryBurden = defenceSpending / Math.max(0.1, country.gdp);
   const wealthScore = Math.log10(Math.max(1, country.gdpPerCapita) + 1) / 5;
   const researchCapacity = Math.max(0.2, Math.log10(country.gdp + 1) * 3.1 + wealthScore * 7.5 - 3.5);
-  const iqScore = calibratedNationalIqScoreV2(country.gdpPerCapita, researchCapacity);
+  const iqScore = calibratedNationalIqScoreV2(
+    country.gdpPerCapita,
+    researchCapacity,
+    country.id,
+    country.subregion,
+  );
   const qualityIndex = nationalQualityIndexV2(country.gdpPerCapita, iqScore);
   const militaryQuality = clamp(0.75 + 1.55 * qualityIndex, 0.75, 2.30);
   const provisionalManpower = Math.max(
@@ -447,6 +589,10 @@ function makeNationContent(country: (typeof COUNTRIES)[number]): NationContentV2
   );
   const landArea = approximateLandAreaKm2(country);
   const foodInsecurityRate = initialFoodInsecurityRate(country);
+  const foodSelfSufficiencyRatio = FAO_FOOD_SELF_SUFFICIENCY.get(country.id);
+  if (!Number.isFinite(foodSelfSufficiencyRatio)) {
+    throw new Error(`Missing FAOSTAT food self-sufficiency baseline for playable country ${country.id}.`);
+  }
   const populationGrowthRate = balancedPopulationGrowthRateV2(country.populationGrowthRate);
   return {
     id: nationIdV2(country.id),
@@ -477,6 +623,7 @@ function makeNationContent(country: (typeof COUNTRIES)[number]): NationContentV2
       populationGrowthRate,
       deathRatePerThousand: WORLD_BANK_DEATH_RATES.get(country.iso3) ?? 8,
       foodInsecurityRate,
+      foodSelfSufficiencyRatio: clamp(foodSelfSufficiencyRatio!, 0.001, 3),
       landArea,
       gdp: Math.max(0.1, country.gdp),
       ...fiscal,

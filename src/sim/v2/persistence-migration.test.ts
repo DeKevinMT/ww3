@@ -3,9 +3,16 @@ import { V2_RULES_VERSION } from './balance';
 import { createWorldStateV2 } from './bootstrap';
 import { stateTerritoryArmyCapacityTargetV2, synchronizeArmyCapacityV2 } from './capacity';
 import { WORLD_CONTENT_V2 } from './content';
-import { beginTerritoryIntegrationV2, territoryIntegrationDurationWeeksV2 } from './integration';
+import {
+  beginTerritoryIntegrationV2,
+  territoryIntegrationAnnualCostV2,
+  territoryIntegrationDurationWeeksV2,
+} from './integration';
 import { canonicalStateHashV2, createSaveV2, loadSaveV2 } from './persistence';
-import { invalidateTerritoryIndexV2 } from './selectors';
+import {
+  invalidateTerritoryIndexV2,
+  selectFoodDomesticCapacityTargetV2,
+} from './selectors';
 import { nationIdV2, territoryIdV2 } from './types';
 
 const LEGACY_CONTENT_VERSION_V16 = 'natural-earth-countries-2026-v6-naval';
@@ -17,6 +24,7 @@ function legacySaveV16(seed: number): Record<string, any> {
   current.contentVersion = LEGACY_CONTENT_VERSION_V16;
   for (const nation of Object.values(current.players) as Array<Record<string, any>>) {
     delete nation.combatExperience;
+    delete nation.domesticFoodCapacity;
   }
   for (const territory of Object.values(current.territories) as Array<Record<string, any>>) {
     delete territory.coreOwner;
@@ -52,6 +60,7 @@ function legacySaveV17(seed: number): Record<string, any> {
   current.rulesVersion = 'frontier-command-v2.52-integration-multifront';
   for (const nation of Object.values(current.players) as Array<Record<string, any>>) {
     delete nation.combatExperience;
+    delete nation.domesticFoodCapacity;
   }
   for (const territory of Object.values(current.territories) as Array<Record<string, any>>) {
     delete territory.coreOwner;
@@ -121,6 +130,47 @@ function legacySaveV14(): Record<string, any> {
 }
 
 describe('V2 legacy save migration', () => {
+  it('initializes missing same-schema domestic food capacity only after authentication', () => {
+    const state = createWorldStateV2(87);
+    const belgium = nationIdV2('bel');
+    const oldCurrent = structuredClone(createSaveV2(state, WORLD_CONTENT_V2)) as Record<string, any>;
+    delete oldCurrent.players[belgium].domesticFoodCapacity;
+    oldCurrent.canonicalStateHash = canonicalStateHashV2(oldCurrent);
+
+    const loaded = loadSaveV2(oldCurrent as never, WORLD_CONTENT_V2);
+    expect(loaded.players[belgium].domesticFoodCapacity).toBeCloseTo(
+      selectFoodDomesticCapacityTargetV2(loaded, WORLD_CONTENT_V2, belgium),
+      8,
+    );
+    const reloaded = loadSaveV2(createSaveV2(loaded, WORLD_CONTENT_V2), WORLD_CONTENT_V2);
+    expect(reloaded.players[belgium].domesticFoodCapacity)
+      .toBe(loaded.players[belgium].domesticFoodCapacity);
+  });
+
+  it('freezes a quote for an authenticated current save created before integration costs existed', () => {
+    const state = createWorldStateV2(88);
+    const bel = nationIdV2('bel');
+    const luxTerritory = territoryIdV2('lux');
+    beginTerritoryIntegrationV2(state, WORLD_CONTENT_V2, luxTerritory, bel);
+    invalidateTerritoryIndexV2(state);
+    synchronizeArmyCapacityV2(state, WORLD_CONTENT_V2);
+    const expectedAnnualCost = territoryIntegrationAnnualCostV2(
+      state.territories[luxTerritory].economy,
+    );
+    const oldCurrent = structuredClone(createSaveV2(state, WORLD_CONTENT_V2)) as Record<string, any>;
+    delete oldCurrent.territories[luxTerritory].integrationProgram.annualCost;
+    oldCurrent.canonicalStateHash = canonicalStateHashV2(oldCurrent);
+
+    const loaded = loadSaveV2(oldCurrent as never, WORLD_CONTENT_V2);
+    expect(loaded.territories[luxTerritory].integrationProgram?.annualCost)
+      .toBeCloseTo(expectedAnnualCost, 8);
+
+    loaded.territories[luxTerritory].economy *= 2;
+    const reloaded = loadSaveV2(createSaveV2(loaded, WORLD_CONTENT_V2), WORLD_CONTENT_V2);
+    expect(reloaded.territories[luxTerritory].integrationProgram?.annualCost)
+      .toBeCloseTo(expectedAnnualCost, 8);
+  });
+
   it('shortens a schema 18 integration promise exactly once without changing its current share', () => {
     const state = createWorldStateV2(89);
     const bel = nationIdV2('bel');
@@ -137,15 +187,20 @@ describe('V2 legacy save migration', () => {
       toOwnerId: bel,
       startedTick: 0,
       completesTick: state.tick + newDuration / 2,
+      annualCost: territoryIntegrationAnnualCostV2(state.territories[luxTerritory].economy),
     };
     synchronizeArmyCapacityV2(state, WORLD_CONTENT_V2);
     const legacy = structuredClone(createSaveV2(state, WORLD_CONTENT_V2)) as Record<string, any>;
     legacy.schemaVersion = 18;
     legacy.rulesVersion = 'frontier-command-v2.53-combat-experience';
+    for (const nation of Object.values(legacy.players) as Array<Record<string, any>>) {
+      delete nation.domesticFoodCapacity;
+    }
     // The old curve was exactly twice as long, so 55% left one full new
     // Luxembourg duration on its original endpoint.
     legacy.territories[luxTerritory].integrationProgram.completesTick = state.tick + newDuration;
     delete legacy.territories[luxTerritory].integrationProgram.fromOwnerId;
+    delete legacy.territories[luxTerritory].integrationProgram.annualCost;
     legacy.canonicalStateHash = canonicalStateHashV2(legacy);
     const legacyEndpoint = legacy.territories[luxTerritory].integrationProgram.completesTick;
 
@@ -155,6 +210,10 @@ describe('V2 legacy save migration', () => {
     expect(loaded.territories[luxTerritory].integration).toBe(0.55);
     expect(migratedProgram.startedTick).toBe(0);
     expect(migratedProgram.fromOwnerId).toBe(lux);
+    expect(migratedProgram.annualCost).toBeCloseTo(
+      territoryIntegrationAnnualCostV2(state.territories[luxTerritory].economy),
+      8,
+    );
     expect(migratedProgram.completesTick).toBe(state.tick + newDuration / 2);
     expect(migratedProgram.completesTick).toBeLessThan(legacyEndpoint);
     expect(legacy.territories[luxTerritory].integrationProgram.completesTick).toBe(legacyEndpoint);

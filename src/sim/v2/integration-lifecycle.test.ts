@@ -5,6 +5,7 @@ import { WORLD_CONTENT_V2 } from './content';
 import {
   advanceTerritoryIntegrationProgramsV2,
   beginTerritoryIntegrationV2,
+  territoryIntegrationAnnualCostV2,
   territoryIntegrationDurationWeeksV2,
 } from './integration';
 import { nationIdV2, territoryIdV2 } from './types';
@@ -37,6 +38,7 @@ describe('V2 permanent territory integration lifecycle', () => {
       toOwnerId: belgium,
       startedTick: 0,
       completesTick: duration,
+      annualCost: territoryIntegrationAnnualCostV2(territory.economy),
     });
 
     for (let week = 1; week <= duration / 2; week += 1) {
@@ -99,6 +101,7 @@ describe('V2 permanent territory integration lifecycle', () => {
       toOwnerId: netherlands,
       startedTick: 100,
       completesTick: 100 + duration,
+      annualCost: territoryIntegrationAnnualCostV2(territory.economy),
     });
   });
 

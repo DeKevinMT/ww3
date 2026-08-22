@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { nextRandom } from '../../game/random';
 import {
+  BATTLE_INTERVAL_TICKS,
   COMBAT_MAX_CASUALTY_RATE,
   COMBAT_ROUTE_STRENGTH_RATIO,
   DEFENDER_COUNTERFIRE_MULTIPLIER,
@@ -175,10 +176,12 @@ describe('V2 coherent combat and forecast calibration', () => {
     expect(attackerView.confidence).toBe('medium');
   });
 
-  it('mobilises for four weeks before the first battle pulse', () => {
+  it('mobilises for eight weeks, then keeps the normal two-week battle cadence', () => {
     const state = calibratedState(4_001_1);
     state.tick = 0;
     war(state);
+    expect(WAR_MOBILIZATION_TICKS).toBe(8);
+    expect(BATTLE_INTERVAL_TICKS).toBe(2);
     for (let week = 0; week < WAR_MOBILIZATION_TICKS; week += 1) {
       state.tick = week;
       expect(processWarsV2(state, WORLD_CONTENT_V2)).toHaveLength(0);
@@ -187,6 +190,14 @@ describe('V2 coherent combat and forecast calibration', () => {
     state.tick = WAR_MOBILIZATION_TICKS;
     expect(processWarsV2(state, WORLD_CONTENT_V2)).toHaveLength(1);
     expect(state.wars[0]!.battles).toBe(1);
+
+    state.tick += BATTLE_INTERVAL_TICKS - 1;
+    expect(processWarsV2(state, WORLD_CONTENT_V2)).toHaveLength(0);
+    expect(state.wars[0]!.battles).toBe(1);
+
+    state.tick += 1;
+    expect(processWarsV2(state, WORLD_CONTENT_V2)).toHaveLength(1);
+    expect(state.wars[0]!.battles).toBe(2);
   });
 
   it('resolves two owned source armies as real fronts in the same battle round', () => {

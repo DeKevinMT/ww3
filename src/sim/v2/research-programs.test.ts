@@ -232,9 +232,9 @@ describe('V2 integrated research programs and army economy', () => {
       'acceleratedDemobilization', 'acceleratedRecruitment', 'activeBudget', 'aiEfficiency', 'aiMode', 'annualEconomyGrowthRate', 'armyUpkeep',
       'ceasefireIncome', 'ceasefirePayment', 'closingTreasury', 'condition', 'conditionFundingRatio', 'debtPremium', 'demobilizationCost', 'development',
       'economyBaseGrowthRate', 'economyFoodGrowthRate', 'economyGrowth', 'economyInvestmentGrowthRate', 'economyResearchGrowthRate', 'expenses',
-      'foodAccessCeiling', 'foodBalance', 'foodConsumed', 'foodCoverage', 'foodDemand', 'foodDomesticProduced', 'foodImported', 'foodLandCapacity', 'foodProduced',
+      'foodAccessCeiling', 'foodBalance', 'foodConsumed', 'foodCoverage', 'foodDemand', 'foodDevelopmentTransfer', 'foodDomesticProduced', 'foodExportIncome', 'foodExported', 'foodImported', 'foodLandCapacity', 'foodProduced',
       'foodProduction', 'foodStockChange', 'foodStorageCapacity', 'foodTargetStock', 'fundedArmyUpkeep',
-      'mandatoryFundingRatio', 'military', 'mode', 'net', 'newBorrowing', 'passiveRecruitment', 'populationGrowth', 'recruitment',
+      'integrationCost', 'mandatoryFundingRatio', 'military', 'mode', 'net', 'newBorrowing', 'passiveRecruitment', 'populationGrowth', 'recruitment',
       'recruitmentAccelerationCost', 'recruitmentFundingRatio', 'research', 'reserveTarget', 'revenue', 'standingOperations', 'totalMilitaryCost',
       'warEconomicPenalty', 'warEconomyGrowthDrag', 'warOperations', 'warPopulationDrag', 'warResearchPenalty',
     ]);

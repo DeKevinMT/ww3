@@ -6,6 +6,7 @@ import {
   synchronizeArmyCapacityV2,
 } from './capacity';
 import { WORLD_CONTENT_V2 } from './content';
+import { territoryIntegrationAnnualCostV2 } from './integration';
 import { assertInvariantsV2 } from './invariants';
 import { selectNationalIqViewV2, selectTerritoriesOfV2 } from './selectors';
 import { nationIdV2, type FrontOperationV2, type TerritoryId } from './types';
@@ -181,6 +182,7 @@ describe('route-aware empire logistics', () => {
       toOwnerId: bel,
       startedTick,
       completesTick: 10_000,
+      annualCost: territoryIntegrationAnnualCostV2(state.territories[relayId]!.economy),
     };
     synchronizeArmyCapacityV2(state, WORLD_CONTENT_V2);
     const capital = state.territories[capitalId]!;

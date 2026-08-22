@@ -35,8 +35,12 @@ export function restoreScrollSessions(
   }
 }
 
-/** Command-dock modes are subtabs of one drawer; ranking and territories are separate panels. */
+/**
+ * Keep live rerenders stable inside one panel, but start every different tab at
+ * its own top. Sharing one scroll offset between War, Nation and Economy can
+ * otherwise hide the heading when a shorter panel replaces a long one.
+ */
 export function drawerScrollSessionId(panelMode: string, territoryId?: string): string {
   if (territoryId) return `drawer:territory:${territoryId}`;
-  return panelMode === 'ranking' ? 'drawer:ranking' : 'drawer:command';
+  return `drawer:${panelMode}`;
 }

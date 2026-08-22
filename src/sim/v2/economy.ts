@@ -1,4 +1,5 @@
 import {
+  FOOD_DOMESTIC_CAPACITY_RAMP_WEEKS,
   PEACE_FATIGUE_RECOVERY_PER_WEEK,
   clamp,
   round,
@@ -12,6 +13,7 @@ import {
 import {
   createPowerSnapshotV2,
   projectFinanceManpowerPhaseV2,
+  selectFoodDomesticCapacityTargetV2,
   selectPopulationDynamicsV2,
   selectTerritoriesOfV2,
   selectWarsOfV2,
@@ -22,6 +24,16 @@ import {
 import type { PlayerId, WeeklyFinanceBreakdownV2, WorldStateV2 } from './types';
 
 export type FinancePlansV2 = ReadonlyMap<PlayerId, WeeklyFinanceBreakdownV2>;
+
+/** One bounded weekly step toward the live domestic food-system target. */
+export function advanceDomesticFoodCapacityV2(current: number, target: number): number {
+  const safeCurrent = Math.max(0, current);
+  const safeTarget = Math.max(0, target);
+  const maximumStep = Math.max(safeCurrent, safeTarget, 0.000001)
+    / FOOD_DOMESTIC_CAPACITY_RAMP_WEEKS;
+  if (Math.abs(safeTarget - safeCurrent) <= maximumStep) return round(safeTarget, 9);
+  return round(safeCurrent + Math.sign(safeTarget - safeCurrent) * maximumStep, 9);
+}
 
 export function createFinancePlansV2(
   state: WorldStateV2,
@@ -103,13 +115,21 @@ export function processFinanceMilitaryV2(
 ): IntegrationCompletionV2[] {
   const integrationCompletions = advanceTerritoryIntegrationProgramsV2(state, content);
   synchronizeArmyCapacityV2(state, content);
+  // Snapshot every target before nation finance mutates stocks, armies and
+  // conditions. Capacity then takes one slow step after the current week's
+  // domestic/import mix has already been funded.
+  const domesticCapacityTargets = new Map(sortedNationIdsV2(state).flatMap((playerId) => (
+    selectTerritoriesOfV2(state, playerId).length > 0
+      ? [[playerId, selectFoodDomesticCapacityTargetV2(state, content, playerId)] as const]
+      : []
+  )));
   for (const playerId of sortedNationIdsV2(state)) {
     if (selectTerritoriesOfV2(state, playerId).length === 0) continue;
     const nation = state.players[playerId]!;
     const finance = financePlans.get(playerId) ?? selectWeeklyFinanceBreakdownV2(state, content, playerId);
     nation.treasury = round(finance.closingTreasury);
     nation.foodStock = round(clamp(
-      nation.foodStock + finance.foodProduced - finance.foodConsumed,
+      nation.foodStock + finance.foodStockChange,
       0,
       finance.foodStorageCapacity,
     ));
@@ -122,6 +142,14 @@ export function processFinanceMilitaryV2(
       0,
       nation.warFatigue - PEACE_FATIGUE_RECOVERY_PER_WEEK,
     ));
+  }
+  for (const [playerId, target] of domesticCapacityTargets) {
+    const nation = state.players[playerId];
+    if (!nation) continue;
+    nation.domesticFoodCapacity = advanceDomesticFoodCapacityV2(
+      nation.domesticFoodCapacity,
+      target,
+    );
   }
   state.ceasefireObligations = state.ceasefireObligations
     .filter((obligation) => obligation.expiresTick > state.tick

@@ -8,8 +8,12 @@ import {
 import { createWorldStateV2 } from './bootstrap';
 import { synchronizeArmyCapacityV2 } from './capacity';
 import type { WorldContentV2 } from './content';
-import { territoryIntegrationDurationWeeksV2 } from './integration';
+import {
+  territoryIntegrationAnnualCostV2,
+  territoryIntegrationDurationWeeksV2,
+} from './integration';
 import { assertInvariantsV2 } from './invariants';
+import { selectFoodDomesticCapacityTargetV2 } from './selectors';
 import type {
   AiEscalationStateV2,
   CeasefireObligationV2,
@@ -87,14 +91,15 @@ interface LegacyArmyV17 extends LegacyArmyV14 {
   baseDefense: number;
 }
 
-type LegacyNationV17 = Omit<NationStateV2, 'combatExperience'>;
+type LegacyNationV18 = Omit<NationStateV2, 'domesticFoodCapacity'>;
+type LegacyNationV17 = Omit<NationStateV2, 'combatExperience' | 'domesticFoodCapacity'>;
 type LegacyNationV15 = Omit<LegacyNationV17, 'manualActionUses'>;
 type LegacyNationV13 = LegacyNationV15 & { battleBots: LegacyBattleBotProgramV13 };
 type LegacyTerritoryBaseV17 = Omit<TerritoryStateV2, 'army' | 'coreOwner' | 'integrationProgram'>;
 type LegacyTerritoryV13 = LegacyTerritoryBaseV17 & { army: LegacyArmyV13 };
 type LegacyTerritoryV14 = LegacyTerritoryBaseV17 & { army: LegacyArmyV14 };
 type LegacyTerritoryV17 = LegacyTerritoryBaseV17 & { army: LegacyArmyV17 };
-type LegacyIntegrationProgramV18 = Omit<IntegrationProgramStateV2, 'fromOwnerId'>;
+type LegacyIntegrationProgramV18 = Omit<IntegrationProgramStateV2, 'annualCost' | 'fromOwnerId'>;
 type LegacyTerritoryV18 = Omit<TerritoryStateV2, 'integrationProgram'> & {
   integrationProgram?: LegacyIntegrationProgramV18;
 };
@@ -106,9 +111,10 @@ type LegacyWarStateV16 = Omit<WarStateV2, 'attackerOperations' | 'defenderOperat
 
 /** Read-only compatibility shape for the original long integration calendar. */
 export interface LegacySaveGameV18 extends Omit<SaveGameV2,
-  'schemaVersion' | 'rulesVersion' | 'territories'> {
+  'schemaVersion' | 'rulesVersion' | 'players' | 'territories'> {
   schemaVersion: 18;
   rulesVersion: typeof LEGACY_RULES_VERSION_V18;
+  players: Record<PlayerId, LegacyNationV18>;
   territories: Record<TerritoryId, LegacyTerritoryV18>;
 }
 
@@ -268,6 +274,10 @@ export function createSaveV2(state: WorldStateV2, content: WorldContentV2): Save
       .sort((a, b) => a.id.localeCompare(b.id))
       .map((war) => ({
         ...war,
+        // Optional compatibility inputs are serialized canonically so a
+        // save/load round-trip cannot change the next state hash.
+        attackerCivilianLosses: war.attackerCivilianLosses ?? 0,
+        defenderCivilianLosses: war.defenderCivilianLosses ?? 0,
         attackerOperations: war.attackerOperations.map((operation) => ({ ...operation })),
         defenderOperations: war.defenderOperations.map((operation) => ({ ...operation })),
       })),
@@ -659,7 +669,11 @@ function legacyTerritoryFromCurrentV2(territory: TerritoryStateV2): LegacyTerrit
 }
 
 function legacyNationFromCurrentV2(nation: NationStateV2): LegacyNationV17 {
-  const { combatExperience: _combatExperience, ...legacy } = nation;
+  const {
+    combatExperience: _combatExperience,
+    domesticFoodCapacity: _domesticFoodCapacity,
+    ...legacy
+  } = nation;
   return {
     ...legacy,
     budget: { ...legacy.budget },
@@ -836,6 +850,7 @@ function migrateLegacyStateV17(
       manualActionUses: { ...nation.manualActionUses },
       propagandaProgram: nation.propagandaProgram ? { ...nation.propagandaProgram } : null,
       combatExperience: experienceByPlayer.get(playerId) ?? 0,
+      domesticFoodCapacity: 0,
     }];
   })) as Record<PlayerId, NationStateV2>;
 
@@ -865,6 +880,7 @@ function migrateLegacyStateV17(
           toOwnerId: territory.owner,
           startedTick: legacyState.tick,
           completesTick: legacyState.tick + remainingDuration,
+          annualCost: territoryIntegrationAnnualCostV2(territory.economy),
         },
       } : {}),
       army: { ...army },
@@ -881,19 +897,75 @@ function migrateLegacyStateV17(
     territories,
     wars: legacyState.wars.map((war) => ({
       ...war,
+      attackerCivilianLosses: war.attackerCivilianLosses === undefined
+        ? 0 : war.attackerCivilianLosses,
+      defenderCivilianLosses: war.defenderCivilianLosses === undefined
+        ? 0 : war.defenderCivilianLosses,
       attackerOperations: war.attackerOperations.map((operation) => ({ ...operation })),
       defenderOperations: war.defenderOperations.map((operation) => ({ ...operation })),
     })),
   };
   synchronizeArmyCapacityV2(state, content);
+  for (const playerId of Object.keys(state.players) as PlayerId[]) {
+    state.players[playerId]!.domesticFoodCapacity = roundMigrationValue(
+      selectFoodDomesticCapacityTargetV2(state, content, playerId),
+    );
+  }
   return state;
 }
 
-function currentStateFromSave(save: SaveGameV2): WorldStateV2 {
-  return {
+function currentStateFromSave(save: SaveGameV2, content: WorldContentV2): WorldStateV2 {
+  const missingDomesticCapacity = new Set<PlayerId>();
+  const players = Object.fromEntries(Object.entries(save.players).map(([rawId, nation]) => {
+    const playerId = rawId as PlayerId;
+    const serializedCapacity = (nation as { domesticFoodCapacity?: number }).domesticFoodCapacity;
+    if (serializedCapacity === undefined) missingDomesticCapacity.add(playerId);
+    return [playerId, {
+      ...nation,
+      ...(serializedCapacity === undefined ? { domesticFoodCapacity: 0 } : {}),
+      budget: { ...nation.budget },
+      research: {
+        ...nation.research,
+        allocations: { ...nation.research.allocations },
+        progress: { ...nation.research.progress },
+        effectLevels: { ...nation.research.effectLevels },
+        breakthroughs: { ...nation.research.breakthroughs },
+      },
+      manualActionUses: { ...nation.manualActionUses },
+      propagandaProgram: nation.propagandaProgram ? { ...nation.propagandaProgram } : null,
+    }];
+  })) as Record<PlayerId, NationStateV2>;
+  const territories = Object.fromEntries(Object.entries(save.territories).map(([rawId, territory]) => {
+    const program = territory.integrationProgram;
+    const serializedAnnualCost = (program as { annualCost?: number } | undefined)?.annualCost;
+    return [rawId, {
+      ...territory,
+      ...(program ? {
+        integrationProgram: {
+          ...program,
+          // Saves created before integration had a financial cost do not have
+          // this quote. Freeze one from their authenticated load-time economy.
+          annualCost: serializedAnnualCost === undefined
+            ? territoryIntegrationAnnualCostV2(territory.economy)
+            : serializedAnnualCost,
+        },
+      } : {}),
+      army: { ...territory.army },
+      ...(territory.control ? { control: { ...territory.control } } : {}),
+    }];
+  })) as Record<TerritoryId, TerritoryStateV2>;
+  const state: WorldStateV2 = {
     ...payloadWithoutHash(save),
+    players,
+    territories,
     wars: save.wars.map((war) => ({
       ...war,
+      // Same-schema saves made before cumulative civilian tracking remain
+      // authenticated against their original payload, then normalize here.
+      attackerCivilianLosses: war.attackerCivilianLosses === undefined
+        ? 0 : war.attackerCivilianLosses,
+      defenderCivilianLosses: war.defenderCivilianLosses === undefined
+        ? 0 : war.defenderCivilianLosses,
       attackerOperations: war.attackerOperations.map((operation) => ({ ...operation })),
       defenderOperations: war.defenderOperations.map((operation) => ({ ...operation })),
     })),
@@ -902,6 +974,15 @@ function currentStateFromSave(save: SaveGameV2): WorldStateV2 {
     winnerId: undefined,
     gameOver: false,
   };
+  // Authentication happened before this function. Same-schema saves made
+  // before slow domestic capacity existed now receive a coherent live target;
+  // any present invalid value remains untouched for invariant rejection.
+  for (const playerId of missingDomesticCapacity) {
+    state.players[playerId]!.domesticFoodCapacity = roundMigrationValue(
+      selectFoodDomesticCapacityTargetV2(state, content, playerId),
+    );
+  }
+  return state;
 }
 
 /**
@@ -929,6 +1010,7 @@ function migrateLegacyStateV18(
           // Schema 18 did not retain the displaced sovereign separately. Its
           // stored former core is the only deterministic compatibility value.
           fromOwnerId: program.fromCoreOwnerId,
+          annualCost: territoryIntegrationAnnualCostV2(territory.economy),
         },
       } : {}),
       army: { ...territory.army },
@@ -936,7 +1018,7 @@ function migrateLegacyStateV18(
     }];
   })) as Record<TerritoryId, TerritoryStateV2>;
   const legacyState: WorldStateV2 = {
-    ...currentStateFromSave(save as unknown as SaveGameV2),
+    ...currentStateFromSave(save as unknown as SaveGameV2, content),
     schemaVersion: 19,
     rulesVersion: V2_RULES_VERSION,
     territories: canonicalTerritories,
@@ -1012,7 +1094,7 @@ export function loadSaveV2(
   }
 
   const state = schemaVersion === 19
-    ? currentStateFromSave(parsed as unknown as SaveGameV2)
+    ? currentStateFromSave(parsed as unknown as SaveGameV2, content)
     : schemaVersion === 18
       ? migrateLegacyStateV18(parsed as unknown as LegacySaveGameV18, content)
       : migrateLegacyStateV17(schemaVersion === 17

@@ -39,6 +39,7 @@ import {
   selectNationalAiPlanV2,
   selectNationalEconomyV2,
   selectNuclearPowerV2,
+  selectOpeningCandidateFinancePlansV2,
   selectPopulationDynamicsV2,
   selectResearchPortfolioV2,
   selectResearchSurgeTermsV2,
@@ -97,6 +98,7 @@ import type {
   RankingEntryV2,
   GlobalResistanceV2,
   ResearchAllocationsV2,
+  ResearchBranchV2,
   ResearchPortfolioV2,
   ResearchSurgeTermsV2,
   TerritoryId,
@@ -319,6 +321,10 @@ export class WorldEngineV2 {
         warScore: round(baseline.humanRole === 'attacker' ? war.warScore : -war.warScore),
         ownLosses: baseline.humanRole === 'attacker' ? war.attackerLosses : war.defenderLosses,
         enemyLosses: baseline.humanRole === 'attacker' ? war.defenderLosses : war.attackerLosses,
+        ownCivilianLosses: baseline.humanRole === 'attacker'
+          ? war.attackerCivilianLosses ?? 0 : war.defenderCivilianLosses ?? 0,
+        enemyCivilianLosses: baseline.humanRole === 'attacker'
+          ? war.defenderCivilianLosses ?? 0 : war.attackerCivilianLosses ?? 0,
         survivingManpower: selectTotalManpowerV2(this.state, humanId).deployed,
         territoriesGained: gained,
         territoriesLost: lost,
@@ -522,6 +528,10 @@ export class WorldEngineV2 {
     return selectWeeklyFinanceBreakdownV2(this.state, this.content, nationIdV2(playerId));
   }
 
+  openingCandidateFinancePlans(): ReadonlyMap<PlayerId, WeeklyFinanceBreakdownV2> {
+    return selectOpeningCandidateFinancePlansV2(this.state, this.content);
+  }
+
   /** Pure authoritative preview; does not queue or mutate the proposed budget. */
   weeklyFinanceBreakdownForBudget(playerId: string, budget: BudgetPolicyV2): WeeklyFinanceBreakdownV2 {
     if (!validBudgetV2(budget)) throw new Error('Budget must be integer 5–90 allocations summing to 100.');
@@ -608,24 +618,20 @@ export class WorldEngineV2 {
     return selectResearchPortfolioV2(this.state, this.content, nationIdV2(playerId));
   }
 
-  researchSurgeTerms(playerId: string): ResearchSurgeTermsV2 {
-    return selectResearchSurgeTermsV2(this.state, this.content, nationIdV2(playerId));
+  researchSurgeTerms(playerId: string, targetBranch: ResearchBranchV2): ResearchSurgeTermsV2 {
+    return selectResearchSurgeTermsV2(this.state, this.content, nationIdV2(playerId), targetBranch);
   }
 
-  researchSurge(playerId: string): CommandResultV2 {
+  researchSurge(playerId: string, targetBranch: ResearchBranchV2): CommandResultV2 {
     const id = nationIdV2(playerId);
-    const terms = this.researchSurgeTerms(id);
+    const terms = this.researchSurgeTerms(id, targetBranch);
     if (!terms.allowed) return { accepted: false, reason: terms.reason };
-    if (!this.applyingCommand) return this.queue({ type: 'research-surge', playerId: id });
+    if (!this.applyingCommand) return this.queue({ type: 'research-surge', playerId: id, targetBranch });
 
     const nation = this.state.players[id]!;
-    const portfolio = this.researchPortfolio(id);
-    for (const branch of portfolio) {
-      if (branch.maxed) continue;
-      nation.research.progress[branch.branch] = round(
-        nation.research.progress[branch.branch] + branch.weeklyProgress * terms.progressWeeks,
-      );
-    }
+    nation.research.progress[targetBranch] = round(
+      nation.research.progress[targetBranch] + terms.progressAdded,
+    );
     nation.treasury = round(nation.treasury - terms.cost);
     nation.manualActionUses.researchSurge += 1;
     nation.researchSurgeAvailableTick = this.state.tick + RESEARCH_SURGE_COOLDOWN_TICKS;
@@ -829,7 +835,7 @@ export class WorldEngineV2 {
       case 'adjust-budget': this.adjustBudget(command.playerId, command.domain, command.delta); break;
       case 'set-budget-policy': this.applyBudgetPolicy(command.playerId, command.budget, false); break;
       case 'rapid-recruitment': this.rapidRecruitment(command.playerId); break;
-      case 'research-surge': this.researchSurge(command.playerId); break;
+      case 'research-surge': this.researchSurge(command.playerId, command.targetBranch); break;
       case 'launch-propaganda': this.launchPropaganda(command.playerId); break;
       case 'set-empire-name': this.setEmpireName(command.playerId, command.name); break;
       case 'declare-war': this.declareWar(command.attackerId, command.defenderId, command.escalatedFromWarId); break;

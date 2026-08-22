@@ -64,7 +64,7 @@ describe('V2 canonical architecture', () => {
     const nation = state.players[nationIdV2('bel')];
     const territory = state.territories[territoryIdV2('bel')];
     expect(state.schemaVersion).toBe(19);
-    expect(Object.keys(nation).sort()).toEqual(['budget', 'capitalId', 'ceasefiresRequested', 'combatExperience', 'empireName', 'foodSecurity', 'foodStock', 'manualActionUses', 'propagandaAvailableTick', 'propagandaProgram', 'rapidRecruitmentAvailableTick', 'research', 'researchSurgeAvailableTick', 'treasury', 'warFatigue']);
+    expect(Object.keys(nation).sort()).toEqual(['budget', 'capitalId', 'ceasefiresRequested', 'combatExperience', 'domesticFoodCapacity', 'empireName', 'foodSecurity', 'foodStock', 'manualActionUses', 'propagandaAvailableTick', 'propagandaProgram', 'rapidRecruitmentAvailableTick', 'research', 'researchSurgeAvailableTick', 'treasury', 'warFatigue']);
     expect(Object.keys(territory).sort()).toEqual(['army', 'condition', 'coreOwner', 'economy', 'integration', 'owner', 'population']);
     expect(Object.keys(territory.army).sort()).toEqual([
       'baseAttack', 'baseDefense', 'capacity', 'manpower',

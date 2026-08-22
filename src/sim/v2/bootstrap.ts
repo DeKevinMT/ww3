@@ -15,6 +15,11 @@ import {
 import { WORLD_CONTENT_V2, type WorldContentV2 } from './content';
 import { initialArmyCapacityRatioV2, initialTerritoryArmyCapacityV2 } from './capacity';
 import { calculateFiscalCapacityV2 } from './fiscal';
+import {
+  invalidateTerritoryIndexV2,
+  selectFoodDomesticCapacityTargetV2,
+  selectFoodStorageCapacityV2,
+} from './selectors';
 import type {
   NationStateV2,
   PlayerId,
@@ -51,14 +56,18 @@ function createNationState(id: PlayerId, content: WorldContentV2): NationStateV2
   const wealthTier = clamp(Math.log2(Math.max(10_000, gdpPerCapita) / 10_000), 0, 4);
   const largeEconomyDamping = 1 / Math.sqrt(Math.max(1, definition.real.gdp / 500));
   const startingCashWeeks = clamp(2 + 2.25 * wealthTier * largeEconomyDamping, 2, 9);
-  const initialFoodSecurity = clamp(1 - definition.real.foodInsecurityRate, 0.28, 0.995);
   const initialFoodBufferWeeks = FOOD_TARGET_WEEKS
     * clamp(1 - 4 * definition.real.foodInsecurityRate, 0.08, 1);
   return {
     empireName: '',
     treasury: round(Math.max(0.10, weeklyRevenue * startingCashWeeks), 3),
     foodStock: round(definition.real.population * initialFoodBufferWeeks),
-    foodSecurity: round(initialFoodSecurity),
+    domesticFoodCapacity: 0,
+    // Food security is a live result of funded supply plus stored reserves,
+    // never a country-data percentage imposed on the simulation. Historical
+    // vulnerability still starts fragile systems with a smaller buffer and a
+    // higher production/import burden below.
+    foodSecurity: 1,
     budget: { ...DEFAULT_BUDGET_V2 },
     research: {
       allocations: { ...DEFAULT_RESEARCH_ALLOCATIONS_V2 },
@@ -231,6 +240,8 @@ export function processOpeningConflictsV2(state: WorldStateV2, content: WorldCon
     battles: 0,
     attackerLosses: 0,
     defenderLosses: 0,
+    attackerCivilianLosses: 0,
+    defenderCivilianLosses: 0,
     lastPeaceOfferTick: -1_000_000,
     attackerOperations: [],
     defenderOperations: [],
@@ -293,5 +304,22 @@ export function createWorldStateV2(
     unread: true,
   });
   if (content === WORLD_CONTENT_V2) seedScenarioPressureV2(state, content);
+  // Opening buffers are population-based, but storage is derived from the
+  // live economy, infrastructure and land. Never begin with food that the
+  // current country could not physically store.
+  for (const playerId of content.nationIds) {
+    state.players[playerId]!.domesticFoodCapacity = round(
+      selectFoodDomesticCapacityTargetV2(state, content, playerId),
+      9,
+    );
+    state.players[playerId]!.foodStock = round(Math.min(
+      state.players[playerId]!.foodStock,
+      selectFoodStorageCapacityV2(state, content, playerId),
+    ));
+  }
+  // Storage selection builds an ephemeral ownership index. A freshly created
+  // state is intentionally returned with that cache cold so callers may still
+  // prepare fixtures/scenarios before the first derived selection.
+  invalidateTerritoryIndexV2(state);
   return state;
 }
