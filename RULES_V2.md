@@ -1,12 +1,13 @@
-# Frontier Command — Rules V2.54
+# Frontier Command — Rules V2.55
 
 This document is the authoritative gameplay and simulation contract. If presentation copy, tests and code disagree, they must be reconciled in the same change.
 
 ## 1. Product promise
 
 - The player chooses one current country, never a starting alliance.
-- The chosen country owns the world's strongest national Super AI. The player chooses war targets; the AI manages finance, Development, recruitment, recovery and front execution.
-- Every other living country uses capable deterministic AI under the same economic and military rules, without the player's Super-AI efficiency advantage.
+- Every living country, including the chosen country, uses the same deterministic national AI planner for finance, Development, recruitment, recovery and front execution.
+- **APEX** is only the presentation name for the chosen country's autopilot. Choosing a country grants no AI-efficiency, planning-cadence or strategy advantage; the player alone chooses that country's war targets.
+- National IQ is the shared AI's only skill input. A higher bounded score provides a modest improvement in execution and allocation response, never a separate ruleset or hidden raw combat bonus.
 - The game advances continuously at one simulated week per real second. Combat is live and contains no dice interaction.
 - The campaign continues until one owner controls the complete playable map.
 - Every starting country must have a plausible route to victory. Catch-up improves development, recruitment and rebuilding; it never grants hidden raw combat damage.
@@ -33,7 +34,7 @@ Absorbed geometry remains visible but never creates a second owner, army, label 
 
 ## 3. Canonical state
 
-V2.54 uses schema version 19. Authenticated schema-13 through schema-18 saves migrate deterministically; incompatible rules versions are rejected. Schema-16 singular operations become one-element front arrays. Its former combined Denmark/Greenland territory is split while conserving population, economy and manpower and preserving the existing owner. Legacy military experience is converted into the single empire-wide Combat Experience score. A schema-18 active integration keeps its exact visible share while its remaining endpoint is converted once to the faster calendar; every later save stays on that immutable schema-19 endpoint. Schema 18 did not store the displaced sovereign separately, so migration canonically uses its stored former core as `fromOwnerId`; every new schema-19 capture records the exact displaced owner.
+V2.55 uses schema version 20 and rules version `frontier-command-v2.55-combat-rebalance`. Authenticated schema-13 through schema-19 saves migrate deterministically; incompatible rules versions are rejected. Schema-16 singular operations become one-element front arrays. Its former combined Denmark/Greenland territory is split while conserving population, economy and manpower and preserving the existing owner. A schema-18 active integration keeps its exact visible share while its remaining endpoint is converted once to the current calendar; every later save stays on that immutable endpoint. An active schema-19 integration keeps both its visible share and already promised completion tick exactly, so save migration never moves an existing deadline. Schema 18 did not store the displaced sovereign separately, so migration canonically uses its stored former core as `fromOwnerId`; every new schema-20 capture records the exact displaced owner. Schema-19's retired legacy Combat Experience field is discarded during migration and has no live replacement.
 
 ### Nation
 
@@ -58,7 +59,6 @@ type NationState = {
     totalSuspicionReduction: number;
     weeklySuspicionReduction: number;
   };
-  combatExperience: number; // non-negative empire-wide institutional knowledge
   warFatigue: number;
   capitalId: TerritoryId;
 };
@@ -91,19 +91,27 @@ type TerritoryState = {
 };
 ```
 
-There is no national manpower reserve, stored force HP/maxHP, readiness resource, special soldier subset, unit inventory, defence fund, research currency, influence, stability or doctrine profile. Temporary integration state is explicit and ends when the former core identity is permanently absorbed.
+There is one finite national trained-reserve pool in addition to deployed manpower. It is not combat HP or a hidden army: its current and maximum size are visible, it contributes no combat power until mobilised, and it is capped at `2 ×` live active army capacity. There is no other stored force HP/maxHP, readiness resource, special soldier subset, unit inventory, defence fund, research currency, influence, stability or doctrine profile. Temporary integration state is explicit and ends when the former core identity is permanently absorbed.
 
-National population, economy, manpower, capacity, Combat Power and rank are selectors over current territory state. Combat Experience is the one nation-level military-knowledge value and applies across every army currently belonging to that country or empire.
+National population, economy, manpower, capacity, Combat Power, global score and rank are selectors over current territory state. There is no nation-level battle-XP or military-experience value.
 
 ## 4. Visible country information
 
-The permanent desktop header presents compact primary values for Treasury, Population, Economy, Manpower/Capacity, Combat Experience, Combat Power and Super AI status. World rank remains a badge, not a resource.
+The permanent desktop header presents compact primary values for Treasury, Population, Economy, Army, Combat Power and APEX autopilot status. Army is displayed as deployed manpower over live capacity (`x / x`). World rank remains a badge, not a resource.
 
 Manpower is the complete number of trained deployed soldiers. Capacity is only the current recruitment ceiling. Empty capacity adds no combat power and a partly filled army does not make each deployed soldier individually weaker.
 
-Combat Power is derived from deployed manpower, empire-wide Combat Experience, ATK, DEF, condition and supply. Ranking, AI target selection, forecasts and live combat use the same selectors. Every opening army receives its country's calibrated ATK and DEF, but no country receives an opening experience bonus. Movement and occupation preserve the source force's quality; merging armies blends it by manpower; normal and rapid recruitment add the original profile of the territory where those soldiers are raised. Casualties preserve the surviving average, while an empty army resets to its local recruitment profile. Federation changes ownership without diluting any army. National ATK/DEF is a manpower-weighted display/outcome snapshot only; total Combat Power is the additive sum of local armies.
+Combat Power is derived from deployed manpower, ATK, DEF, condition and supply. AI target selection, forecasts and live combat use the same underlying selectors. Every opening army receives its country's calibrated ATK and DEF. Movement and occupation preserve the source force's quality; merging armies blends it by manpower; normal and rapid recruitment add the original profile of the territory where those soldiers are raised. Casualties preserve the surviving average, while an empty army resets to its local recruitment profile. Federation changes ownership without diluting any army. National ATK/DEF is a manpower-weighted display/outcome snapshot only; total Combat Power is the additive sum of local armies.
 
-Opening ATK and DEF use one constant-time country calibration. `powerIndex / (100 × deployedOpeningManpower)` sets the combined per-soldier rating (bounded to `[0.35, 14]`). SIPRI spending per deployed soldier adds a small symmetric tilt: equipment-heavy forces lean toward ATK, manpower-heavy forces toward DEF, while `0.55 × ATK + 0.45 × DEF` remains unchanged. Nuclear tiers, research and earned Combat Experience are applied afterward.
+Opening ATK and DEF use one constant-time country calibration. `powerIndex / (100 × deployedOpeningManpower)` sets the combined per-soldier rating (bounded to `[0.35, 14]`). SIPRI spending per deployed soldier adds a small symmetric tilt: equipment-heavy forces lean toward ATK, manpower-heavy forces toward DEF, while `0.55 × ATK + 0.45 × DEF` remains unchanged. Nuclear tiers and research are applied afterward.
+
+There is one global ranking and no separate military or economic table:
+
+```text
+globalScore = sqrt(max(0, CombatPower) × max(0, controlledOutput))
+```
+
+The geometric mean gives military power and controlled economy equal relative weight: doubling either input changes the score identically. Living nations sort by descending global score, then stable country ID.
 
 ## 5. Tick order and determinism
 
@@ -125,26 +133,37 @@ All randomness advances the saved seeded RNG. The same seed, commands and tick c
 
 ## 6. Simple tax and one treasury
 
-The player does not manually allocate a budget. Every national AI chooses an exact-100 policy and derives an adaptive active plan from treasury runway, food coverage and reserves, live population growth, army gaps, territory damage, technology gap and active fronts. The chosen country's APEX Super AI applies its documented funded-output efficiency and faster planning cadence; it never creates free money or troops.
+The player does not manually allocate a budget. Every national AI runs the same planner, chooses an exact-100 policy and derives an adaptive active plan from treasury runway, food coverage and reserves, live population growth, army gaps, territory damage, technology gap and active fronts. APEX is only the chosen country's autopilot label; selection never changes the planner or its inputs.
+
+National IQ is a bounded gameplay score in `[80, 108]`, not a scientific claim about real populations. It is the sole skill input to the shared planner. Its modest funded-output multiplier is exact and inspectable:
+
+```text
+aiEfficiency = 1 + (clamp(IQ, 80, 108) − 100) × 0.0025
+```
+
+This yields only `0.95×` to `1.02×`. Every country reviews budget policy and the six research allocations on the same eight-week cadence. A review moves each exact-100 allocation toward its target by only this many percentage points in total:
+
+```text
+stepLimit = round(2 + 2 × clamp((IQ − 80) / 28, 0, 1))
+```
+
+The resulting limit is two to four points. Policies therefore transition gradually instead of jumping directly to a newly optimised mix. Mandatory costs may still change immediately when a real event changes the army, fronts, food need, debt or owned territory; the AI does not hide those costs behind smoothing.
 
 Weekly tax uses one automatic country rate between 10% and 20%. It is not a policy slider:
 
 ```text
-ownedPopulation = sum(live population of every owned territory)
-populationWeightedWealthPerPerson =
-  sum(territory live population × territory live wealth per person)
-  / ownedPopulation
-
+productivePopulation = sum(live territory population × integration share)
+referenceProductivePopulation = sum(opening territory population × integration share)
+populationFactor = productivePopulation / referenceProductivePopulation
+integratedOutput = sum(live territory GDP × integration share)
+fiscalReferenceWealthPerPerson = integratedOutput / referenceProductivePopulation
 countryTaxRate = 0.10
-  + 0.10 × clamp(populationWeightedWealthPerPerson / 75, 0, 1)
-
-weeklyTax = ownedPopulation
-  × populationWeightedWealthPerPerson
-  × countryTaxRate
-  / 52
+  + 0.10 × clamp(fiscalReferenceWealthPerPerson / 75, 0, 1)
+taxableOutput = integratedOutput × (0.50 + 0.50 × populationFactor)
+weeklyTax = taxableOutput × countryTaxRate / 52
 ```
 
-Wealth is measured in thousands of dollars per person, so `$75K` reaches the 20% end of the range. Population and wealth per person are simply the visible decomposition of total live GDP. Population growth alone does not create GDP: with unchanged total production it lowers wealth per person and leaves taxable output unchanged. Twice the population yields twice the tax only when output per person also stays unchanged. No condition, war or integration modifier is hidden inside the rate.
+Fiscal reference wealth is measured in thousands of dollars per immutable reference person, so `$75K` reaches the 20% end of the range. Using that reference for the rate prevents live population from algebraically cancelling its own contribution or lowering the rate when it grows. At baseline `populationFactor = 1`, so taxable output equals integrated GDP and opening income preserves the old calibration. With fixed GDP, tax then rises monotonically with more live productive people and falls with losses; even at zero live population the stable economy half retains 50% of the taxable-output base for a possible food and population recovery. This blend changes only tax: real integrated GDP remains the Economy value used by global ranking, strategic value, growth and conquest. The UI may still show live GDP per person, which falls when population grows against unchanged production. No condition or war modifier is hidden inside the rate, and integration applies equally to live population, its reference and GDP.
 
 The final annual economy-growth rate is recalculated once per finance plan:
 
@@ -164,15 +183,15 @@ One active war removes at least 1.8 percentage points of annual growth. Extra fr
 
 The Economy drawer shows this final percentage and its five components next to treasury, tax, costs, net, population, wealth per person, and domestic/imported food. Recurring player-facing amounts are annualized while canonical settlement remains weekly. It remains compact and does not expose branch-by-branch research arithmetic or obsolete movement costs.
 
-One treasury pays food, army upkeep, recruitment, research, national development, active-front operations, treaty obligations and any debt premium. Domestic food depends on land, terrain, condition, integration, research and live territory economic strength; India-origin agricultural territory receives a 1.30 yield multiplier. More expensive imports fill the remaining reachable demand. Food storage is finite: population demand supplies the base capacity, controlled landmass adds physical capacity, and wealth plus Supply research improve it. The top bar reports current/max food and the projected annualized stock change. Treasury may become negative; new borrowing adds a premium and causes discretionary spending to contract until finances recover.
+One treasury first pays a universal Base Operations cost equal to exactly `0.20 × ordinary weekly tax revenue`; the other 80% of tax revenue is the basis available to food and normal programmes. It then pays food, army upkeep, recruitment and reserve training, research, national development, active-front operations, treaty obligations and any debt premium. Domestic food depends on land, terrain, condition, integration, research and live territory economic strength; India-origin agricultural territory receives a 1.30 yield multiplier. More expensive imports fill the remaining reachable demand. Food storage is finite: population demand supplies the base capacity, controlled landmass adds physical capacity, and wealth plus Supply research improve it. The top bar reports current/max food and the projected annualized stock change. Treasury may become negative; new borrowing adds a premium and causes discretionary spending to contract until finances recover.
 
-At peace, food shortage, less than two weeks of reserves, live population decline or debt activates survival recovery. Development is prioritised, food/logistics research gains weight and optional new wars are blocked. Territory damage, post-war fatigue, an ordinary deficit or a routine recovery plan never permits demobilisation. A solvent, fed country protects payroll and recruits toward 100% of live capacity. Only an extreme food or debt emergency that also makes payroll genuinely unaffordable may shrink the deployed force, and the AI rebuilds toward full capacity as soon as that emergency ends. During an active war, Armed Forces becomes the largest priority, but the AI keeps an essential development floor so victory does not automatically destroy the civilian system.
+At peace, food shortage, less than two weeks of reserves, live population decline or debt activates survival recovery. Development is prioritised, food/logistics research gains weight and optional new wars are blocked. Any emergency transfer from Development into immediate food funding scales continuously with shortage and reserve stress, so crossing a threshold cannot create a sudden cost cliff. Territory damage, post-war fatigue, an ordinary deficit or a routine recovery plan never permits demobilisation. A solvent, fed country protects payroll and recruits toward 100% of live capacity. Only an extreme food or debt emergency that also makes payroll genuinely unaffordable may shrink the deployed force, and the AI rebuilds toward full capacity as soon as that emergency ends. During an active war, Armed Forces becomes the largest priority, but the AI keeps an essential development floor so victory does not automatically destroy the civilian system.
 
-Armed Forces pays mandatory upkeep before mobilization. Capacity is never purchased and cannot be reduced by an underfunded week. Fully maintained forces receive a slow passive training pipeline of 0.1% of live capacity per peaceful week, improved by Training research and limited by food. If readiness is low, surplus military funding may purchase a peacetime fast-track at 2.5× normal unit cost. War disrupts routine training but unlocks a larger emergency programme at 4.5× normal unit cost, allowing strong economies to replace losses materially faster. Base ATK/DEF quality raises unit cost on a bounded square-root curve; Reinforcement Efficiency reduces it. The sole extreme-crisis drawdown may remove at most `0.0005 × deployed manpower`, or 0.05%, per week. It has no instant or accelerated second path and never changes capacity.
+Armed Forces pays mandatory upkeep before mobilization. Capacity is never purchased and cannot be reduced by an underfunded week. Fully maintained forces receive a slow active training pipeline of 0.1% of live capacity per peaceful week, improved by Training research and limited by food. If readiness is low, surplus military funding may purchase a peacetime fast-track at 2.5× normal unit cost. Only after projected deployed strength reaches full capacity within the one-millionth canonical rounding tolerance does paid training begin filling the separate reserve pool, up to `2 ×` live active capacity. In war, the old bounded passive and paid-emergency throughputs instead mobilise existing reserves into active gaps; ordinary weekly recruitment adds no second source of fresh active manpower. Paid reserve training continues at exactly 5% of the normal peace pipeline, so sustained losses ordinarily drain the pool much faster than it grows. A later capacity fall blocks new reserve growth but never deletes stored personnel. Base ATK/DEF quality raises unit cost on a bounded square-root curve; Reinforcement Efficiency and the same modest national-IQ efficiency used by every country reduce it. The sole extreme-crisis drawdown may remove at most `0.0005 × deployed manpower`, or 0.05%, per week. It has no instant or accelerated second path and never changes capacity.
 
 Moving or redistributing troops costs exactly zero treasury. There is no per-hop, distance-based or hidden logistics charge for troop movement. This does not make a war declaration or an active front free: their explicit mobilisation and operations costs remain separate and visible.
 
-## 7. Army capacity, recruitment and Combat Experience
+## 7. Army capacity and recruitment
 
 Every territory's capacity uses only that territory's current live population and the owner's Force Capacity research. National capacity is the sum across currently owned territories:
 
@@ -187,34 +206,13 @@ nationalCapacity = sum(territoryCapacity of every owned territory)
 
 The universal population share is `0.00145`. Homeland integration is 1. A foreign conquest starts at 0.10 and therefore supplies 10% of its structural cap; integration then unlocks the remainder. Military quality, defence spending, starting army size, territory condition, treasury, war fatigue and budget funding do not modify capacity. Capacity automatically rises again when population, integration or research supports it; no permanent crisis penalty exists.
 
-Recruitment spends military funding to fill free national capacity. Training, Recovery and bounded catch-up may change automatic recruitment speed or price, but never the capacity formula. Rapid Recruitment fills at most 5% of current live capacity and then enters a 104-week cooldown. Its discounted initial quote is fixed from the opening country and every successful use makes the next one 25% more expensive; live GDP, conquest and war no longer reprice the button. Research Surge and Propaganda use the same rule with 30% and 35% per-use growth. A conquered frontier begins with 10% of its native local cap, while slow imperial logistics may station existing soldiers above it up to a strict new-inflow ceiling of `2 × local capacity`. This does not create troops: recruitment cannot exceed free empire capacity. Existing trained personnel are not deleted if later population loss or a local cap recalculation leaves them above that ceiling. Instead, ordinary weekly logistics treats the excess as a donor and gradually moves it to owned territory with room; with nowhere valid to move, it remains until real attrition or the sole extreme-crisis drawdown reduces it.
+Recruitment spends military funding to fill free national capacity and, after full active readiness in peace, to train the finite national reserve. Training, Recovery and the same bounded IQ efficiency may change automatic recruitment speed or price, but never the capacity formula. Peacetime-only Rapid Recruitment fills at most 5% of current live capacity and then enters a 104-week cooldown; every country is blocked from using it during war, including queued actions, so wartime replacements cannot bypass trained reserves. Its discounted initial quote is fixed from the opening country and every successful use makes the next one 25% more expensive; live GDP and conquest no longer reprice the button. Research Surge and Propaganda use the same rule with 30% and 35% per-use growth. A conquered frontier begins with 10% of its native local cap, while slow imperial logistics may station existing soldiers above it up to a strict new-inflow ceiling of `2 × local capacity`. This does not create troops: recruitment cannot exceed free empire capacity. Existing trained personnel are not deleted if later population loss or a local cap recalculation leaves them above that ceiling. Instead, ordinary weekly logistics treats the excess as a donor and gradually moves it to owned territory with room; with nowhere valid to move, it remains until real attrition or the sole extreme-crisis drawdown reduces it.
 
-Army redistribution moves manpower through owned routes while conserving total manpower and manpower-weighted base ATK/DEF. The owning empire's Combat Experience applies uniformly before and after movement. Redistribution has zero treasury cost.
-
-### 7.1 Combat Experience
-
-Combat Experience is one non-negative institutional score stored by the country or empire, not by individual soldiers or territories. Every country starts at zero. Country rank, player selection and army size grant no free opening experience.
-
-Battle pulses never grant experience. When a complete war ends after at least one real battle, each participating country receives exactly one deterministic gain. Total-war difficulty uses duration, battle count, cumulative own losses and the campaign power ratio; a harder completed war therefore teaches more than an easy one. A war without combat grants nothing.
-
-```text
-warExperienceGain = 1 × clamp(totalWarDifficulty, 0.5, 2)
-combatScore = sqrt(combatExperience)
-```
-
-Combat Experience itself has no hard cap, while all combat effects are bounded:
-
-```text
-attackMultiplier   = 1 + min(0.20, 0.01 × combatScore)
-defenseMultiplier  = 1 + min(0.20, 0.01 × combatScore)
-casualtyMultiplier = 1 − min(0.15, 0.0075 × combatScore)
-```
-
-These multipliers apply empire-wide to every current local army. Recruiting, moving, merging, conquering or losing soldiers neither creates nor dilutes the score. Permanent national mergers preserve earned knowledge without summing duplicate bonuses into free military power.
+Army redistribution moves manpower through owned routes while conserving total manpower and manpower-weighted base ATK/DEF. Redistribution has zero treasury cost.
 
 ## 8. Automatic Development portfolio
 
-All six programs are active at the same time. There is no exclusive focus, separate upgrade currency or manual quality/volume slider. Every 32 weeks the national AI redirects extra attention according to manpower fill, technology gap and current wars; APEX reassesses more frequently. The Progress drawer shows the total completed level of every empire-wide effect, separate from progress toward the next breakthrough.
+All six programs are active at the same time. There is no exclusive focus, separate upgrade currency or manual quality/volume slider. Every national AI reassesses its target portfolio every eight weeks according to manpower fill, technology gap, food security, economy and current wars. The saved allocation then moves only two to four percentage points toward that target, using the same IQ-scaled transition limit as the budget. The Progress drawer shows the total completed level of every empire-wide effect, separate from progress toward the next breakthrough.
 
 | Program | Seeded-random +1% result |
 | --- | --- |
@@ -235,7 +233,7 @@ branchBaseRP × 0.45 × (B + 1) × 1.18^B
   × research-efficiency modifier
 ```
 
-Research may improve indefinitely, while the exponential requirement slows extreme late-game growth. APEX Research Surge adds a visible, paid boost to the ordinary Development portfolio and then enters its cooldown; it does not create a separate research system.
+Research may improve indefinitely, while the exponential requirement slows extreme late-game growth. Research Surge adds a visible, paid boost to the ordinary Development portfolio and then enters its cooldown; it does not create a separate research system.
 
 ## 9. War declaration, access and costs
 
@@ -258,24 +256,27 @@ Wars resolve battle pulses every two weeks. Each side builds a deterministic, so
 
 Supply remains bounded to `[0.25, 1]` and depends on route connectivity, distance from the capital, condition, hostile control, access and Supply research. Naval attacks receive only modest supply friction plus their explicit 35% operations cost. They have no separate assault-strength or casualty multiplier. Troop routing and supply limitations affect combat effectiveness but never charge treasury for movement.
 
-The defender receives `1.25 × terrainModifier` position strength. Attacker pressure is opposed by defender DEF; defender counter-pressure is independently opposed by attacker DEF. Empire-wide Combat Experience modifies ATK, DEF and casualties through the same bounded selectors used by forecasts.
+The defender receives `1.25 × terrainModifier` position strength. Attacker pressure is opposed by defender DEF; defender counter-pressure is independently opposed by attacker DEF. Research may reduce casualties through its bounded selector.
 
 ```text
-defenderLossRate = clamp(0.016 × (attackPressure / defenseShield)
-  × variance × defenderCasualtyModifiers, 0, 0.05)
-attackerLossRate = clamp(0.016 × (counterPressure × 1.15 / attackerShield)
-  × variance × attackerCasualtyModifiers, 0, 0.05)
+requestedDefenderLosses = defenderCombatManpower × 0.004
+  × max(0, attackPressure / defenseShield)
+  × variance × defenderCasualtyModifiers
+
+requestedAttackerLosses = attackerCombatManpower × 0.004
+  × max(0, counterPressure / attackerShield)
+  × variance × accessCasualtyModifier × attackerCasualtyModifiers
 ```
 
-Variance is seeded in `[0.94, 1.06]`. Damage is simultaneous, uses only deployed local forces and has no minimum-casualty floor. Both loss rates are clamped to `[0, 0.05]`, and the complete exchange including route losses may remove at most 5% of each local formation's supported maximum manpower per pulse. Remaining headcount is the final bound, so a force already below that budget can be fully routed instead of creating a last-percent stalemate. Manpower casualties are continuous. A battle pulse never grants experience; the single difficulty-scaled award occurs only when the full war ends after real combat.
+Variance is seeded in `[0.94, 1.06]`; the linear power-ratio exponent is exactly `1`. Every deployed soldier in the local source and target armies contributes to front pressure through the formulas above. Damage is simultaneous, has no minimum-casualty floor and has no per-pulse rate, capacity or damage ceiling. Requested losses are applied directly and only the remaining local manpower is a natural upper bound. The `0.004` effectiveness is one quarter of the former `0.016` baseline. The separate 5% strength ratio remains solely a front-viability and initiative signal; it never caps casualties or adds route damage. Manpower casualties are continuous and battles create no XP resource.
 
-The declaration forecast and live battle resolution use the same pulse projection. Battle damage may also cause bounded civilian casualties, economic damage, condition loss and war fatigue.
+The declaration forecast and live battle resolution use the same pulse projection. Battle damage may also cause bounded civilian casualties, economic damage, condition loss and war fatigue. A separate non-lethal displacement transfer can move survivors from either local army's territory to the highest-condition deterministic safe land neighbour. The host cannot belong to either belligerent, participate in any active war, be under foreign control or integration, or have condition below `0.70`; without such a neighbour nobody moves. Across all battles and wars in one weekly round, each source territory shares one cap: attacker-side displacement is at most `35%` of its civilian-death figure and `0.025%` of its exposed opening population, while defender-side displacement is at most `50%` and `0.05%` respectively. The same population is subtracted from the source and added to the host, so only civilian deaths reduce world population.
 
 ## 11. Evolving borders and capture
 
 Partial control is a visual and peace-settlement value, not a second owner and not a capture gate. A territory captures when defending local manpower reaches zero while the attacking source retains combat strength.
 
-For a foreign capture, up to 10% of surviving source manpower moves into the captured territory as a real occupation guard, bounded by `2 ×` the newly unlocked local capacity. The same headcount is removed from the source, so enemy manpower is never inherited and occupation creates no troops or Combat Experience. During the first 52 weeks after capture the guard may receive reinforcement but ordinary empire logistics cannot use it as an outbound donor. It becomes normally mobile after that year and never vanishes automatically.
+For a foreign capture, up to 10% of surviving source manpower moves into the captured territory as a real occupation guard, bounded by `2 ×` the newly unlocked local capacity. The same headcount is removed from the source, so enemy manpower is never inherited and occupation creates no troops or military quality. During the first 52 weeks after capture the guard may receive reinforcement but ordinary empire logistics cannot use it as an outbound donor. It becomes normally mobile after that year and never vanishes automatically.
 
 On capture:
 
@@ -283,16 +284,19 @@ On capture:
 - surviving population, economy and condition remain as the territory's full potential after explicit battle damage;
 - a foreign owner starts at exactly `integration = 0.10`; an original-owner recapture restores `integration = 1`;
 - population capacity, taxable output, food production and army capacity all use that same visible integration share;
-- the remaining 90% unlocks linearly over one fixed duration derived from immutable baseline population (50%), GDP (30%) and land area (20%); Luxembourg takes 12.5 years, Belgium about 25.5 and China about 170;
+- the remaining 90% unlocks linearly over one fixed duration derived from immutable baseline population (50%), GDP (30%) and land area (20%); every new calendar is exactly 1.5× the previous duration, so Luxembourg takes 18.75 years, Belgium about 38 and China about 255;
 - integration speed is calendar-based and is never changed by budget, AI efficiency, war or later growth;
 - until completion, `coreOwner` preserves the territorial identity, `fromOwnerId` preserves the sovereign displaced by the latest capture, and the map shows a subtle border, former flag and progress treatment;
-- on completion, `coreOwner` becomes the current owner: the old country identity disappears and its land, statistics and land/naval routes are ordinary core territory of that country or empire; Combat Experience and research knowledge from the displaced sovereign and former core transfer by maxima only when each no longer owns any territory, with duplicate identities processed once;
+- on completion, `integration = 1`, `coreOwner` becomes the current owner and `integrationProgram` is deleted; population, economy, condition, manpower, force quality and routes are conserved while full owner-based capacity and output become available;
+- the old flag, integration border and country label are no longer renderable once `coreOwner === owner`; after the last territory carrying that former owner/core identity completes, living-country selectors ignore its dormant deterministic nation record;
+- durable research knowledge from the displaced sovereign and former core transfers by maxima only when neither owned territory nor an unfinished former-core identity remains, with duplicate values never summed into free progress;
 - a lost capital moves to the former owner's largest remaining economy.
 
 The duration curve is immutable. Each population, GDP and area axis first uses the country's baseline logarithmic size normalized over the playable world. Let `s = 0.50 × population + 0.30 × GDP + 0.20 × area`, let `L` be Luxembourg's resulting score, and let `r = clamp((s − L) / (1 − L), 0, 1)`:
 
 ```text
-integrationYears = 12.5 + 25r + 50r² + 100r⁴
+baseWeeks = round(52 × (12.5 + 25r + 50r² + 100r⁴))
+integrationWeeks = round(1.5 × baseWeeks)
 ```
 
 If one side's total deployed manpower reaches zero while the opponent retains combat strength, its remaining land capitulates with the same damage and zero inherited enemy army. Final elimination transfers 25% of the defeated treasury and sets that treasury to zero. If both armies reach zero together, the war ends without mutual absorption.
@@ -316,9 +320,9 @@ Rival expansion is intentionally sparse and predictable enough for the map to re
 - normal expansion considers only peaceful ordinary targets, never a country already fighting another war;
 - defensive and containment reactions remain separate from ordinary expansion but still respect their explicit cooldown and global cap.
 
-Strategic initiative rotates deterministically across living AI countries. Legal access, favourable force ratio, treasury runway, fatigue, target value and seeded randomness decide whether a credible plan executes. AI uses the same treasury, supply, defence bonus, casualties and conquest rules as the player.
+Strategic initiative rotates deterministically across living AI countries. Legal access, favourable force ratio, treasury runway, fatigue, target value and seeded randomness decide whether a credible plan executes. Every country uses the same planner, treasury, supply, defence bonus, casualty and conquest rules. National IQ supplies the planner's only bounded skill scaling; choosing a country never changes that score or upgrades its AI. The chosen country's autonomous finance/research/recruitment planner is labelled APEX, while its war declarations remain player-controlled.
 
-Capturing territory, rapid Combat Power growth and sustained offensive wars raise global suspicion; peaceful time lowers it. Coalition recruitment begins no earlier than week 156, may add only one member every 52 weeks, requires a higher join threshold and needs five members before containment activates. Nearby states and soft present-day affinity tags may later form permanent defensive federations. Federation cooldown ranges from at least 208 to 312 weeks. Federation merging preserves territories, treasuries, deployed manpower, earned Combat Experience and the strongest existing research without creating free capacity or forces.
+Capturing territory, rapid Combat Power growth and sustained offensive wars raise global suspicion; peaceful time lowers it. Coalition recruitment begins no earlier than week 156, may add only one member every 52 weeks, requires a higher join threshold and needs five members before containment activates. Nearby states and soft present-day affinity tags may later form permanent defensive federations. Federation cooldown ranges from at least 208 to 312 weeks. Federation merging preserves territories, treasuries, deployed manpower, trained reserves and the strongest existing research without creating free capacity or forces.
 
 The player may fund the documented expensive propaganda program. Its gradual suspicion reduction cannot dissolve an existing federation.
 
@@ -328,7 +332,7 @@ After the first conquest, the player may name the empire. That name becomes the 
 
 - All user-facing game copy is English.
 - The game is desktop-first; no narrow/mobile breakpoint is required.
-- The first interaction is the power-ranked country picker. Choosing a country opens the live map directly; there is no preceding explainer or post-selection activation briefing.
+- The first interaction is the single global-ranking country picker. Military and economic strength are combined by the geometric-mean formula in section 4; there are no separate military/economic ranking modes. Its Army column shows deployed manpower over capacity as `x / x`. Choosing a country opens the live map directly; there is no preceding explainer or post-selection activation briefing.
 - The map shows current ownership, the player's empire outline, active fronts, partial control and selected/important country labels. The current top ten powers remain strategically legible.
 - Camera zoom reaches 24× with pointer-anchored wheel zoom and constrained panning, making compact countries such as Luxembourg practical to inspect and select.
 - Flags use sharp scalable assets. Active integration retains a subtle former-core flag/border/progress treatment; only completed integration removes that identity from the map.
@@ -337,9 +341,8 @@ After the first conquest, the player may name the empire. That name becomes the 
 - Economy does not show long calculation chains, troop-movement charges or branch-by-branch research accounting.
 - Nation is read-only and shows the current AI mode, paid spending, population, food, research and military state.
 - War is the primary decision surface for live fronts, legal targets, forecasts, army upkeep, operations, propaganda, suspicion and containment.
-- Combat Experience appears once as the empire-wide score with its bounded derived effects.
 - Weekly refresh preserves scroll position in drawers and ranking lists.
-- War recommendations and confirmation show target food coverage, storage trend, domestic production, GDP, population and the 10% initial occupation contribution. War starts and conquests create subtle notifications. A conquest no longer blocks play with a post-war modal: currently unlocked economy, cash, population capacity, food access and army-cap gains animate from the captured territory into the matching top-bar metric. Country detail shows integration and remaining years.
+- War recommendations and confirmation show target food coverage, storage trend, domestic production, GDP, population and the 10% initial occupation contribution. War starts and conquests create subtle bottom notifications. Normal notices remain visible for 3.2 seconds, war notices for 4 seconds and conquest notices for 5 seconds; at most four stack at once. A conquest no longer blocks play with a post-war modal: currently unlocked economy, cash, population capacity, food access and army-cap gains animate from the captured territory into the matching top-bar metric. Country detail shows integration and remaining years.
 
 ## 15. Persistence and invariants
 
@@ -349,9 +352,8 @@ Every completed tick must satisfy:
 
 - all canonical numbers are finite;
 - treasury is finite and may be negative;
-- population, economy, manpower, capacity, Combat Experience and research progress are non-negative;
+- population, economy, manpower, capacity and research progress are non-negative;
 - manpower is non-negative; recruitment cannot exceed free empire capacity, new local inflow cannot cross `2 × local capacity`, and an existing overshoot is never deleted instantly;
-- `combatExperience >= 0` with no artificial score maximum;
 - capacity equals the live population/integration/research formula and never contains a budget or crisis penalty;
 - condition and integration remain within their declared bounds;
 - each territory has exactly one valid living owner;
@@ -359,26 +361,26 @@ Every completed tick must satisfy:
 - budgets and Development allocations retain their exact sums;
 - wars have distinct living participants and no duplicate nation pair;
 - control references a hostile controller and remains bounded;
-- army movement and occupation conserve manpower and manpower-weighted base ATK/DEF except for explicit battle losses; only a completed real war may increase Combat Experience;
+- army movement and occupation conserve manpower and manpower-weighted base ATK/DEF except for explicit battle losses;
 - troop movement never mutates treasury.
 
 ## 16. Required automated evidence
 
-The V2.54 suite must cover at minimum:
+The V2.55 suite must cover at minimum:
 
-1. schema-18 save/load deterministic continuation plus authenticated schema-13–17 migration, including Greenland conservation and singular-to-plural fronts;
-2. the exact 10–20% wealth-linked country-tax identity without double-counting population growth;
+1. schema-20 save/load deterministic continuation plus authenticated schema-13–19 migration, including Greenland conservation, singular-to-plural fronts and removal of the retired schema-19 military-experience field;
+2. the exact 10–20% reference-wealth rate and 50/50 GDP/live-population tax identity;
 3. the compact Economy presentation and absence of obsolete calculation chains;
 4. one treasury, debt, paid spending and explicit front costs;
 5. army capacity using only `population × integration × 0.00145 × (1 + 0.01 × research)`;
 6. automatic capacity recovery after population/integration/research changes and no budget-driven cap loss;
 7. recruitment raising manpower without purchasing capacity;
 8. free troop movement with exact treasury conservation;
-9. Combat Experience remaining one non-negative empire-wide score with no opening selection bonus;
-10. zero pulse-time experience plus exactly one difficulty-scaled award after a completed war containing real combat;
-11. uncapped experience with bounded square-root ATK/DEF/casualty effects;
+9. complete absence of a live battle-XP resource, bonus, UI value or war-end award;
+10. every deployed soldier in each local front army contributing to combat pressure;
+11. direct combat damage using `0.004` effectiveness, exponent `1`, no per-pulse casualty/damage ceiling and remaining manpower as the only upper bound;
 12. movement, merging and occupation conserving manpower and manpower-weighted base quality;
-13. casualties reducing real manpower without creating or deleting Combat Experience;
+13. the global score equalling `sqrt(Combat Power × controlled output)`, with one stable global ordering and no military/economic ranking modes;
 14. all four ATK/DEF directions changing the correct casualty stream;
 15. equal-force defenders losing less because of the 25% position bonus;
 16. capture inheriting zero enemy army and preserving only the proportional occupation force;
@@ -388,15 +390,18 @@ The V2.54 suite must cover at minimum:
 20. active AI war cap of 2–4, ordinary one-war limit and post-week-260 major two-war limit;
 21. ordinary expansion filtering out targets already at war;
 22. exact six always-active Development programs and funding conservation;
-23. per-tick invariant checks and multi-seed soak coverage;
-24. player finance/Development automation without autonomous player war declarations;
-25. expansion suspicion, containment and federation conservation;
-26. first-conquest empire naming and persistence;
-27. conquest starting at 10%, following the deterministic 12.5/~25.5/~170-year size curve and permanently merging core identity on completion;
-28. two or more source armies resolving as real battles in the same front round;
-29. healthy post-war AI recruiting toward 100%, with demobilisation only in an extreme crisis and never above 0.05% per week;
-30. Greenland remaining separate from Denmark with valid flags, fiscal calibration and Arctic sea routes;
-31. top-ten map labels, sharp flags, visible active integration, 24× zoom and country-picker-to-map flow without intro or briefing screens;
-32. recruitment and logistics stopping at `2 × local capacity`, with pre-existing overshoot preserved and only gradually rerouted through normal weekly logistics;
-33. a manpower-conserving foreign-capture guard staying protected from outbound logistics for exactly 52 weeks before normal redeployment.
-34. combat using the gentler 1.6% base rate and a 5%-of-supported-maximum pulse ceiling, including route losses and no protection for a final remnant.
+23. the same national planner for every country, no selection-based superiority and only the bounded national-IQ efficiency/response scaling;
+24. eight-week budget and research reviews moving at most the IQ-scaled two-to-four-point total step toward each target;
+25. per-tick invariant checks and multi-seed soak coverage;
+26. chosen-country finance/Development automation without autonomous player war declarations;
+27. expansion suspicion, containment and federation conservation;
+28. first-conquest empire naming and persistence;
+29. conquest starting at 10%, every new duration being exactly 1.5× the prior size curve (18.75/~38/~255 years), and completion permanently replacing former core identity without changing population, economy, condition, manpower, force quality or routes;
+30. two or more source armies resolving as real battles in the same front round;
+31. healthy post-war AI recruiting toward 100%, with demobilisation only in an extreme crisis and never above 0.05% per week;
+32. Greenland remaining separate from Denmark with valid flags, fiscal calibration and Arctic sea routes;
+33. top-ten map labels, sharp flags, visible active integration, 24× zoom and country-picker-to-map flow without intro or briefing screens;
+34. the picker showing one global rank and Army as deployed/capacity (`x / x`), plus the documented 3.2/4/5-second notification timings;
+35. recruitment and logistics stopping at `2 × local capacity`, with pre-existing overshoot preserved and only gradually rerouted through normal weekly logistics;
+36. a manpower-conserving foreign-capture guard staying protected from outbound logistics for exactly 52 weeks before normal redeployment;
+37. cached map ownership, border, front, label and logistics derivations preserving identical presentation while avoiding redundant weekly/zoom work.

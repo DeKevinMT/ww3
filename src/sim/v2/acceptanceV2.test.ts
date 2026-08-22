@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { nextRandom } from '../../game/random';
 import {
-  COMBAT_BASE_CASUALTY_RATE,
-  COMBAT_MAX_CASUALTY_RATE,
+  COMBAT_DAMAGE_EFFECTIVENESS,
   COMBAT_POWER_RATIO_EXPONENT,
   AI_FIRST_WAR_TICK,
   AI_GLOBAL_WAR_COOLDOWN,
@@ -251,13 +250,13 @@ describe('V2 combat and absorption acceptance', () => {
     const attackPressure = source.army.manpower * attack * attackerSupply;
     const expectedShield = target.army.manpower * defense * DEFENDER_POSITION_MULTIPLIER
       * TERRAIN_DEFENSE_MODIFIER.plains * defenderSupply;
-    const expectedRate = Math.min(COMBAT_MAX_CASUALTY_RATE, Math.max(0, COMBAT_BASE_CASUALTY_RATE * Math.pow(
+    const expectedRate = Math.max(0, COMBAT_DAMAGE_EFFECTIVENESS * Math.pow(
       attackPressure / expectedShield,
       COMBAT_POWER_RATIO_EXPONENT,
-    ) * varianceA));
+    ) * varianceA);
     const expectedDamage = Math.min(
       target.army.manpower,
-      Math.max(target.army.capacity, target.army.manpower) * expectedRate,
+      target.army.manpower * expectedRate,
     );
 
     const event = resolveBattlePulseV2(state, FIXTURE_CONTENT, currentWar, currentOperation)!;

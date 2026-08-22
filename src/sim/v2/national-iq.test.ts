@@ -3,6 +3,7 @@ import {
   NATIONAL_IQ_SCORE_MAX,
   NATIONAL_IQ_SCORE_MIN,
 } from './balance';
+import { selectDefensiveAidAssessmentV2 } from './ai';
 import { createWorldStateV2 } from './bootstrap';
 import {
   calibratedMilitaryRatingsV2,
@@ -11,8 +12,8 @@ import {
   type WorldContentV2,
 } from './content';
 import {
-  selectCombatExperienceV2,
   selectEffectiveAttackV2,
+  selectWarAccessTypeV2,
   selectGlobalRankingV2,
   selectNationalIqViewV2,
   selectPopulationDynamicsV2,
@@ -20,7 +21,7 @@ import {
   selectWeeklyFinanceBreakdownV2,
 } from './selectors';
 import { nationIdV2, territoryIdV2, type PlayerId } from './types';
-import { logisticsThroughputShareV2 } from './war';
+import { logisticsThroughputShareV2, projectCombatExchangeV2 } from './war';
 
 function contentWithIq(playerId: PlayerId, iqScore: number): WorldContentV2 {
   return {
@@ -80,19 +81,19 @@ describe('national IQ gameplay proxy', () => {
     expect(highCapacity - lowCapacity).toBeLessThanOrEqual(3);
   });
 
-  it('preserves the established opening top-ten power order', () => {
+  it('preserves the calibrated opening global-score order', () => {
     const ranking = selectGlobalRankingV2(createWorldStateV2(2026), WORLD_CONTENT_V2);
     expect(ranking.slice(0, 10).map((entry) => entry.player.id)).toEqual([
       nationIdV2('usa'),
       nationIdV2('chn'),
-      nationIdV2('rus'),
-      nationIdV2('ind'),
       nationIdV2('deu'),
+      nationIdV2('jpn'),
+      nationIdV2('ind'),
       nationIdV2('gbr'),
       nationIdV2('fra'),
-      nationIdV2('jpn'),
-      nationIdV2('sau'),
+      nationIdV2('rus'),
       nationIdV2('ita'),
+      nationIdV2('can'),
     ]);
   });
 
@@ -125,23 +126,84 @@ describe('national IQ gameplay proxy', () => {
     expect(highFinance.annualEconomyGrowthRate).toBeGreaterThan(lowFinance.annualEconomyGrowthRate);
     expect(selectResearchOutputV2(state, highContent, belgium, lowFinance, 1))
       .toBeGreaterThan(selectResearchOutputV2(state, lowContent, belgium, lowFinance, 1));
-    expect(logisticsThroughputShareV2(0.25, 0, false, highView.logisticsMultiplier))
-      .toBeGreaterThan(logisticsThroughputShareV2(0.25, 0, false, lowView.logisticsMultiplier));
+    expect(logisticsThroughputShareV2(0.25, 0, highView.logisticsMultiplier))
+      .toBeGreaterThan(logisticsThroughputShareV2(0.25, 0, lowView.logisticsMultiplier));
     expect(selectPopulationDynamicsV2(state, highContent, belgium, 0).annualNetRate)
       .toBeLessThan(selectPopulationDynamicsV2(state, lowContent, belgium, 0).annualNetRate);
   });
 
-  it('keeps base quality, research and Combat Experience as separate multipliers', () => {
+  it('uses the same IQ-bound defensive coordination for every country', () => {
+    const attacker = nationIdV2('bel');
+    const defender = nationIdV2('nld');
+    const state = createWorldStateV2(8_203);
+    const sourceId = territoryIdV2('bel');
+    const targetId = territoryIdV2('nld');
+    const lowContent = contentWithIq(defender, NATIONAL_IQ_SCORE_MIN);
+    const highContent = contentWithIq(defender, NATIONAL_IQ_SCORE_MAX);
+    const low = projectCombatExchangeV2(
+      state, lowContent, attacker, defender, sourceId, targetId, 'land', 1, 1,
+    )!;
+    const high = projectCombatExchangeV2(
+      state, highContent, attacker, defender, sourceId, targetId, 'land', 1, 1,
+    )!;
+
+    expect(high.defenseShield).toBeGreaterThan(low.defenseShield);
+    expect(high.counterPressure).toBeGreaterThan(low.counterPressure);
+    expect(high.defenderLosses).toBeLessThan(low.defenderLosses);
+    expect(high.attackerLosses).toBeGreaterThan(low.attackerLosses);
+
+    state.humanPlayerId = defender;
+    expect(projectCombatExchangeV2(
+      state, highContent, attacker, defender, sourceId, targetId, 'land', 1, 1,
+    )).toEqual(high);
+  });
+
+  it('offers the same weak-defender aid regardless of selection, with only a modest shared IQ effect', () => {
+    const defender = nationIdV2('bel');
+    const supporter = nationIdV2('nld');
+    const attacker = nationIdV2('fra');
+    const state = createWorldStateV2(8_204);
+    state.tick = 40;
+    const war = {
+      id: 'shared-defensive-aid', attackerId: attacker, defenderId: defender,
+      startedTick: 10, lastBattleTick: 40, warScore: 0, battles: 8,
+      attackerLosses: 0, defenderLosses: 0, lastPeaceOfferTick: -1,
+      attackerOperations: [], defenderOperations: [],
+    };
+    state.wars = [war];
+    const access = selectWarAccessTypeV2(state, WORLD_CONTENT_V2, supporter, attacker);
+    expect(access).not.toBe('none');
+    if (access === 'none') throw new Error('Expected supporter access to aggressor.');
+
+    const unselected = selectDefensiveAidAssessmentV2(
+      state, WORLD_CONTENT_V2, supporter, war, access,
+    );
+    state.humanPlayerId = defender;
+    const selected = selectDefensiveAidAssessmentV2(
+      state, WORLD_CONTENT_V2, supporter, war, access,
+    );
+    expect(selected).toEqual(unselected);
+    expect(selected).toBeDefined();
+
+    const low = selectDefensiveAidAssessmentV2(
+      state, contentWithIq(supporter, NATIONAL_IQ_SCORE_MIN), supporter, war, access,
+    )!;
+    const high = selectDefensiveAidAssessmentV2(
+      state, contentWithIq(supporter, NATIONAL_IQ_SCORE_MAX), supporter, war, access,
+    )!;
+    expect(high.interventionChance).toBeGreaterThan(low.interventionChance);
+    expect(high.interventionChance - low.interventionChance).toBeLessThan(0.03);
+  });
+
+  it('keeps base quality and research as separate multipliers', () => {
     const belgium = nationIdV2('bel');
     const state = createWorldStateV2(8_202);
     const army = state.territories[territoryIdV2('bel')].army;
     const base = calibratedMilitaryRatingsV2(80, 200, 0.40, 100_000, 108).attack;
     army.baseAttack = base;
     state.players[belgium].research.effectLevels.attack = 10;
-    state.players[belgium].combatExperience = 25;
-    const experience = selectCombatExperienceV2(state, belgium);
 
     expect(selectEffectiveAttackV2(state, WORLD_CONTENT_V2, belgium, army))
-      .toBeCloseTo(base * 1.10 * experience.attackMultiplier, 6);
+      .toBeCloseTo(base * 1.10, 6);
   });
 });

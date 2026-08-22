@@ -7,7 +7,6 @@ import {
   RESEARCH_SURGE_COST_REVENUE_WEEKS,
   RESEARCH_SURGE_POPULATION_SCALE,
   RESEARCH_SURGE_TERRITORY_SCALE,
-  SUPER_AI_EFFICIENCY,
   MANUAL_ACTION_BASE_DISCOUNT,
   MANUAL_PROPAGANDA_COST_GROWTH,
   MANUAL_RAPID_RECRUITMENT_COST_GROWTH,
@@ -17,6 +16,7 @@ import {
 import { initialNationArmyCapacityBenchmarkV2 } from './capacity';
 import type { WorldContentV2 } from './content';
 import { calculateFiscalCapacityV2 } from './fiscal';
+import { nationalAiEfficiencyV2 } from './nationalAi';
 import type { ManualActionUsesV2, PlayerId } from './types';
 
 export type ManualActionV2 = keyof ManualActionUsesV2;
@@ -68,7 +68,7 @@ export function initialManualActionCostV2(
     const quality = 0.55 * (nation.militaryAttackRating ?? nation.militaryQuality)
       + 0.45 * (nation.militaryDefenseRating ?? nation.militaryQuality);
     const baseCost = Math.max(0.001, initialAmount
-      * (2 / SUPER_AI_EFFICIENCY)
+      * (2 / nationalAiEfficiencyV2(nation.iqScore))
       * RAPID_RECRUITMENT_COST_MULTIPLIER
       * quality ** 2
       * MANUAL_ACTION_BASE_DISCOUNT);

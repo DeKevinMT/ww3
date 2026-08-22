@@ -565,12 +565,6 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
 .power-ranking__row:focus-visible { outline: 2px solid color-mix(in srgb, var(--power) 78%, #dffaff); outline-offset: 2px; border-color: var(--power); }
 .power-ranking__row.is-human { border-color: color-mix(in srgb, var(--power) 58%, transparent); background: color-mix(in srgb, var(--power) 10%, rgba(7, 19, 29, .94)); box-shadow: inset 2px 0 var(--power); }
 .power-ranking__row.is-leader > span { color: #f0bd68; font-weight: 900; }
-.ranking-mode-tabs { margin: 10px 0 8px; padding: 3px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 3px; border: 1px solid rgba(107, 221, 242, .13); border-radius: 8px; background: rgba(2, 12, 21, .36); }
-.ranking-mode-tabs button { min-height: 31px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: #7897a2; font: 850 8px/1 inherit; letter-spacing: .65px; cursor: pointer; transition: border-color 130ms ease, background 130ms ease, color 130ms ease; }
-.ranking-mode-tabs button:hover { color: #dff7fa; background: rgba(107, 221, 242, .045); }
-.ranking-mode-tabs button:focus-visible { outline: 2px solid rgba(107, 221, 242, .75); outline-offset: 1px; }
-.ranking-mode-tabs button.is-active { border-color: rgba(107, 221, 242, .28); background: rgba(107, 221, 242, .10); color: #dffaff; box-shadow: inset 0 -2px var(--cyan); }
-.power-ranking--economy .power-ranking__row > b { color: #f0bd68; }
 .ranking-panel h2 { margin-right: 38px; }
 .ranking-podium { display: grid; grid-template-columns: 1.3fr .7fr; gap: 6px; }
 .ranking-podium > div { padding: 10px; display: flex; flex-direction: column; border: 1px solid rgba(240, 189, 104, .16); border-radius: 8px; background: rgba(240, 189, 104, .035); }
@@ -1675,7 +1669,7 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
 .resistance-alert span { grid-column: 1 / -1; color: #8fa6ae; font-size: 7px; }
 .resistance-alert strong { grid-column: 2; grid-row: 1; color: #ffc0b9; font-size: 7px; white-space: nowrap; }
 
-/* V2.8 · read-only Super-AI command surfaces */
+/* V2.8 · read-only national-AI command surfaces */
 .ai-status-hero { margin: 6px 0 9px; padding: 9px; display: grid; grid-template-columns: 1fr auto; gap: 3px 9px; border: 1px solid rgba(107,221,242,.2); border-radius: 9px; background: linear-gradient(135deg,rgba(107,221,242,.075),rgba(105,227,162,.025)); }
 .ai-status-hero > div { display: flex; flex-direction: column; gap: 2px; }
 .ai-status-hero span { color: #6f9fab; font-size: 7px; font-weight: 850; letter-spacing: .7px; }
@@ -3399,7 +3393,6 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
 /* Clear national-quality, war-decision and focused-research language. */
 .world-ui-v2 .country-preview__stats .stat-atk strong { color: #ffad79; }
 .world-ui-v2 .country-preview__stats .stat-def strong { color: #78dff0; }
-.world-ui-v2 .country-preview__stats .stat-xp strong { color: #bdaef2; }
 .world-ui-v2 .country-preview__stats .stat-iq strong { color: #d8c8ff; }
 .world-ui-v2 .country-preview__stats .stat-economy strong { color: #f0c173; }
 

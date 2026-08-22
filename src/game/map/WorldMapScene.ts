@@ -12,6 +12,7 @@ import {
   mapBridge,
   type MapBattleEvent,
   type MapFrontOperation,
+  type MapLogisticsMovement,
   type MapSceneAdapter,
   type MapSelectionState,
   type MapWarState,
@@ -22,6 +23,7 @@ import {
   MAP_FLAG_TEXTURE_HEIGHT,
   MAP_FLAG_TEXTURE_WIDTH,
 } from '../../ui/countryFlags';
+import { forcePresentationSignature } from './forcePresentation';
 
 interface TerritoryVisual {
   parts: Phaser.GameObjects.Polygon[];
@@ -33,6 +35,12 @@ interface TerritoryVisual {
   localForceBarBack: Phaser.GameObjects.Rectangle;
   localForceBarFill: Phaser.GameObjects.Rectangle;
   minLabelZoom: number;
+  layoutDetailVisible?: boolean;
+  layoutWidth?: number;
+  layoutHeight?: number;
+  localForceText: string;
+  localForceFill: number;
+  localForceFillColor: number;
 }
 
 interface OwnershipBoundarySegment {
@@ -54,6 +62,10 @@ function compareFrontOperations(left: MapFrontOperation, right: MapFrontOperatio
 
 function sortedWarOperations(war: MapWarState): MapFrontOperation[] {
   return [...war.attackerOperations, ...war.defenderOperations].sort(compareFrontOperations);
+}
+
+function ownerPairKey(leftId: string, rightId: string): string {
+  return leftId < rightId ? `${leftId}:${rightId}` : `${rightId}:${leftId}`;
 }
 
 function colorMix(color: number, target: number, amount: number): number {
@@ -123,6 +135,28 @@ const BORDER_SIMPLIFICATION_TOLERANCE = 0.05;
 interface RenderPoint {
   x: number;
   y: number;
+}
+
+interface TerritoryConnection {
+  sourceId: string;
+  targetId: string;
+  source: RenderPoint;
+  target: RenderPoint;
+}
+
+interface FrontRenderOperation {
+  source: RenderPoint;
+  target: RenderPoint;
+  color: number;
+  isHuman: boolean;
+  momentum: number;
+}
+
+interface RenderRectangle {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 function distanceToSegmentSquared(point: RenderPoint, start: RenderPoint, end: RenderPoint): number {
@@ -249,6 +283,28 @@ const COUNTRY_RENDER_BOUNDS = new Map(COUNTRIES.flatMap((country) => {
   return bounds ? [[country.id, bounds] as const] : [];
 }));
 
+const TERRITORY_CONNECTIONS: readonly TerritoryConnection[] = (() => {
+  const connections: TerritoryConnection[] = [];
+  const seen = new Set<string>();
+  for (const territory of TERRITORIES) {
+    for (const neighborId of territory.neighbors) {
+      const key = territory.id < neighborId
+        ? `${territory.id}:${neighborId}` : `${neighborId}:${territory.id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const neighbor = TERRITORY_BY_ID[neighborId];
+      if (!neighbor) continue;
+      connections.push({
+        sourceId: territory.id,
+        targetId: neighborId,
+        source: territory,
+        target: neighbor,
+      });
+    }
+  }
+  return connections;
+})();
+
 function flagTextureKey(nationId: string): string {
   return `${FLAG_TEXTURE_PREFIX}${nationId}`;
 }
@@ -296,7 +352,14 @@ function labelPlacementOffsets(
   return offsets;
 }
 
-function rectangleOverlapArea(left: Phaser.Geom.Rectangle, right: Phaser.Geom.Rectangle): number {
+function rectanglesIntersect(left: RenderRectangle, right: RenderRectangle): boolean {
+  return !(left.x + left.width < right.x
+    || right.x + right.width < left.x
+    || left.y + left.height < right.y
+    || right.y + right.height < left.y);
+}
+
+function rectangleOverlapArea(left: RenderRectangle, right: RenderRectangle): number {
   const width = Math.max(0,
     Math.min(left.x + left.width, right.x + right.width) - Math.max(left.x, right.x));
   const height = Math.max(0,
@@ -307,6 +370,7 @@ function rectangleOverlapArea(left: Phaser.Geom.Rectangle, right: Phaser.Geom.Re
 export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
   private visuals = new Map<string, TerritoryVisual>();
   private selection: MapSelectionState = { legalTargetIds: [] };
+  private legalTargetIds = new Set<string>();
   private engine?: WorldMapEngineContract;
   private frontGraphics?: Phaser.GameObjects.Graphics;
   private routeGraphics?: Phaser.GameObjects.Graphics;
@@ -335,10 +399,21 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
   private strategicScores = new Map<string, number>();
   private ownerRanks = new Map<string, number>();
   private topPowerOwnerIds = new Set<string>();
+  private ownerColors = new Map<string, number>();
+  private movedTerritoryIds = new Set<string>();
+  private activeHumanSourceIds = new Set<string>();
+  private strongestHumanTerritoryIds = new Set<string>();
+  private hostileOwnerPairs = new Set<string>();
+  private ordinaryBoundarySegments: readonly OwnershipBoundarySegment[] = [];
+  private humanBoundarySegments: readonly OwnershipBoundarySegment[] = [];
+  private integrationBoundarySegments: readonly OwnershipBoundarySegment[] = [];
+  private frontRenderOperations: readonly FrontRenderOperation[] = [];
+  private humanLogisticsMovements: readonly MapLogisticsMovement[] = [];
   private lastStrategicScoreTick = -Infinity;
   private lastTopologySignature = '';
   private lastOperationSignature = '';
   private lastLogisticsSignature = '';
+  private lastForcePresentationSignature = '';
   private activeBattleEffects = 0;
   private battleLabelRefresh?: Phaser.Time.TimerEvent;
   private zoomTarget = 1;
@@ -381,10 +456,12 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
     this.frontGraphics = this.add.graphics().setDepth(6);
     this.buildOwnershipBoundarySegments();
     this.createCountries();
-    this.redrawFlagAtlas();
     this.configureCamera();
     this.refreshZoomDetails();
     mapBridge.attach(this);
+    // When the adapter is already present, attach() materialises the live atlas.
+    // Only paint the neutral opening ownership when the engine has not attached yet.
+    if (!this.mapState) this.redrawFlagAtlas();
   }
 
   private drawOcean(): void {
@@ -452,39 +529,47 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       }));
   }
 
-  private drawOwnershipPerimeters(state: MapStateSnapshot): void {
+  private rebuildTopologyPresentation(state: MapStateSnapshot): void {
+    const ordinary: OwnershipBoundarySegment[] = [];
+    const human: OwnershipBoundarySegment[] = [];
+    const integration: OwnershipBoundarySegment[] = [];
+    for (const segment of this.ownershipBoundarySegments) {
+      if (segment.territoryIds.length === 1) continue;
+      let firstOwnerId: string | undefined;
+      let multipleOwners = false;
+      let touchesHuman = false;
+      let integrating = false;
+      for (const territoryId of segment.territoryIds) {
+        const ownerId = state.territories[territoryId]?.ownerId;
+        if (!ownerId) continue;
+        if (!firstOwnerId) firstOwnerId = ownerId;
+        else if (ownerId !== firstOwnerId) multipleOwners = true;
+        if (ownerId === state.humanPlayerId) touchesHuman = true;
+        if (this.integratingTerritoryIds.has(territoryId)) integrating = true;
+      }
+      if (!firstOwnerId) continue;
+      if (!multipleOwners && integrating) integration.push(segment);
+      else if (multipleOwners) (touchesHuman ? human : ordinary).push(segment);
+    }
+    this.ordinaryBoundarySegments = ordinary;
+    this.humanBoundarySegments = human;
+    this.integrationBoundarySegments = integration;
+    this.hostileOwnerPairs = new Set(state.wars.map((war) => (
+      ownerPairKey(war.attackerId, war.defenderId)
+    )));
+  }
+
+  private drawOwnershipPerimeters(): void {
     const graphics = this.ownershipBoundaryGraphics;
     if (!graphics) return;
     graphics.clear();
-    const border: OwnershipBoundarySegment[] = [];
-    const humanBorder: OwnershipBoundarySegment[] = [];
-    const integrationBorder: OwnershipBoundarySegment[] = [];
-    for (const segment of this.ownershipBoundarySegments) {
-      // Singleton segments are coastlines. Their filled silhouette already reads
-      // against the ocean, so this layer only owns political land perimeters.
-      if (segment.territoryIds.length === 1) continue;
-      const owners = new Set(segment.territoryIds
-        .map((territoryId) => state.territories[territoryId]?.ownerId)
-        .filter((ownerId): ownerId is string => Boolean(ownerId)));
-      if (owners.size === 0) continue;
-      const integrating = segment.territoryIds.some((territoryId) => (
-        this.integratingTerritoryIds.has(territoryId)
-      ));
-      if (owners.size === 1 && integrating) {
-        integrationBorder.push(segment);
-        continue;
-      }
-      if (owners.size === 1) continue;
-      if (owners.has(state.humanPlayerId)) humanBorder.push(segment);
-      else border.push(segment);
-    }
     const draw = (segmentsToDraw: readonly OwnershipBoundarySegment[], width: number, color: number, alpha: number) => {
       graphics.lineStyle(this.screenWorldSize(width), color, alpha);
       for (const segment of segmentsToDraw) this.drawWrappedLine(graphics, segment.x1, segment.y1, segment.x2, segment.y2);
     };
-    draw(border, 1.15, 0xd4e7eb, 0.58);
-    draw(humanBorder, 1.7, 0x8cf3ff, 0.88);
-    draw(integrationBorder, 0.85, 0xf2c879, 0.42);
+    draw(this.ordinaryBoundarySegments, 1.15, 0xd4e7eb, 0.58);
+    draw(this.humanBoundarySegments, 1.7, 0x8cf3ff, 0.88);
+    draw(this.integrationBoundarySegments, 0.85, 0xf2c879, 0.42);
   }
 
   private createCountries(): void {
@@ -547,6 +632,7 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       const minLabelZoom = baseLabelZoom + (country.regionId === 'heartlands' ? 0.08 : country.subregion === 'Caribbean' ? 0.12 : 0);
       this.visuals.set(country.id, {
         parts, hud, panel, name, detail, localForce, localForceBarBack, localForceBarFill, minLabelZoom,
+        localForceText: '', localForceFill: -1, localForceFillColor: -1,
       });
     }
   }
@@ -685,6 +771,10 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
   }
 
   private layoutLabel(visual: TerritoryVisual, showDetail: boolean): { width: number; height: number } {
+    if (visual.layoutDetailVisible === showDetail
+      && visual.layoutWidth !== undefined && visual.layoutHeight !== undefined) {
+      return { width: visual.layoutWidth, height: visual.layoutHeight };
+    }
     visual.detail.setVisible(showDetail);
     visual.name.setY(showDetail ? -4.5 : 0);
     visual.detail.setY(6);
@@ -697,6 +787,9 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
     visual.panel.setDisplaySize(width, height);
     const hitArea = visual.hud.input?.hitArea;
     if (hitArea instanceof Phaser.Geom.Rectangle) hitArea.setTo(-width / 2, -height / 2, width, height);
+    visual.layoutDetailVisible = showDetail;
+    visual.layoutWidth = width;
+    visual.layoutHeight = height;
     return { width, height };
   }
 
@@ -704,18 +797,12 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
     const zoom = this.cameras.main.zoom;
     const camera = this.cameras.main;
     const humanId = this.mapState?.humanPlayerId;
-    const movedIds = new Set((this.mapState?.logisticsMovements ?? [])
-      .filter((movement) => movement.playerId === humanId)
-      .flatMap((movement) => [movement.sourceId, movement.targetId]));
-    const activeSourceIds = new Set((this.mapState?.wars ?? []).flatMap((war) => (
-      sortedWarOperations(war)
-        .filter((operation) => operation.commanderId === humanId)
-        .map((operation) => operation.sourceId)
-    )));
-    const strongestHumanIds = new Set(Object.values(this.mapState?.territories ?? {})
-      .filter((territory) => territory.ownerId === humanId)
-      .sort((left, right) => right.army.power - left.army.power)
-      .slice(0, 6).map((territory) => territory.id));
+    const movedIds = this.movedTerritoryIds;
+    const activeSourceIds = this.activeHumanSourceIds;
+    const strongestHumanIds = this.strongestHumanTerritoryIds;
+    const forceScale = Phaser.Math.Clamp(1 / zoom, 1 / MAP_MAX_ZOOM, 1.18);
+    const forceTextOffset = 29 / zoom;
+    const forceBarOffset = 39 / zoom;
     const candidates: {
       territoryId: string;
       visual: TerritoryVisual;
@@ -731,9 +818,8 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
         && (zoom >= 1.45 || movedIds.has(territoryId) || activeSourceIds.has(territoryId) || strongestHumanIds.has(territoryId));
       const forceAnchor = TERRITORY_BY_ID[territoryId];
       if (showLocalForce && forceAnchor) {
-        const forceScale = Phaser.Math.Clamp(1 / zoom, 1 / MAP_MAX_ZOOM, 1.18);
-        const barY = forceAnchor.y + 39 / zoom;
-        visual.localForce.setPosition(forceAnchor.x, forceAnchor.y + 29 / zoom)
+        const barY = forceAnchor.y + forceBarOffset;
+        visual.localForce.setPosition(forceAnchor.x, forceAnchor.y + forceTextOffset)
           .setScale(forceScale).setVisible(true)
           .setColor(movedIds.has(territoryId) ? '#e3fdff' : '#9eeaf4')
           .setAlpha(movedIds.has(territoryId) || activeSourceIds.has(territoryId) ? 1 : 0.76);
@@ -741,7 +827,7 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
           .setScale(forceScale).setVisible(true);
         visual.localForceBarFill.setPosition(forceAnchor.x - 17 * forceScale, barY)
           .setScale(forceScale).setVisible(true);
-      } else {
+      } else if (visual.localForce.visible || visual.localForceBarBack.visible || visual.localForceBarFill.visible) {
         visual.localForce.setVisible(false);
         visual.localForceBarBack.setVisible(false);
         visual.localForceBarFill.setVisible(false);
@@ -794,9 +880,9 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
 
     // Persistent DOM chrome overlays the canvas. Reserve it in the same collision
     // pass so country text never sits underneath the header or command dock.
-    const accepted: Phaser.Geom.Rectangle[] = [
-      new Phaser.Geom.Rectangle(0, 0, camera.width, LABEL_SAFE_TOP),
-      new Phaser.Geom.Rectangle(0, Math.max(0, camera.height - 76), Math.min(340, camera.width), 76),
+    const accepted: RenderRectangle[] = [
+      { x: 0, y: 0, width: camera.width, height: LABEL_SAFE_TOP },
+      { x: 0, y: Math.max(0, camera.height - 76), width: Math.min(340, camera.width), height: 76 },
     ];
     candidates.sort((left, right) => right.priority - left.priority || left.territoryId.localeCompare(right.territoryId));
     for (const {
@@ -820,7 +906,7 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       const width = layout.width * screenScale;
       const height = layout.height * screenScale;
       const offsets = labelPlacementOffsets(width, height, strategic, persistentTopPower);
-      let placement: { x: number; y: number; bounds: Phaser.Geom.Rectangle } | undefined;
+      let placement: { x: number; y: number; bounds: RenderRectangle } | undefined;
       let leastOverlap: typeof placement;
       let leastOverlapScore = Number.POSITIVE_INFINITY;
       for (const { x: offsetX, y: offsetY } of offsets) {
@@ -834,19 +920,21 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
           LABEL_SAFE_TOP + height / 2 + LABEL_COLLISION_GAP,
           camera.height - LABEL_SAFE_BOTTOM - height / 2 - LABEL_COLLISION_GAP,
         );
-        const bounds = new Phaser.Geom.Rectangle(
-          centerX - width / 2,
-          centerY - height / 2,
-          width,
-          height,
-        );
-        Phaser.Geom.Rectangle.Inflate(bounds, LABEL_COLLISION_GAP, LABEL_COLLISION_GAP);
-        const collisions = accepted.filter((other) => (
-          Phaser.Geom.Intersects.RectangleToRectangle(bounds, other)
-        ));
-        if (collisions.length > 0) {
+        const bounds = {
+          x: centerX - width / 2 - LABEL_COLLISION_GAP,
+          y: centerY - height / 2 - LABEL_COLLISION_GAP,
+          width: width + LABEL_COLLISION_GAP * 2,
+          height: height + LABEL_COLLISION_GAP * 2,
+        };
+        let collides = false;
+        let overlap = 0;
+        for (const other of accepted) {
+          if (!rectanglesIntersect(bounds, other)) continue;
+          collides = true;
+          if (required || persistentTopPower) overlap += rectangleOverlapArea(bounds, other);
+        }
+        if (collides) {
           if (required || persistentTopPower) {
-            const overlap = collisions.reduce((sum, other) => sum + rectangleOverlapArea(bounds, other), 0);
             const score = overlap * 1_000 + Math.hypot(offsetX, offsetY);
             if (score < leastOverlapScore) {
               leastOverlapScore = score;
@@ -871,8 +959,12 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
           LABEL_SAFE_TOP + height / 2 + LABEL_COLLISION_GAP,
           camera.height - LABEL_SAFE_BOTTOM - height / 2 - LABEL_COLLISION_GAP,
         );
-        const bounds = new Phaser.Geom.Rectangle(centerX - width / 2, centerY - height / 2, width, height);
-        Phaser.Geom.Rectangle.Inflate(bounds, LABEL_COLLISION_GAP, LABEL_COLLISION_GAP);
+        const bounds = {
+          x: centerX - width / 2 - LABEL_COLLISION_GAP,
+          y: centerY - height / 2 - LABEL_COLLISION_GAP,
+          width: width + LABEL_COLLISION_GAP * 2,
+          height: height + LABEL_COLLISION_GAP * 2,
+        };
         placement = { x: centerX - anchorScreenX, y: centerY - anchorScreenY, bounds };
       }
       if (!placement) continue;
@@ -890,10 +982,10 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       visual.hud.setVisible(true).setScale(scale);
       visual.name.setVisible(true);
       const ownerId = this.mapState?.territories[territoryId]?.ownerId;
-      const owner = ownerId ? this.engine?.player(ownerId) : undefined;
+      const ownerColor = ownerId ? this.ownerColors.get(ownerId) : undefined;
       const own = ownerId === this.mapState?.humanPlayerId;
       const atWar = this.warTerritoryIds.has(territoryId);
-      const accent = selected ? 0xffd36b : hovered ? 0xffffff : own ? 0x72efff : atWar ? 0xff746d : owner?.color ?? 0xa8c8d2;
+      const accent = selected ? 0xffd36b : hovered ? 0xffffff : own ? 0x72efff : atWar ? 0xff746d : ownerColor ?? 0xa8c8d2;
       visual.panel.setFillStyle(0x04111b, selected || hovered ? 0.98 : 0.93);
       visual.panel.setStrokeStyle(selected || hovered ? 1.4 : 1, accent, selected || hovered ? 1 : 0.74);
       visual.detail.setColor(selected ? '#ffeaa8' : own ? '#b9f8ff' : atWar ? '#ffd0cc' : '#c6dce2');
@@ -943,11 +1035,10 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
 
   private refreshCameraPresentation(): void {
     this.drawGraticule();
-    const state = this.mapState;
-    if (state) {
-      this.drawOwnershipPerimeters(state);
-      if (this.engine) this.drawLiveFronts(this.engine, state);
-      this.drawLogistics(state);
+    if (this.mapState) {
+      this.drawOwnershipPerimeters();
+      this.drawLiveFronts();
+      this.drawLogistics();
     }
     this.setSelection(this.selection);
   }
@@ -1068,6 +1159,22 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
     this.mapState = state;
     const humanId = state.humanPlayerId;
     const human = engine.player(humanId);
+    const territoryStates = Object.values(state.territories);
+    const playerViews = new Map<string, ReturnType<WorldMapEngineContract['player']>>();
+    if (human) {
+      playerViews.set(humanId, human);
+      this.ownerColors.set(humanId, human.color);
+    }
+    const playerFor = (playerId: string) => {
+      if (!playerViews.has(playerId)) {
+        const player = engine.player(playerId);
+        playerViews.set(playerId, player);
+        if (player) this.ownerColors.set(playerId, player.color);
+      }
+      return playerViews.get(playerId);
+    };
+    const sortedWars = [...state.wars].sort((left, right) => left.id.localeCompare(right.id));
+    const warOperations = sortedWars.map((war) => ({ war, operations: sortedWarOperations(war) }));
     const ownerSignature = `${humanId}|${TERRITORIES.map((territory) => state.territories[territory.id]?.ownerId ?? '').join(',')}`;
     const integrationSignature = TERRITORIES.map((territory) => {
       const live = state.territories[territory.id];
@@ -1083,24 +1190,26 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       return live && live.coreOwnerId !== live.ownerId && live.integration < 0.999999
         ? `${territory.id}:${live.coreOwnerId}>${live.ownerId}` : '';
     }).filter(Boolean).join(',');
-    const topologySignature = `${humanId}:${human?.capitalId ?? ''}|${ownerSignature}|${integrationTopology}|${state.wars.map((war) => `${war.id}:${war.attackerId}:${war.defenderId}`).sort().join(',')}`;
+    const topologySignature = `${humanId}:${human?.capitalId ?? ''}|${ownerSignature}|${integrationTopology}|${sortedWars.map((war) => `${war.id}:${war.attackerId}:${war.defenderId}`).join(',')}`;
     const topologyChanged = topologySignature !== this.lastTopologySignature;
     if (topologyChanged) {
       this.lastTopologySignature = topologySignature;
-      this.humanOwnedIds = new Set(engine.territoriesOf(humanId).map((territory) => territory.id));
+      this.humanOwnedIds = new Set(territoryStates
+        .filter((territory) => territory.ownerId === humanId)
+        .map((territory) => territory.id));
       this.ownerTerritoryCounts.clear();
       this.ownerLabelTerritoryIds.clear();
       this.absorbedTerritoryIds.clear();
       this.integratingTerritoryIds.clear();
       const territoryIdsByOwner = new Map<string, string[]>();
-      for (const territoryState of Object.values(state.territories)) {
+      for (const territoryState of territoryStates) {
         this.ownerTerritoryCounts.set(territoryState.ownerId, (this.ownerTerritoryCounts.get(territoryState.ownerId) ?? 0) + 1);
         const ids = territoryIdsByOwner.get(territoryState.ownerId) ?? [];
         ids.push(territoryState.id);
         territoryIdsByOwner.set(territoryState.ownerId, ids);
       }
       for (const [ownerId, territoryIds] of territoryIdsByOwner) {
-        const owner = engine.player(ownerId);
+        const owner = playerFor(ownerId);
         const labelTerritoryId = owner && territoryIds.includes(owner.capitalId)
           ? owner.capitalId
           : [...territoryIds].sort((left, right) => (
@@ -1110,7 +1219,7 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
         if (labelTerritoryId) this.ownerLabelTerritoryIds.set(ownerId, labelTerritoryId);
       }
       this.humanCapitalId = this.ownerLabelTerritoryIds.get(humanId) ?? human?.capitalId;
-      for (const territoryState of Object.values(state.territories)) {
+      for (const territoryState of territoryStates) {
         const integrating = territoryState.coreOwnerId !== territoryState.ownerId
           && territoryState.integration < 0.999999;
         if (integrating) this.integratingTerritoryIds.add(territoryState.id);
@@ -1118,23 +1227,70 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
           && territoryState.id !== this.ownerLabelTerritoryIds.get(territoryState.ownerId)) this.absorbedTerritoryIds.add(territoryState.id);
       }
       this.warTerritoryIds.clear();
-      for (const war of state.wars) {
+      for (const war of sortedWars) {
         for (const territory of TERRITORIES) {
           const ownerId = state.territories[territory.id]?.ownerId;
           if (ownerId === war.attackerId || ownerId === war.defenderId) this.warTerritoryIds.add(territory.id);
         }
       }
+      this.rebuildTopologyPresentation(state);
     }
-    if (topologyChanged || state.tick - this.lastStrategicScoreTick >= 5) {
+
+    const movedTerritoryIds = new Set<string>();
+    for (const movement of state.logisticsMovements) {
+      if (movement.playerId !== humanId) continue;
+      movedTerritoryIds.add(movement.sourceId);
+      movedTerritoryIds.add(movement.targetId);
+    }
+    this.movedTerritoryIds = movedTerritoryIds;
+    this.strongestHumanTerritoryIds = new Set(territoryStates
+      .filter((territory) => territory.ownerId === humanId)
+      .sort((left, right) => right.army.power - left.army.power)
+      .slice(0, 6)
+      .map((territory) => territory.id));
+
+    const activeHumanSourceIds = new Set<string>();
+    const frontRenderOperations: FrontRenderOperation[] = [];
+    for (const { operations } of warOperations) {
+      for (const operation of operations) {
+        if (operation.commanderId === humanId) activeHumanSourceIds.add(operation.sourceId);
+        const source = TERRITORY_BY_ID[operation.sourceId];
+        const target = TERRITORY_BY_ID[operation.targetId];
+        const commander = playerFor(operation.commanderId);
+        if (!source || !target || !commander) continue;
+        frontRenderOperations.push({
+          source,
+          target,
+          color: commander.isHuman ? 0x70ecff : commander.color,
+          isHuman: commander.isHuman,
+          momentum: operation.momentum,
+        });
+      }
+    }
+    this.activeHumanSourceIds = activeHumanSourceIds;
+    this.frontRenderOperations = frontRenderOperations;
+    this.humanLogisticsMovements = state.logisticsMovements
+      .filter((movement) => movement.playerId === humanId && movement.manpower > 0.000001)
+      .sort((left, right) => right.manpower - left.manpower)
+      .slice(0, 6);
+    const forceSignature = forcePresentationSignature({
+      moved: movedTerritoryIds,
+      active: activeHumanSourceIds,
+      strongest: this.strongestHumanTerritoryIds,
+    });
+    const forcePresentationChanged = forceSignature !== this.lastForcePresentationSignature;
+    if (forcePresentationChanged) this.lastForcePresentationSignature = forceSignature;
+
+    const strategicPresentationChanged = topologyChanged || state.tick - this.lastStrategicScoreTick >= 5;
+    if (strategicPresentationChanged) {
       const ranking = engine.globalRanking();
       this.strategicScores = new Map(ranking.map((entry) => [entry.player.id, entry.score]));
       this.ownerRanks = new Map(ranking.map((entry, index) => [entry.player.id, index + 1]));
       this.topPowerOwnerIds = new Set(ranking.slice(0, 10).map((entry) => entry.player.id));
       this.lastStrategicScoreTick = state.tick;
-      this.refreshZoomDetails();
     }
-    const operationSignature = [...state.wars].sort((left, right) => left.id.localeCompare(right.id))
-      .map((war) => `${war.id}:${sortedWarOperations(war)
+    const operationSignature = warOperations
+      .map(({ war, operations }) => `${war.id}:${operations
         .map((operation) => `${operation.commanderId}:${operation.sourceId}:${operation.targetId}:${operation.doctrine}:${Math.round((operation.supply ?? 1) * 10)}:${Math.round(operation.momentum)}`)
         .join('|')}`).join(';');
     const operationChanged = operationSignature !== this.lastOperationSignature;
@@ -1144,11 +1300,6 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
     )).join('|');
     const logisticsChanged = logisticsSignature !== this.lastLogisticsSignature;
     if (logisticsChanged) this.lastLogisticsSignature = logisticsSignature;
-    const playerViews = new Map<string, ReturnType<WorldMapEngineContract['player']>>();
-    const playerFor = (playerId: string) => {
-      if (!playerViews.has(playerId)) playerViews.set(playerId, engine.player(playerId));
-      return playerViews.get(playerId);
-    };
     const empireArmies = new Map<string, {
       manpower: number;
       capacity: number;
@@ -1157,7 +1308,7 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       attackMass: number;
       defenseMass: number;
     }>();
-    for (const territoryState of Object.values(state.territories)) {
+    for (const territoryState of territoryStates) {
       const total = empireArmies.get(territoryState.ownerId) ?? {
         manpower: 0, capacity: 0, combatStrength: 0, power: 0,
         attackMass: 0, defenseMass: 0,
@@ -1210,8 +1361,7 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       }
       // An absorbed territory never keeps its former country label. The current
       // realm name appears once, at its capital; every visible label uses the same
-      // compact name + one consistent total-force badge. National Combat
-      // Experience is already folded into this value by the UI bridge.
+      // compact name + one consistent total-force badge.
       const absorbed = this.absorbedTerritoryIds.has(territory.id);
       const ownerRank = this.ownerRanks.get(owner.id);
       const coreOwner = integrating ? playerFor(territoryState.coreOwnerId) : undefined;
@@ -1229,75 +1379,77 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
         visual.name.setText(labelName);
         visual.detail.setText(armyLabel);
         visual.name.setColor('#f4fbfc');
+        visual.layoutWidth = undefined;
+        visual.layoutHeight = undefined;
       }
-      visual.localForce.setText(compactPower(territoryState.army.power));
+      const localForceText = compactPower(territoryState.army.power);
+      if (visual.localForceText !== localForceText) {
+        visual.localForceText = localForceText;
+        visual.localForce.setText(localForceText);
+      }
       const localFill = Phaser.Math.Clamp(
         territoryState.army.manpower / Math.max(0.000001, territoryState.army.capacity), 0, 1,
       );
-      visual.localForceBarFill.setSize(34 * localFill, 3).setFillStyle(
-        localFill < 0.35 ? 0xef5b5b : localFill < 0.70 ? 0xe8b64a : 0x58d68d,
-        0.92,
-      );
+      const localFillColor = localFill < 0.35 ? 0xef5b5b : localFill < 0.70 ? 0xe8b64a : 0x58d68d;
+      if (visual.localForceFill !== localFill) {
+        visual.localForceFill = localFill;
+        visual.localForceBarFill.setSize(34 * localFill, 3);
+      }
+      if (visual.localForceFillColor !== localFillColor) {
+        visual.localForceFillColor = localFillColor;
+        visual.localForceBarFill.setFillStyle(localFillColor, 0.92);
+      }
     }
     if (topologyChanged || operationChanged) {
-      this.drawLiveFronts(engine, state);
+      this.drawLiveFronts();
     }
-    if (topologyChanged || operationChanged || logisticsChanged) this.drawLogistics(state);
+    if (topologyChanged || operationChanged || logisticsChanged) this.drawLogistics();
     if (topologyChanged) {
-      this.drawOwnershipPerimeters(state);
-      this.setSelection(this.selection);
+      this.drawOwnershipPerimeters();
+      this.setSelection(this.selection, false);
+    }
+    if (topologyChanged || strategicPresentationChanged || forcePresentationChanged) {
       this.refreshZoomDetails();
     }
   }
 
-  private drawLiveFronts(engine: WorldMapEngineContract, state: MapStateSnapshot): void {
+  private drawLiveFronts(): void {
     const graphics = this.frontGraphics;
     if (!graphics) return;
     graphics.clear();
-    const seen = new Set<string>();
-    for (const territory of TERRITORIES) {
-      const ownerId = state.territories[territory.id]?.ownerId;
-      for (const neighborId of territory.neighbors) {
-        const key = [territory.id, neighborId].sort().join(':');
-        if (seen.has(key)) continue;
-        seen.add(key);
-        const neighborOwnerId = state.territories[neighborId]?.ownerId;
-        const atWar = state.wars.some((war) => (
-          (war.attackerId === ownerId && war.defenderId === neighborOwnerId)
-          || (war.attackerId === neighborOwnerId && war.defenderId === ownerId)
-        ));
-        if (!ownerId || !neighborOwnerId || ownerId === neighborOwnerId || !atWar) continue;
-        const neighbor = TERRITORY_BY_ID[neighborId];
-        if (!neighbor) continue;
-        graphics.lineStyle(this.screenWorldSize(0.75), 0xff8a79, 0.24);
-        this.drawWrappedLine(graphics, territory.x, territory.y, neighbor.x, neighbor.y);
-      }
+    const state = this.mapState;
+    if (!state) return;
+    graphics.lineStyle(this.screenWorldSize(0.75), 0xff8a79, 0.24);
+    for (const connection of TERRITORY_CONNECTIONS) {
+      const ownerId = state.territories[connection.sourceId]?.ownerId;
+      const neighborOwnerId = state.territories[connection.targetId]?.ownerId;
+      if (!ownerId || !neighborOwnerId || ownerId === neighborOwnerId
+        || !this.hostileOwnerPairs.has(ownerPairKey(ownerId, neighborOwnerId))) continue;
+      this.drawWrappedLine(
+        graphics,
+        connection.source.x,
+        connection.source.y,
+        connection.target.x,
+        connection.target.y,
+      );
     }
-    for (const war of [...state.wars].sort((left, right) => left.id.localeCompare(right.id))) {
-      for (const operation of sortedWarOperations(war)) {
-        const source = TERRITORY_BY_ID[operation.sourceId];
-        const target = TERRITORY_BY_ID[operation.targetId];
-        const commander = engine.player(operation.commanderId);
-        if (!source || !target || !commander) continue;
-        const color = commander.isHuman ? 0x70ecff : commander.color;
-        graphics.lineStyle(this.screenWorldSize(1.4), color, 0.045 + Math.max(0, operation.momentum) * 0.0008);
-        this.drawWrappedLine(graphics, source.x, source.y, target.x, target.y);
-        graphics.lineStyle(this.screenWorldSize(0.65), color, commander.isHuman ? 0.34 : 0.22);
-        this.drawWrappedLine(graphics, source.x, source.y, target.x, target.y);
-      }
+    for (const operation of this.frontRenderOperations) {
+      graphics.lineStyle(
+        this.screenWorldSize(1.4),
+        operation.color,
+        0.045 + Math.max(0, operation.momentum) * 0.0008,
+      );
+      this.drawWrappedLine(graphics, operation.source.x, operation.source.y, operation.target.x, operation.target.y);
+      graphics.lineStyle(this.screenWorldSize(0.65), operation.color, operation.isHuman ? 0.34 : 0.22);
+      this.drawWrappedLine(graphics, operation.source.x, operation.source.y, operation.target.x, operation.target.y);
     }
   }
 
-  private drawLogistics(state: MapStateSnapshot): void {
+  private drawLogistics(): void {
     const graphics = this.logisticsGraphics;
     if (!graphics) return;
     graphics.clear();
-    const humanMoves = state.logisticsMovements
-      .filter((movement) => movement.playerId === state.humanPlayerId
-        && movement.manpower > 0.000001)
-      .sort((left, right) => right.manpower - left.manpower)
-      .slice(0, 6);
-    for (const movement of humanMoves) {
+    for (const movement of this.humanLogisticsMovements) {
       const source = TERRITORY_BY_ID[movement.sourceId];
       const target = TERRITORY_BY_ID[movement.targetId];
       if (!source || !target) continue;
@@ -1328,11 +1480,14 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
     graphics.lineBetween(MAP_WIDTH, edgeY, right.x, right.y);
   }
 
-  setSelection(selection: MapSelectionState): void {
+  setSelection(selection: MapSelectionState, refreshZoom = true): void {
+    if (selection.legalTargetIds !== this.selection.legalTargetIds) {
+      this.legalTargetIds = new Set(selection.legalTargetIds);
+    }
     this.selection = selection;
     const state = this.mapState;
     const humanId = state?.humanPlayerId;
-    const legal = new Set(selection.legalTargetIds);
+    const legal = this.legalTargetIds;
     for (const [territoryId, visual] of this.visuals) {
       const selected = territoryId === selection.sourceId;
       const target = territoryId === selection.targetId;
@@ -1340,16 +1495,17 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       const hovered = territoryId === this.hoveredId;
       const humanOwned = this.humanOwnedIds.has(territoryId);
       const territoryState = state?.territories[territoryId];
-      const owner = territoryState ? this.engine?.player(territoryState.ownerId) : undefined;
-      const empireSize = owner ? this.ownerTerritoryCounts.get(owner.id) ?? 1 : 1;
+      const ownerId = territoryState?.ownerId;
+      const ownerColor = ownerId ? this.ownerColors.get(ownerId) : undefined;
+      const empireSize = ownerId ? this.ownerTerritoryCounts.get(ownerId) ?? 1 : 1;
       const integrating = territoryState
         ? territoryState.coreOwnerId !== territoryState.ownerId && territoryState.integration < 0.999999
         : false;
       const mergedRegion = empireSize > 1 && !integrating;
+      const mergedFill = ownerId && ownerColor !== undefined
+        ? colorMix(ownerId === humanId ? colorMix(ownerColor, 0x65efff, 0.22) : ownerColor, 0x071521, ownerId === humanId ? 0.08 : 0.24)
+        : 0xa9c5cd;
       for (const part of visual.parts) {
-        const mergedFill = owner
-          ? colorMix(owner.id === humanId ? colorMix(owner.color, 0x65efff, 0.22) : owner.color, 0x071521, owner.id === humanId ? 0.08 : 0.24)
-          : 0xa9c5cd;
         if (mergedRegion) {
           // Territory polygons are implementation detail once a nation owns more
           // than one region. Never reveal the former national outline on hover.
@@ -1365,7 +1521,7 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       }
       visual.hud.setDepth(selected || target ? 14 : hovered ? 13 : humanOwned ? 12 : isLegal ? 11 : 8);
     }
-    this.refreshZoomDetails();
+    if (refreshZoom) this.refreshZoomDetails();
   }
 
   setInputBlocked(blocked: boolean): void {

@@ -58,20 +58,34 @@ describe('strategic world simulation', () => {
     expect(engine.state.players.filter((player) => player.isHuman)).toHaveLength(1);
   });
 
-  it('geeft een klein gekozen land een schaalbare conquest perk', () => {
+  it('geeft een gekozen land geen verborgen gevechts- of capaciteitsbonus', () => {
     const engine = new WorldEngine(43);
-    const originalCapacity = engine.state.territories.btn!.force.maxHp;
+    const force = engine.state.territories.btn!.force;
+    const before = {
+      capacity: force.maxHp,
+      attack: engine.effectiveAttack('btn', force),
+      defense: engine.effectiveDefense('btn', force),
+      recovery: engine.effectiveRecovery('btn', force),
+    };
     expect(engine.chooseCountry('btn')).toBe(true);
-    expect(engine.player('btn')?.perk.id).toBe('phoenix-doctrine');
-    expect(engine.state.territories.btn!.force.maxHp).toBeGreaterThan(originalCapacity * 1.5);
-    expect(engine.effectiveAttack('btn', engine.state.territories.btn!.force)).toBeGreaterThan(engine.state.territories.btn!.force.attack);
+    expect(engine.player('btn')?.perk).toMatchObject({
+      id: 'standard-command',
+      attackBonus: 0,
+      defenseBonus: 0,
+      recoveryBonus: 0,
+      capacityBonus: 0,
+    });
+    expect(force.maxHp).toBe(before.capacity);
+    expect(engine.effectiveAttack('btn', force)).toBe(before.attack);
+    expect(engine.effectiveDefense('btn', force)).toBe(before.defense);
+    expect(engine.effectiveRecovery('btn', force)).toBe(before.recovery);
   });
 
   it('laat oorlogen autonoom aan fronten vechten en land veroveren', () => {
     const engine = new WorldEngine(7);
     engine.chooseCountry('bel');
-    engine.state.territories.bel!.force = { hp: 180, maxHp: 180, attack: 82, defense: 42, readiness: 1, recovery: 0.2, experience: 0 };
-    engine.state.territories.nld!.force = { hp: 6, maxHp: 90, attack: 12, defense: 9, readiness: 0.5, recovery: 0.1, experience: 0 };
+    engine.state.territories.bel!.force = { hp: 180, maxHp: 180, attack: 82, defense: 42, readiness: 1, recovery: 0.2 };
+    engine.state.territories.nld!.force = { hp: 6, maxHp: 90, attack: 12, defense: 9, readiness: 0.5, recovery: 0.1 };
     engine.player('bel')!.treasury = 100;
     engine.setStance('bel', 'assertive');
     const populationBefore = engine.controlledPopulation('bel');
@@ -103,8 +117,8 @@ describe('strategic world simulation', () => {
     engine.state.territories.pol!.ownerId = 'ukr';
     engine.state.territories.pol!.capital = false;
     engine.player('pol')!.eliminated = true;
-    engine.state.territories.rus!.force = { hp: 340, maxHp: 340, attack: 112, defense: 58, readiness: 1, recovery: 0.1, experience: 0.2 };
-    engine.state.territories.ukr!.force = { hp: 26, maxHp: 180, attack: 8, defense: 11, readiness: 0.55, recovery: 0.04, experience: 0 };
+    engine.state.territories.rus!.force = { hp: 340, maxHp: 340, attack: 112, defense: 58, readiness: 1, recovery: 0.1 };
+    engine.state.territories.ukr!.force = { hp: 26, maxHp: 180, attack: 8, defense: 11, readiness: 0.55, recovery: 0.04 };
     engine.player('rus')!.treasury = 100;
     expect(engine.declareWar('rus', 'ukr')).toBe(true);
     for (let week = 0; week < 150 && engine.state.territories.ukr!.ownerId === 'ukr'; week += 1) engine.stepOneTick();
@@ -120,8 +134,8 @@ describe('strategic world simulation', () => {
   it('maakt oorlog een langdurige strijd waarin beide kanten HP verliezen', () => {
     const engine = new WorldEngine(8);
     engine.chooseCountry('bel');
-    engine.state.territories.bel!.force = { hp: 220, maxHp: 220, attack: 30, defense: 30, readiness: 0.9, recovery: 0.05, experience: 0 };
-    engine.state.territories.nld!.force = { hp: 220, maxHp: 220, attack: 30, defense: 30, readiness: 0.9, recovery: 0.05, experience: 0 };
+    engine.state.territories.bel!.force = { hp: 220, maxHp: 220, attack: 30, defense: 30, readiness: 0.9, recovery: 0.05 };
+    engine.state.territories.nld!.force = { hp: 220, maxHp: 220, attack: 30, defense: 30, readiness: 0.9, recovery: 0.05 };
     engine.player('bel')!.treasury = 100;
     expect(engine.declareWar('bel', 'nld')).toBe(true);
     engine.step(20);
@@ -226,9 +240,9 @@ describe('strategic world simulation', () => {
   it('moves reserves through an empire toward its most hostile border', () => {
     const engine = new WorldEngine(92);
     engine.state.territories.nld!.ownerId = 'bel';
-    engine.state.territories.bel!.force = { hp: 240, maxHp: 240, attack: 70, defense: 65, readiness: 0.9, recovery: 0.5, experience: 0 };
-    engine.state.territories.nld!.force = { hp: 22, maxHp: 40, attack: 6, defense: 6, readiness: 0.7, recovery: 0.1, experience: 0 };
-    engine.state.territories.deu!.force = { hp: 50, maxHp: 50, attack: 12, defense: 11, readiness: 0.8, recovery: 0.2, experience: 0 };
+    engine.state.territories.bel!.force = { hp: 240, maxHp: 240, attack: 70, defense: 65, readiness: 0.9, recovery: 0.5 };
+    engine.state.territories.nld!.force = { hp: 22, maxHp: 40, attack: 6, defense: 6, readiness: 0.7, recovery: 0.1 };
+    engine.state.territories.deu!.force = { hp: 50, maxHp: 50, attack: 12, defense: 11, readiness: 0.8, recovery: 0.2 };
     const hostile = engine.relation('bel', 'deu')!;
     hostile.status = 'tension';
     hostile.score = -80;
@@ -244,9 +258,9 @@ describe('strategic world simulation', () => {
     netherlands.ownerId = 'bel';
     netherlands.capital = false;
     netherlands.annexedAtTick = engine.state.tick;
-    netherlands.force = { hp: 8, maxHp: 20, attack: 3, defense: 4, readiness: 0.62, recovery: 0.08, experience: 0 };
+    netherlands.force = { hp: 4, maxHp: 10, attack: 3, defense: 4, readiness: 0.62, recovery: 0.08 };
     engine.player('nld')!.eliminated = true;
-    engine.state.territories.bel!.force = { hp: 210, maxHp: 220, attack: 58, defense: 62, readiness: 0.94, recovery: 0.5, experience: 0.1 };
+    engine.state.territories.bel!.force = { hp: 270, maxHp: 280, attack: 82, defense: 90, readiness: 0.94, recovery: 0.5 };
     engine.player('bel')!.treasury = 100;
     const beforeCapacity = netherlands.force.maxHp;
     expect(engine.declareWar('bel', 'deu')).toBe(true);
@@ -259,8 +273,8 @@ describe('strategic world simulation', () => {
     const engine = new WorldEngine(931);
     engine.chooseCountry('bel');
     engine.player('bel')!.treasury = 100;
-    engine.state.territories.bel!.force = { hp: 95, maxHp: 100, attack: 15, defense: 20, readiness: 0.82, recovery: 0.1, experience: 0 };
-    engine.state.territories.nld!.force = { hp: 180, maxHp: 180, attack: 48, defense: 68, readiness: 0.96, recovery: 0.2, experience: 0.1 };
+    engine.state.territories.bel!.force = { hp: 95, maxHp: 100, attack: 15, defense: 20, readiness: 0.82, recovery: 0.1 };
+    engine.state.territories.nld!.force = { hp: 180, maxHp: 180, attack: 48, defense: 68, readiness: 0.96, recovery: 0.2 };
     expect(engine.declareWar('bel', 'nld')).toBe(true);
     engine.state.wars[0]!.warScore = 70;
     engine.step(2);
@@ -405,8 +419,8 @@ describe('strategic world simulation', () => {
   it('laat een frontlijn gedeeltelijke territoriale controle en bevolking opleveren', () => {
     const engine = new WorldEngine(2028);
     engine.chooseCountry('rus');
-    engine.state.territories.rus!.force = { hp: 260, maxHp: 260, attack: 50, defense: 38, readiness: 1, recovery: 0.1, experience: 0 };
-    engine.state.territories.ukr!.force = { hp: 220, maxHp: 220, attack: 28, defense: 30, readiness: 0.9, recovery: 0.1, experience: 0 };
+    engine.state.territories.rus!.force = { hp: 260, maxHp: 260, attack: 50, defense: 38, readiness: 1, recovery: 0.1 };
+    engine.state.territories.ukr!.force = { hp: 220, maxHp: 220, attack: 28, defense: 30, readiness: 0.9, recovery: 0.1 };
     const beforeControlledPopulation = engine.controlledPopulation('rus');
     engine.player('rus')!.treasury = 100;
     expect(engine.declareWar('rus', 'ukr')).toBe(true);
@@ -424,8 +438,8 @@ describe('strategic world simulation', () => {
     const engine = new WorldEngine(2040);
     engine.chooseCountry('rus');
     engine.player('rus')!.treasury = 100;
-    engine.state.territories.rus!.force = { hp: 320, maxHp: 320, attack: 105, defense: 55, readiness: 1, recovery: 0.1, experience: 0.2 };
-    engine.state.territories.ukr!.force = { hp: 180, maxHp: 180, attack: 20, defense: 26, readiness: 0.75, recovery: 0.05, experience: 0 };
+    engine.state.territories.rus!.force = { hp: 320, maxHp: 320, attack: 105, defense: 55, readiness: 1, recovery: 0.1 };
+    engine.state.territories.ukr!.force = { hp: 180, maxHp: 180, attack: 20, defense: 26, readiness: 0.75, recovery: 0.05 };
     expect(engine.declareWar('rus', 'ukr')).toBe(true);
     engine.step(2);
     expect(engine.state.territories.ukr!.ownerId).toBe('ukr');
@@ -662,8 +676,7 @@ describe('strategic world simulation', () => {
     expect(player.treasury).toBeLessThan(beforeTreasury);
     expect(player.upgrades.weapons).toBe(1);
     const attackIncrease = engine.effectiveAttack('bel', engine.state.territories.bel!.force) / beforeAttack;
-    expect(attackIncrease).toBeGreaterThan(1.02);
-    expect(attackIncrease).toBeLessThan(1.03);
+    expect(attackIncrease).toBeCloseTo(1.03, 8);
   });
 
   it('houdt een live globale machtsranking bij', () => {

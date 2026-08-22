@@ -34,7 +34,7 @@ describe('V2 strategic deterrence', () => {
     expect(selectNuclearPowerV2(state, WORLD_CONTENT_V2, nationIdV2('deu')).level).toBe(0);
   });
 
-  it('applies the tier only to ATK and therefore to live combat power and ranking', () => {
+  it('applies the tier only to ATK while global rank still combines power and economy', () => {
     const state = createWorldStateV2(3_002);
     const russia = nationIdV2('rus');
     const army = state.territories[territoryIdV2('rus')].army;
@@ -45,9 +45,11 @@ describe('V2 strategic deterrence', () => {
       6,
     );
     const engine = new WorldEngineV2(3_002);
-    const ranks = engine.globalRanking().map((entry) => entry.player.id);
-    expect(ranks.indexOf(russia)).toBeLessThan(ranks.indexOf(nationIdV2('ind')));
     expect(engine.currentPower(russia)).toBeGreaterThan(engine.currentPower('ind'));
+    const entry = engine.globalRanking().find((candidate) => candidate.player.id === russia)!;
+    expect(entry.score).toBeCloseTo(Math.sqrt(
+      engine.currentPower(russia) * engine.nationalEconomy(russia).controlledOutput,
+    ), 6);
   });
 
   it('requires a long chain of increasingly expensive Advanced Weapons breakthroughs to unlock', () => {

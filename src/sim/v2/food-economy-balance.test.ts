@@ -15,6 +15,7 @@ import {
   createFinancePlansV2,
   processFinanceMilitaryV2,
 } from './economy';
+import { redirectDevelopmentFundingToFoodV2 } from './nationalAi';
 import {
   createPowerSnapshotV2,
   selectFoodDomesticCapacityTargetV2,
@@ -34,6 +35,7 @@ describe('V2 funded food transition and trade', () => {
   });
 
   it('redirects Development, never Research, into food for a human or rival shortage', () => {
+    const selectionIndependentPlans = [];
     for (const humanPlayerId of [burundi, belgium]) {
       const state = createWorldStateV2(7_101);
       state.humanPlayerId = humanPlayerId;
@@ -48,29 +50,31 @@ describe('V2 funded food transition and trade', () => {
       const crisis = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, burundi);
 
       expect(crisis.foodDevelopmentTransfer).toBeGreaterThan(0);
-      if (humanPlayerId === burundi) {
-        expect(crisis.development).toBe(0);
-        expect(crisis.activeBudget.development).toBe(0);
-      } else {
-        expect(crisis.development).toBeGreaterThan(0);
-        expect(crisis.activeBudget.development).toBeGreaterThan(0);
-      }
+      expect(crisis.development).toBeGreaterThanOrEqual(0);
+      expect(crisis.activeBudget.development).toBeLessThan(savedPolicy.development);
       expect(crisis.research).toBeGreaterThan(0);
-      expect(crisis.activeBudget.research).toBeGreaterThan(0);
+      expect(crisis.activeBudget.research).toBe(savedPolicy.research);
+      expect(crisis.activeBudget.military).toBe(savedPolicy.military);
       expect(crisis.foodImported).toBe(0);
       expect(state.players[burundi]!.budget).toEqual(savedPolicy);
+      selectionIndependentPlans.push({
+        transfer: crisis.foodDevelopmentTransfer,
+        development: crisis.development,
+        research: crisis.research,
+      });
 
       const domesticUnitCost = crisis.foodProduction / crisis.foodDomesticProduced;
       const ordinaryFunding = crisis.foodProduction - crisis.foodDevelopmentTransfer;
       const coverageWithoutTransfer = ordinaryFunding / domesticUnitCost / crisis.foodDemand;
       expect(crisis.foodCoverage).toBeGreaterThan(coverageWithoutTransfer);
       expect(crisis.expenses).toBeCloseTo(
-        crisis.ceasefirePayment + crisis.integrationCost + crisis.foodProduction
+        crisis.baseOperatingCost + crisis.ceasefirePayment + crisis.integrationCost + crisis.foodProduction
           + crisis.military + crisis.research + crisis.development
           + crisis.warOperations + crisis.debtPremium,
         5,
       );
     }
+    expect(selectionIndependentPlans[1]).toEqual(selectionIndependentPlans[0]);
   });
 
   it('keeps normal Development and Research funded once food and reserves are safe', () => {
@@ -83,6 +87,33 @@ describe('V2 funded food transition and trade', () => {
     expect(healthy.development).toBeGreaterThan(0);
     expect(healthy.research).toBeGreaterThan(0);
     expect(healthy.activeBudget.development).toBeGreaterThan(0);
+  });
+
+  it('ramps emergency Development transfers instead of switching at a cost cliff', () => {
+    const preview = (foodCoverage: number) => redirectDevelopmentFundingToFoodV2({
+      baseBudget: { military: 30, research: 30, development: 40 },
+      plannedDevelopment: 10,
+      foodFundingGap: 10,
+      foodCoverage,
+      foodReserveWeeks: 6,
+      foodStockChange: 0,
+      foodDemand: 1,
+      iqScore: 100,
+    });
+    const safe = preview(0.98);
+    const justBelow = preview(0.979);
+    const strained = preview(0.90);
+    const severe = preview(0.40);
+
+    expect(safe.transfer).toBe(0);
+    expect(justBelow.transfer).toBeGreaterThan(0);
+    expect(justBelow.transfer).toBeLessThan(0.02);
+    expect(strained.transfer).toBeGreaterThan(justBelow.transfer);
+    expect(strained.transfer).toBeLessThan(severe.transfer);
+    expect(severe.transfer).toBeLessThanOrEqual(10);
+    expect(justBelow.activeBudget.development).toBeGreaterThan(
+      strained.activeBudget.development,
+    );
   });
 
   it('uses funded research to focus existing food-recovery programs', () => {

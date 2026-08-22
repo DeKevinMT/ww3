@@ -99,7 +99,6 @@ export interface PlayerPerk {
   defenseBonus: number;
   recoveryBonus: number;
   capacityBonus: number;
-  conquestGrowth: number;
 }
 
 export interface ForceState {
@@ -109,7 +108,6 @@ export interface ForceState {
   defense: number;
   readiness: number;
   recovery: number;
-  experience: number;
 }
 
 export interface SimPlayerState {
@@ -143,7 +141,6 @@ export interface SimPlayerState {
   management: ManagementProjects;
   capitalId: TerritoryId;
   perk: PlayerPerk;
-  combatExperience: number;
 }
 
 export interface SimTerritoryState {

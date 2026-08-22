@@ -33,8 +33,8 @@ describe('clear war decisions and attrition', () => {
   it('starts Luxembourg without an artificial underdog bonus', () => {
     const engine = isolatedEngine(1_501, 'lux');
     const forecast = engine.warForecast('lux', 'bel');
-    expect(forecast.attackerCombatExperience).toBe(0);
-    expect(engine.combatExperience('lux').experience).toBe(0);
+    expect(forecast).not.toHaveProperty('attackerCombatExperience');
+    expect(engine.state.players[id('lux')]).not.toHaveProperty('combatExperience');
     expect(forecast.winChance).toBeGreaterThanOrEqual(5);
     expect(forecast.winChance).toBeLessThanOrEqual(15);
 
@@ -73,13 +73,35 @@ describe('clear war decisions and attrition', () => {
     const forecast = engine.warForecast('chn', 'ind');
     expect(engine.declareWar('chn', 'ind').accepted).toBe(true);
     engine.step();
-    for (let week = 0; week < 520 && engine.activeWarBetween('chn', 'ind'); week += 1) engine.step();
+    let elapsedWeeks = 1;
+    let midCampaign: { active: boolean; battles: number; manpower: number; reserves: number } | undefined;
+    while (elapsedWeeks < 780 && engine.activeWarBetween('chn', 'ind')) {
+      engine.step();
+      elapsedWeeks += 1;
+      if (elapsedWeeks === 260) {
+        const activeWar = engine.activeWarBetween('chn', 'ind');
+        midCampaign = {
+          active: Boolean(activeWar),
+          battles: activeWar?.battles ?? 0,
+          manpower: engine.totalManpower('ind').deployed,
+          reserves: engine.state.players[id('ind')].trainedReserves,
+        };
+      }
+    }
     const indiaEnd = engine.totalManpower('ind').deployed;
     expect(forecast.winChance).toBeGreaterThan(50);
+    expect(midCampaign).toMatchObject({ active: true });
+    expect(midCampaign!.battles).toBeGreaterThan(120);
+    expect(midCampaign!.manpower).toBeGreaterThan(0);
+    expect(midCampaign!.manpower).toBeLessThan(indiaStart);
+    expect(midCampaign!.reserves).toBeLessThan(0.001);
     expect(indiaEnd).toBeLessThan(indiaStart);
+    expect(engine.state.players[id('ind')].trainedReserves).toBeLessThan(0.001);
+    expect(elapsedWeeks).toBeGreaterThanOrEqual(480);
+    expect(elapsedWeeks).toBeLessThanOrEqual(780);
     expect(engine.activeWarBetween('chn', 'ind')).toBeUndefined();
     expect(engine.territoriesOf('ind')).toHaveLength(0);
-  }, 15_000);
+  }, 90_000);
 
   it('turns one peace request into bounded payments plus a full extra year of mutual peace', () => {
     const engine = isolatedEngine(1_503, 'lux');
@@ -257,15 +279,19 @@ describe('clear war decisions and attrition', () => {
   });
 
   it('gives major powers recurring initiative instead of letting minors consume every war window', () => {
-    const engine = new WorldEngineV2(1_505);
+    // Opening scenarios have their own pacing coverage. Use an equivalent
+    // content object here so this test isolates the ordinary global scheduler
+    // instead of spending three of its four slots on staged campaigns.
+    const content = { ...WORLD_CONTENT_V2 };
+    const engine = new WorldEngineV2(1_505, content);
     engine.state.wars = [];
     engine.state.offers = [];
     engine.state.truces = [];
     engine.state.aiEscalation.lastWarStartTick = -1_000_000;
-    const majorIds = new Set(WORLD_CONTENT_V2.nationIds
+    const majorIds = new Set(content.nationIds
       .filter((nationId) => nationId !== engine.state.humanPlayerId)
-      .sort((left, right) => WORLD_CONTENT_V2.nations[right].real.powerIndex
-        - WORLD_CONTENT_V2.nations[left].real.powerIndex)
+      .sort((left, right) => content.nations[right].real.powerIndex
+        - content.nations[left].real.powerIndex)
       .slice(0, 8));
     const observed = new Set<string>();
     const majorAttackers = new Set<string>();

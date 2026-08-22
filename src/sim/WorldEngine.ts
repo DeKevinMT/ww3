@@ -98,41 +98,15 @@ function initialTrainedManpower(country: (typeof COUNTRIES)[number]): number {
 
 const STANDARD_PERK: PlayerPerk = {
   id: 'standard-command',
-  name: 'Global Command Mandate',
-  description: 'A flexible high-command doctrine built for sustained overseas conquest.',
-  attackBonus: 0.12,
-  defenseBonus: 0.1,
-  recoveryBonus: 0.18,
-  capacityBonus: 0.1,
-  conquestGrowth: 0.035,
+  name: 'Standard Command',
+  description: 'Country selection does not change military effectiveness.',
+  attackBonus: 0,
+  defenseBonus: 0,
+  recoveryBonus: 0,
+  capacityBonus: 0,
 };
 
-export function playerPerkForCountry(countryId: TerritoryId): PlayerPerk {
-  const power = COUNTRY_BY_ID[countryId]?.powerIndex ?? 30;
-  if (power < 22) {
-    return {
-      id: 'phoenix-doctrine',
-      name: 'Phoenix Doctrine',
-      description: 'Extreme national mobilisation turns a tiny state into a resilient conquest power.',
-      attackBonus: 0.48,
-      defenseBonus: 0.58,
-      recoveryBonus: 0.72,
-      capacityBonus: 0.62,
-      conquestGrowth: 0.085,
-    };
-  }
-  if (power < 45) {
-    return {
-      id: 'asymmetric-ascendancy',
-      name: 'Asymmetric Ascendancy',
-      description: 'Mobility, mobilisation and rapid learning offset a weaker starting position.',
-      attackBonus: 0.3,
-      defenseBonus: 0.34,
-      recoveryBonus: 0.46,
-      capacityBonus: 0.36,
-      conquestGrowth: 0.06,
-    };
-  }
+export function playerPerkForCountry(_countryId: TerritoryId): PlayerPerk {
   return { ...STANDARD_PERK };
 }
 
@@ -148,7 +122,6 @@ function forceFromCountry(country: (typeof COUNTRIES)[number], fortification: nu
     defense: 11 + budgetFactor * 7.2 + populationFactor * 3.8 + fortification * 2.2,
     readiness: Math.min(1, 0.62 + budgetFactor * 0.1 + country.powerIndex / 420),
     recovery: Math.max(0.22, maxHp * (0.0016 + budgetFactor * 0.00065)),
-    experience: 0,
   };
 }
 
@@ -252,7 +225,6 @@ function makePlayer(country: (typeof COUNTRIES)[number], seed: number): SimPlaye
       war: { progress: 0, target: 0, paidCost: 0, startedTick: 0 },
     },
     perk: { ...STANDARD_PERK },
-    combatExperience: 0,
   };
 }
 
@@ -338,19 +310,12 @@ export class WorldEngine {
     if (!country || this.state.tick > 0) return false;
     for (const player of this.state.players) {
       player.isHuman = player.id === countryId;
-      player.perk = player.id === countryId ? playerPerkForCountry(countryId) : { ...STANDARD_PERK };
-      player.combatExperience = 0;
+      player.perk = { ...STANDARD_PERK };
     }
     // Every player starts from a sustainable neutral strategy, regardless of the
     // AI doctrine the country had before it was selected (notably Russia).
     country.budget = clonePolicy(BUDGET_PRESETS.balanced!.policy);
     country.treasury = this.startingTreasury(countryId);
-    const homeland = this.state.territories[countryId];
-    if (homeland) {
-      const capacityBoost = 1 + country.perk.capacityBonus;
-      homeland.force.maxHp *= capacityBoost;
-      homeland.force.hp = homeland.force.maxHp;
-    }
     this.state.humanPlayerId = countryId;
     this.state.speed = 0;
     this.addEvent('system', 'action', `You take command of ${country.name}. Every other country remains autonomous.`, countryId, countryId);
@@ -755,9 +720,8 @@ export class WorldEngine {
     ), 0);
     const budgetScale = 0.75 + player.budget.military * 0.01;
     const mobilizationScale = (1 + player.upgrades.mobilization * 0.04) * (1 + player.improvements['manpower-capacity'] * 0.01);
-    const perkScale = player.isHuman ? 1 + player.perk.capacityBonus * 0.2 : 1;
     return Math.max(0.012, (population * 0.003 + Math.sqrt(Math.max(0.01, defenceBase)) * 0.06)
-      * budgetScale * mobilizationScale * perkScale);
+      * budgetScale * mobilizationScale);
   }
 
   manpowerTrainingRate(playerId: PlayerId): number {
@@ -766,9 +730,8 @@ export class WorldEngine {
     const population = this.controlledPopulation(playerId);
     const budgetScale = 0.35 + player.budget.military * 0.014;
     const mobilizationScale = (1 + player.upgrades.mobilization * 0.08) * (1 + player.improvements.training * 0.01);
-    const perkScale = player.isHuman ? 1 + player.perk.capacityBonus * 0.12 : 1;
     return Math.max(0.00005, (population * 0.000012 + player.industry * 0.000006)
-      * budgetScale * mobilizationScale * perkScale);
+      * budgetScale * mobilizationScale);
   }
 
   weeklyMilitaryUpkeep(playerId: PlayerId): number {
@@ -863,14 +826,12 @@ export class WorldEngine {
     const defenceBase = territories.reduce((sum, territory) => sum + (COUNTRY_BY_ID[territory.id]?.military ?? 0), 0);
     const militaryBudgetScale = 0.75 + player.budget.military * 0.01;
     const mobilizationScale = (1 + player.upgrades.mobilization * 0.04) * (1 + player.improvements['manpower-capacity'] * 0.01);
-    const perkCapacityScale = player.isHuman ? 1 + player.perk.capacityBonus * 0.2 : 1;
     const manpowerCap = Math.max(0.012, (population * 0.003 + Math.sqrt(Math.max(0.01, defenceBase)) * 0.06)
-      * militaryBudgetScale * mobilizationScale * perkCapacityScale);
+      * militaryBudgetScale * mobilizationScale);
     const trainingBudgetScale = 0.35 + player.budget.military * 0.014;
     const trainingUpgradeScale = (1 + player.upgrades.mobilization * 0.08) * (1 + player.improvements.training * 0.01);
-    const perkTrainingScale = player.isHuman ? 1 + player.perk.capacityBonus * 0.12 : 1;
     const trainingCapacity = Math.max(0.00005, (population * 0.000012 + player.industry * 0.000006)
-      * trainingBudgetScale * trainingUpgradeScale * perkTrainingScale);
+      * trainingBudgetScale * trainingUpgradeScale);
     const requestedTraining = Math.min(Math.max(0, manpowerCap - player.manpower), trainingCapacity) * TRAINING_COST_PER_MILLION;
     const requestedRecovery = this.recoveryRequests(playerId, territories, activeWars > 0).reduce((sum, request) => sum + request.cost, 0);
     const requestedForceExpansion = this.state.tick % 4 === 0 ? (this.reinforcementRequest(playerId, territories)?.growth ?? 0) * 0.48 : 0;
@@ -1188,9 +1149,8 @@ export class WorldEngine {
     const warModifier = atWar ? 0.42 : 1;
     const research = 1 + (player.research.discoveries['integrated-logistics'] ?? 0) * 0.01;
     const logistics = (1 + player.upgrades.logistics * 0.06) * (1 + player.improvements.recovery * 0.01);
-    const perk = player.isHuman ? 1 + player.perk.recoveryBonus : 1;
     const reconstruction = !atWar && this.state.tick < player.recoverySurgeUntilTick ? 1.4 : 1;
-    const recoveryScale = research * logistics * perk * reconstruction * warModifier;
+    const recoveryScale = research * logistics * reconstruction * warModifier;
     const requests = owned.flatMap((territory) => {
       const missing = Math.max(0, territory.force.maxHp - territory.force.hp);
       if (missing <= 0) return [];
@@ -1255,9 +1215,8 @@ export class WorldEngine {
       return sum + (country ? forceFromCountry(country, territory.fortification).maxHp : territory.force.maxHp);
     }, 0);
     const budgetScale = 0.72 + player.budget.military * 0.008;
-    const perkScale = player.isHuman ? 1 + player.perk.capacityBonus * 0.5 : 1;
     const mobilizationScale = 1 + player.upgrades.mobilization * 0.04;
-    const desiredCapacity = baselineCapacity * budgetScale * perkScale * mobilizationScale;
+    const desiredCapacity = baselineCapacity * budgetScale * mobilizationScale;
     const currentCapacity = owned.reduce((sum, territory) => sum + territory.force.maxHp, 0);
     const gap = desiredCapacity - currentCapacity;
     if (gap <= 0.25) {
@@ -1456,7 +1415,6 @@ export class WorldEngine {
     source.force.recovery -= movedRecovery;
     const combinedCapacity = target.force.maxHp + movedCapacity;
     target.force.readiness = (target.force.readiness * target.force.maxHp + source.force.readiness * movedCapacity) / combinedCapacity;
-    target.force.experience = (target.force.experience * target.force.maxHp + source.force.experience * movedCapacity) / combinedCapacity;
     target.force.maxHp = combinedCapacity;
     target.force.hp = Math.min(target.force.maxHp, target.force.hp + movedHp);
     target.force.attack += movedAttack;
@@ -1808,7 +1766,6 @@ export class WorldEngine {
         defense: occupationDefense,
         readiness: 0.4,
         recovery: occupationRecovery,
-        experience: source.force.experience * 0.55,
       };
       target.ownerId = attackerId;
       target.foreignControl = undefined;
@@ -1819,7 +1776,6 @@ export class WorldEngine {
       if (occupier) {
         occupier.treasury += Math.min(18, target.economy * 0.28);
         occupier.stability = Math.max(20, occupier.stability - 0.8);
-        occupier.combatExperience = Math.min(0.65, occupier.combatExperience + (occupier.isHuman ? occupier.perk.conquestGrowth : 0.018));
       }
       this.relocateCapitalIfNeeded(defenderId, targetId);
     }
@@ -1837,8 +1793,6 @@ export class WorldEngine {
     war.economicDamage += economicDamage;
     war.lastBattleTick = this.state.tick;
     war.battles += 1;
-    attacker.combatExperience = Math.min(0.65, attacker.combatExperience + (attacker.isHuman ? 0.0015 : 0.0008));
-    defender.combatExperience = Math.min(0.65, defender.combatExperience + (defender.isHuman ? 0.0012 : 0.0007));
     attacker.warExhaustion = Math.min(100, attacker.warExhaustion + defenderDamage / Math.max(8, source.force.maxHp) * 5 + 0.08);
     defender.warExhaustion = Math.min(100, defender.warExhaustion + attackerDamage / Math.max(8, target.force.maxHp) * 6 + (conquered ? 1.4 : 0.08));
 
@@ -2123,29 +2077,24 @@ export class WorldEngine {
 
   effectiveAttack(playerId: PlayerId, force: ForceState): number {
     const player = this.player(playerId);
-    const perk = player?.isHuman ? player.perk.attackBonus : 0;
-    const experience = (player?.combatExperience ?? 0) + force.experience * 0.25;
     const weapons = (player?.upgrades.weapons ?? 0) * 0.03;
     const improvement = (player?.improvements.attack ?? 0) * 0.01;
-    return force.attack * (1 + perk + experience + weapons + improvement);
+    return force.attack * (1 + weapons + improvement);
   }
 
   effectiveDefense(playerId: PlayerId, force: ForceState): number {
     const player = this.player(playerId);
-    const perk = player?.isHuman ? player.perk.defenseBonus : 0;
-    const experience = (player?.combatExperience ?? 0) * 0.72 + force.experience * 0.18;
     const defenceSystems = (player?.upgrades['defence-systems'] ?? 0) * 0.03;
     const improvement = (player?.improvements.defense ?? 0) * 0.01;
-    return force.defense * (1 + perk + experience + defenceSystems + improvement);
+    return force.defense * (1 + defenceSystems + improvement);
   }
 
   effectiveRecovery(playerId: PlayerId, force: ForceState): number {
     const player = this.player(playerId);
     const research = 1 + (player?.research.discoveries['integrated-logistics'] ?? 0) * 0.01;
     const logistics = (1 + (player?.upgrades.logistics ?? 0) * 0.06) * (1 + (player?.improvements.recovery ?? 0) * 0.01);
-    const perk = player?.isHuman ? 1 + player.perk.recoveryBonus : 1;
     const reconstruction = player && !this.isAtWar(playerId) && this.state.tick < player.recoverySurgeUntilTick ? 1.4 : 1;
-    return force.recovery * research * logistics * perk * reconstruction;
+    return force.recovery * research * logistics * reconstruction;
   }
 
   effectivePower(playerId: PlayerId, force: ForceState): number {
@@ -2308,7 +2257,7 @@ export function worldInvariantErrors(state: WorldState): string[] {
       for (const amount of [value.economy, value.industry, value.research, value.infrastructure, value.population, value.stability, value.fortification]) {
       if (!Number.isFinite(amount) || amount < 0) errors.push(`${territory.id}: invalid territory value`);
       }
-      const forceValues = [value.force.hp, value.force.maxHp, value.force.attack, value.force.defense, value.force.readiness, value.force.recovery, value.force.experience];
+      const forceValues = [value.force.hp, value.force.maxHp, value.force.attack, value.force.defense, value.force.readiness, value.force.recovery];
       if (forceValues.some((amount) => !Number.isFinite(amount) || amount < 0)) errors.push(`${territory.id}: invalid force value`);
       if (value.force.maxHp <= 0 || value.force.hp > value.force.maxHp) errors.push(`${territory.id}: invalid force HP`);
       if (value.force.readiness > 1) errors.push(`${territory.id}: readiness above maximum`);

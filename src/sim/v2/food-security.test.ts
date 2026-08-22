@@ -72,7 +72,7 @@ describe('V2 automated food security', () => {
     expect(plan.foodProduced).toBeGreaterThan(0);
     expect(plan.foodProduction).toBeGreaterThan(0);
     expect(plan.expenses).toBeCloseTo(
-      plan.foodProduction + plan.military + plan.research + plan.development,
+      plan.baseOperatingCost + plan.foodProduction + plan.military + plan.research + plan.development,
       5,
     );
   });
@@ -197,7 +197,7 @@ describe('V2 automated food security', () => {
     expect(after).toBeGreaterThan(population);
   });
 
-  it('does not let Combat Experience create extra manpower food demand', () => {
+  it('bases army food demand on deployed manpower rather than unused capacity', () => {
     const state = createWorldStateV2(2_110);
     const usa = nationIdV2('usa');
     const territory = state.territories[territoryIdV2('usa')];
@@ -207,7 +207,6 @@ describe('V2 automated food security', () => {
     territory.army.manpower = 20;
     const massArmy = selectFoodDemandV2(state, usa);
     expect(massArmy - modestArmy).toBeGreaterThan(20);
-    state.players[usa].combatExperience = 500;
     expect(selectFoodDemandV2(state, usa)).toBeCloseTo(massArmy, 6);
   });
 

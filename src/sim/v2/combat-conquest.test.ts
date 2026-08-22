@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { WorldEngineV2 } from './WorldEngineV2';
 import {
-  COMBAT_MAX_CASUALTY_RATE,
   CONQUEST_CAPTURE_GUARD_MAX_TRANSFER_SHARE,
   DEFENDER_POSITION_MULTIPLIER,
   TERRAIN_DEFENSE_MODIFIER,
@@ -21,6 +20,7 @@ import {
   selectControlledPopulationV2,
   selectEffectiveAttackV2,
   selectEffectiveDefenseV2,
+  selectNationalIqViewV2,
   selectNationalEconomyV2,
   selectMilitaryBaseRatingsV2,
   selectTerritoriesOfV2,
@@ -114,27 +114,24 @@ describe('V2 combat, capture and absorption', () => {
     );
   });
 
-  it('applies the defender 1.25 exactly once with a five-percent supported-max ceiling', () => {
+  it('applies the defender 1.25 exactly once without an artificial pulse ceiling', () => {
     const state = createWorldStateV2(20);
     const target = state.territories[nldTerritory];
     const source = state.territories[belTerritory];
     source.army.baseAttack *= 100;
-    const targetSupportedMaximum = Math.max(target.army.capacity, target.army.manpower);
-    const sourceSupportedMaximum = Math.max(source.army.capacity, source.army.manpower);
+    const targetManpowerBefore = target.army.manpower;
+    const sourceManpowerBefore = source.army.manpower;
     const supply = supplyFactorV2(state, WORLD_CONTENT_V2, nld, nldTerritory, false);
     const terrain = WORLD_CONTENT_V2.territories[nldTerritory].terrain;
     const expectedShield = target.army.manpower * selectEffectiveDefenseV2(state, WORLD_CONTENT_V2, nld, target.army)
       * DEFENDER_POSITION_MULTIPLIER * TERRAIN_DEFENSE_MODIFIER[terrain]
-      * (0.65 + 0.35 * target.condition) * supply;
+      * (0.65 + 0.35 * target.condition) * supply
+      * selectNationalIqViewV2(WORLD_CONTENT_V2, nld).logisticsMultiplier;
     const event = resolveBattlePulseV2(state, WORLD_CONTENT_V2, testWar(state), operation())!;
     expect(event.defenderPower).toBeCloseTo(expectedShield, 5);
-    expect(event.defenderLosses).toBeCloseTo(
-      targetSupportedMaximum * COMBAT_MAX_CASUALTY_RATE,
-      5,
-    );
-    expect(event.attackerLosses).toBeLessThanOrEqual(
-      sourceSupportedMaximum * COMBAT_MAX_CASUALTY_RATE,
-    );
+    expect(event.defenderLosses).toBeGreaterThan(targetManpowerBefore * 0.05);
+    expect(event.defenderLosses).toBeLessThanOrEqual(targetManpowerBefore);
+    expect(event.attackerLosses).toBeLessThanOrEqual(sourceManpowerBefore);
     expect(event.attackerSupply).toBeGreaterThanOrEqual(0.25);
     expect(event.attackerSupply).toBeLessThanOrEqual(1);
   });

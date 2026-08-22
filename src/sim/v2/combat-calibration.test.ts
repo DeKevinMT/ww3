@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import { nextRandom } from '../../game/random';
 import {
   BATTLE_INTERVAL_TICKS,
-  COMBAT_MAX_CASUALTY_RATE,
   COMBAT_ROUTE_STRENGTH_RATIO,
   DEFENDER_COUNTERFIRE_MULTIPLIER,
   WAR_MOBILIZATION_TICKS,
@@ -97,6 +96,7 @@ function isolatedEngine(seed: number, humanId: string): WorldEngineV2 {
 function simulateWar(seed: number, humanId: string, attackerId: string, defenderId: string, maximumWeeks: number) {
   const engine = isolatedEngine(seed, humanId);
   const forecast = engine.warForecast(attackerId, defenderId);
+  const defenderManpowerStart = engine.totalManpower(defenderId).deployed;
   expect(engine.declareWar(attackerId, defenderId).accepted).toBe(true);
   engine.step();
   let weeks = 1;
@@ -105,7 +105,9 @@ function simulateWar(seed: number, humanId: string, attackerId: string, defender
     weeks += 1;
   }
   return {
+    engine,
     forecast,
+    defenderManpowerStart,
     weeks,
     attackerAlive: engine.territoriesOf(attackerId).length > 0,
     defenderAlive: engine.territoriesOf(defenderId).length > 0,
@@ -123,6 +125,13 @@ describe('V2 coherent combat and forecast calibration', () => {
     expect(forecast.projectedDefenderLosses).toBeCloseTo(projected.defenderLosses, 6);
     expect(forecast.projectedAttackerLossRate).toBeCloseTo(projected.attackerLossRate, 6);
     expect(forecast.projectedDefenderLossRate).toBeCloseTo(projected.defenderLossRate, 6);
+    const decisivePulses = Math.min(
+      Math.ceil(projected.attackerStrength / projected.attackerLosses),
+      Math.ceil(projected.defenderStrength / projected.defenderLosses),
+    );
+    const centralWeeks = Math.min(156, Math.max(4, BATTLE_INTERVAL_TICKS * decisivePulses));
+    expect(forecast.estimatedWeeksMin).toBe(Math.max(2, Math.round(centralWeeks * 0.72)));
+    expect(forecast.estimatedWeeksMax).toBe(Math.max(4, Math.round(centralWeeks * 1.35)));
 
     const rng = { rngState: state.rngState };
     const varianceA = 0.94 + nextRandom(rng) * 0.12;
@@ -135,23 +144,21 @@ describe('V2 coherent combat and forecast calibration', () => {
     expect(event.defenderLosses).toBeCloseTo(randomized.defenderLosses, 6);
   });
 
-  it('caps decisive pulse damage at five percent of supported maximum manpower', () => {
-    const projection = (defenderManpower: number) => {
+  it('lets every additional front soldier add damage without a pulse ceiling', () => {
+    const projection = (attackerManpower: number) => {
       const state = calibratedState(4_001_001);
-      state.territories[belTerritory].army.manpower = 10;
-      state.territories[belTerritory].army.capacity = 10;
-      state.territories[nldTerritory].army.manpower = defenderManpower;
+      state.territories[belTerritory].army.manpower = attackerManpower;
+      state.territories[belTerritory].army.capacity = attackerManpower;
+      state.territories[nldTerritory].army.manpower = 0.10;
       state.territories[nldTerritory].army.capacity = 0.10;
       return projectCombatExchangeV2(
         state, WORLD_CONTENT_V2, bel, nld, belTerritory, nldTerritory, 'land', 1, 1,
       )!;
     };
-    const full = projection(0.10);
-    const half = projection(0.05);
-    expect(full.defenderLossRate).toBe(COMBAT_MAX_CASUALTY_RATE);
-    expect(half.defenderLossRate).toBe(COMBAT_MAX_CASUALTY_RATE);
-    expect(full.defenderLosses).toBeCloseTo(0.10 * COMBAT_MAX_CASUALTY_RATE, 9);
-    expect(half.defenderLosses).toBeCloseTo(0.10 * COMBAT_MAX_CASUALTY_RATE, 9);
+    const one = projection(0.20);
+    const two = projection(0.40);
+    expect(two.defenderLosses).toBeCloseTo(one.defenderLosses * 2, 9);
+    expect(two.defenderLossRate).toBeCloseTo(one.defenderLossRate * 2, 9);
   });
 
   it('reports perspective-aware live damage and a bounded remaining-war estimate', () => {
@@ -245,7 +252,8 @@ describe('V2 coherent combat and forecast calibration', () => {
     const event = resolveBattlePulseV2(state, WORLD_CONTENT_V2, war(state), operation())!;
     expect(event.attackerPopulationLoss).toBeGreaterThan(0);
     expect(event.defenderPopulationLoss).toBeGreaterThan(event.attackerPopulationLoss);
-    expect(event.defenderPopulationLoss).toBeGreaterThan(event.attackerPopulationLoss * 4);
+    expect(event.defenderPopulationLoss / event.attackerPopulationLoss).toBeGreaterThanOrEqual(1.5);
+    expect(event.defenderPopulationLoss / event.attackerPopulationLoss).toBeLessThanOrEqual(2);
     expect(event.defenderPopulationLoss).toBeGreaterThan(
       (event.attackerLosses + event.defenderLosses) * 0.25,
     );
@@ -260,7 +268,7 @@ describe('V2 coherent combat and forecast calibration', () => {
     expect(7 * 0.002 * chinaExposure).toBeLessThan(0.005);
   });
 
-  it('never inverts an overwhelming advantage and can finish a depleted routed remnant', () => {
+  it('never inverts an overwhelming advantage or adds a synthetic wipe', () => {
     const state = calibratedState(4_002);
     state.territories[belTerritory].army.manpower = 1;
     state.territories[belTerritory].army.capacity = 1;
@@ -273,34 +281,29 @@ describe('V2 coherent combat and forecast calibration', () => {
     expect(projected.attackerLosses).toBeLessThan(0.05 * projected.defenderStrength);
     const event = resolveBattlePulseV2(state, WORLD_CONTENT_V2, war(state), operation())!;
     expect(event.defenderLosses).toBeGreaterThan(event.attackerLosses);
-    expect(event.defenderLosses).toBeCloseTo(0.003, 9);
+    expect(event.defenderLosses).toBeGreaterThan(0.003 * 0.90);
+    expect(event.defenderLosses).toBeLessThan(0.003);
     expect(event.defenderLosses).toBeLessThanOrEqual(projected.defenderStrength);
-    expect(state.territories[nldTerritory].army.manpower).toBe(0);
+    expect(state.territories[nldTerritory].army.manpower).toBeGreaterThan(0);
     expect(COMBAT_ROUTE_STRENGTH_RATIO).toBe(0.05);
   });
 
-  it('keeps micro-formation route losses inside the same supported-maximum budget', () => {
+  it('does not add synthetic route casualties to a weak effective hit', () => {
     const state = calibratedState(4_002_1);
     state.territories[belTerritory].army.manpower = 1;
     state.territories[belTerritory].army.capacity = 1;
-    // Keep the force at a meaningful 1,000-person scale, but make the initial
-    // exchange tiny so routing must spend only the budget that remains.
+    // Keep the force at a meaningful 1,000-person scale, but make its opponent's
+    // effective hit tiny even though the formation is below the route ratio.
     state.territories[belTerritory].army.baseAttack = 0.00001;
     state.territories[nldTerritory].army.manpower = 0.001;
     state.territories[nldTerritory].army.capacity = 0.001;
     const manpowerBefore = state.territories[nldTerritory].army.manpower;
-    const supportedMaximum = Math.max(
-      state.territories[nldTerritory].army.capacity,
-      manpowerBefore,
-    );
-
     const event = resolveBattlePulseV2(state, WORLD_CONTENT_V2, war(state), operation())!;
     const canonicalLoss = manpowerBefore - state.territories[nldTerritory].army.manpower;
 
-    const pulseBudget = supportedMaximum * COMBAT_MAX_CASUALTY_RATE;
-    expect(canonicalLoss).toBeCloseTo(pulseBudget, 9);
-    expect(canonicalLoss).toBeLessThanOrEqual(pulseBudget + 1e-12);
-    expect(event.defenderLosses).toBeCloseTo(canonicalLoss, 9);
+    expect(event.defenderLosses).toBe(0);
+    expect(canonicalLoss).toBeGreaterThan(0);
+    expect(canonicalLoss).toBeLessThan(manpowerBefore * 0.01);
     expect(state.territories[nldTerritory].army.manpower).toBeGreaterThan(0);
   });
 
@@ -367,8 +370,27 @@ describe('V2 coherent combat and forecast calibration', () => {
 
   it('keeps a stronger China forecast and campaign from being padded by Indian replenishment', () => {
     const result = simulateWar(4_301, 'chn', 'chn', 'ind', 520);
+    const midWar = result.engine.activeWarBetween('chn', 'ind');
+    const indiaManpowerAtTenYears = result.engine.totalManpower('ind').deployed;
+    const indiaReservesAtTenYears = result.engine.state.players[ind].trainedReserves;
+    const indiaControlAtTenYears = result.engine.state.territories[territoryIdV2('ind')].control?.share ?? 0;
+    let weeks = result.weeks;
+    while (weeks < 572 && result.engine.activeWarBetween('chn', 'ind')) {
+      result.engine.step();
+      weeks += 1;
+    }
+
     expect(result.forecast.winChance).toBeGreaterThan(50);
-    expect(result.defenderAlive).toBe(false);
-    expect(result.weeks).toBeLessThan(520);
-  }, 15_000);
+    expect(result.weeks).toBe(520);
+    expect(result.defenderAlive).toBe(true);
+    expect(midWar?.battles).toBeGreaterThan(250);
+    expect(indiaManpowerAtTenYears).toBeGreaterThan(0);
+    expect(indiaManpowerAtTenYears).toBeLessThan(result.defenderManpowerStart * 0.01);
+    expect(indiaReservesAtTenYears).toBeLessThan(0.001);
+    expect(indiaControlAtTenYears).toBeGreaterThan(0.90);
+    expect(result.engine.activeWarBetween('chn', 'ind')).toBeUndefined();
+    expect(result.engine.territoriesOf('ind')).toHaveLength(0);
+    expect(weeks).toBeGreaterThan(520);
+    expect(weeks).toBeLessThanOrEqual(572);
+  }, 90_000);
 });

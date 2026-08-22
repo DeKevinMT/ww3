@@ -30,7 +30,7 @@ import type {
 } from './types';
 
 export interface SaveGameV2 {
-  schemaVersion: 19;
+  schemaVersion: 20;
   rulesVersion: string;
   contentVersion: string;
   mapId: string;
@@ -58,6 +58,7 @@ const LEGACY_RULES_VERSION_V15 = 'frontier-command-v2.50-mixed-armies';
 const LEGACY_RULES_VERSION_V16 = 'frontier-command-v2.51-fixed-manual-actions';
 const LEGACY_RULES_VERSION_V17 = 'frontier-command-v2.52-integration-multifront';
 const LEGACY_RULES_VERSION_V18 = 'frontier-command-v2.53-combat-experience';
+const LEGACY_RULES_VERSION_V19 = 'frontier-command-v2.54-faster-integration';
 const LEGACY_CONTENT_VERSION_V16 = 'natural-earth-countries-2026-v6-naval';
 const LEGACY_CONTENT_VERSION_V17 = 'natural-earth-countries-2026-v7-greenland';
 const LEGACY_BOT_MANPOWER_PER_UNIT = 0.10;
@@ -91,8 +92,9 @@ interface LegacyArmyV17 extends LegacyArmyV14 {
   baseDefense: number;
 }
 
-type LegacyNationV18 = Omit<NationStateV2, 'domesticFoodCapacity'>;
-type LegacyNationV17 = Omit<NationStateV2, 'combatExperience' | 'domesticFoodCapacity'>;
+type LegacyNationV19 = Omit<NationStateV2, 'trainedReserves'> & { combatExperience: number };
+type LegacyNationV18 = Omit<NationStateV2, 'domesticFoodCapacity' | 'trainedReserves'> & { combatExperience: number };
+type LegacyNationV17 = Omit<NationStateV2, 'domesticFoodCapacity' | 'trainedReserves'>;
 type LegacyNationV15 = Omit<LegacyNationV17, 'manualActionUses'>;
 type LegacyNationV13 = LegacyNationV15 & { battleBots: LegacyBattleBotProgramV13 };
 type LegacyTerritoryBaseV17 = Omit<TerritoryStateV2, 'army' | 'coreOwner' | 'integrationProgram'>;
@@ -108,6 +110,14 @@ type LegacyWarStateV16 = Omit<WarStateV2, 'attackerOperations' | 'defenderOperat
   attackerOperation?: FrontOperationV2;
   defenderOperation?: FrontOperationV2;
 };
+
+/** Read-only compatibility shape for the last Combat Experience save format. */
+export interface LegacySaveGameV19 extends Omit<SaveGameV2,
+  'schemaVersion' | 'rulesVersion' | 'players'> {
+  schemaVersion: 19;
+  rulesVersion: typeof LEGACY_RULES_VERSION_V19;
+  players: Record<PlayerId, LegacyNationV19>;
+}
 
 /** Read-only compatibility shape for the original long integration calendar. */
 export interface LegacySaveGameV18 extends Omit<SaveGameV2,
@@ -210,6 +220,11 @@ const LEGACY_NATION_KEYS_V17 = [
   'manualActionUses', 'propagandaAvailableTick', 'propagandaProgram', 'rapidRecruitmentAvailableTick',
   'research', 'researchSurgeAvailableTick', 'treasury', 'warFatigue',
 ].sort();
+const LEGACY_NATION_KEYS_V18 = [...LEGACY_NATION_KEYS_V17, 'combatExperience'].sort();
+const LEGACY_NATION_KEYS_V19 = [
+  ...LEGACY_NATION_KEYS_V18,
+  'domesticFoodCapacity',
+].sort();
 const LEGACY_TERRITORY_KEYS = ['army', 'condition', 'control', 'economy', 'integration', 'owner', 'population'];
 const LEGACY_ARMY_KEYS_V13 = ['battleBotCapacity', 'battleBotWear', 'battleBots', 'capacity', 'manpower'];
 const LEGACY_ARMY_KEYS_V14 = ['capacity', 'manpower', 'veteranExperience', 'veteranManpower'];
@@ -259,7 +274,7 @@ export function canonicalStateHashV2(value: object): string {
 export function createSaveV2(state: WorldStateV2, content: WorldContentV2): SaveGameV2 {
   assertInvariantsV2(state, content);
   const payload: Omit<SaveGameV2, 'canonicalStateHash'> = {
-    schemaVersion: 19,
+    schemaVersion: 20,
     rulesVersion: state.rulesVersion,
     contentVersion: state.contentVersion,
     mapId: state.mapId,
@@ -670,8 +685,8 @@ function legacyTerritoryFromCurrentV2(territory: TerritoryStateV2): LegacyTerrit
 
 function legacyNationFromCurrentV2(nation: NationStateV2): LegacyNationV17 {
   const {
-    combatExperience: _combatExperience,
     domesticFoodCapacity: _domesticFoodCapacity,
+    trainedReserves: _trainedReserves,
     ...legacy
   } = nation;
   return {
@@ -811,33 +826,14 @@ function legacyStateFromSaveV17(save: LegacySaveGameV17): LegacyWorldStateV17 {
   };
 }
 
-/**
- * Converts local veteran cohorts into one empire-wide institutional score.
- * Score mass is preserved exactly: veteran headcount times sqrt(cohort XP),
- * diluted across the nation's whole surviving army before squaring back to XP.
- */
+/** Retires local veteran fields while preserving canonical armies and research. */
 function migrateLegacyStateV17(
   legacyState: LegacyWorldStateV17,
   content: WorldContentV2,
 ): WorldStateV2 {
   assertLegacyCanonicalShapeV17(legacyState);
-  const experienceByPlayer = new Map<PlayerId, number>();
-  for (const playerId of Object.keys(legacyState.players) as PlayerId[]) {
-    let totalManpower = 0;
-    let scoreMass = 0;
-    for (const territory of Object.values(legacyState.territories)) {
-      if (territory.owner !== playerId) continue;
-      totalManpower += territory.army.manpower;
-      scoreMass += territory.army.veteranManpower
-        * Math.sqrt(territory.army.veteranExperience);
-    }
-    const nationalScore = totalManpower > 0 ? scoreMass / totalManpower : 0;
-    experienceByPlayer.set(playerId, roundMigrationValue(nationalScore ** 2));
-  }
-
-  const players = Object.fromEntries(Object.entries(legacyState.players).map(([rawId, nation]) => {
-    const playerId = rawId as PlayerId;
-    return [playerId, {
+  const players = Object.fromEntries(Object.entries(legacyState.players).map(([rawId, nation]) => (
+    [rawId, {
       ...nation,
       budget: { ...nation.budget },
       research: {
@@ -849,10 +845,10 @@ function migrateLegacyStateV17(
       },
       manualActionUses: { ...nation.manualActionUses },
       propagandaProgram: nation.propagandaProgram ? { ...nation.propagandaProgram } : null,
-      combatExperience: experienceByPlayer.get(playerId) ?? 0,
       domesticFoodCapacity: 0,
-    }];
-  })) as Record<PlayerId, NationStateV2>;
+      trainedReserves: 0,
+    }]
+  ))) as Record<PlayerId, NationStateV2>;
 
   const territories = Object.fromEntries(Object.entries(legacyState.territories).map(([rawId, territory]) => {
     const territoryId = rawId as TerritoryId;
@@ -890,7 +886,7 @@ function migrateLegacyStateV17(
 
   const state: WorldStateV2 = {
     ...legacyState,
-    schemaVersion: 19,
+    schemaVersion: 20,
     rulesVersion: V2_RULES_VERSION,
     contentVersion: V2_CONTENT_VERSION,
     players,
@@ -914,32 +910,55 @@ function migrateLegacyStateV17(
   return state;
 }
 
-function currentStateFromSave(save: SaveGameV2, content: WorldContentV2): WorldStateV2 {
+function currentStateFromSave(
+  save: SaveGameV2 | LegacySaveGameV19 | LegacySaveGameV18,
+  content: WorldContentV2,
+  retireLegacyCombatExperience = false,
+): WorldStateV2 {
+  if (retireLegacyCombatExperience) {
+    const expectedNationKeys = save.schemaVersion === 19
+      ? LEGACY_NATION_KEYS_V19 : LEGACY_NATION_KEYS_V18;
+    for (const [playerId, nation] of Object.entries(save.players)) {
+      if (!nation || typeof nation !== 'object' || !exactKeys(nation, expectedNationKeys)
+        || !Number.isFinite((nation as { combatExperience?: number }).combatExperience)
+        || (nation as { combatExperience: number }).combatExperience < 0) {
+        throw new Error(`Legacy V2 nation ${playerId} has non-canonical Combat Experience state.`);
+      }
+    }
+  }
   const missingDomesticCapacity = new Set<PlayerId>();
   const players = Object.fromEntries(Object.entries(save.players).map(([rawId, nation]) => {
     const playerId = rawId as PlayerId;
     const serializedCapacity = (nation as { domesticFoodCapacity?: number }).domesticFoodCapacity;
+    const serializedNation = nation as NationStateV2 & { combatExperience?: number };
+    const canonicalNation: NationStateV2 = retireLegacyCombatExperience
+      ? (({ combatExperience: _retiredCombatExperience, ...rest }) => ({
+        ...rest,
+        trainedReserves: 0,
+      } as NationStateV2))(serializedNation)
+      : serializedNation;
     if (serializedCapacity === undefined) missingDomesticCapacity.add(playerId);
     return [playerId, {
-      ...nation,
+      ...canonicalNation,
       ...(serializedCapacity === undefined ? { domesticFoodCapacity: 0 } : {}),
-      budget: { ...nation.budget },
+      budget: { ...canonicalNation.budget },
       research: {
-        ...nation.research,
-        allocations: { ...nation.research.allocations },
-        progress: { ...nation.research.progress },
-        effectLevels: { ...nation.research.effectLevels },
-        breakthroughs: { ...nation.research.breakthroughs },
+        ...canonicalNation.research,
+        allocations: { ...canonicalNation.research.allocations },
+        progress: { ...canonicalNation.research.progress },
+        effectLevels: { ...canonicalNation.research.effectLevels },
+        breakthroughs: { ...canonicalNation.research.breakthroughs },
       },
-      manualActionUses: { ...nation.manualActionUses },
-      propagandaProgram: nation.propagandaProgram ? { ...nation.propagandaProgram } : null,
+      manualActionUses: { ...canonicalNation.manualActionUses },
+      propagandaProgram: canonicalNation.propagandaProgram ? { ...canonicalNation.propagandaProgram } : null,
     }];
   })) as Record<PlayerId, NationStateV2>;
   const territories = Object.fromEntries(Object.entries(save.territories).map(([rawId, territory]) => {
-    const program = territory.integrationProgram;
+    const serializedTerritory = territory as TerritoryStateV2;
+    const program = serializedTerritory.integrationProgram;
     const serializedAnnualCost = (program as { annualCost?: number } | undefined)?.annualCost;
     return [rawId, {
-      ...territory,
+      ...serializedTerritory,
       ...(program ? {
         integrationProgram: {
           ...program,
@@ -950,12 +969,14 @@ function currentStateFromSave(save: SaveGameV2, content: WorldContentV2): WorldS
             : serializedAnnualCost,
         },
       } : {}),
-      army: { ...territory.army },
-      ...(territory.control ? { control: { ...territory.control } } : {}),
+      army: { ...serializedTerritory.army },
+      ...(serializedTerritory.control ? { control: { ...serializedTerritory.control } } : {}),
     }];
   })) as Record<TerritoryId, TerritoryStateV2>;
   const state: WorldStateV2 = {
     ...payloadWithoutHash(save),
+    schemaVersion: 20,
+    rulesVersion: V2_RULES_VERSION,
     players,
     territories,
     wars: save.wars.map((war) => ({
@@ -974,8 +995,8 @@ function currentStateFromSave(save: SaveGameV2, content: WorldContentV2): WorldS
     winnerId: undefined,
     gameOver: false,
   };
-  // Authentication happened before this function. Same-schema saves made
-  // before slow domestic capacity existed now receive a coherent live target;
+  // Authentication happened before this function. Compatible saves made before
+  // slow domestic capacity existed now receive a coherent live target;
   // any present invalid value remains untouched for invariant rejection.
   for (const playerId of missingDomesticCapacity) {
     state.players[playerId]!.domesticFoodCapacity = roundMigrationValue(
@@ -986,10 +1007,11 @@ function currentStateFromSave(save: SaveGameV2, content: WorldContentV2): WorldS
 }
 
 /**
- * Schema 19 halves the country-size calendar. An authenticated schema-18 save
- * keeps its exact visible integration share, but receives the shorter
- * remaining promise once. Subsequent saves are schema 19, so the endpoint can
- * never be shortened again by another round-trip.
+ * Schema 18 used twice the V2.54 country-size calendar. An authenticated old
+ * save keeps its exact visible integration share, but receives the current
+ * 1.5x-calendar remainder once. Subsequent saves keep that endpoint, so it can
+ * never be shortened again by another round-trip. Schema-19 programs bypass
+ * this migration and retain their already promised endpoint exactly.
  */
 function migrateLegacyStateV18(
   save: LegacySaveGameV18,
@@ -1018,9 +1040,7 @@ function migrateLegacyStateV18(
     }];
   })) as Record<TerritoryId, TerritoryStateV2>;
   const legacyState: WorldStateV2 = {
-    ...currentStateFromSave(save as unknown as SaveGameV2, content),
-    schemaVersion: 19,
-    rulesVersion: V2_RULES_VERSION,
+    ...currentStateFromSave(save, content, true),
     territories: canonicalTerritories,
   };
   // Validate the authenticated old payload before the new calendar is allowed
@@ -1056,7 +1076,7 @@ function migrateLegacyStateV18(
 }
 
 export function loadSaveV2(
-  input: string | SaveGameV2 | LegacySaveGameV18 | LegacySaveGameV17 | LegacySaveGameV16 | LegacySaveGameV15 | LegacySaveGameV14 | LegacySaveGameV13,
+  input: string | SaveGameV2 | LegacySaveGameV19 | LegacySaveGameV18 | LegacySaveGameV17 | LegacySaveGameV16 | LegacySaveGameV15 | LegacySaveGameV14 | LegacySaveGameV13,
   content: WorldContentV2,
 ): WorldStateV2 {
   const unknownSave = typeof input === 'string' ? JSON.parse(input) as unknown : input;
@@ -1070,16 +1090,17 @@ export function loadSaveV2(
   }
 
   const schemaVersion = parsed.schemaVersion;
-  if (schemaVersion !== 19 && schemaVersion !== 18 && schemaVersion !== 17 && schemaVersion !== 16 && schemaVersion !== 15 && schemaVersion !== 14 && schemaVersion !== 13) {
-    throw new Error(`Unsupported V2 schemaVersion: ${String(schemaVersion)}. Current saves use schema 19; canonical schema 13–18 saves can be migrated.`);
+  if (schemaVersion !== 20 && schemaVersion !== 19 && schemaVersion !== 18 && schemaVersion !== 17 && schemaVersion !== 16 && schemaVersion !== 15 && schemaVersion !== 14 && schemaVersion !== 13) {
+    throw new Error(`Unsupported V2 schemaVersion: ${String(schemaVersion)}. Current saves use schema 20; canonical schema 13–19 saves can be migrated.`);
   }
-  const expectedRules = schemaVersion === 19 ? V2_RULES_VERSION
-    : schemaVersion === 18 ? LEGACY_RULES_VERSION_V18
-      : schemaVersion === 17 ? LEGACY_RULES_VERSION_V17
-      : schemaVersion === 16 ? LEGACY_RULES_VERSION_V16
-        : schemaVersion === 15 ? LEGACY_RULES_VERSION_V15
-          : schemaVersion === 14 ? LEGACY_RULES_VERSION_V14
-            : LEGACY_RULES_VERSION_V13;
+  const expectedRules = schemaVersion === 20 ? V2_RULES_VERSION
+    : schemaVersion === 19 ? LEGACY_RULES_VERSION_V19
+      : schemaVersion === 18 ? LEGACY_RULES_VERSION_V18
+        : schemaVersion === 17 ? LEGACY_RULES_VERSION_V17
+          : schemaVersion === 16 ? LEGACY_RULES_VERSION_V16
+            : schemaVersion === 15 ? LEGACY_RULES_VERSION_V15
+              : schemaVersion === 14 ? LEGACY_RULES_VERSION_V14
+                : LEGACY_RULES_VERSION_V13;
   if (parsed.rulesVersion !== expectedRules) throw new Error(`Unsupported V2 rulesVersion: ${String(parsed.rulesVersion)}.`);
   const expectedContent = schemaVersion >= 17 ? V2_CONTENT_VERSION : LEGACY_CONTENT_VERSION_V16;
   if (parsed.contentVersion !== expectedContent) throw new Error(`Unsupported V2 contentVersion: ${String(parsed.contentVersion)}.`);
@@ -1093,22 +1114,24 @@ export function loadSaveV2(
     throw new Error(`V2 canonical hash mismatch: expected ${parsed.canonicalStateHash}, got ${hash}.`);
   }
 
-  const state = schemaVersion === 19
+  const state = schemaVersion === 20
     ? currentStateFromSave(parsed as unknown as SaveGameV2, content)
-    : schemaVersion === 18
-      ? migrateLegacyStateV18(parsed as unknown as LegacySaveGameV18, content)
-      : migrateLegacyStateV17(schemaVersion === 17
-        ? legacyStateFromSaveV17(parsed as unknown as LegacySaveGameV17)
-        : migrateLegacyStateV16(schemaVersion === 16
-          ? legacyStateFromSaveV16(parsed as unknown as LegacySaveGameV16)
-          : migrateLegacyStateV15(schemaVersion === 15
-            ? legacyStateFromSaveV15(parsed as unknown as LegacySaveGameV15)
-            : migrateLegacyStateV14(
-              schemaVersion === 14
-                ? legacyStateFromSaveV14(parsed as unknown as LegacySaveGameV14)
-                : migrateLegacySaveV13(parsed as unknown as LegacySaveGameV13),
-              content,
-            )), content), content);
+    : schemaVersion === 19
+      ? currentStateFromSave(parsed as unknown as LegacySaveGameV19, content, true)
+      : schemaVersion === 18
+        ? migrateLegacyStateV18(parsed as unknown as LegacySaveGameV18, content)
+        : migrateLegacyStateV17(schemaVersion === 17
+          ? legacyStateFromSaveV17(parsed as unknown as LegacySaveGameV17)
+          : migrateLegacyStateV16(schemaVersion === 16
+            ? legacyStateFromSaveV16(parsed as unknown as LegacySaveGameV16)
+            : migrateLegacyStateV15(schemaVersion === 15
+              ? legacyStateFromSaveV15(parsed as unknown as LegacySaveGameV15)
+              : migrateLegacyStateV14(
+                schemaVersion === 14
+                  ? legacyStateFromSaveV14(parsed as unknown as LegacySaveGameV14)
+                  : migrateLegacySaveV13(parsed as unknown as LegacySaveGameV13),
+                content,
+              )), content), content);
   assertInvariantsV2(state, content);
   const owners = [...new Set(Object.values(state.territories).map((territory) => territory.owner))];
   if (owners.length === 1 && Object.keys(state.territories).length === content.territoryIds.length) {

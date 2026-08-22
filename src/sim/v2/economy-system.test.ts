@@ -97,7 +97,7 @@ describe('V2 simple dynamic economy and survival AI', () => {
       foodSecurity: 0.55,
       populationGrowthRate: -0.01,
       foodReserveWeeks: 0.4,
-      superAi: true,
+      iqScore: 100,
     };
     const peace = optimizeNationalAiPlanV2({ ...common, activeWars: 0 });
     const war = optimizeNationalAiPlanV2({ ...common, activeWars: 1 });

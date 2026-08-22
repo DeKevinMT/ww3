@@ -53,6 +53,7 @@ function processMilitaryAndCondition(
   const atWar = selectWarsOfV2(state, playerId).length > 0;
   const territories = selectTerritoriesOfV2(state, playerId);
   const projectedArmy = projectFinanceManpowerPhaseV2(state, content, playerId, finance);
+  state.players[playerId]!.trainedReserves = projectedArmy.trainedReservesAfter;
   const projectedByTerritory = new Map(projectedArmy.territories.map((army) => [army.id, army]));
   for (const view of territories) {
     const territory = state.territories[view.id]!;

@@ -53,7 +53,7 @@ export interface NationalAiPlanV2 {
   mode: NationalAiModeV2;
   /** Normalized base plan after adapting intent; emergency food transfers happen in finance. */
   activeBudget: BudgetPolicyV2;
-  /** Visible multiplier for the player country's unique super-AI advantage. */
+  /** Visible IQ-scaled execution multiplier shared by every country's AI. */
   efficiency: number;
   explanation: string;
 }
@@ -69,6 +69,10 @@ export interface WeeklyManpowerProjectionV2 {
   deployedAfterFinance: number;
   recruited: number;
   demobilized: number;
+  trainedReservesBefore: number;
+  trainedReservesAfter: number;
+  reserveTrained: number;
+  reserveDeployed: number;
   financePhaseNet: number;
   estimatedBattleLosses: number;
   net: number;
@@ -123,6 +127,8 @@ export interface NationStateV2 {
   domesticFoodCapacity: number;
   /** Share of last week's national food demand actually supplied. */
   foodSecurity: number;
+  /** Trained personnel held outside the deployed regular army, in millions. */
+  trainedReserves: number;
   budget: BudgetPolicyV2;
   research: ResearchStateV2;
   /** Number of unilateral player ceasefires; each makes the next contract 10% dearer. */
@@ -134,8 +140,6 @@ export interface NationStateV2 {
   propagandaAvailableTick: number;
   propagandaProgram: PropagandaProgramStateV2 | null;
   warFatigue: number;
-  /** Empire-wide institutional combat knowledge earned only through real wars. */
-  combatExperience: number;
   capitalId: TerritoryId;
 }
 
@@ -339,7 +343,7 @@ export interface AiEscalationStateV2 {
 
 /** Live facade state. speed/winner/gameOver are transient projections and omitted from saves/hashes. */
 export interface WorldStateV2 {
-  schemaVersion: 19;
+  schemaVersion: 20;
   rulesVersion: string;
   contentVersion: string;
   mapId: string;
@@ -395,6 +399,8 @@ export interface WeeklyFinanceBreakdownV2 {
   ceasefireIncome: number;
   /** Mandatory weekly administration and reconstruction cost for unfinished integrations. */
   integrationCost: number;
+  /** Universal weekly state operating cost: exactly 20% of ordinary weekly tax revenue. */
+  baseOperatingCost: number;
   /** Principal newly borrowed this week because committed payments exceeded liquidity. */
   newBorrowing: number;
   /** One-time 10% premium added to newly borrowed principal. */
@@ -415,6 +421,16 @@ export interface WeeklyFinanceBreakdownV2 {
   /** Extra soldiers trained through the AI's paid mobilization fast-track. */
   acceleratedRecruitment: number;
   recruitmentAccelerationCost: number;
+  /** Maximum trained reserve pool at the live 2x active-capacity rule. */
+  trainedReserveCapacity: number;
+  trainedReservesBefore: number;
+  trainedReservesAfter: number;
+  /** Newly trained reserve personnel, in millions. */
+  reserveTraining: number;
+  /** Military-envelope spending used to train the reserve pool. */
+  reserveTrainingCost: number;
+  /** Existing reserves transferred into deployed armies this week. */
+  reserveDeployment: number;
   /** Explicit catastrophic-crisis force reduction, capped at 0.05% per week. */
   acceleratedDemobilization: number;
   demobilizationCost: number;
@@ -493,16 +509,6 @@ export interface ResearchSurgeTermsV2 {
   cost: number;
 }
 
-export interface CombatExperienceViewV2 {
-  /** Canonical empire-wide experience earned from completed wars with combat. */
-  experience: number;
-  /** Diminishing-return score used by every experience modifier. */
-  score: number;
-  attackMultiplier: number;
-  defenseMultiplier: number;
-  casualtyMultiplier: number;
-}
-
 export interface NuclearPowerViewV2 {
   /** 0 = conventional only, 1–5 = increasingly difficult strategic deterrence tiers. */
   level: number;
@@ -516,17 +522,25 @@ export interface NuclearPowerViewV2 {
 export interface ArmyStrengthV2 extends TotalManpowerV2 {
   capacityTarget: number;
   fillRatio: number;
-  combatExperience: CombatExperienceViewV2;
 }
 
 export interface NationalEconomyV2 {
   population: number;
-  /** Compatibility alias of current live owned population. */
+  /** Current live population unlocked by the visible integration share. */
   effectivePopulation: number;
+  /** Immutable opening population unlocked by the same integration share. */
+  baselineProductivePopulation: number;
+  /** Live productive population divided by its immutable reference. */
+  productivePopulationFactor: number;
   /** Current live wealth in thousands of dollars per owned person. */
   wealthPerPerson: number;
+  /** GDP per immutable reference person, used only to set the automatic tax rate. */
+  fiscalReferenceWealthPerPerson: number;
   output: number;
+  /** Real integrated GDP; population damage never changes this field by itself. */
   controlledOutput: number;
+  /** Blended 50% GDP / 50% live-population public-revenue base. */
+  taxableOutput: number;
   /** One fixed normalized fiscal percentage; alias of `dynamicTaxRate`. */
   taxRate: number;
   /** Compatibility name for the fixed normalized fiscal percentage. */
@@ -535,26 +549,33 @@ export interface NationalEconomyV2 {
 }
 
 /**
- * Compatibility ledger behind `NationalEconomyV2`. Former intermediate output
- * stages remain exposed for saves/tests, but all resolve to the same live owned
- * population-and-wealth base used by the simple tax identity.
+ * Compatibility ledger behind `NationalEconomyV2`. Real integrated GDP stays
+ * separate from the blended public-revenue base so demographic damage can
+ * change tax receipts without silently changing GDP, ranking or target value.
  */
 export interface EconomicOutputLedgerV2 {
   population: number;
-  /** Compatibility alias of current live owned population. */
+  /** Current live population unlocked by the visible integration share. */
   productivePopulation: number;
-  /** Compatibility alias of current live owned population. */
+  /** Immutable opening population unlocked by the same integration share. */
+  baselineProductivePopulation: number;
+  /** Live productive population divided by its immutable reference. */
+  productivePopulationFactor: number;
+  /** Compatibility alias of current live productive population. */
   effectivePopulation: number;
   /** Current live wealth in thousands of dollars per owned person. */
   wealthPerPerson: number;
+  /** GDP per immutable reference person, used only to set the automatic tax rate. */
+  fiscalReferenceWealthPerPerson: number;
   /** Current total live owned GDP; population alone does not multiply it. */
   demographicOutput: number;
   /** Compatibility alias of `demographicOutput`. */
   conditionAdjustedOutput: number;
-  /** Compatibility alias of `demographicOutput`. */
+  /** Current GDP unlocked by the visible integration share. */
   integratedOutput: number;
   warOutputPenalty: number;
   warAdjustedOutput: number;
+  /** Integrated GDP weighted 50/50 with live productive population. */
   taxableOutput: number;
   /** One fixed normalized fiscal percentage; this is not a player policy. */
   dynamicTaxRate: number;
@@ -635,8 +656,6 @@ export interface WarForecastV2 {
   outlook: 'dominant' | 'favored' | 'contested' | 'risky' | 'desperate';
   attackerStrength: number;
   defenderStrength: number;
-  attackerCombatExperience: number;
-  defenderCombatExperience: number;
   attackerAttack: number;
   attackerDefense: number;
   defenderAttack: number;
@@ -753,9 +772,6 @@ export interface WarOutcomeV2 {
   reparationsPaid: number;
   treatyWeeklyPayment: number;
   treatyPaymentWeeks: number;
-  combatExperienceBefore: number;
-  combatExperienceAfter: number;
-  combatExperienceGained: number;
   baseAttackBefore: number;
   baseAttackAfter: number;
   baseDefenseBefore: number;

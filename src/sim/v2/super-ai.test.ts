@@ -1,10 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { planAiCommandsV2 } from './ai';
-import { SUPER_AI_EFFICIENCY, aiActiveWarCapV2 } from './balance';
+import { DEFAULT_BUDGET_V2, DEFAULT_RESEARCH_ALLOCATIONS_V2, aiActiveWarCapV2 } from './balance';
 import { createWorldStateV2 } from './bootstrap';
 import { stateTerritoryArmyCapacityTargetV2 } from './capacity';
 import { WORLD_CONTENT_V2 } from './content';
-import { optimizeNationalAiPlanV2 } from './nationalAi';
+import {
+  moveBudgetTowardTargetV2,
+  moveResearchTowardTargetV2,
+  nationalAiAllocationStepLimitV2,
+  nationalAiEfficiencyV2,
+  optimizeNationalAiPlanV2,
+} from './nationalAi';
 import {
   resistanceCombatMultiplierV2,
   selectDefensiveFederationPolicyV2,
@@ -22,7 +28,7 @@ import { declareWarV2, warDeclarationStatusV2 } from './war';
 import { nationIdV2, territoryIdV2 } from './types';
 import { WorldEngineV2 } from './WorldEngineV2';
 
-describe('V2 national Super AI', () => {
+describe('V2 shared national AI', () => {
   it('usually accepts a ceasefire offer but retains a real chance to refuse', () => {
     let accepted = 0;
     const samples = 40;
@@ -53,7 +59,7 @@ describe('V2 national Super AI', () => {
     expect(accepted).toBeLessThan(samples * 0.95);
   }, 10_000);
 
-  it('gives an invaded player a visible APEX defense against a stronger aggressor', () => {
+  it('does not give the chosen country a hidden defensive combat advantage', () => {
     const ordinary = new WorldEngineV2(699);
     ordinary.stopClock();
     const defended = new WorldEngineV2(699);
@@ -65,8 +71,13 @@ describe('V2 national Super AI', () => {
 
     const ordinaryForecast = ordinary.warForecast(russia, ukraine);
     const defendedForecast = defended.warForecast(russia, ukraine);
-    expect(defendedForecast.winChance).toBeLessThanOrEqual(ordinaryForecast.winChance - 10);
-    expect(defendedForecast.estimatedWeeksMax).toBeGreaterThanOrEqual(ordinaryForecast.estimatedWeeksMax);
+    expect(defendedForecast.winChance).toBe(ordinaryForecast.winChance);
+    expect(defendedForecast.estimatedWeeksMin).toBe(ordinaryForecast.estimatedWeeksMin);
+    expect(defendedForecast.estimatedWeeksMax).toBe(ordinaryForecast.estimatedWeeksMax);
+    expect(defendedForecast.projectedAttackerLosses)
+      .toBe(ordinaryForecast.projectedAttackerLosses);
+    expect(defendedForecast.projectedDefenderLosses)
+      .toBe(ordinaryForecast.projectedDefenderLosses);
   });
 
   it('stages a lightly chaotic first year without attributing those rival wars to the player', () => {
@@ -86,19 +97,19 @@ describe('V2 national Super AI', () => {
     expect(selectGlobalResistanceV2(engine.state).members).toBe(0);
   });
 
-  it('turns a simple player intent into an exact adaptive weekly plan', () => {
+  it('turns a national intent into an exact adaptive target plan', () => {
     const intent = { military: 35, research: 15, development: 50 } as const;
     const peace = optimizeNationalAiPlanV2({
       intent, activeWars: 0, fillRatio: 1, averageCondition: 1,
-      researchGap: 0, treasuryWeeks: 8, superAi: true,
+      researchGap: 0, treasuryWeeks: 8, iqScore: 100,
     });
     expect(peace.mode).toBe('growth');
     expect(peace.activeBudget).toEqual(intent);
-    expect(peace.efficiency).toBe(SUPER_AI_EFFICIENCY);
+    expect(peace.efficiency).toBe(nationalAiEfficiencyV2(100));
 
     const war = optimizeNationalAiPlanV2({
       intent, activeWars: 2, fillRatio: 0.45, averageCondition: 0.7,
-      researchGap: 8, treasuryWeeks: 1, superAi: true,
+      researchGap: 8, treasuryWeeks: 1, iqScore: 100,
     });
     expect(war.mode).toBe('war');
     expect(war.activeBudget.military).toBeGreaterThan(intent.military);
@@ -106,17 +117,50 @@ describe('V2 national Super AI', () => {
     expect(Object.values(war.activeBudget).every((value) => value >= 10 && value <= 70)).toBe(true);
   });
 
-  it('gives the selected nation a real efficiency advantage without changing its base country data', () => {
+  it('never changes a country\'s AI efficiency when it becomes the selected nation', () => {
     const state = createWorldStateV2(701);
     const netherlands = nationIdV2('nld');
     const defaultCost = selectRecruitmentUnitCostV2(state, netherlands);
     const defaultPlan = selectNationalAiPlanV2(state, WORLD_CONTENT_V2, netherlands);
     state.humanPlayerId = netherlands;
-    const superCost = selectRecruitmentUnitCostV2(state, netherlands);
-    const superPlan = selectNationalAiPlanV2(state, WORLD_CONTENT_V2, netherlands);
-    expect(defaultPlan.efficiency).toBe(1);
-    expect(superPlan.efficiency).toBe(SUPER_AI_EFFICIENCY);
-    expect(superCost).toBeCloseTo(defaultCost / SUPER_AI_EFFICIENCY, 5);
+    const selectedCost = selectRecruitmentUnitCostV2(state, netherlands);
+    const selectedPlan = selectNationalAiPlanV2(state, WORLD_CONTENT_V2, netherlands);
+    expect(selectedPlan.efficiency).toBe(defaultPlan.efficiency);
+    expect(selectedCost).toBe(defaultCost);
+    expect(nationalAiEfficiencyV2(108)).toBeGreaterThan(nationalAiEfficiencyV2(80));
+  });
+
+  it('moves every exact-100 allocation only a small IQ-scaled step per review', () => {
+    const budgetTarget = { military: 70, research: 20, development: 10 } as const;
+    const lowBudget = moveBudgetTowardTargetV2({ ...DEFAULT_BUDGET_V2 }, budgetTarget, 80);
+    const highBudget = moveBudgetTowardTargetV2({ ...DEFAULT_BUDGET_V2 }, budgetTarget, 108);
+    const moved = (before: object, after: object) => {
+      const from = before as Record<string, number>;
+      const to = after as Record<string, number>;
+      return Object.keys(from).reduce((sum, key) => sum + Math.max(0, to[key]! - from[key]!), 0);
+    };
+    expect(moved(DEFAULT_BUDGET_V2, lowBudget)).toBe(nationalAiAllocationStepLimitV2(80));
+    expect(moved(DEFAULT_BUDGET_V2, highBudget)).toBe(nationalAiAllocationStepLimitV2(108));
+    expect(Object.values(lowBudget).reduce((sum, value) => sum + value, 0)).toBe(100);
+    expect(Object.values(highBudget).reduce((sum, value) => sum + value, 0)).toBe(100);
+
+    const researchTarget = {
+      'population-recruitment': 20,
+      'military-industry': 20,
+      'advanced-weapons': 15,
+      'defensive-systems': 15,
+      'logistics-medicine': 15,
+      'economy-science': 15,
+    } as const;
+    const research = moveResearchTowardTargetV2(
+      { ...DEFAULT_RESEARCH_ALLOCATIONS_V2 }, researchTarget, 100,
+    );
+    expect(moved(DEFAULT_RESEARCH_ALLOCATIONS_V2, research))
+      .toBe(nationalAiAllocationStepLimitV2(100));
+    expect(Object.values(research).reduce((sum, value) => sum + value, 0)).toBe(100);
+    expect(moveResearchTowardTargetV2(
+      { ...DEFAULT_RESEARCH_ALLOCATIONS_V2 }, researchTarget, 100,
+    )).toEqual(research);
   });
 
   it('makes enemy AI repair weak armies and redirect research automatically', () => {
@@ -133,17 +177,28 @@ describe('V2 national Super AI', () => {
     expect(budgetCommand).toBeDefined();
     if (budgetCommand?.type === 'set-budget-policy') {
       expect(budgetCommand.playerId).toBe(belgium);
-      expect(budgetCommand.budget.military).toBeGreaterThan(
-        Math.max(budgetCommand.budget.research, budgetCommand.budget.development),
-      );
+      expect(budgetCommand.budget.military).toBeGreaterThan(state.players[belgium].budget.military);
+      const movedPoints = Object.keys(budgetCommand.budget).reduce((sum, domain) => (
+        sum + Math.max(0, budgetCommand.budget[domain as keyof typeof budgetCommand.budget]
+          - state.players[belgium].budget[domain as keyof typeof budgetCommand.budget])
+      ), 0);
+      expect(movedPoints).toBeLessThanOrEqual(nationalAiAllocationStepLimitV2(
+        WORLD_CONTENT_V2.nations[belgium].iqScore,
+      ));
       expect(Object.values(budgetCommand.budget).reduce((sum, value) => sum + value, 0)).toBe(100);
     }
     const research = commands.find((command) => command.type === 'set-research-allocations');
     expect(research?.type).toBe('set-research-allocations');
     if (research?.type === 'set-research-allocations') {
-      expect(research.allocations['population-recruitment']).toBeGreaterThan(research.allocations['advanced-weapons']);
+      const movedPoints = Object.keys(research.allocations).reduce((sum, branch) => (
+        sum + Math.max(0, research.allocations[branch as keyof typeof research.allocations]
+          - state.players[belgium].research.allocations[branch as keyof typeof research.allocations])
+      ), 0);
+      expect(movedPoints).toBeLessThanOrEqual(nationalAiAllocationStepLimitV2(
+        WORLD_CONTENT_V2.nations[belgium].iqScore,
+      ));
       expect(Object.values(research.allocations).reduce((sum, value) => sum + value, 0)).toBe(100);
-      expect(Object.values(research.allocations).every((value) => value >= 5)).toBe(true);
+      expect(Object.values(research.allocations).every((value) => value >= 0)).toBe(true);
     }
   });
 
@@ -157,12 +212,10 @@ describe('V2 national Super AI', () => {
     const india = allocations.get(nationIdV2('ind'))!;
     const burundi = allocations.get(nationIdV2('bdi'))!;
     const usa = allocations.get(nationIdV2('usa'))!;
-    expect(luxembourg['population-recruitment']).toBeGreaterThan(india['population-recruitment']);
-    expect(burundi['economy-science']).toBeGreaterThan(usa['economy-science']);
-    expect(new Set([luxembourg, india, burundi, usa].map((mix) => JSON.stringify(mix))).size).toBeGreaterThanOrEqual(3);
+    expect(new Set([luxembourg, india, burundi, usa].map((mix) => JSON.stringify(mix))).size).toBeGreaterThanOrEqual(2);
     for (const mix of [luxembourg, india, burundi, usa]) {
       expect(Object.values(mix).reduce((sum, value) => sum + value, 0)).toBe(100);
-      expect(Object.values(mix).every((value) => value >= 5)).toBe(true);
+      expect(Object.values(mix).every((value) => value >= 0)).toBe(true);
     }
   });
 
@@ -179,8 +232,8 @@ describe('V2 national Super AI', () => {
     const budgets = new Map(planAiCommandsV2(state, WORLD_CONTENT_V2)
       .filter((command) => command.type === 'set-budget-policy')
       .map((command) => [command.playerId, command.budget]));
-    expect(budgets.get(burundi)!.development).toBeGreaterThan(budgets.get(burundi)!.military);
-    expect(budgets.get(usa)!.military).toBeGreaterThan(budgets.get(usa)!.development);
+    expect(budgets.get(burundi)!.development).toBeGreaterThan(state.players[burundi].budget.development);
+    expect(budgets.get(usa)!.military).toBeGreaterThan(state.players[usa].budget.military);
     expect(budgets.get(burundi)).not.toEqual(budgets.get(usa));
   });
 
@@ -197,7 +250,7 @@ describe('V2 national Super AI', () => {
     expect(commands.some((command) => command.type === 'declare-war' && command.attackerId === human)).toBe(false);
   });
 
-  it('reassesses the player research portfolio four times as often as rival AI', () => {
+  it('reviews player and rival research with the same eight-week AI cadence', () => {
     const state = createWorldStateV2(711);
     const human = state.humanPlayerId;
     const rival = nationIdV2('nld');
@@ -209,7 +262,7 @@ describe('V2 national Super AI', () => {
     state.tick = 8;
     const commands = planAiCommandsV2(state, WORLD_CONTENT_V2);
     expect(commands.some((command) => command.type === 'set-research-allocations' && command.playerId === human)).toBe(true);
-    expect(commands.some((command) => command.type === 'set-research-allocations' && command.playerId === rival)).toBe(false);
+    expect(commands.some((command) => command.type === 'set-research-allocations' && command.playerId === rival)).toBe(true);
   });
 
   it('allows multiple simultaneous fronts and charges each one', () => {
@@ -529,6 +582,13 @@ describe('V2 dynamic containment coalition', () => {
     state.aiEscalation.globalThreat = 90;
     state.aiEscalation.lastFederationTick = 0;
     state.aiEscalation.coalitionMembers = [nationIdV2('lux'), nationIdV2('nld')];
+    const livingOwnersBefore = [...new Set(Object.values(state.territories)
+      .map((territory) => territory.owner))];
+    for (const [index, id] of livingOwnersBefore.entries()) {
+      state.players[id].trainedReserves = (index + 1) / 1_000;
+    }
+    const livingReservesBefore = livingOwnersBefore
+      .reduce((sum, id) => sum + state.players[id].trainedReserves, 0);
     const home = state.territories[state.players[human].capitalId];
     home.army.capacity = 2;
     home.army.manpower = 2;
@@ -547,6 +607,14 @@ describe('V2 dynamic containment coalition', () => {
       && selectTerritoriesOfV2(state, id).length >= 2
     ));
     expect(federation).toBeDefined();
+    const livingOwnersAfter = new Set(Object.values(state.territories)
+      .map((territory) => territory.owner));
+    const livingReservesAfter = [...livingOwnersAfter]
+      .reduce((sum, id) => sum + state.players[id].trainedReserves, 0);
+    const absorbedMembers = livingOwnersBefore.filter((id) => !livingOwnersAfter.has(id));
+    expect(absorbedMembers).toHaveLength(livingBefore - livingAfter);
+    expect(livingReservesAfter).toBeCloseTo(livingReservesBefore, 6);
+    for (const id of absorbedMembers) expect(state.players[id].trainedReserves).toBe(0);
     const firstFederationSize = selectTerritoriesOfV2(state, federation!).length;
     expect(firstFederationSize).toBe(2);
     expect(selectTerritoriesOfV2(state, federation!).every((territory) => territory.integration === 1)).toBe(true);

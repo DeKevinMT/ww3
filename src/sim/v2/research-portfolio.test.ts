@@ -147,10 +147,10 @@ describe('V2 six-program Development portfolio', () => {
     const at260 = totalBreakthroughs(state);
     expect(firstCompletion).toBeDefined();
     expect(firstCompletion).toBeGreaterThanOrEqual(30);
-    expect(firstCompletion).toBeLessThanOrEqual(104);
+    expect(firstCompletion).toBeLessThanOrEqual(130);
     expect(at52).toBeLessThanOrEqual(1);
-    // The learning-outcome IQ calibration keeps progress visible without
-    // restoring the old rich-country research acceleration.
+    // The shared IQ-scaled planner keeps progress visible without restoring a
+    // selected-country research acceleration.
     expect(at260).toBeGreaterThanOrEqual(2);
     expect(at260).toBeLessThanOrEqual(6);
   }, 15_000);
