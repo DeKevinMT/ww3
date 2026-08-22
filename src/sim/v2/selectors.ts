@@ -42,6 +42,14 @@ import {
   FOOD_STORAGE_MILLIONS_PER_KM2,
   FOOD_MAX_STOCK_WEEKS,
   FOOD_TARGET_WEEKS,
+  NATIONAL_IQ_ECONOMY_GROWTH_PER_POINT,
+  NATIONAL_IQ_GDP_PER_CAPITA_FLOOR,
+  NATIONAL_IQ_LOGISTICS_PER_POINT,
+  NATIONAL_IQ_POPULATION_GROWTH_PER_POINT,
+  NATIONAL_IQ_RESEARCH_PER_POINT,
+  NATIONAL_IQ_SCORE_MAX,
+  NATIONAL_IQ_SCORE_MIN,
+  NATIONAL_IQ_SCORE_NEUTRAL,
   EXTREME_CRISIS_DEMOBILIZATION_RATE,
   EXTREME_CRISIS_FOOD_COVERAGE,
   EXTREME_CRISIS_FOOD_RESERVE_WEEKS,
@@ -70,6 +78,8 @@ import {
   WAR_RECRUITMENT_ACCELERATION_COST_MULTIPLIER,
   WAR_RECRUITMENT_ACCELERATION_MULTIPLIER,
   WAR_ACCESS_OPERATION_MULTIPLIER,
+  WAR_FATIGUE_OPERATION_COST_MAX_BONUS,
+  WAR_FATIGUE_OPERATION_COST_PER_POINT,
   WAR_OPERATION_COST_PER_MILLION,
   WAR_OPERATION_REVENUE_SHARE,
   WAR_RECRUITMENT_THROUGHPUT_FACTOR,
@@ -78,7 +88,11 @@ import {
   diminishingResearchLevelV2,
   round,
 } from './balance';
-import { WORLD_CONTENT_V2, type WorldContentV2 } from './content';
+import {
+  WORLD_CONTENT_V2,
+  openingCombatQualityMultiplierV2,
+  type WorldContentV2,
+} from './content';
 import { calculateFiscalCapacityV2 } from './fiscal';
 import { localArmyBaseQualityV2, mixArmyBaseQualityV2, nationArmyBaseQualityV2 } from './armyQuality';
 import {
@@ -241,6 +255,49 @@ export function selectMilitaryBaseRatingsV2(
   snapshot: MilitaryBaseSnapshotV2 = createMilitaryBaseSnapshotV2(state, content),
 ): MilitaryBaseRatingsV2 {
   return snapshot.byNation.get(playerId) ?? nationArmyBaseQualityV2(content, playerId);
+}
+
+export interface NationalIqViewV2 {
+  score: number;
+  source: 'gdp-institution-gameplay-proxy';
+  combatQualityMultiplier: number;
+  economyGrowthMultiplier: number;
+  researchMultiplier: number;
+  logisticsMultiplier: number;
+  populationGrowthMultiplier: number;
+}
+
+/**
+ * One bounded, inspectable quality view shared by every IQ-influenced system.
+ * The score is a gameplay proxy, not a scientific real-world IQ measurement.
+ */
+export function selectNationalIqViewV2(
+  content: WorldContentV2,
+  playerId: PlayerId,
+): NationalIqViewV2 {
+  const definition = content.nations[playerId];
+  const score = clamp(
+    definition?.iqScore ?? NATIONAL_IQ_SCORE_NEUTRAL,
+    NATIONAL_IQ_SCORE_MIN,
+    NATIONAL_IQ_SCORE_MAX,
+  );
+  const delta = score - NATIONAL_IQ_SCORE_NEUTRAL;
+  const gdpPerCapita = definition
+    ? definition.real.gdp / Math.max(0.000001, definition.real.population) * 1_000
+    : NATIONAL_IQ_GDP_PER_CAPITA_FLOOR;
+  return {
+    score: round(score, 3),
+    source: 'gdp-institution-gameplay-proxy',
+    combatQualityMultiplier: definition
+      ? openingCombatQualityMultiplierV2(gdpPerCapita, score) : 1,
+    economyGrowthMultiplier: round(1 + delta * NATIONAL_IQ_ECONOMY_GROWTH_PER_POINT, 9),
+    researchMultiplier: round(1 + delta * NATIONAL_IQ_RESEARCH_PER_POINT, 9),
+    logisticsMultiplier: round(1 + delta * NATIONAL_IQ_LOGISTICS_PER_POINT, 9),
+    populationGrowthMultiplier: round(
+      1 - delta * NATIONAL_IQ_POPULATION_GROWTH_PER_POINT,
+      9,
+    ),
+  };
 }
 
 export function selectNationStateV2(state: WorldStateV2, playerId: PlayerId): NationStateV2 | undefined {
@@ -1000,18 +1057,19 @@ export function selectResearchOutputV2(
   const base = 0.22 + 0.08 * Math.log2(1 + Math.max(0, finance.research));
   return round(base * Math.sqrt(clamp(fundingRatio, 0, 1.25))
     * (1 + 0.01 * nation.research.effectLevels['research-speed'])
+    * selectResearchInstitutionalCapacityV2(content, playerId)
     * (catchUpOverride ?? selectResearchCatchUpFactorV2(state, content, playerId))
     * nationalAiEfficiencyV2(playerId === state.humanPlayerId)
     * (1 - finance.warResearchPenalty)
     * (0.55 + 0.45 * clamp(nation.foodSecurity, 0, 1)));
 }
 
-/** Bounded real-world science/industry identity used by ordinary R&D. */
+/** Bounded IQ gameplay-proxy effect used by ordinary R&D. */
 export function selectResearchInstitutionalCapacityV2(
-  _content: WorldContentV2,
-  _playerId: PlayerId,
+  content: WorldContentV2,
+  playerId: PlayerId,
 ): number {
-  return 1;
+  return selectNationalIqViewV2(content, playerId).researchMultiplier;
 }
 
 export function selectNationalAiPlanV2(
@@ -1064,7 +1122,7 @@ function economicGrowthRatesV2(
   const nation = state.players[playerId]!;
   const annualInvestmentShare = productiveInvestment * 52
     / Math.max(0.10, economy.controlledOutput);
-  const investment = ECONOMY_INVESTMENT_GROWTH_MULTIPLIER
+  const rawInvestment = ECONOMY_INVESTMENT_GROWTH_MULTIPLIER
     * clamp(annualInvestmentShare * aiEfficiency, 0, 0.12);
   const researchImpact = selectResearchEffectImpactV2(
     state,
@@ -1072,14 +1130,17 @@ function economicGrowthRatesV2(
     playerId,
     'economy-growth',
   );
-  const research = Math.min(0.012,
+  const rawResearch = Math.min(0.012,
     ECONOMY_RESEARCH_GROWTH_PER_LEVEL
       * nation.research.effectLevels['economy-growth'] * researchImpact);
+  const iqGrowthMultiplier = selectNationalIqViewV2(content, playerId).economyGrowthMultiplier;
+  const base = ECONOMY_BASE_ANNUAL_GROWTH * iqGrowthMultiplier;
+  const investment = rawInvestment * iqGrowthMultiplier;
+  const research = rawResearch * iqGrowthMultiplier;
   const food = foodCoverage >= 0.98
     ? ECONOMY_FOOD_SURPLUS_MAX_BONUS * clamp((foodCoverage - 0.98) / 0.02, 0, 1)
     : -ECONOMY_FOOD_SHORTAGE_MAX_DRAG
       * clamp((0.90 - foodCoverage) / 0.50, 0, 1) ** 1.25;
-  const base = ECONOMY_BASE_ANNUAL_GROWTH;
   return {
     annual: clamp(base + investment + research + food - warGrowthDrag,
       ECONOMY_ANNUAL_GROWTH_MIN, ECONOMY_ANNUAL_GROWTH_MAX),
@@ -1305,10 +1366,15 @@ export function selectWeeklyFinanceBreakdownV2(
       fronts + WAR_ACCESS_OPERATION_MULTIPLIER[operation.access]
     ), 0);
   }, 0);
+  const warFatigueCostMultiplier = 1 + clamp(
+    nation.warFatigue * WAR_FATIGUE_OPERATION_COST_PER_POINT,
+    0,
+    WAR_FATIGUE_OPERATION_COST_MAX_BONUS,
+  );
   const warOperations = atWar ? frontLoad * (
     economy.weeklyRevenue * WAR_OPERATION_REVENUE_SHARE
     + army.deployed * WAR_OPERATION_COST_PER_MILLION
-  ) : 0;
+  ) * warFatigueCostMultiplier : 0;
   const weeklyRealDefence = Math.max(0.001, (content.nations[playerId]?.real.defenceSpending ?? 0.052) / 52);
   const initialArmy = Math.max(0.000001, initialNationArmyCapacityBenchmarkV2(content, playerId));
   const weaponsUpkeep = 1 + 0.005 * nation.research.effectLevels.attack;
@@ -1671,7 +1737,14 @@ export function selectPopulationDynamicsV2(
   const supportedNet = researchedNet
     + 0.0005 * Math.sqrt(funds * nationalAiEfficiencyV2(playerId === state.humanPlayerId)
       / Math.max(0.01, population));
-  const annualBirthMigrationRate = Math.max(0, baselineDeathRate + supportedNet);
+  const iqPopulationMultiplier = selectNationalIqViewV2(
+    content,
+    playerId,
+  ).populationGrowthMultiplier;
+  const annualBirthMigrationRate = Math.max(
+    0,
+    (baselineDeathRate + supportedNet) * iqPopulationMultiplier,
+  );
   const medicalReduction = 0.20 * nation.research.effectLevels.recovery
     / (nation.research.effectLevels.recovery + 46.67);
   const foodCrisis = clamp((0.90 - foodSecurity) / 0.50, 0, 1);

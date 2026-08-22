@@ -119,7 +119,8 @@ describe('V2 wartime economy pressure', () => {
     expect(transition.outputPenalty).toBeCloseTo(0.05, 6);
     expect(transition.researchPenalty).toBeCloseTo(0.15, 6);
 
-    for (let week = 0; week < 32; week += 1) {
+    const recoveryWeeks = Math.ceil(state.players[nationIdV2('bel')].warFatigue / 0.25);
+    for (let week = 0; week < recoveryWeeks; week += 1) {
       const plans = createFinancePlansV2(state, WORLD_CONTENT_V2);
       processFinanceMilitaryV2(state, WORLD_CONTENT_V2, plans);
       state.tick += 1;
@@ -127,5 +128,45 @@ describe('V2 wartime economy pressure', () => {
     expect(state.players[nationIdV2('bel')].warFatigue).toBe(0);
     expect(selectWarPressureV2(state, nationIdV2('bel')).outputPenalty).toBe(0);
     expect(selectWarPressureV2(state, nationIdV2('bel')).researchPenalty).toBe(0);
+  });
+
+  it('stacks a fresh recovery load after every campaign instead of reusing one floor', () => {
+    const state = createWorldStateV2(882);
+    const belgium = nationIdV2('bel');
+    state.wars = [];
+    state.truces = [];
+    state.offers = [];
+    state.tick = 52;
+
+    const endCampaign = (index: number, defender: 'nld' | 'lux'): void => {
+      addFront(state, index, defender);
+      const war = state.wars.find((candidate) => candidate.id === `war-pressure-${index}`)!;
+      war.startedTick = 0;
+      const defenderId = nationIdV2(defender);
+      state.players[defenderId]!.treasury = 1_000;
+      expect(requestCeasefireV2(state, WORLD_CONTENT_V2, war.id, defenderId).accepted).toBe(true);
+      const offer = state.offers.find((candidate) => candidate.warId === war.id && candidate.status === 'pending')!;
+      expect(respondToOfferV2(state, WORLD_CONTENT_V2, offer.id, true).accepted).toBe(true);
+    };
+
+    endCampaign(1, 'nld');
+    expect(state.players[belgium]!.warFatigue).toBe(8);
+    endCampaign(2, 'lux');
+    expect(state.players[belgium]!.warFatigue).toBe(16);
+  });
+
+  it('makes repeat-war operations progressively more expensive with a bounded surcharge', () => {
+    const belgium = nationIdV2('bel');
+    const operationsAt = (fatigue: number): number => {
+      const state = pressureState(1);
+      state.players[belgium]!.warFatigue = fatigue;
+      return selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, belgium).warOperations;
+    };
+
+    const fresh = operationsAt(0);
+    expect(operationsAt(8) / fresh).toBeCloseTo(1.20, 4);
+    expect(operationsAt(16) / fresh).toBeCloseTo(1.40, 4);
+    expect(operationsAt(20) / fresh).toBeCloseTo(1.50, 4);
+    expect(operationsAt(80)).toBeCloseTo(operationsAt(20), 6);
   });
 });

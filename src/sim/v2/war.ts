@@ -64,6 +64,7 @@ import {
   selectEffectiveDefenseV2,
   selectIsEliminatedV2,
   selectArmyStrengthV2,
+  selectNationalIqViewV2,
   selectNationalEconomyV2,
   selectTerritoriesOfV2,
   selectTerritoryPowerV2,
@@ -1335,9 +1336,13 @@ function endWarV2(
   for (const playerId of [war.attackerId, war.defenderId]) {
     const stillAtWar = state.wars.some((candidate) => candidate.attackerId === playerId || candidate.defenderId === playerId);
     if (!stillAtWar && state.players[playerId]) {
-      state.players[playerId]!.warFatigue = round(Math.max(
-        POST_WAR_TRANSITION_FATIGUE,
-        state.players[playerId]!.warFatigue,
+      // Every completed campaign leaves another recovery load. The old floor
+      // made the second and later conquest effectively free whenever the
+      // first transition had not yet recovered.
+      state.players[playerId]!.warFatigue = round(clamp(
+        state.players[playerId]!.warFatigue + POST_WAR_TRANSITION_FATIGUE,
+        0,
+        100,
       ));
     }
   }
@@ -1452,13 +1457,18 @@ export function logisticsThroughputShareV2(
   deployedManpower: number,
   supplyLevel: number,
   superAi: boolean,
+  iqLogisticsMultiplier = 1,
 ): number {
   // A fixed percentage lets giant empires teleport implausibly huge armies.
   // This power curve keeps absolute throughput growing with army size while
   // making the movable share diminish sharply as the empire army grows.
   const scale = (0.25 / Math.max(0.005, deployedManpower)) ** 0.32;
   const research = 1 + 0.015 * diminishingResearchLevelV2(supplyLevel);
-  return clamp(0.035 * scale * research * (superAi ? 1.05 : 1), 0.01, 0.12);
+  return clamp(
+    0.035 * scale * research * (superAi ? 1.05 : 1) * clamp(iqLogisticsMultiplier, 0.90, 1.10),
+    0.01,
+    0.12,
+  );
 }
 
 function captureGuardActiveV2(
@@ -1620,6 +1630,7 @@ export function redistributeArmiesV2(state: WorldStateV2, content: WorldContentV
         totalManpowerBefore,
         supplyLevel,
         playerId === state.humanPlayerId,
+        selectNationalIqViewV2(content, playerId).logisticsMultiplier,
       );
       const outgoing = new Map(weighted.map((item) => [
         item.id,

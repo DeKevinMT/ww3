@@ -44,16 +44,18 @@ describe('V2 real-world military power calibration', () => {
     const ranking = selectGlobalRankingV2(state, WORLD_CONTENT_V2);
     const rankedIds = ranking.map((entry) => entry.player.id);
 
-    expect(rankedIds.slice(0, 4)).toEqual([
+    expect(rankedIds.slice(0, 10)).toEqual([
       nationIdV2('usa'),
       nationIdV2('chn'),
       nationIdV2('rus'),
       nationIdV2('ind'),
+      nationIdV2('deu'),
+      nationIdV2('gbr'),
+      nationIdV2('fra'),
+      nationIdV2('jpn'),
+      nationIdV2('sau'),
+      nationIdV2('ita'),
     ]);
-    expect(new Set(rankedIds.slice(0, 15))).toEqual(new Set([
-      'usa', 'chn', 'rus', 'ind', 'deu', 'gbr', 'fra', 'jpn',
-      'sau', 'ita', 'kor', 'esp', 'ukr', 'pol', 'bra',
-    ].map(nationIdV2)));
     expect(ranking[0]!.score).toBeLessThanOrEqual(selectCurrentPowerV2(state, WORLD_CONTENT_V2, nationIdV2('usa')) * 1.10 + 1e-6);
   });
 

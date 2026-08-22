@@ -9,6 +9,7 @@ import {
   selectFoodDemandV2,
   selectFoodLandCapacityV2,
   selectFoodStorageCapacityV2,
+  selectNationalIqViewV2,
   selectPopulationDynamicsV2,
   selectWeeklyFinanceBreakdownV2,
 } from './selectors';
@@ -115,7 +116,16 @@ describe('V2 automated food security', () => {
 
     state.players[nigeria].foodSecurity = 1;
     const fed = selectPopulationDynamicsV2(state, WORLD_CONTENT_V2, nigeria, 0);
-    expect(fed.annualNetRate).toBeCloseTo(baseline.populationGrowthRate / 100, 5);
+    const baselineDeathRate = baseline.deathRatePerThousand / 1_000;
+    const baselineNetRate = baseline.populationGrowthRate / 100;
+    const iqPopulationMultiplier = selectNationalIqViewV2(
+      WORLD_CONTENT_V2,
+      nigeria,
+    ).populationGrowthMultiplier;
+    expect(fed.annualNetRate).toBeCloseTo(
+      (baselineDeathRate + baselineNetRate) * iqPopulationMultiplier - baselineDeathRate,
+      5,
+    );
   });
 
   it('makes more land materially increase domestic food capacity', () => {

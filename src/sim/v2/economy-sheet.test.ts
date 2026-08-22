@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createWorldStateV2 } from './bootstrap';
 import { WORLD_CONTENT_V2 } from './content';
 import {
+  selectControlledPopulationV2,
   selectEconomicOutputLedgerV2,
   selectNationalEconomyV2,
   selectWeeklyFinanceBreakdownV2,
@@ -76,6 +77,28 @@ describe('V2 economic truth sheet', () => {
     expect(finance.net).toBeCloseTo(
       finance.revenue + finance.ceasefireIncome - finance.expenses,
       5,
+    );
+  });
+
+  it('unlocks only ten percent of conquered residents while retaining the gross local population', () => {
+    const state = createWorldStateV2(8_203);
+    const belgium = nationIdV2('bel');
+    const luxembourg = territoryIdV2('lux');
+    const homePopulation = state.territories[territoryIdV2('bel')]!.population;
+    const residentPopulation = state.territories[luxembourg]!.population;
+
+    state.territories[luxembourg]!.owner = belgium;
+    state.territories[luxembourg]!.integration = 0.10;
+
+    const ledger = selectEconomicOutputLedgerV2(state, WORLD_CONTENT_V2, belgium);
+    expect(ledger.population).toBeCloseTo(homePopulation + residentPopulation, 6);
+    expect(selectControlledPopulationV2(state, belgium)).toBeCloseTo(
+      homePopulation + residentPopulation * 0.10,
+      6,
+    );
+    expect(ledger.productivePopulation).toBeCloseTo(
+      selectControlledPopulationV2(state, belgium),
+      6,
     );
   });
 });

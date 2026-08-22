@@ -7,7 +7,7 @@ import {
 } from './capacity';
 import { WORLD_CONTENT_V2 } from './content';
 import { assertInvariantsV2 } from './invariants';
-import { selectTerritoriesOfV2 } from './selectors';
+import { selectNationalIqViewV2, selectTerritoriesOfV2 } from './selectors';
 import { nationIdV2, type FrontOperationV2, type TerritoryId } from './types';
 import { logisticsThroughputShareV2, redistributeArmiesV2 } from './war';
 
@@ -80,7 +80,12 @@ describe('route-aware empire logistics', () => {
     expect(firstWeek.some((move) => move.sourceId === capitalId
       && move.targetId === secondId && move.manpower > 0)).toBe(false);
     expect(firstWeekManpowerMoved).toBeLessThanOrEqual(
-      manpowerBefore * logisticsThroughputShareV2(manpowerBefore, 20, true) + 1e-9,
+      manpowerBefore * logisticsThroughputShareV2(
+        manpowerBefore,
+        20,
+        true,
+        selectNationalIqViewV2(WORLD_CONTENT_V2, bel).logisticsMultiplier,
+      ) + 1e-9,
     );
     expect(firstWeek.every((move) => !('veteranManpower' in move))).toBe(true);
     expect(firstWeek.every((move) => move.capacity === 0)).toBe(true);
@@ -128,6 +133,7 @@ describe('route-aware empire logistics', () => {
         overshootEmpireManpower,
         state.players[bel]!.research.effectLevels.supply,
         bel === state.humanPlayerId,
+        selectNationalIqViewV2(WORLD_CONTENT_V2, bel).logisticsMultiplier,
       ) + 1e-9,
     );
     expect(frontier.army.manpower).toBeGreaterThan(frontierSupportCeiling);

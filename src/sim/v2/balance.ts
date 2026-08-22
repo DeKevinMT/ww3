@@ -124,6 +124,29 @@ export const FOOD_PRICE_LEVEL_FLOOR = 0.75;
 export const FOOD_PRICE_LEVEL_PER_WEALTH_THOUSAND = 0.03;
 export const FOOD_PRICE_LEVEL_WEALTH_CAP = 75;
 export const FOOD_SHORTAGE_POPULATION_LOSS = 0.0008;
+/**
+ * National IQ is a bounded gameplay proxy derived from existing economic and
+ * institutional content. It is not a scientific psychometric claim.
+ */
+export const NATIONAL_IQ_SCORE_MIN = 80;
+export const NATIONAL_IQ_SCORE_NEUTRAL = 100;
+export const NATIONAL_IQ_SCORE_MAX = 108;
+export const NATIONAL_IQ_GDP_PER_CAPITA_FLOOR = 500;
+export const NATIONAL_IQ_GDP_PER_CAPITA_CEILING = 100_000;
+export const NATIONAL_IQ_INSTITUTIONAL_CAPACITY_FLOOR = 0.2;
+export const NATIONAL_IQ_INSTITUTIONAL_CAPACITY_CEILING = 18;
+export const NATIONAL_IQ_PROXY_GDP_WEIGHT = 0.75;
+export const NATIONAL_IQ_PROXY_INSTITUTION_WEIGHT = 0.25;
+/** GDP per capita remains the primary opening-force quality input; IQ refines it. */
+export const NATIONAL_QUALITY_GDP_WEIGHT = 0.60;
+export const NATIONAL_QUALITY_IQ_WEIGHT = 0.40;
+/** Total opening combat-quality spread around the neutral readiness baseline. */
+export const NATIONAL_QUALITY_COMBAT_SPAN = 0.06;
+/** Bounded per-IQ-point effects used by the live national systems. */
+export const NATIONAL_IQ_ECONOMY_GROWTH_PER_POINT = 0.002;
+export const NATIONAL_IQ_RESEARCH_PER_POINT = 0.003;
+export const NATIONAL_IQ_LOGISTICS_PER_POINT = 0.0025;
+export const NATIONAL_IQ_POPULATION_GROWTH_PER_POINT = 0.0025;
 /** A healthy economy grows slowly by itself; investment, research and food move the live rate. */
 export const ECONOMY_BASE_ANNUAL_GROWTH = 0.003;
 /** Productive investment matters, but normal countries no longer compound at arcade-like rates. */
@@ -163,6 +186,9 @@ export const WAR_MOBILIZATION_COST_FACTOR = 0.35;
 /** Active fronts are a real surcharge outside the ordinary national budget. */
 export const WAR_OPERATION_REVENUE_SHARE = 0.08;
 export const WAR_OPERATION_COST_PER_MILLION = 0.08;
+/** Repeat campaigns strain the same treasury and logistics network; the surcharge is bounded at +50%. */
+export const WAR_FATIGUE_OPERATION_COST_PER_POINT = 0.025;
+export const WAR_FATIGUE_OPERATION_COST_MAX_BONUS = 0.50;
 export const WAR_ACCESS_OPERATION_MULTIPLIER = {
   land: 1,
   naval: 1.35,

@@ -28,6 +28,7 @@ import {
 import {
   createPowerSnapshotV2,
   selectArmyStrengthV2,
+  selectControlledPopulationV2,
   selectFoodDemandV2,
   selectIsEliminatedV2,
   selectNationalEconomyV2,
@@ -255,7 +256,12 @@ function aiBudgetTargetV2(
   const ownResearch = Object.values(player.research.breakthroughs).reduce((a, b) => a + b, 0);
   const nation = content.nations[playerId]!;
   const researchStrength = clamp(nation.real.researchCapacity / 30, 0, 1);
-  const poverty = clamp((20 - economy.controlledOutput / Math.max(0.05, economy.population)) / 18, 0, 1);
+  // Conquered residents only become usable national capacity as integration
+  // advances. AI planning must use that same population share as taxation,
+  // army capacity and strategic power instead of gaining every resident on
+  // the capture tick.
+  const controlledPopulation = Math.max(0.05, selectControlledPopulationV2(state, playerId));
+  const poverty = clamp((20 - economy.controlledOutput / controlledPopulation) / 18, 0, 1);
   const debtStress = clamp(-treasuryWeeks / 8, 0, 1);
   const researchGap = clamp((leaderResearch - ownResearch) / 10, 0, 1);
   const populationDecline = clamp(
@@ -325,7 +331,7 @@ export function selectAiResearchAllocationsV2(
   }, 0);
   const ownResearch = Object.values(player.research.breakthroughs).reduce((a, b) => a + b, 0);
   const leaderResearch = powers.leaderBreakthroughs;
-  const population = Math.max(0.05, economy.population);
+  const population = Math.max(0.05, selectControlledPopulationV2(state, playerId));
   const outputPerPerson = economy.controlledOutput / population;
   const smallPopulation = clamp(Math.log(80 / population) / Math.log(80), 0, 1);
   const populationDecline = clamp(
