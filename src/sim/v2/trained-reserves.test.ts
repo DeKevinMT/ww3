@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { nextRandom } from '../../game/random';
 import {
+  TRAINED_RESERVE_DEPLOYMENT_THROUGHPUT_MULTIPLIER,
   TRAINED_RESERVE_TRAINING_COST_MULTIPLIER,
   TRAINED_RESERVE_WARTIME_TRAINING_FACTOR,
 } from './balance';
@@ -83,7 +83,7 @@ describe('finite trained reserves', () => {
     expect(full.trainedReservesAfter).toBe(full.reserveTraining);
   });
 
-  it('caps training at twice live active capacity without deleting an over-cap legacy pool', () => {
+  it('caps training at one live active capacity without deleting an over-cap legacy pool', () => {
     const state = fundedState(71_002);
     setActiveFill(state, belgium, 1);
     const capacity = selectTrainedReserveCapacityV2(state, belgium);
@@ -140,12 +140,18 @@ describe('finite trained reserves', () => {
     addWar(state);
     const before = selectTotalManpowerV2(state, belgium).deployed;
     const reserveBefore = state.players[belgium]!.trainedReserves;
+    const trainingPipeline = selectRecruitmentTrainingPipelineV2(state, WORLD_CONTENT_V2, belgium);
     const finance = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, belgium);
     const projection = projectFinanceManpowerPhaseV2(state, WORLD_CONTENT_V2, belgium, finance);
 
     expect(finance.passiveRecruitment).toBe(0);
     expect(finance.acceleratedRecruitment).toBe(0);
     expect(finance.reserveDeployment).toBeGreaterThan(finance.reserveTraining);
+    expect(finance.reserveDeployment).toBeGreaterThan(
+      trainingPipeline * TRAINED_RESERVE_DEPLOYMENT_THROUGHPUT_MULTIPLIER,
+    );
+    expect(finance.fundedArmyUpkeep + finance.recruitmentAccelerationCost
+      + finance.reserveTrainingCost + finance.standingOperations).toBeCloseTo(finance.military, 5);
     expect(projection.recruited).toBeCloseTo(projection.reserveDeployed, 6);
     expect(projection.deployedAfterFinance + projection.trainedReservesAfter).toBeCloseTo(
       before + reserveBefore + projection.reserveTrained,
@@ -231,7 +237,7 @@ describe('finite trained reserves', () => {
     });
   });
 
-  it('lets selected-country APEX make the same peacetime rebuild decision as a rival', () => {
+  it('keeps selected-country APEX and rivals on gradual peacetime recruitment', () => {
     const base = fundedState(71_010);
     base.tick = 104;
     base.wars = [];
@@ -241,21 +247,15 @@ describe('finite trained reserves', () => {
     for (const id of WORLD_CONTENT_V2.nationIds) setActiveFill(base, id, 1);
     setActiveFill(base, netherlands, 0.05);
 
-    let favorableRngState = 1;
-    while (true) {
-      const probe = { rngState: favorableRngState };
-      if (nextRandom(probe) < 0.025) break;
-      favorableRngState += 1;
-    }
     const asRival = structuredClone(base);
     const asSelected = structuredClone(base);
     asRival.humanPlayerId = belgium;
     asSelected.humanPlayerId = netherlands;
-    asRival.rngState = favorableRngState;
-    asSelected.rngState = favorableRngState;
 
     const expected = { type: 'rapid-recruitment', playerId: netherlands } as const;
-    expect(planAiCommandsV2(asRival, WORLD_CONTENT_V2)).toContainEqual(expected);
-    expect(planAiCommandsV2(asSelected, WORLD_CONTENT_V2)).toContainEqual(expected);
+    expect(planAiCommandsV2(asRival, WORLD_CONTENT_V2)).not.toContainEqual(expected);
+    expect(planAiCommandsV2(asSelected, WORLD_CONTENT_V2)).not.toContainEqual(expected);
+    const finance = selectWeeklyFinanceBreakdownV2(asRival, WORLD_CONTENT_V2, netherlands);
+    expect(finance.passiveRecruitment + finance.acceleratedRecruitment).toBeGreaterThan(0);
   });
 });

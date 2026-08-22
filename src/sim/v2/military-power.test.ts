@@ -51,15 +51,21 @@ describe('V2 real-world military power calibration', () => {
       nationIdV2('chn'),
       nationIdV2('deu'),
       nationIdV2('jpn'),
-      nationIdV2('ind'),
       nationIdV2('gbr'),
       nationIdV2('fra'),
+      nationIdV2('ind'),
       nationIdV2('rus'),
       nationIdV2('ita'),
       nationIdV2('can'),
     ]);
     expect(ranking[0]!.score).toBe(
       selectStrategicScoreV2(state, WORLD_CONTENT_V2, ranking[0]!.player.id),
+    );
+    expect(ranking[0]!.combatPower).toBe(
+      selectCurrentPowerV2(state, WORLD_CONTENT_V2, ranking[0]!.player.id),
+    );
+    expect(ranking[0]!.economicOutput).toBe(
+      selectNationalEconomyV2(state, WORLD_CONTENT_V2, ranking[0]!.player.id).controlledOutput,
     );
   });
 

@@ -48,9 +48,11 @@ export const EXTREME_CRISIS_DEMOBILIZATION_RATE = 0.0005;
 /** Normal training is slow and predictable; Training research improves the pipeline. */
 export const PASSIVE_RECRUITMENT_CAPACITY_RATE = 0.001;
 export const PASSIVE_RECRUITMENT_TRAINING_BONUS = 0.02;
-/** A finite trained pool: at most twice live active capacity, built only after the peacetime army is ready. */
-export const TRAINED_RESERVE_CAPACITY_MULTIPLIER = 2;
+/** A finite trained pool: at most one full active army, built only after the peacetime army is ready. */
+export const TRAINED_RESERVE_CAPACITY_MULTIPLIER = 1;
 export const TRAINED_RESERVE_ACTIVE_READY_RATIO = 0.999999;
+/** Existing trained soldiers mobilise faster than the pipeline can train fresh replacements. */
+export const TRAINED_RESERVE_DEPLOYMENT_THROUGHPUT_MULTIPLIER = 3;
 /** War keeps only a paid 5% training trickle while normal replacement draw remains much faster. */
 export const TRAINED_RESERVE_WARTIME_TRAINING_FACTOR = 0.05;
 export const TRAINED_RESERVE_TRAINING_COST_MULTIPLIER = 1.25;
@@ -89,9 +91,9 @@ export const COMBAT_POWER_RATIO_EXPONENT = 1;
 /**
  * Converts effective opposing combat pressure into real manpower damage.
  * Every soldier present contributes; the former per-pulse casualty ceiling is
- * deliberately gone. At 0.4% this is one quarter of the previous baseline.
+ * deliberately gone. At 0.8% this is half of the previous baseline.
  */
-export const COMBAT_DAMAGE_EFFECTIVENESS = 0.004;
+export const COMBAT_DAMAGE_EFFECTIVENESS = 0.008;
 /** Front-planning threshold for viability and initiative reassessment; it never adds casualties. */
 export const COMBAT_ROUTE_STRENGTH_RATIO = 0.05;
 /** Defensive research saturates at +20%; level 20 reaches +10%. */
@@ -171,6 +173,21 @@ export const NATIONAL_QUALITY_GDP_WEIGHT = 0.60;
 export const NATIONAL_QUALITY_IQ_WEIGHT = 0.40;
 /** Total opening combat-quality spread around the neutral readiness baseline. */
 export const NATIONAL_QUALITY_COMBAT_SPAN = 0.06;
+/**
+ * Live national combat systems make prosperity and IQ materially important on
+ * top of the local force quality carried by soldiers. The full 1.0 span gives
+ * the poorest/lowest-IQ and richest/highest-IQ systems 0.5x and 1.5x quality.
+ */
+export const NATIONAL_COMBAT_SYSTEM_QUALITY_SPAN = 1;
+/** A higher ceiling leaves room for already-rich countries to keep modernising. */
+export const NATIONAL_COMBAT_GDP_PER_CAPITA_FLOOR = 500;
+export const NATIONAL_COMBAT_GDP_PER_CAPITA_CEILING = 250_000;
+/** IQ changes how efficiently completed research becomes battlefield capability. */
+export const NATIONAL_COMBAT_RESEARCH_CONVERSION_MIN = 0.75;
+export const NATIONAL_COMBAT_RESEARCH_CONVERSION_MAX = 1.25;
+/** Economy & Science modernises both ATK and DEF with diminishing returns. */
+export const NATIONAL_COMBAT_ECONOMY_RESEARCH_MAX_BONUS = 0.30;
+export const NATIONAL_COMBAT_ECONOMY_RESEARCH_HALF_SATURATION = 25;
 /** Bounded per-IQ-point effects used by the live national systems. */
 export const NATIONAL_IQ_ECONOMY_GROWTH_PER_POINT = 0.002;
 export const NATIONAL_IQ_RESEARCH_PER_POINT = 0.003;
@@ -289,11 +306,21 @@ export const NATIONAL_AI_ALLOCATION_STEP_MAX = 4;
 /** Small, bounded execution gain or loss per point around IQ 100. */
 export const NATIONAL_AI_EFFICIENCY_PER_IQ_POINT = 0.0025;
 /** Shared cash-runway policy; selecting a country grants no reserve advantage. */
-export const NATIONAL_AI_PEACE_RESERVE_WEEKS = 5;
+export const NATIONAL_AI_PEACE_RESERVE_WEEKS = 8;
 /** Universal public administration and operating burden: exactly 20% of ordinary tax revenue. */
 export const BASE_OPERATING_COST_TAX_REVENUE_SHARE = 0.20;
-export const NATIONAL_AI_WAR_BASE_RUNWAY_WEEKS = 4;
-export const NATIONAL_AI_WAR_FRONT_RUNWAY_WEEKS = 1.5;
+export const NATIONAL_AI_WAR_BASE_RUNWAY_WEEKS = 6;
+export const NATIONAL_AI_WAR_FRONT_RUNWAY_WEEKS = 2;
+/** Better national decision quality builds a slightly deeper emergency buffer. */
+export const NATIONAL_AI_RESERVE_IQ_MULTIPLIER_MIN = 0.90;
+export const NATIONAL_AI_RESERVE_IQ_MULTIPLIER_MAX = 1.10;
+/** Uncommitted ordinary cashflow is retained instead of feeding one-off AI purchases. */
+export const NATIONAL_AI_PEACE_FREE_CASHFLOW_SHARE_MIN = 0.12;
+export const NATIONAL_AI_PEACE_FREE_CASHFLOW_SHARE_MAX = 0.16;
+export const NATIONAL_AI_WAR_FREE_CASHFLOW_SHARE_MIN = 0.14;
+export const NATIONAL_AI_WAR_FREE_CASHFLOW_SHARE_MAX = 0.18;
+/** Even a fully funded peacetime reserve keeps a small continuing emergency contribution. */
+export const NATIONAL_AI_FUNDED_FREE_CASHFLOW_SHARE = 0.05;
 
 /** A conquest exposes ten percent of its surviving potential immediately. */
 export const CONQUEST_INITIAL_INTEGRATION_SHARE = 0.10;

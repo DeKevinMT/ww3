@@ -78,7 +78,10 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
     || coalitionMembers.join('|') !== [...coalitionMembers].sort((a, b) => a.localeCompare(b)).join('|')) {
     errors.push('AI coalition membership is invalid.');
   }
-  for (const id of content.nationIds) if (!state.players[id]) errors.push(`Missing nation state: ${id}.`);
+  const humanNationExists = Boolean(state.players[state.humanPlayerId]);
+  if (!humanNationExists && (!state.gameOver || !state.winnerId || !state.players[state.winnerId])) {
+    errors.push('Human nation state is missing outside a completed absorption defeat.');
+  }
   for (const id of content.territoryIds) if (!state.territories[id]) errors.push(`Missing territory state: ${id}.`);
   for (const id of playerIds) {
     const nation = state.players[id]!;
@@ -174,6 +177,38 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
     } else if (territory.coreOwner !== territory.owner || territory.integration !== 1) {
       errors.push(`Territory ${id} has unfinished integration without a program.`);
     }
+  }
+  const referencedNations = new Set<PlayerId>();
+  if (humanNationExists) referencedNations.add(state.humanPlayerId);
+  for (const territory of Object.values(state.territories)) {
+    referencedNations.add(territory.owner);
+    referencedNations.add(territory.coreOwner);
+    if (territory.control) referencedNations.add(territory.control.controller);
+    if (territory.integrationProgram) {
+      referencedNations.add(territory.integrationProgram.fromOwnerId);
+      referencedNations.add(territory.integrationProgram.fromCoreOwnerId);
+      referencedNations.add(territory.integrationProgram.toOwnerId);
+    }
+  }
+  for (const war of state.wars) {
+    referencedNations.add(war.attackerId);
+    referencedNations.add(war.defenderId);
+  }
+  for (const truce of state.truces) {
+    referencedNations.add(truce.leftId);
+    referencedNations.add(truce.rightId);
+  }
+  for (const offer of state.offers) {
+    referencedNations.add(offer.fromId);
+    referencedNations.add(offer.toId);
+  }
+  for (const obligation of state.ceasefireObligations) {
+    referencedNations.add(obligation.payerId);
+    referencedNations.add(obligation.payeeId);
+  }
+  for (const memberId of state.aiEscalation.coalitionMembers) referencedNations.add(memberId);
+  for (const id of referencedNations) {
+    if (!state.players[id]) errors.push(`Missing referenced nation state: ${id}.`);
   }
   const warPairs = new Set<string>();
   for (const war of state.wars) {

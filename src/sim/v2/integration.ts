@@ -9,6 +9,7 @@ import {
 } from './balance';
 import type { WorldContentV2 } from './content';
 import { addWorldEventV2 } from './events';
+import { invalidateNationIndexV2 } from './selectors';
 import {
   territoryIdV2,
   type PlayerId,
@@ -28,8 +29,10 @@ const SMALL_COUNTRY_INTEGRATION_YEARS = 12.5;
 const INTEGRATION_LINEAR_YEARS = 25;
 const INTEGRATION_QUADRATIC_YEARS = 50;
 const INTEGRATION_LARGE_COUNTRY_YEARS = 100;
-/** New captures use a calendar exactly 50% longer than the V2.54 curve. */
-export const INTEGRATION_DURATION_MULTIPLIER_V2 = 1.5;
+/** Current captures use a 1.2x calendar: exactly 20% faster than the former 1.5x calendar. */
+export const INTEGRATION_DURATION_MULTIPLIER_V2 = 1.2;
+/** Voluntary defensive unions complete four times faster than conquest. */
+export const FEDERATION_INTEGRATION_DURATION_FACTOR_V2 = 0.25;
 
 /**
  * Administration price frozen from the territory's live output at conquest.
@@ -106,7 +109,7 @@ export function territoryIntegrationDurationWeeksV2(
   territoryId: TerritoryId,
 ): number {
   // The underlying size curve remains unchanged; new captures receive the
-  // universal 1.5x calendar after its old whole-week promise is calculated.
+  // universal 1.2x calendar after its old whole-week promise is calculated.
   // This makes the extension exact for every territory and avoids changing
   // the relative ordering through fractional-week rounding.
   const luxembourgId = territoryIdV2('lux');
@@ -158,11 +161,12 @@ export interface IntegrationCompletionV2 {
  * Starts one immutable integration calendar. A sovereign-core recapture is the
  * only case that restores full access immediately.
  */
-export function beginTerritoryIntegrationV2(
+function beginTerritoryIntegrationWithFactorV2(
   state: WorldStateV2,
   content: WorldContentV2,
   territoryId: TerritoryId,
   newOwnerId: PlayerId,
+  durationFactor: number,
 ): void {
   const territory = state.territories[territoryId];
   if (!territory) return;
@@ -179,48 +183,165 @@ export function beginTerritoryIntegrationV2(
     fromCoreOwnerId: territory.coreOwner,
     toOwnerId: newOwnerId,
     startedTick: state.tick,
-    completesTick: state.tick + territoryIntegrationDurationWeeksV2(content, territoryId),
+    completesTick: state.tick + Math.max(1, Math.round(
+      territoryIntegrationDurationWeeksV2(content, territoryId) * durationFactor,
+    )),
     annualCost: territoryIntegrationAnnualCostV2(territory.economy),
   };
 }
 
-function mergeEliminatedNationKnowledgeV2(
+export function beginTerritoryIntegrationV2(
   state: WorldStateV2,
+  content: WorldContentV2,
+  territoryId: TerritoryId,
+  newOwnerId: PlayerId,
+): void {
+  beginTerritoryIntegrationWithFactorV2(state, content, territoryId, newOwnerId, 1);
+}
+
+/**
+ * A coalition member retains every live local and national value while its
+ * peaceful federation proceeds through the same visible core-fusion model.
+ */
+export function beginFederationTerritoryIntegrationV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  territoryId: TerritoryId,
+  newOwnerId: PlayerId,
+): void {
+  beginTerritoryIntegrationWithFactorV2(
+    state,
+    content,
+    territoryId,
+    newOwnerId,
+    FEDERATION_INTEGRATION_DURATION_FACTOR_V2,
+  );
+}
+
+function nationStillHasBackendIdentityV2(
+  state: WorldStateV2,
+  playerId: PlayerId,
+): boolean {
+  return Object.values(state.territories).some((territory) => (
+    territory.owner === playerId
+      || territory.coreOwner === playerId
+      || territory.control?.controller === playerId
+      || territory.integrationProgram?.fromOwnerId === playerId
+      || territory.integrationProgram?.fromCoreOwnerId === playerId
+      || territory.integrationProgram?.toOwnerId === playerId
+  )) || state.wars.some((war) => war.attackerId === playerId || war.defenderId === playerId);
+}
+
+/**
+ * Permanently folds a vanished sovereign into its successor. Territory-held
+ * population, output, armies and capacity already belong to the owner, so only
+ * genuinely national stores are transferred before the old backend record is
+ * removed.
+ */
+export function retireAbsorbedNationV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
   formerNationId: PlayerId,
   ownerId: PlayerId,
-): void {
-  if (formerNationId === ownerId) return;
-  // A country that still controls land or survives as the visible core of an
-  // unfinished integration remains a separate institution. Only its final
-  // permanent disappearance transfers durable knowledge, without summing
-  // duplicate research into free progress.
-  if (Object.values(state.territories).some((territory) => (
-    territory.owner === formerNationId || territory.coreOwner === formerNationId
-  ))) return;
+  mergeKnowledge = true,
+): boolean {
+  if (formerNationId === ownerId) return false;
+  // A country that owns, controls or remains referenced by any unfinished
+  // integration is still a real institution and cannot be retired yet.
+  if (nationStillHasBackendIdentityV2(state, formerNationId)) return false;
   const former = state.players[formerNationId];
-  const owner = state.players[ownerId];
-  if (!former || !owner) return;
-  // The final disappearance of a sovereign transfers its remaining trained
-  // personnel exactly once. Clearing the dormant record keeps repeated or
-  // multi-core completions idempotent, while the owner may retain an over-cap
-  // pool under the ordinary reserve rules.
+  const canonicalSuccessorId = absorbedNationSuccessorV2(
+    state,
+    content,
+    formerNationId,
+  ) ?? ownerId;
+  const owner = state.players[canonicalSuccessorId] ?? state.players[ownerId];
+  if (!former || !owner) return false;
+  // The final disappearance transfers national stores exactly once. An
+  // over-cap reserve pool is preserved under the ordinary reserve rules.
+  owner.treasury = round(owner.treasury + former.treasury);
+  owner.foodStock = round(owner.foodStock + former.foodStock);
   owner.trainedReserves = round(owner.trainedReserves + former.trainedReserves);
+  former.treasury = 0;
+  former.foodStock = 0;
   former.trainedReserves = 0;
-  for (const branch of RESEARCH_BRANCHES) {
-    owner.research.progress[branch] = round(Math.max(
-      owner.research.progress[branch],
-      former.research.progress[branch],
-    ));
-    owner.research.breakthroughs[branch] = Math.max(
-      owner.research.breakthroughs[branch],
-      former.research.breakthroughs[branch],
-    );
-    for (const effect of RESEARCH_BRANCH_EFFECTS[branch]) {
-      owner.research.effectLevels[effect] = Math.max(
-        owner.research.effectLevels[effect],
-        former.research.effectLevels[effect],
+  if (mergeKnowledge) {
+    for (const branch of RESEARCH_BRANCHES) {
+      owner.research.progress[branch] = round(Math.max(
+        owner.research.progress[branch],
+        former.research.progress[branch],
+      ));
+      owner.research.breakthroughs[branch] = Math.max(
+        owner.research.breakthroughs[branch],
+        former.research.breakthroughs[branch],
       );
+      for (const effect of RESEARCH_BRANCH_EFFECTS[branch]) {
+        owner.research.effectLevels[effect] = Math.max(
+          owner.research.effectLevels[effect],
+          former.research.effectLevels[effect],
+        );
+      }
     }
+  }
+  state.aiEscalation.coalitionMembers = state.aiEscalation.coalitionMembers
+    .filter((id) => id !== formerNationId);
+  state.truces = state.truces.filter((truce) => (
+    truce.leftId !== formerNationId && truce.rightId !== formerNationId
+  ));
+  state.offers = state.offers.filter((offer) => (
+    offer.fromId !== formerNationId && offer.toId !== formerNationId
+  ));
+  state.ceasefireObligations = state.ceasefireObligations.filter((obligation) => (
+    obligation.payerId !== formerNationId && obligation.payeeId !== formerNationId
+  ));
+  // Full integration has no selected-country exception. If the former nation
+  // was the player's country, the campaign ends with the absorbing country as
+  // victor while the obsolete backend record still disappears normally.
+  if (formerNationId === state.humanPlayerId) {
+    state.winnerId = owner === state.players[canonicalSuccessorId]
+      ? canonicalSuccessorId : ownerId;
+    state.gameOver = true;
+    state.speed = 0;
+  }
+  delete state.players[formerNationId];
+  invalidateNationIndexV2(state);
+  return true;
+}
+
+/** Finds the present owner holding most of an absorbed country's home cores. */
+export function absorbedNationSuccessorV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  formerNationId: PlayerId,
+): PlayerId | undefined {
+  const successors = new Map<PlayerId, number>();
+  for (const territoryId of content.territoryIds) {
+    if (content.territories[territoryId]?.initialOwnerId !== formerNationId) continue;
+    const ownerId = state.territories[territoryId]?.owner;
+    if (ownerId && ownerId !== formerNationId) {
+      successors.set(ownerId, (successors.get(ownerId) ?? 0) + 1);
+    }
+  }
+  return [...successors]
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))[0]?.[0];
+}
+
+/**
+ * Same-schema saves from before true backend fusion may contain already
+ * absorbed nation records. Remove those zombies deterministically on load.
+ */
+export function retireDormantAbsorbedNationsV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+): void {
+  for (const formerNationId of (Object.keys(state.players) as PlayerId[])
+    .sort((left, right) => left.localeCompare(right))) {
+    if (nationStillHasBackendIdentityV2(state, formerNationId)) continue;
+    const ownerId = absorbedNationSuccessorV2(state, content, formerNationId);
+    // Knowledge uses maxima, so repeating this merge while normalising an old
+    // save is idempotent and also preserves exiles that vanished before their
+    // research had ever reached the successor.
+    if (ownerId) retireAbsorbedNationV2(state, content, formerNationId, ownerId);
   }
 }
 
@@ -250,17 +371,17 @@ export function advanceTerritoryIntegrationProgramsV2(
     }
     const formerCoreOwnerId = program.fromCoreOwnerId;
     const ownerId = territory.owner;
+    const formerName = state.players[formerCoreOwnerId]?.empireName
+      || content.nations[formerCoreOwnerId]?.shortName || formerCoreOwnerId;
+    const ownerName = state.players[ownerId]?.empireName
+      || content.nations[ownerId]?.shortName || ownerId;
     territory.integration = 1;
     territory.coreOwner = ownerId;
     delete territory.integrationProgram;
     for (const formerNationId of new Set([
       program.fromOwnerId,
       formerCoreOwnerId,
-    ])) mergeEliminatedNationKnowledgeV2(state, formerNationId, ownerId);
-    const formerName = state.players[formerCoreOwnerId]?.empireName
-      || content.nations[formerCoreOwnerId]?.shortName || formerCoreOwnerId;
-    const ownerName = state.players[ownerId]?.empireName
-      || content.nations[ownerId]?.shortName || ownerId;
+    ])) retireAbsorbedNationV2(state, content, formerNationId, ownerId);
     addWorldEventV2(
       state,
       'conquest',

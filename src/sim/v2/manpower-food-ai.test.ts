@@ -7,6 +7,7 @@ import {
   createPowerSnapshotV2,
   selectWeeklyFinanceBreakdownV2,
   projectFinanceManpowerPhaseV2,
+  selectTrainedReserveCapacityV2,
   selectWeeklyManpowerProjectionV2,
   selectTotalManpowerV2,
 } from './selectors';
@@ -27,7 +28,7 @@ describe('V2 authoritative manpower projection', () => {
     }
     const peaceFinance = selectWeeklyFinanceBreakdownV2(peace, WORLD_CONTENT_V2, belgium);
     const war = structuredClone(peace);
-    war.players[belgium]!.trainedReserves = selectTotalManpowerV2(war, belgium).capacity * 2;
+    war.players[belgium]!.trainedReserves = selectTrainedReserveCapacityV2(war, belgium) * 0.90;
     war.wars = [{
       id: 'mobilization-war', attackerId: belgium, defenderId: nationIdV2('nld'),
       startedTick: 0, lastBattleTick: 0, warScore: 0, battles: 0,

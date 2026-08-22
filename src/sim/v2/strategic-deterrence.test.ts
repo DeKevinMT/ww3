@@ -7,7 +7,11 @@ import {
 } from './balance';
 import { createWorldStateV2 } from './bootstrap';
 import { WORLD_CONTENT_V2 } from './content';
-import { selectEffectiveAttackV2, selectNuclearPowerV2 } from './selectors';
+import {
+  selectEffectiveAttackV2,
+  selectNationalCombatQualityV2,
+  selectNuclearPowerV2,
+} from './selectors';
 import { nationIdV2, territoryIdV2 } from './types';
 import { WorldEngineV2 } from './WorldEngineV2';
 import { nuclearRivalryPenaltyV2 } from './ai';
@@ -38,9 +42,11 @@ describe('V2 strategic deterrence', () => {
     const state = createWorldStateV2(3_002);
     const russia = nationIdV2('rus');
     const army = state.territories[territoryIdV2('rus')].army;
+    const nationalQuality = selectNationalCombatQualityV2(state, WORLD_CONTENT_V2, russia);
     const attack = selectEffectiveAttackV2(state, WORLD_CONTENT_V2, russia, army);
     expect(attack).toBeCloseTo(
       WORLD_CONTENT_V2.nations[russia].militaryAttackRating!
+        * nationalQuality.combinedMultiplier
         * (1 + 3 * NUCLEAR_POWER_ATTACK_BONUS_PER_LEVEL),
       6,
     );

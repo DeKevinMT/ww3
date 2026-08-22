@@ -255,6 +255,9 @@ describe('V2 fiscal identity and population-linked income', () => {
     expect(india.foodProduction / india.revenue)
       .toBeGreaterThan(unitedStates.foodProduction / unitedStates.revenue);
     expect(unitedStates.armyUpkeep / unitedStates.revenue).toBeGreaterThan(0.15);
-    expect(unitedStates.net / unitedStates.revenue).toBeLessThan(0.02);
+    // A healthy country now deliberately retains part of ordinary cashflow as
+    // a war chest instead of spending almost every dollar each week.
+    expect(unitedStates.net / unitedStates.revenue).toBeGreaterThan(0.04);
+    expect(unitedStates.net / unitedStates.revenue).toBeLessThan(0.15);
   });
 });

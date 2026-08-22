@@ -16,6 +16,7 @@ import {
   selectWarAccessTypeV2,
   selectGlobalRankingV2,
   selectNationalIqViewV2,
+  selectNationalCombatQualityV2,
   selectPopulationDynamicsV2,
   selectResearchOutputV2,
   selectWeeklyFinanceBreakdownV2,
@@ -88,9 +89,9 @@ describe('national IQ gameplay proxy', () => {
       nationIdV2('chn'),
       nationIdV2('deu'),
       nationIdV2('jpn'),
-      nationIdV2('ind'),
       nationIdV2('gbr'),
       nationIdV2('fra'),
+      nationIdV2('ind'),
       nationIdV2('rus'),
       nationIdV2('ita'),
       nationIdV2('can'),
@@ -158,7 +159,7 @@ describe('national IQ gameplay proxy', () => {
     )).toEqual(high);
   });
 
-  it('offers the same weak-defender aid regardless of selection, with only a modest shared IQ effect', () => {
+  it('offers the same weak-defender aid regardless of selection or IQ appetite', () => {
     const defender = nationIdV2('bel');
     const supporter = nationIdV2('nld');
     const attacker = nationIdV2('fra');
@@ -191,8 +192,8 @@ describe('national IQ gameplay proxy', () => {
     const high = selectDefensiveAidAssessmentV2(
       state, contentWithIq(supporter, NATIONAL_IQ_SCORE_MAX), supporter, war, access,
     )!;
-    expect(high.interventionChance).toBeGreaterThan(low.interventionChance);
-    expect(high.interventionChance - low.interventionChance).toBeLessThan(0.03);
+    expect(high.interventionChance).toBe(low.interventionChance);
+    expect(high.priority).toBe(low.priority);
   });
 
   it('keeps base quality and research as separate multipliers', () => {
@@ -202,8 +203,10 @@ describe('national IQ gameplay proxy', () => {
     const base = calibratedMilitaryRatingsV2(80, 200, 0.40, 100_000, 108).attack;
     army.baseAttack = base;
     state.players[belgium].research.effectLevels.attack = 10;
+    const nationalQuality = selectNationalCombatQualityV2(state, WORLD_CONTENT_V2, belgium);
 
     expect(selectEffectiveAttackV2(state, WORLD_CONTENT_V2, belgium, army))
-      .toBeCloseTo(base * 1.10, 6);
+      .toBeCloseTo(base * nationalQuality.combinedMultiplier
+        * (1 + 0.10 * nationalQuality.researchConversion), 6);
   });
 });

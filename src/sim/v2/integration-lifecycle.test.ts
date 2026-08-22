@@ -6,13 +6,17 @@ import {
   synchronizeArmyCapacityV2,
 } from './capacity';
 import { WORLD_CONTENT_V2 } from './content';
+import { createFinancePlansV2 } from './economy';
 import {
   advanceTerritoryIntegrationProgramsV2,
   beginTerritoryIntegrationV2,
+  retireAbsorbedNationV2,
   territoryIntegrationAnnualCostV2,
   territoryIntegrationDurationWeeksV2,
 } from './integration';
+import { invariantErrorsV2 } from './invariants';
 import { createSaveV2, loadSaveV2 } from './persistence';
+import { sortedNationIdsV2 } from './selectors';
 import { nationIdV2, territoryIdV2 } from './types';
 
 const belgium = nationIdV2('bel');
@@ -37,6 +41,7 @@ function conservedWorldTotals(state: ReturnType<typeof createWorldStateV2>) {
 describe('V2 permanent territory integration lifecycle', () => {
   it('keeps the former core identity until the fixed calendar completes', () => {
     const state = createWorldStateV2(260822);
+    expect(sortedNationIdsV2(state)).toContain(luxembourg);
     const territory = state.territories[luxembourgTerritory];
     const duration = territoryIntegrationDurationWeeksV2(WORLD_CONTENT_V2, luxembourgTerritory);
     const routesBefore = WORLD_CONTENT_V2.territories[luxembourgTerritory].connections;
@@ -59,6 +64,7 @@ describe('V2 permanent territory integration lifecycle', () => {
     beginTerritoryIntegrationV2(state, WORLD_CONTENT_V2, luxembourgTerritory, belgium);
 
     expect(territory.owner).toBe(belgium);
+    expect(createFinancePlansV2(state, WORLD_CONTENT_V2).has(luxembourg)).toBe(false);
     expect(territory.coreOwner).toBe(luxembourg);
     expect(territory.integration).toBe(CONQUEST_INITIAL_INTEGRATION_SHARE);
     expect(territory.integrationProgram).toEqual({
@@ -78,7 +84,7 @@ describe('V2 permanent territory integration lifecycle', () => {
     expect(territory.integration).toBeCloseTo(
       CONQUEST_INITIAL_INTEGRATION_SHARE
         + (1 - CONQUEST_INITIAL_INTEGRATION_SHARE) * halfwayWeek / duration,
-      10,
+      9,
     );
     expect(territory.coreOwner).toBe(luxembourg);
 
@@ -110,11 +116,13 @@ describe('V2 permanent territory integration lifecycle', () => {
       baseDefense: territory.army.baseDefense,
     }).toEqual(durableTerritoryStatsBefore);
     const worldTotalsAfter = conservedWorldTotals(state);
-    expect({ ...worldTotalsAfter, trainedReserves: worldTotalsBefore.trainedReserves })
-      .toEqual(worldTotalsBefore);
+    expect({
+      ...worldTotalsAfter,
+      trainedReserves: worldTotalsBefore.trainedReserves,
+    }).toEqual(worldTotalsBefore);
     expect(worldTotalsAfter.trainedReserves).toBeCloseTo(worldTotalsBefore.trainedReserves, 6);
     expect(state.players[belgium].trainedReserves).toBeCloseTo(combinedReservesBefore, 6);
-    expect(state.players[luxembourg].trainedReserves).toBe(0);
+    expect(state.players[luxembourg]).toBeUndefined();
     expect(state.players[belgium].research.effectLevels.attack).toBe(3);
     // The map snapshot is a direct projection of these canonical fields. Once
     // owner and core owner match, no former flag, integration boundary or old
@@ -136,9 +144,9 @@ describe('V2 permanent territory integration lifecycle', () => {
     expect(Object.values(state.territories).some((candidate) => (
       candidate.owner === luxembourg || candidate.coreOwner === luxembourg
     ))).toBe(false);
-    // The dormant nation record stays deterministic, but no territory or map
-    // identity can still treat it as a living country.
-    expect(state.players[luxembourg]).toBeDefined();
+    // The nation-index cache and canonical backend both lose the absorbed
+    // sovereign immediately after its final core reference disappears.
+    expect(sortedNationIdsV2(state)).not.toContain(luxembourg);
     expect(WORLD_CONTENT_V2.territories[luxembourgTerritory].connections).toBe(routesBefore);
     expect(state.events.at(-1)?.message).toContain('permanent core territory');
 
@@ -151,6 +159,7 @@ describe('V2 permanent territory integration lifecycle', () => {
     expect(Object.values(reloaded.territories).some((candidate) => (
       candidate.owner === luxembourg || candidate.coreOwner === luxembourg
     ))).toBe(false);
+    expect(reloaded.players[luxembourg]).toBeUndefined();
   });
 
   it('waits for the final former-core reference before merging durable knowledge', () => {
@@ -193,7 +202,7 @@ describe('V2 permanent territory integration lifecycle', () => {
     ))).toBe(false);
     expect(state.players[netherlands].research.effectLevels.attack).toBe(9);
     expect(state.players[netherlands].trainedReserves).toBe(1.75);
-    expect(state.players[luxembourg].trainedReserves).toBe(0);
+    expect(state.players[luxembourg]).toBeUndefined();
   });
 
   it('restores full core status immediately when the sovereign core recaptures its land', () => {
@@ -239,6 +248,7 @@ describe('V2 permanent territory integration lifecycle', () => {
 
   it('merges both an eliminated exiled sovereign and the absorbed former core', () => {
     const state = createWorldStateV2(260825);
+    state.humanPlayerId = netherlands;
     const luxembourgDuration = territoryIntegrationDurationWeeksV2(
       WORLD_CONTENT_V2,
       luxembourgTerritory,
@@ -279,5 +289,62 @@ describe('V2 permanent territory integration lifecycle', () => {
     expect(state.players[netherlands].research.breakthroughs['defensive-systems']).toBe(3);
     expect(state.players[netherlands].research.effectLevels.attack).toBe(5);
     expect(state.players[netherlands].research.effectLevels.defense).toBe(6);
+    expect(state.players[luxembourg]).toBeUndefined();
+    expect(state.players[belgium]).toBeUndefined();
+  });
+
+  it('fully retires an absorbed selected country and reconstructs its defeat after loading', () => {
+    const state = createWorldStateV2(260827);
+    state.humanPlayerId = luxembourg;
+    beginTerritoryIntegrationV2(state, WORLD_CONTENT_V2, luxembourgTerritory, belgium);
+    state.tick = state.territories[luxembourgTerritory].integrationProgram!.completesTick;
+
+    advanceTerritoryIntegrationProgramsV2(state, WORLD_CONTENT_V2);
+
+    expect(state.players[luxembourg]).toBeUndefined();
+    expect(state.gameOver).toBe(true);
+    expect(state.winnerId).toBe(belgium);
+    expect(state.speed).toBe(0);
+    expect(invariantErrorsV2(state, WORLD_CONTENT_V2)).toEqual([]);
+
+    const reloaded = loadSaveV2(createSaveV2(state, WORLD_CONTENT_V2), WORLD_CONTENT_V2);
+    expect(reloaded.players[luxembourg]).toBeUndefined();
+    expect(reloaded.gameOver).toBe(true);
+    expect(reloaded.winnerId).toBe(belgium);
+    expect(invariantErrorsV2(reloaded, WORLD_CONTENT_V2)).toEqual([]);
+  });
+
+  it('retires an exile after its last foreign holding returns directly to its core owner', () => {
+    const state = createWorldStateV2(260828);
+    state.humanPlayerId = netherlands;
+    state.players[luxembourg].research.effectLevels.attack = 7;
+    state.players[belgium].research.effectLevels.attack = 1;
+
+    beginTerritoryIntegrationV2(state, WORLD_CONTENT_V2, belgiumTerritory, luxembourg);
+    beginTerritoryIntegrationV2(state, WORLD_CONTENT_V2, luxembourgTerritory, netherlands);
+    state.tick = state.territories[luxembourgTerritory].integrationProgram!.completesTick;
+    advanceTerritoryIntegrationProgramsV2(state, WORLD_CONTENT_V2);
+    expect(state.players[luxembourg]).toBeDefined();
+    expect(state.territories[belgiumTerritory].owner).toBe(luxembourg);
+
+    beginTerritoryIntegrationV2(state, WORLD_CONTENT_V2, belgiumTerritory, belgium);
+    expect(state.territories[belgiumTerritory]).toMatchObject({
+      owner: belgium,
+      coreOwner: belgium,
+      integration: 1,
+    });
+    expect(state.territories[belgiumTerritory].integrationProgram).toBeUndefined();
+    expect(retireAbsorbedNationV2(
+      state,
+      WORLD_CONTENT_V2,
+      luxembourg,
+      belgium,
+    )).toBe(true);
+    expect(state.players[luxembourg]).toBeUndefined();
+    expect(state.players[netherlands].research.effectLevels.attack).toBe(7);
+
+    const reloaded = loadSaveV2(createSaveV2(state, WORLD_CONTENT_V2), WORLD_CONTENT_V2);
+    expect(reloaded.players[luxembourg]).toBeUndefined();
+    expect(invariantErrorsV2(reloaded, WORLD_CONTENT_V2)).toEqual([]);
   });
 });

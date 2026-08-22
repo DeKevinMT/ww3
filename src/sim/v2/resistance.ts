@@ -1,8 +1,6 @@
 import {
   DEFENSIVE_FEDERATION_COOLDOWN_TICKS,
   DEFENSIVE_FEDERATION_THREAT,
-  RESEARCH_BRANCHES,
-  RESEARCH_BRANCH_EFFECTS,
   TRUCE_TICKS,
   clamp,
   round,
@@ -11,13 +9,17 @@ import type { WorldContentV2 } from './content';
 import { synchronizeArmyCapacityV2 } from './capacity';
 import { addWorldEventV2 } from './events';
 import {
+  beginFederationTerritoryIntegrationV2,
+  retireAbsorbedNationV2,
+} from './integration';
+import {
   createPowerSnapshotV2,
   invalidateTerritoryIndexV2,
   selectCurrentPowerV2,
   selectTerritoriesOfV2,
   type PowerSnapshotV2,
 } from './selectors';
-import type { GlobalResistanceV2, PlayerId, WorldStateV2 } from './types';
+import type { GlobalResistanceV2, PlayerId, TerritoryId, WorldStateV2 } from './types';
 
 const COALITION_FORMATION_MEMBERS = 5;
 const UNITED_THREAT = 78;
@@ -248,45 +250,35 @@ export function selectDefensiveFederationPolicyV2(
   };
 }
 
-function absorbFederationMemberV2(
+export function absorbFederationMemberV2(
   state: WorldStateV2,
+  content: WorldContentV2,
   leaderId: PlayerId,
   memberId: PlayerId,
 ): void {
-  const leader = state.players[leaderId]!;
-  const member = state.players[memberId]!;
-  for (const territory of Object.values(state.territories)) {
-    if (territory.owner !== memberId) continue;
-    territory.owner = leaderId;
-    territory.coreOwner = leaderId;
-    territory.integration = 1;
-    delete territory.integrationProgram;
-    delete territory.control;
-  }
-  leader.treasury = round(leader.treasury + member.treasury);
-  leader.foodStock = round(leader.foodStock + member.foodStock);
-  // A federation is a permanent sovereign merger. Trained reserves are real
-  // personnel, so move the whole pool even when the combined value is above
-  // the new leader's current reserve cap; ordinary finance already preserves
-  // such an over-cap pool without creating any additional soldiers.
-  leader.trainedReserves = round(leader.trainedReserves + member.trainedReserves);
-  member.treasury = 0;
-  member.foodStock = 0;
-  member.trainedReserves = 0;
-  member.warFatigue = 100;
-  for (const branch of RESEARCH_BRANCHES) {
-    leader.research.progress[branch] = round(Math.max(
-      leader.research.progress[branch], member.research.progress[branch],
-    ));
-    leader.research.breakthroughs[branch] = Math.max(
-      leader.research.breakthroughs[branch], member.research.breakthroughs[branch],
+  // Ownership changes when the voluntary union starts, but every local army,
+  // resident, economic value and condition remains untouched. National cash,
+  // food, reserves and knowledge stay on the member record until its final
+  // core finishes the accelerated integration and are then transferred by the
+  // same exactly-once retirement path as conquest.
+  const joiningTerritories = Object.entries(state.territories)
+    .filter(([, territory]) => territory.owner === memberId)
+    .map(([territoryId]) => territoryId as TerritoryId)
+    .sort((left, right) => left.localeCompare(right));
+  for (const territoryId of joiningTerritories) {
+    delete state.territories[territoryId]!.control;
+    beginFederationTerritoryIntegrationV2(
+      state,
+      content,
+      territoryId,
+      leaderId,
     );
-    for (const effect of RESEARCH_BRANCH_EFFECTS[branch]) {
-      leader.research.effectLevels[effect] = Math.max(
-        leader.research.effectLevels[effect], member.research.effectLevels[effect],
-      );
-    }
   }
+  // Usually the unfinished peaceful programs keep the member identity alive.
+  // An exiled member can instead return only the leader's own cores, which
+  // complete immediately; retire that now-empty record without waiting for a
+  // save/load normalization pass.
+  retireAbsorbedNationV2(state, content, memberId, leaderId);
 }
 
 /**
@@ -351,7 +343,7 @@ function maybeFormDefensiveFederationV2(
       - (powers.byNation.get(left) ?? 0) || left.localeCompare(right))[0]!;
     const growing = isDefensiveFederationV2(state, leaderId);
     const absorbed = cluster.filter((id) => id !== leaderId);
-    for (const memberId of absorbed) absorbFederationMemberV2(state, leaderId, memberId);
+    for (const memberId of absorbed) absorbFederationMemberV2(state, content, leaderId, memberId);
     invalidateTerritoryIndexV2(state);
     synchronizeArmyCapacityV2(state, content);
     if (!state.players[leaderId]!.empireName) {
@@ -372,8 +364,8 @@ function maybeFormDefensiveFederationV2(
     const federationTerritories = selectTerritoriesOfV2(state, leaderId).length;
     addWorldEventV2(state, 'critical', 'critical',
       growing
-        ? `${formerNames} joined the ${state.players[leaderId]!.empireName}; the federation now spans ${federationTerritories} territories.`
-        : `${formerNames} permanently merged into the ${state.players[leaderId]!.empireName} to resist rapid expansion.`,
+        ? `${formerNames} began accelerated integration into the ${state.players[leaderId]!.empireName}; the federation now spans ${federationTerritories} territories.`
+        : `${formerNames} began accelerated integration into the ${state.players[leaderId]!.empireName} to resist rapid expansion.`,
       undefined, humanId);
     return true;
   }
@@ -437,7 +429,7 @@ function maybeFormAiDefensiveFederationV2(
         : (powers.byNation.get(anchor) ?? 0) >= (powers.byNation.get(partner) ?? 0) ? anchor : partner;
     const memberId = leaderId === anchor ? partner : anchor;
     const growing = isDefensiveFederationV2(state, leaderId);
-    absorbFederationMemberV2(state, leaderId, memberId);
+    absorbFederationMemberV2(state, content, leaderId, memberId);
     invalidateTerritoryIndexV2(state);
     synchronizeArmyCapacityV2(state, content);
     if (!state.players[leaderId]!.empireName) state.players[leaderId]!.empireName = federationNameV2(content, leaderId);
@@ -450,8 +442,8 @@ function maybeFormAiDefensiveFederationV2(
     const aggressorName = content.nations[aggressor.id]?.shortName ?? aggressor.id;
     const memberName = content.nations[memberId]?.shortName ?? memberId;
     addWorldEventV2(state, 'critical', 'critical', growing
-      ? `${memberName} joined the ${state.players[leaderId]!.empireName} as ${aggressorName}'s expansion raised regional alarm.`
-      : `${content.nations[leaderId]?.shortName ?? leaderId} and ${memberName} merged into the ${state.players[leaderId]!.empireName} to contain ${aggressorName}.`);
+      ? `${memberName} began accelerated integration into the ${state.players[leaderId]!.empireName} as ${aggressorName}'s expansion raised regional alarm.`
+      : `${content.nations[leaderId]?.shortName ?? leaderId} and ${memberName} began accelerated federation integration to contain ${aggressorName}.`);
     return true;
   }
   return false;
@@ -461,16 +453,16 @@ export function selectGlobalResistanceV2(state: WorldStateV2): GlobalResistanceV
   const level = state.aiEscalation.resistanceLevel;
   const threat = state.aiEscalation.globalThreat;
   const memberIds = [...state.aiEscalation.coalitionMembers];
-  const defenseBonus = level === 2
-    ? clamp(0.14 + threat * 0.001 + memberIds.length * 0.001, 0.18, 0.28)
-    : level === 1 ? clamp(0.05 + threat * 0.001 + memberIds.length * 0.003, 0.06, 0.16) : 0;
   return {
     level,
     threat,
     members: memberIds.length,
     memberIds,
-    defenseBonus: round(defenseBonus),
-    offensiveBonus: round(defenseBonus * 0.45),
+    // Compatibility fields stay explicit, but containment grants no hidden
+    // selected-opponent combat multiplier. Federations fight with their real
+    // merged armies, economy, research and IQ-scaled common AI only.
+    defenseBonus: 0,
+    offensiveBonus: 0,
   };
 }
 
@@ -512,21 +504,9 @@ export function updateGlobalResistanceV2(
 }
 
 export function resistanceCombatMultiplierV2(
-  state: WorldStateV2,
-  attackerId: PlayerId,
-  defenderId: PlayerId,
+  _state: WorldStateV2,
+  _attackerId: PlayerId,
+  _defenderId: PlayerId,
 ): { attacker: number; defender: number } {
-  const resistance = selectGlobalResistanceV2(state);
-  if (resistance.level === 0) return { attacker: 1, defender: 1 };
-  const members = new Set(resistance.memberIds);
-  return {
-    // Loose members share defensive intelligence but never gain a magical
-    // combined attack. Only a permanently merged federation can project its
-    // consolidated command bonus against the player.
-    attacker: members.has(attackerId) && isDefensiveFederationV2(state, attackerId)
-      && defenderId === state.humanPlayerId
-      ? 1 + resistance.offensiveBonus : 1,
-    defender: members.has(defenderId) && attackerId === state.humanPlayerId
-      ? 1 + resistance.defenseBonus : 1,
-  };
+  return { attacker: 1, defender: 1 };
 }

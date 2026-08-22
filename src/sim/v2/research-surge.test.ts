@@ -13,7 +13,6 @@ import {
   selectResearchSurgeTermsV2,
 } from './selectors';
 import { WorldEngineV2 } from './WorldEngineV2';
-import { selectAiResearchSurgeTargetV2 } from './ai';
 import {
   nationIdV2,
   territoryIdV2,
@@ -129,20 +128,4 @@ describe('targeted Research Surge', () => {
     expect(invalid.progressAdded).toBe(0);
   });
 
-  it('chooses the highest-priority unfinished program for an AI surge', () => {
-    const state = belgiumState(2_406);
-    state.players[bel].research.allocations = { ...focusedAllocations };
-    const available = RESEARCH_BRANCHES.filter((branch) => branch !== 'advanced-weapons');
-
-    expect(selectAiResearchSurgeTargetV2(
-      state.players[bel].research.allocations,
-      state.players[bel].research.breakthroughs,
-      available,
-    )).toBe('defensive-systems');
-    expect(selectAiResearchSurgeTargetV2(
-      state.players[bel].research.allocations,
-      state.players[bel].research.breakthroughs,
-      [],
-    )).toBeUndefined();
-  });
 });

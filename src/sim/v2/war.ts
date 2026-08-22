@@ -527,6 +527,16 @@ function prospectiveFrontCountV2(state: WorldStateV2, playerId: PlayerId, oppone
     + (active.some((war) => war.attackerId === opponentId || war.defenderId === opponentId) ? 0 : 1));
 }
 
+/** Small forecast edge supplied by the real finite trained-reserve pool. */
+export function strategicReserveReadinessMultiplierV2(
+  trainedReserves: number,
+  activeCapacity: number,
+): number {
+  const reserveRatio = activeCapacity > 0
+    ? clamp(trainedReserves / activeCapacity, 0, 1) : 0;
+  return 0.95 + 0.05 * reserveRatio;
+}
+
 /** Cheap strategic layer for the forecast: field allocation, slow reserves,
  * treasury runway and food security matter, but the live front remains the
  * main signal. It intentionally avoids the full weekly AI-finance planner so
@@ -538,16 +548,17 @@ function strategicReadinessV2(
   opponentId: PlayerId,
   militaryBaseSnapshot: MilitaryBaseSnapshotV2 = createMilitaryBaseSnapshotV2(state, content),
 ): number {
-  const deployed = nationalCombatManpowerV2(state, playerId);
   const capacity = nationalCombatCapacityV2(state, playerId);
-  const reserveRatio = clamp((capacity - deployed) / Math.max(0.001, deployed), 0, 1);
   const economy = selectNationalEconomyV2(state, content, playerId);
   const treasuryRunway = clamp(state.players[playerId]!.treasury
     / Math.max(0.001, economy.weeklyRevenue), -2, 8);
   const funding = 0.85 + 0.15 * clamp((treasuryRunway + 2) / 10, 0, 1);
   const food = 0.85 + 0.15 * clamp(state.players[playerId]!.foodSecurity, 0, 1);
   // Reserve manpower trains slowly in wartime, so it is only a modest edge.
-  const reinforcement = 0.95 + 0.05 * reserveRatio;
+  const reinforcement = strategicReserveReadinessMultiplierV2(
+    state.players[playerId]!.trainedReserves,
+    capacity,
+  );
   const fronts = prospectiveFrontCountV2(state, playerId, opponentId);
   const allocation = 1 / (1 + 0.55 * (fronts - 1));
   return Math.max(0.000001, selectCurrentPowerV2(state, content, playerId, militaryBaseSnapshot)
