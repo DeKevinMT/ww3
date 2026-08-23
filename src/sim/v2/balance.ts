@@ -7,7 +7,7 @@ import type {
   TerrainType,
 } from './types';
 
-export const V2_RULES_VERSION = 'frontier-command-v2.55-combat-rebalance';
+export const V2_RULES_VERSION = 'frontier-command-v2.57-performance-multiplayer';
 export const V2_CONTENT_VERSION = 'natural-earth-countries-2026-v7-greenland';
 export const V2_MAP_ID = 'natural-earth-countries-2026';
 export const V2_TICK_DURATION_MS = 1_000;
@@ -56,6 +56,13 @@ export const TRAINED_RESERVE_DEPLOYMENT_THROUGHPUT_MULTIPLIER = 3;
 /** War keeps only a paid 5% training trickle while normal replacement draw remains much faster. */
 export const TRAINED_RESERVE_WARTIME_TRAINING_FACTOR = 0.05;
 export const TRAINED_RESERVE_TRAINING_COST_MULTIPLIER = 1.25;
+/** Dedicated reserve research improves throughput, never the one-active-army reserve cap. */
+export const RESERVE_TRAINING_RESEARCH_BONUS_PER_EFFECTIVE_LEVEL = 0.02;
+export const RESERVE_TRAINING_RESEARCH_EFFECTIVE_CEILING = 25;
+export const RESERVE_TRAINING_RESEARCH_HALF_SATURATION = 15;
+export const RESERVE_MOBILIZATION_RESEARCH_BONUS_PER_EFFECTIVE_LEVEL = 0.015;
+export const RESERVE_MOBILIZATION_RESEARCH_EFFECTIVE_CEILING = 20;
+export const RESERVE_MOBILIZATION_RESEARCH_HALF_SATURATION = 12;
 /** Extra AI mobilization is paid above upkeep; wartime speed carries a much steeper premium. */
 export const PEACE_RECRUITMENT_ACCELERATION_MULTIPLIER = 1.5;
 export const WAR_RECRUITMENT_ACCELERATION_MULTIPLIER = 3;
@@ -75,13 +82,6 @@ export const ATTACKER_CIVILIAN_LOSS_INTENSITY = 0.55;
 export const ATTACKER_CIVILIAN_LOSS_POPULATION_CAP = 0.0025;
 /** Keeps comparable battles near a 1.6:1 defender/attacker civilian-loss floor. */
 export const ATTACKER_CIVILIAN_LOSS_DEFENDER_SHARE = 0.625;
-/** Battle displacement is additional to deaths but conserves world population. */
-export const DEFENDER_REFUGEE_DISPLACEMENT_DEATH_SHARE = 0.50;
-export const DEFENDER_REFUGEE_DISPLACEMENT_POPULATION_CAP = 0.0005;
-export const ATTACKER_REFUGEE_DISPLACEMENT_DEATH_SHARE = 0.35;
-export const ATTACKER_REFUGEE_DISPLACEMENT_POPULATION_CAP = 0.00025;
-/** Only stable, uncontested third-country territory can receive refugees. */
-export const REFUGEE_HOST_MIN_CONDITION = 0.70;
 /**
  * Casualties scale linearly with committed combat pressure. A sub-linear
  * exponent made a huge army take more absolute losses merely because its
@@ -99,12 +99,33 @@ export const COMBAT_ROUTE_STRENGTH_RATIO = 0.05;
 /** Defensive research saturates at +20%; level 20 reaches +10%. */
 export const DEFENSE_RESEARCH_MAX_BONUS = 0.20;
 export const DEFENSE_RESEARCH_HALF_SATURATION = 20;
+/**
+ * DEF remains valuable, but points above the neutral 1.0 rating no longer
+ * scale linearly forever. This curve leaves weak forces untouched while
+ * compressing increasingly fortified armies into a bounded effective score.
+ */
+export const DEFENSE_STAT_EXCESS_SCALE = 0.85;
+export const DEFENSE_STAT_EXCESS_DIMINISHING_RATE = 0.14;
+export function effectiveDefenseStatV2(rawDefense: number): number {
+  const defense = Math.max(0, rawDefense);
+  if (defense <= 1) return defense;
+  const excess = defense - 1;
+  return 1 + DEFENSE_STAT_EXCESS_SCALE * excess
+    / (1 + DEFENSE_STAT_EXCESS_DIMINISHING_RATE * excess);
+}
 /** A fresh entrant cannot claim a force another war already destroyed. */
 export const CAPTURE_MIN_CONTRIBUTION_SHARE = 0.10;
-/** Collapsed, undefended land can still be occupied, but never on the first pulse. */
-export const COLLAPSED_OCCUPATION_CAPTURE_SHARE = 0.60;
-/** A rival occupation must be displaced before a second attacker can establish control. */
-export const CONTESTED_CONTROL_EROSION_PER_PULSE = 0.05;
+/**
+ * A front that has been decisively dominated for half a year can force the
+ * last under-strength formation to surrender. This replaces gradual territorial
+ * progress tracking with one explicit campaign endpoint; the territory remains with
+ * its defender until all of these conditions are met.
+ */
+export const DECISIVE_SURRENDER_MIN_FRONT_TICKS = 26;
+export const DECISIVE_SURRENDER_MAX_DEFENDER_FILL = 0.125;
+export const DECISIVE_SURRENDER_MIN_FORCE_RATIO = 4;
+export const DECISIVE_SURRENDER_MIN_CUMULATIVE_LOSS_SHARE = 0.80;
+export const DECISIVE_SURRENDER_MIN_MOMENTUM = 0.50;
 export const BATTLE_INTERVAL_TICKS = 2;
 /** Declared wars spend their first two months mobilising at the border before combat begins. */
 export const WAR_MOBILIZATION_TICKS = 8;
@@ -112,15 +133,17 @@ export const STALE_WAR_TICKS = 26;
 export const TRUCE_TICKS = 26;
 /** No side can ask to end a war before it has run for one full year. */
 export const PEACE_REQUEST_MIN_WAR_AGE_TICKS = 52;
+/** A declined or expired peace offer can be retried after half a year. */
+export const PEACE_REQUEST_COOLDOWN_TICKS = 26;
 /** Peace decisions remain available for half a year instead of disappearing between AI reviews. */
 export const PEACE_OFFER_DURATION_TICKS = 26;
 /** Ending a war unilaterally creates a material 52-week treaty burden. */
 export const CEASEFIRE_PAYMENT_WEEKS = 52;
 /** Neither signatory may restart the war until a full year after the last instalment. */
 export const CEASEFIRE_POST_PAYMENT_TRUCE_TICKS = 52;
-/** A unilateral exit is costly without becoming a jackpot for a much smaller recipient. */
-export const CEASEFIRE_PAYER_WEEKLY_REVENUE_SHARE = 0.30;
-export const CEASEFIRE_PAYEE_WEEKLY_REVENUE_CAP_SHARE = 0.25;
+/** A unilateral exit is a costly surrender without becoming a jackpot for a much smaller recipient. */
+export const CEASEFIRE_PAYER_WEEKLY_REVENUE_SHARE = 0.45;
+export const CEASEFIRE_PAYEE_WEEKLY_REVENUE_CAP_SHARE = 0.35;
 export const CEASEFIRE_REPEAT_COST_MULTIPLIER = 1.10;
 /** Active combat consumes the training pipeline; only a fifth reaches the field. */
 export const WAR_RECRUITMENT_THROUGHPUT_FACTOR = 0.20;
@@ -133,6 +156,12 @@ export const FOOD_TARGET_WEEKS = 6;
 export const FOOD_STORAGE_BASE_WEEKS = 5;
 export const FOOD_STORAGE_MILLIONS_PER_KM2 = 0.00002;
 export const FOOD_MAX_STOCK_WEEKS = 18;
+export const FOOD_PRODUCTION_RESEARCH_BONUS_PER_EFFECTIVE_LEVEL = 0.01;
+export const FOOD_PRODUCTION_RESEARCH_EFFECTIVE_CEILING = 35;
+export const FOOD_PRODUCTION_RESEARCH_HALF_SATURATION = 20;
+export const FOOD_STORAGE_RESEARCH_BONUS_PER_EFFECTIVE_LEVEL = 0.015;
+export const FOOD_STORAGE_RESEARCH_EFFECTIVE_CEILING = 30;
+export const FOOD_STORAGE_RESEARCH_HALF_SATURATION = 15;
 export const FOOD_DOMESTIC_COST_PER_MILLION = 0.0006;
 export const FOOD_IMPORT_COST_PER_MILLION = 0.0018;
 /** Food is a material public expense without overwhelming the wider economy. */
@@ -155,13 +184,20 @@ export const FOOD_PRICE_LEVEL_WEALTH_CAP = 75;
 export const FOOD_SHORTAGE_POPULATION_LOSS = 0.0008;
 /** Empty reserves can add up to six percentage points of annual mortality in a live shortage. */
 export const FOOD_EMPTY_RESERVE_ANNUAL_MORTALITY_MAX = 0.06;
+/** Extra starvation mortality begins once reserves fall below 10% of their safe target. */
+export const FOOD_MORTALITY_RESERVE_START_SHARE = 0.10;
 /**
  * National IQ is a bounded gameplay proxy derived from existing economic and
  * institutional content. It is not a scientific psychometric claim.
  */
 export const NATIONAL_IQ_SCORE_MIN = 80;
 export const NATIONAL_IQ_SCORE_NEUTRAL = 100;
+/** Opening country data remains capped at 108; long-run education research may exceed it modestly. */
 export const NATIONAL_IQ_SCORE_MAX = 108;
+export const NATIONAL_IQ_EFFECTIVE_SCORE_MAX = 112;
+/** Education research approaches +8 IQ points but can never push the live score above 112. */
+export const NATIONAL_IQ_RESEARCH_MAX_BONUS = 8;
+export const NATIONAL_IQ_RESEARCH_HALF_SATURATION = 5;
 export const NATIONAL_IQ_GDP_PER_CAPITA_FLOOR = 500;
 export const NATIONAL_IQ_GDP_PER_CAPITA_CEILING = 100_000;
 export const NATIONAL_IQ_INSTITUTIONAL_CAPACITY_FLOOR = 0.2;
@@ -236,9 +272,9 @@ export const WAR_MOBILIZATION_COST_FACTOR = 0.35;
 /** Active fronts are a real surcharge outside the ordinary national budget. */
 export const WAR_OPERATION_REVENUE_SHARE = 0.08;
 export const WAR_OPERATION_COST_PER_MILLION = 0.08;
-/** Repeat campaigns strain the same treasury and logistics network; the surcharge is bounded at +50%. */
-export const WAR_FATIGUE_OPERATION_COST_PER_POINT = 0.025;
-export const WAR_FATIGUE_OPERATION_COST_MAX_BONUS = 0.50;
+/** Repeat campaigns strain the same treasury and logistics network; the softened surcharge is bounded at +30%. */
+export const WAR_FATIGUE_OPERATION_COST_PER_POINT = 0.015;
+export const WAR_FATIGUE_OPERATION_COST_MAX_BONUS = 0.30;
 export const WAR_ACCESS_OPERATION_MULTIPLIER = {
   land: 1,
   naval: 1.35,
@@ -247,6 +283,41 @@ export const WAR_ACCESS_SUPPLY_MULTIPLIER = {
   land: 1,
   naval: 0.92,
 } as const;
+/** Naval routes remain usable at global range, but distance increasingly taxes fleets and supply. */
+export const NAVAL_ROUTE_BASE_DISTANCE_KM = 1_500;
+export const NAVAL_ROUTE_MAX_DISTANCE_KM = 9_000;
+export const NAVAL_ROUTE_OPERATION_MULTIPLIER_MAX = 2.15;
+export const NAVAL_ROUTE_SUPPLY_MULTIPLIER_MIN = 0.62;
+
+export function navalRouteDistancePressureV2(distanceKm?: number): number {
+  if (!Number.isFinite(distanceKm) || distanceKm === undefined) return 0;
+  return smoothstep(
+    0,
+    1,
+    (Math.max(0, distanceKm) - NAVAL_ROUTE_BASE_DISTANCE_KM)
+      / (NAVAL_ROUTE_MAX_DISTANCE_KM - NAVAL_ROUTE_BASE_DISTANCE_KM),
+  );
+}
+
+export function warAccessOperationMultiplierV2(
+  access: 'land' | 'naval',
+  distanceKm?: number,
+): number {
+  if (access === 'land') return WAR_ACCESS_OPERATION_MULTIPLIER.land;
+  const pressure = navalRouteDistancePressureV2(distanceKm);
+  return round(WAR_ACCESS_OPERATION_MULTIPLIER.naval
+    + (NAVAL_ROUTE_OPERATION_MULTIPLIER_MAX - WAR_ACCESS_OPERATION_MULTIPLIER.naval) * pressure, 9);
+}
+
+export function warAccessSupplyMultiplierV2(
+  access: 'land' | 'naval',
+  distanceKm?: number,
+): number {
+  if (access === 'land') return WAR_ACCESS_SUPPLY_MULTIPLIER.land;
+  const pressure = navalRouteDistancePressureV2(distanceKm);
+  return round(WAR_ACCESS_SUPPLY_MULTIPLIER.naval
+    - (WAR_ACCESS_SUPPLY_MULTIPLIER.naval - NAVAL_ROUTE_SUPPLY_MULTIPLIER_MIN) * pressure, 9);
+}
 export const WAR_ACCESS_ASSAULT_MULTIPLIER = {
   land: 1,
   naval: 1,
@@ -309,6 +380,14 @@ export const NATIONAL_AI_EFFICIENCY_PER_IQ_POINT = 0.0025;
 export const NATIONAL_AI_PEACE_RESERVE_WEEKS = 8;
 /** Universal public administration and operating burden: exactly 20% of ordinary tax revenue. */
 export const BASE_OPERATING_COST_TAX_REVENUE_SHARE = 0.20;
+/** Administrative research improves collection modestly and can trim operations to no less than 15%. */
+export const TAX_EFFICIENCY_RESEARCH_BONUS_PER_EFFECTIVE_LEVEL = 0.003;
+export const TAX_EFFICIENCY_RESEARCH_EFFECTIVE_CEILING = 30;
+export const TAX_EFFICIENCY_RESEARCH_HALF_SATURATION = 20;
+export const OPERATING_EFFICIENCY_RESEARCH_REDUCTION_PER_EFFECTIVE_LEVEL = 0.0025;
+export const OPERATING_EFFICIENCY_RESEARCH_EFFECTIVE_CEILING = 20;
+export const OPERATING_EFFICIENCY_RESEARCH_HALF_SATURATION = 15;
+export const BASE_OPERATING_COST_MIN_TAX_REVENUE_SHARE = 0.15;
 export const NATIONAL_AI_WAR_BASE_RUNWAY_WEEKS = 6;
 export const NATIONAL_AI_WAR_FRONT_RUNWAY_WEEKS = 2;
 /** Better national decision quality builds a slightly deeper emergency buffer. */
@@ -327,8 +406,8 @@ export const CONQUEST_INITIAL_INTEGRATION_SHARE = 0.10;
 /** Every unfinished integration costs 2% of that territory's live GDP per year. */
 export const INTEGRATION_ADMINISTRATION_ANNUAL_OUTPUT_SHARE = 0.02;
 export const WEEKS_PER_YEAR = 52;
-/** Only a light slice of the field army crosses the border as an occupation force. */
-export const CONQUEST_OCCUPATION_FORCE_TRANSFER_SHARE = 0.02;
+/** A minimum guard slice crosses the border after decisive conquest. */
+export const CONQUEST_GUARD_MIN_TRANSFER_SHARE = 0.02;
 /** A fresh conquest may commit up to 10% of its surviving source as a real one-year guard. */
 export const CONQUEST_CAPTURE_GUARD_MAX_TRANSFER_SHARE = 0.10;
 export const CONQUEST_CAPTURE_GUARD_TICKS = 52;
@@ -349,10 +428,14 @@ export const RESEARCH_BRANCHES: readonly ResearchBranchV2[] = [
   'defensive-systems',
   'logistics-medicine',
   'economy-science',
+  'food-systems',
+  'reserve-doctrine',
+  'public-administration',
+  'education-intelligence',
 ];
 
-/** Every unfinished program receives 5%; allocations divide the remaining 70%. */
-export const RESEARCH_PASSIVE_FUNDING_SHARE = 0.05;
+/** Every unfinished program receives 3%; allocations divide the remaining 70%. */
+export const RESEARCH_PASSIVE_FUNDING_SHARE = 0.03;
 export const RESEARCH_ALLOCATED_FUNDING_SHARE = 0.70;
 export const RESEARCH_COST_GROWTH = 1.18;
 export const RESEARCH_BASE_COST_SCALE = 0.45;
@@ -377,6 +460,10 @@ export const DEFAULT_RESEARCH_ALLOCATIONS_V2: Readonly<ResearchAllocationsV2> = 
   'defensive-systems': 0,
   'logistics-medicine': 0,
   'economy-science': 60,
+  'food-systems': 0,
+  'reserve-doctrine': 0,
+  'public-administration': 0,
+  'education-intelligence': 0,
 };
 
 export const RESEARCH_BRANCH_BASE_RP: Readonly<Record<ResearchBranchV2, number>> = {
@@ -386,20 +473,28 @@ export const RESEARCH_BRANCH_BASE_RP: Readonly<Record<ResearchBranchV2, number>>
   'defensive-systems': 24,
   'logistics-medicine': 22,
   'economy-science': 22,
+  'food-systems': 26,
+  'reserve-doctrine': 30,
+  'public-administration': 34,
+  /** Roughly six ordinary first-tier programs: a real multi-decade national investment. */
+  'education-intelligence': 144,
 };
 
 export const RESEARCH_BRANCH_EFFECTS: Readonly<Record<ResearchBranchV2, readonly ResearchEffectV2[]>> = {
   'population-recruitment': ['population-growth', 'training'],
   'military-industry': ['force-capacity', 'reinforcement-efficiency'],
-  'advanced-weapons': ['attack', 'control'],
+  'advanced-weapons': ['attack', 'reinforcement-efficiency'],
   'defensive-systems': ['defense', 'casualty-reduction'],
   'logistics-medicine': ['recovery', 'supply'],
   'economy-science': ['economy-growth', 'research-speed', 'research-efficiency'],
+  'food-systems': ['food-production', 'food-storage'],
+  'reserve-doctrine': ['reserve-training', 'reserve-mobilization'],
+  'public-administration': ['tax-efficiency', 'operating-efficiency'],
+  'education-intelligence': ['iq-increase'],
 };
 
 export const EMPTY_RESEARCH_EFFECT_LEVELS: Readonly<Record<ResearchEffectV2, number>> = {
   attack: 0,
-  control: 0,
   defense: 0,
   'force-capacity': 0,
   'reinforcement-efficiency': 0,
@@ -411,6 +506,13 @@ export const EMPTY_RESEARCH_EFFECT_LEVELS: Readonly<Record<ResearchEffectV2, num
   'population-growth': 0,
   'research-speed': 0,
   'research-efficiency': 0,
+  'food-production': 0,
+  'food-storage': 0,
+  'reserve-training': 0,
+  'reserve-mobilization': 0,
+  'tax-efficiency': 0,
+  'operating-efficiency': 0,
+  'iq-increase': 0,
 };
 
 export const EMPTY_RESEARCH_BREAKTHROUGHS: Readonly<Record<ResearchBranchV2, number>> = {
@@ -420,6 +522,10 @@ export const EMPTY_RESEARCH_BREAKTHROUGHS: Readonly<Record<ResearchBranchV2, num
   'defensive-systems': 0,
   'logistics-medicine': 0,
   'economy-science': 0,
+  'food-systems': 0,
+  'reserve-doctrine': 0,
+  'public-administration': 0,
+  'education-intelligence': 0,
 };
 
 export const EMPTY_RESEARCH_PROGRESS: Readonly<ResearchProgressByBranchV2> = {
@@ -429,6 +535,10 @@ export const EMPTY_RESEARCH_PROGRESS: Readonly<ResearchProgressByBranchV2> = {
   'defensive-systems': 0,
   'logistics-medicine': 0,
   'economy-science': 0,
+  'food-systems': 0,
+  'reserve-doctrine': 0,
+  'public-administration': 0,
+  'education-intelligence': 0,
 };
 
 export function validResearchAllocationsV2(value: unknown): value is ResearchAllocationsV2 {

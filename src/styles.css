@@ -731,11 +731,6 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
 .territory-heading i { --owner: #fff; width: 38px; height: 38px; display: grid; place-items: center; border: 1px solid color-mix(in srgb, var(--owner) 55%, transparent); border-radius: 10px 3px 10px 3px; color: var(--owner); background: color-mix(in srgb, var(--owner) 7%, transparent); font-style: normal; font-weight: 800; }
 .front-alert { margin-bottom: 10px; padding: 7px 8px; border: 1px solid rgba(255, 111, 104, 0.25); border-radius: 7px; background: rgba(255, 111, 104, 0.065); color: #ff9a94; font-size: 7px; letter-spacing: 0.8px; }
 .occupation-alert { margin-bottom: 10px; padding: 7px 8px; border: 1px solid rgba(240, 189, 104, 0.3); border-radius: 7px; background: rgba(240, 189, 104, 0.07); color: #f0c977; font-size: 6.5px; letter-spacing: 0.65px; }
-.foreign-control-alert { margin-bottom: 10px; padding: 9px; display: grid; gap: 5px; border: 1px solid color-mix(in srgb, var(--controller) 48%, transparent); border-radius: 8px; background: color-mix(in srgb, var(--controller) 10%, rgba(6,19,29,.92)); }
-.foreign-control-alert strong { color: var(--controller); font-size: 7px; letter-spacing: .7px; }
-.foreign-control-alert span { color: #91abb4; font-size: 6px; line-height: 1.45; }
-.foreign-control-alert i { height: 4px; overflow: hidden; border-radius: 4px; background: rgba(255,255,255,.06); }
-.foreign-control-alert i b { height: 100%; display: block; border-radius: inherit; background: var(--controller); }
 .territory-kpis { grid-template-columns: repeat(4, 1fr); }
 .territory-kpis > div { padding: 7px; }
 .territory-kpis strong { font-size: 10px; }
@@ -1000,6 +995,29 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
 .country-preview__stats strong { margin-top: 5px; overflow: hidden; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
 .country-preview__source { margin: 9px 0 !important; color: #5d7883 !important; font-size: 5.8px !important; line-height: 1.4; }
 .country-preview__start { width: 100%; min-height: 48px; margin-top: 10px; font-size: 10px; }
+.country-preview__actions { display: grid; grid-template-columns: 1fr; gap: 7px; margin-top: 10px; }
+.country-preview__actions .country-preview__start { margin-top: 0; }
+.country-preview__multiplayer { width: 100%; min-height: 42px; }
+
+.world-ui-v2 .multiplayer-spectator {
+  position: fixed;
+  z-index: 34;
+  top: 78px;
+  left: 50%;
+  width: min(600px, calc(100vw - 24px));
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  transform: translateX(-50%);
+  border-color: rgba(110, 214, 234, .2);
+  background: rgba(4, 18, 29, .9);
+  color: #a8bec5;
+  font-size: 9px;
+  pointer-events: auto;
+}
+.world-ui-v2 .multiplayer-spectator b { color: #85e1ed; font-size: 8px; letter-spacing: 1px; }
 .country-select footer { display: flex; justify-content: space-between; color: #617f8a; font-size: 9px; letter-spacing: 0.5px; }
 .country-select footer strong { color: var(--cyan); }
 .data-vintage { margin: 7px 0 0 !important; color: #587681 !important; font-size: 6px !important; }
@@ -1892,14 +1910,6 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
 .simple-war-impact.is-peace b { color: #83dfb8; }
 .simple-war-impact.is-peace span { color: #7fa696; }
 
-.ai-simple-actions { display: grid; gap: 4px; }
-.ai-simple-actions article { min-width: 0; padding: 7px 8px; display: grid; grid-template-columns: 20px minmax(0,1fr) auto; gap: 7px; align-items: center; border-radius: 7px; background: rgba(255,255,255,.02); }
-.ai-simple-actions article > i { width: 20px; height: 20px; display: grid; place-items: center; border-radius: 6px; color: #9eecf4; background: rgba(107,221,242,.08); font-size: 8px; font-style: normal; font-weight: 900; }
-.ai-simple-actions article > div { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.ai-simple-actions span { color: #668893; font-size: 6.5px; font-weight: 900; letter-spacing: .6px; }
-.ai-simple-actions article > div strong { overflow: hidden; color: #c4d7dc; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
-.ai-simple-actions article > b { color: #8fb0b8; font-size: 7px; white-space: nowrap; }
-
 .simple-projects { display: grid; gap: 4px; }
 .simple-projects article { padding: 7px 8px; border-radius: 7px; background: color-mix(in srgb,var(--project) 4%,rgba(255,255,255,.012)); }
 .simple-projects article > div { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -2160,13 +2170,6 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
 }
 .world-ui-v2 .army-weekly-ledger > span b { color: #d8e8eb; font-size: 10px; }
 
-.world-ui-v2 .ai-simple-actions { gap: 6px; }
-.world-ui-v2 .ai-simple-actions article { min-height: 43px; padding: 9px 10px; grid-template-columns: 26px minmax(0,1fr) auto; }
-.world-ui-v2 .ai-simple-actions article > i { width: 25px; height: 25px; font-size: 10px; }
-.world-ui-v2 .ai-simple-actions span { color: #9cb8c0; font-size: 9px; }
-.world-ui-v2 .ai-simple-actions article > div strong { color: #e3eef0; font-size: 11px; }
-.world-ui-v2 .ai-simple-actions article > b { color: #bad0d5; font-size: 10px; }
-
 .world-ui-v2 .simple-projects { gap: 6px; }
 .world-ui-v2 .simple-projects article { padding: 9px 10px; }
 .world-ui-v2 .simple-projects span { font-size: 9.5px; }
@@ -2253,107 +2256,251 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
 .world-ui-v2 .war-tracker__operation > div:last-child b,
 .world-ui-v2 .war-tracker__cost b { font-size: 10px; }
 
-/* One honest, compact readout of existing war pressure. It sits above the
-   detailed war cards so the map centre remains clear. */
+/* One restrained, centred readout of existing war pressure. */
 .world-ui-v2 .war-strain-meter {
   --strain-color: #68dfa9;
-  padding: 9px 10px;
-  border: 1px solid color-mix(in srgb, var(--strain-color) 32%, transparent);
-  border-radius: 9px;
-  background: linear-gradient(105deg, color-mix(in srgb, var(--strain-color) 8%, rgba(4, 16, 27, .93)), rgba(4, 16, 27, .92));
+  padding: 6px 8px 7px;
+  border: 1px solid color-mix(in srgb, var(--strain-color) 20%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--strain-color) 3%, rgba(4, 16, 27, .88));
 }
-.world-ui-v2 .war-tracker > .war-strain-meter { margin-bottom: 9px; }
+
+/* Direct Connect multiplayer lobby */
+.multiplayer-lobby-layer {
+  position: fixed;
+  z-index: 500;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  pointer-events: auto;
+  background: radial-gradient(circle at 50% 22%, rgba(29, 90, 113, .24), transparent 42%), rgba(2, 9, 16, .88);
+  backdrop-filter: blur(12px);
+}
+
+.multiplayer-lobby-card {
+  position: relative;
+  width: min(940px, 100%);
+  max-height: min(860px, calc(100vh - 48px));
+  overflow: auto;
+  padding: 30px;
+  border: 1px solid rgba(133, 220, 238, .24);
+  border-radius: 18px;
+  background: linear-gradient(145deg, rgba(8, 25, 39, .985), rgba(3, 14, 24, .99));
+  box-shadow: 0 32px 90px rgba(0, 0, 0, .58), inset 0 1px rgba(255, 255, 255, .04);
+  color: #eaf8fa;
+}
+
+.multiplayer-lobby-card h1,
+.multiplayer-lobby-card h2,
+.multiplayer-lobby-card h3,
+.multiplayer-lobby-card p { margin-top: 0; }
+.multiplayer-lobby-card h1 { max-width: 670px; margin-bottom: 12px; font-size: clamp(28px, 4vw, 46px); line-height: 1.02; }
+.multiplayer-lobby-card h2 { margin-bottom: 8px; font-size: 25px; }
+.multiplayer-lobby-card h3 { margin-bottom: 6px; font-size: 13px; letter-spacing: .4px; }
+.multiplayer-lobby-card p { color: #a9c1c8; font-size: 13px; line-height: 1.55; }
+.multiplayer-lobby-card .modal-close { top: 16px; right: 16px; }
+
+.mp-lobby__intro { max-width: 720px; margin: 12px auto 4px; text-align: center; }
+.mp-lobby__intro > p { max-width: 650px; margin: 0 auto 24px; }
+.mp-setup { width: min(650px, 100%); margin: 8px auto 22px; }
+.mp-field { display: grid; gap: 7px; margin: 16px 0; text-align: left; }
+.mp-field > span { color: #82ddeb; font-size: 9px; font-weight: 800; letter-spacing: 1.25px; }
+.mp-field input,
+.mp-field textarea,
+.mp-connect-grid textarea,
+.mp-answer-callout textarea,
+.mp-player select {
+  width: 100%;
+  min-height: 43px;
+  padding: 11px 12px;
+  border: 1px solid rgba(143, 213, 226, .19);
+  border-radius: 9px;
+  outline: none;
+  background: rgba(1, 10, 18, .68);
+  color: #edf9fa;
+  font: inherit;
+}
+.mp-field textarea,
+.mp-connect-grid textarea,
+.mp-answer-callout textarea { min-height: 82px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 9px; line-height: 1.35; }
+.mp-field input:focus,
+.mp-field textarea:focus,
+.mp-connect-grid textarea:focus,
+.mp-player select:focus { border-color: rgba(102, 221, 242, .65); box-shadow: 0 0 0 3px rgba(102, 221, 242, .08); }
+
+.mp-choice { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 22px 0 16px; }
+.mp-choice button { min-height: 78px; display: grid; align-content: center; gap: 5px; }
+.mp-choice button b { font-size: 13px; }
+.mp-choice button small { opacity: .74; font-size: 10px; text-transform: none; letter-spacing: 0; }
+.mp-caveat { display: block; max-width: 640px; margin: 18px auto 0; color: #77939c; line-height: 1.5; }
+
+.mp-room__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin: 4px 0 18px; padding-right: 38px; }
+.mp-room__head > span { padding: 7px 10px; border: 1px solid rgba(106, 222, 242, .22); border-radius: 999px; color: #9debf5; background: rgba(83, 200, 223, .08); font-size: 9px; font-weight: 800; letter-spacing: .8px; }
+.mp-player-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-bottom: 16px; }
+.mp-player { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 12px; border: 1px solid rgba(140, 198, 209, .12); border-radius: 10px; background: rgba(4, 17, 27, .7); }
+.mp-player.is-local { border-color: rgba(105, 222, 241, .34); background: rgba(41, 115, 135, .12); }
+.mp-player.is-offline { opacity: .48; }
+.mp-player__identity { min-width: 0; display: flex; align-items: center; gap: 9px; }
+.mp-player__identity > span { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 50%; background: rgba(255, 255, 255, .06); font-size: 17px; }
+.mp-player__identity div { min-width: 0; display: grid; gap: 2px; }
+.mp-player__identity strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.mp-player__identity small { color: #77939c; font-size: 8px; font-weight: 800; letter-spacing: .8px; }
+.mp-player > b { overflow: hidden; color: #b8cbd0; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.mp-player select { width: min(250px, 52%); min-height: 37px; padding: 8px 9px; font-size: 10px; }
+.mp-empty { padding: 22px; border: 1px dashed rgba(140, 198, 209, .16); border-radius: 10px; color: #7f9aa2; text-align: center; }
+
+.mp-connect-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.mp-connect-grid section,
+.mp-answer-callout { padding: 15px; border: 1px solid rgba(140, 198, 209, .13); border-radius: 11px; background: rgba(1, 10, 18, .48); }
+.mp-connect-grid section p,
+.mp-answer-callout p { margin-bottom: 10px; font-size: 10px; }
+.mp-connect-grid button,
+.mp-answer-callout button { width: 100%; margin-top: 8px; }
+.mp-answer-callout { margin-bottom: 14px; border-color: rgba(241, 190, 102, .25); background: rgba(111, 76, 24, .09); }
+
+.mp-room__actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 16px; }
+.mp-room__actions > span { margin-right: auto; color: #78949c; font-size: 10px; }
+.mp-room__actions .is-ready { border-color: rgba(104, 226, 157, .42); color: #8ff0b7; background: rgba(65, 165, 107, .12); }
+.mp-start-note { display: block; margin-top: 9px; color: #78949c; text-align: right; }
+.mp-status { min-height: 34px; display: flex; align-items: center; gap: 8px; margin: 20px -10px -14px; padding: 10px 12px 0; border-top: 1px solid rgba(140, 198, 209, .09); color: #8ba5ad; font-size: 10px; }
+.mp-status i { width: 7px; height: 7px; flex: none; border-radius: 50%; background: #65d4e8; box-shadow: 0 0 10px rgba(101, 212, 232, .55); }
+.mp-status.has-error { color: #ffaaa4; }
+.mp-status.has-error i { background: #ff756c; box-shadow: 0 0 10px rgba(255, 117, 108, .5); }
+.mp-status b { margin-left: auto; color: #8fe7f2; font-size: 8px; letter-spacing: 1px; }
+
+@media (max-width: 700px) {
+  .multiplayer-lobby-layer { padding: 8px; align-items: stretch; }
+  .multiplayer-lobby-card { max-height: none; min-height: calc(100vh - 16px); padding: 24px 16px 18px; border-radius: 13px; }
+  .mp-choice,
+  .mp-player-list,
+  .mp-connect-grid { grid-template-columns: 1fr; }
+  .mp-room__head { display: block; }
+  .mp-room__head > span { display: inline-block; margin-top: 6px; }
+  .mp-player { align-items: flex-start; flex-direction: column; }
+  .mp-player select { width: 100%; }
+  .mp-room__actions { align-items: stretch; flex-direction: column; }
+  .mp-room__actions button { width: 100%; }
+  .mp-room__actions > span { margin: 0; text-align: center; }
+}
 .world-ui-v2 .war-strain-meter--stretched,
 .world-ui-v2 .war-strain-meter--recovering { --strain-color: #e8bc67; }
 .world-ui-v2 .war-strain-meter--overextended { --strain-color: #f18b63; }
 .world-ui-v2 .war-strain-meter--critical { --strain-color: #ff625c; }
 .world-ui-v2 .war-strain-meter--standalone {
   position: absolute;
-  top: 80px;
+  top: 74px;
   left: 50%;
-  z-index: 24;
-  width: min(470px, calc(100vw - 440px));
-  min-width: 410px;
+  z-index: 23;
+  width: min(320px, calc(100vw - 32px));
   transform: translateX(-50%);
   pointer-events: auto;
-  box-shadow: 0 14px 38px rgba(0,0,0,.46), 0 0 22px color-mix(in srgb, var(--strain-color) 12%, transparent);
+  box-shadow: 0 7px 20px rgba(0,0,0,.28);
+}
+.world-ui-v2:has(.war-strain-meter--standalone) .war-tracker { top: 124px; }
+.world-ui-v2:has(.war-strain-meter--standalone) .world-panel.command-drawer { top: 124px; }
+@media (min-width: 841px) {
+  .world-ui-v2:has(.war-strain-meter--standalone) .world-panel.command-drawer {
+    max-height: calc(100vh - 198px);
+  }
 }
 .world-ui-v2 .war-strain-meter__head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px;
 }
 .world-ui-v2 .war-strain-meter__head > span {
-  color: #aec5cb;
-  font-size: 9px;
+  color: #91a8ae;
+  font-size: 7.5px;
   font-weight: 850;
-  letter-spacing: .7px;
+  letter-spacing: .65px;
 }
 .world-ui-v2 .war-strain-meter__head > strong {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 5px;
   color: var(--strain-color);
-  font-size: 10px;
-  letter-spacing: .4px;
+  font-size: 8px;
+  letter-spacing: .35px;
 }
 .world-ui-v2 .war-strain-meter__head > strong b {
-  padding: 2px 5px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--strain-color) 13%, transparent);
-  font-size: 9px;
+  color: #a9bbc0;
+  font-size: 7.5px;
 }
 .world-ui-v2 .war-strain-meter__track {
-  height: 7px;
-  margin: 7px 0;
+  height: 3px;
+  margin: 5px 0 4px;
   display: block;
   overflow: hidden;
   border-radius: 99px;
-  background: rgba(255,255,255,.065);
+  background: rgba(255,255,255,.055);
 }
 .world-ui-v2 .war-strain-meter__track b {
   height: 100%;
   display: block;
   border-radius: inherit;
   background: linear-gradient(90deg, #68dfa9 0%, #e8bc67 42%, #f18b63 67%, #ff625c 100%);
+  opacity: .78;
   transition: width .35s ease;
 }
-.world-ui-v2 .war-strain-meter__summary {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 6px 12px;
-  align-items: center;
-}
-.world-ui-v2 .war-strain-meter__summary p {
-  margin: 0;
-  color: #dbe8eb;
-  font-size: 9.5px;
-  line-height: 1.35;
-}
-.world-ui-v2 .war-strain-meter__summary small {
-  color: #9fb5bc;
-  font-size: 8.5px;
-  text-align: right;
-}
-.world-ui-v2 .war-strain-meter__effects {
-  margin-top: 7px;
-  padding-top: 7px;
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 5px;
-  border-top: 1px solid rgba(255,255,255,.06);
-}
-.world-ui-v2 .war-strain-meter__effects span {
-  min-width: 0;
+.world-ui-v2 .war-strain-meter__detail {
   display: flex;
+  align-items: center;
   justify-content: space-between;
-  gap: 4px;
-  color: #91aab2;
-  font-size: 8px;
+  gap: 8px;
+  color: #81979e;
+  font-size: 7px;
   white-space: nowrap;
 }
-.world-ui-v2 .war-strain-meter__effects b { color: var(--strain-color); font-size: 8.5px; }
+.world-ui-v2 .war-strain-meter__detail b { color: #9eb1b6; font-size: inherit; font-weight: 700; }
+
+/* Incoming peace decisions stay noticeable without spanning the playfield. */
+.world-ui-v2 .decision-banner {
+  z-index: 40;
+  right: auto;
+  bottom: 75px;
+  left: 50%;
+  width: min(480px, calc(100vw - 36px));
+  min-height: 38px;
+  padding: 5px 6px 5px 7px;
+  grid-template-columns: 24px minmax(0, 1fr) auto auto;
+  gap: 6px;
+  border-color: color-mix(in srgb, var(--sender) 22%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--sender) 3%, rgba(4, 16, 27, .91));
+  transform: translateX(-50%);
+  box-shadow: 0 7px 22px rgba(0,0,0,.28);
+}
+.world-ui-v2 .decision-banner > i {
+  width: 22px;
+  height: 16px;
+  border: 0;
+  border-radius: 3px;
+}
+.world-ui-v2 .decision-banner > div { min-width: 0; }
+.world-ui-v2 .decision-banner span {
+  overflow: hidden;
+  color: color-mix(in srgb, var(--sender) 72%, #b7c9ce);
+  font-size: 6.5px;
+  letter-spacing: .65px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.world-ui-v2 .decision-banner strong {
+  overflow: hidden;
+  margin-top: 1px;
+  color: #b8c9ce;
+  font-size: 8px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.world-ui-v2 .decision-banner button {
+  min-height: 25px;
+  padding: 0 8px;
+  font-size: 7px;
+}
 
 .world-ui-v2 #tooltip,
 #tooltip { width: 244px; padding: 13px 14px; border-color: rgba(174,222,233,.32); background: rgba(3, 15, 25, .985); }
@@ -2446,9 +2593,10 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
   .world-ui-v2 .world-panel.command-drawer,
   .world-ui-v2 .war-tracker { top: 126px; }
   .world-ui-v2 .war-tracker { right: 8px; left: 8px; width: auto; min-width: 0; }
-  .world-ui-v2 .war-strain-meter--standalone { top: 126px; right: 8px; left: 8px; width: auto; min-width: 0; transform: none; }
-  .world-ui-v2 .war-strain-meter__summary { grid-template-columns: 1fr; }
-  .world-ui-v2 .war-strain-meter__summary small { text-align: left; }
+  .world-ui-v2 .war-strain-meter--standalone { top: 126px; width: min(320px, calc(100vw - 16px)); }
+  .world-ui-v2:has(.war-strain-meter--standalone) .world-panel.command-drawer,
+  .world-ui-v2:has(.war-strain-meter--standalone) .war-tracker { top: 174px; }
+  .world-ui-v2 .decision-banner { right: auto; bottom: 121px; left: 50%; width: min(480px, calc(100vw - 16px)); transform: translateX(-50%); }
   .country-select__head p { font-size: 13px; }
   .world-ui-v2 .command-dock { right: 8px; left: 8px; width: auto; }
 }
@@ -2465,8 +2613,14 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
   .world-ui-v2 .command-dock b { font-size: 9px; }
   .world-ui-v2 .command-dock small { font-size: 8px; }
   .progress-summary,.progress-milestones { grid-template-columns: 1fr; }
-  .world-ui-v2 .war-strain-meter__summary p { display: none; }
-  .world-ui-v2 .war-strain-meter__effects { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .world-ui-v2 .war-strain-meter__detail { font-size: 6.5px; }
+  .world-ui-v2 .decision-banner { grid-template-columns: 22px minmax(0,1fr) auto auto; }
+  .world-ui-v2 .decision-banner > button:first-of-type { display: inline-flex; }
+  .world-ui-v2 .war-summary-grid--compact { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .world-ui-v2 .war-summary-grid--compact > :last-child { grid-column: 1 / -1; }
+  .world-ui-v2 .war-card-compact__metrics { grid-template-columns: 1fr !important; }
+  .world-ui-v2 .war-tracker__quick { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .world-ui-v2 .war-tracker__quick > :last-child { grid-column: 1 / -1; }
 }
 
 /* Economy truth sheet ---------------------------------------------------- */
@@ -3043,6 +3197,51 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
   font-weight: 850;
   letter-spacing: .15px;
 }
+.world-ui-v2 .power-modifier-label {
+  margin-top: 7px;
+  color: #7f98a0;
+  font-size: 6.5px;
+  font-weight: 900;
+  letter-spacing: .45px;
+}
+.world-ui-v2 .national-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+}
+.world-ui-v2 .national-stats-grid article {
+  min-width: 0;
+  min-height: 52px;
+  padding: 7px 8px;
+  border: 1px solid rgba(255, 255, 255, .045);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, .018);
+}
+.world-ui-v2 .national-stats-grid span,
+.world-ui-v2 .national-stats-grid strong,
+.world-ui-v2 .national-stats-grid small { display: block; }
+.world-ui-v2 .national-stats-grid span {
+  color: #76919a;
+  font-size: 7px;
+  font-weight: 900;
+  letter-spacing: .45px;
+}
+.world-ui-v2 .national-stats-grid strong {
+  margin-top: 3px;
+  overflow: hidden;
+  color: #dcebed;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.world-ui-v2 .national-stats-grid small {
+  margin-top: 2px;
+  overflow: hidden;
+  color: #829ba3;
+  font-size: 7px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .world-ui-v2 .nation-reaction-block {
   margin-top: 8px;
   padding: 11px;
@@ -3106,12 +3305,6 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
   margin: 8px 0 0;
   padding: 9px 10px;
 }
-.world-ui-v2 .nation-command .ai-simple-actions article {
-  border: 1px solid rgba(255, 255, 255, .05);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, .018);
-}
-
 .world-ui-v2 .research-surge-card.research-surge-card--clean {
   margin-top: 8px;
   padding: 10px 11px;
@@ -3297,6 +3490,140 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
   color: #8fa8b0;
   font-size: 9px;
 }
+.world-ui-v2 .war-summary-grid--compact {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.world-ui-v2 .war-summary-grid--compact .simple-economy-card {
+  min-height: 62px;
+  padding: 9px 10px;
+}
+.world-ui-v2 .war-command .war-list .war-card-compact {
+  padding: 9px 10px;
+}
+.world-ui-v2 .war-command .war-list .war-card-compact > .war-card-compact__head {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+  gap: 8px;
+}
+.world-ui-v2 .war-card-compact__head > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.world-ui-v2 .war-card-compact__head > b { font-size: 12px; }
+.world-ui-v2 .war-command .war-list .war-card-compact > .war-card-compact__state {
+  margin-top: 6px;
+  padding: 5px 7px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid color-mix(in srgb, var(--enemy) 14%, rgba(255,255,255,.04));
+  border-radius: 6px;
+  background: rgba(255,255,255,.018);
+}
+.world-ui-v2 .war-card-compact__state span {
+  margin: 0;
+  color: color-mix(in srgb, var(--enemy) 68%, #b8cbd0);
+  font-size: 8px;
+  font-weight: 850;
+  letter-spacing: .45px;
+}
+.world-ui-v2 .war-command .war-list .war-card-compact > .war-card-compact__metrics {
+  margin-top: 6px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+}
+.world-ui-v2 .war-card-compact__metrics > span {
+  min-width: 0;
+  padding: 6px 7px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  border: 1px solid rgba(255,255,255,.045);
+  border-radius: 6px;
+  background: rgba(255,255,255,.014);
+}
+.world-ui-v2 .war-card-compact__metrics small {
+  color: #78939c;
+  font-size: 6.5px;
+  font-weight: 850;
+  letter-spacing: .5px;
+}
+.world-ui-v2 .war-card-compact__metrics b {
+  overflow: hidden;
+  color: #d4e4e7;
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.world-ui-v2 .war-command .war-list .war-card-compact > .war-card-actions {
+  margin-top: 6px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+}
+.world-ui-v2 .war-command .war-list .war-card-compact > .war-card-actions:has(> :only-child) {
+  grid-template-columns: 1fr;
+}
+.world-ui-v2 .war-intel-card--compact { min-height: 50px; }
+.world-ui-v2 .war-intel-card--compact > div > small b { font-size: inherit; }
+
+/* The persistent tracker is a glanceable war balance, not a second detail panel. */
+.world-ui-v2 .war-tracker--compact {
+  width: min(540px, calc(100vw - 750px));
+  padding: 7px 8px;
+}
+.world-ui-v2 .war-tracker--compact .war-tracker__title {
+  height: 20px;
+  padding-bottom: 5px;
+}
+.world-ui-v2 .war-tracker--compact .war-tracker__focus {
+  padding: 7px 5px 6px;
+  gap: 6px;
+}
+.world-ui-v2 .war-tracker__quick {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1.15fr;
+  gap: 5px;
+}
+.world-ui-v2 .war-tracker__quick > span {
+  min-width: 0;
+  padding: 5px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 1px solid rgba(255,255,255,.045);
+  border-radius: 5px;
+  background: rgba(255,255,255,.014);
+}
+.world-ui-v2 .war-tracker__quick small {
+  color: #79949d;
+  font-size: 6.5px;
+  font-weight: 850;
+  letter-spacing: .5px;
+}
+.world-ui-v2 .war-tracker__quick b {
+  overflow: hidden;
+  color: #d7e6e9;
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.world-ui-v2 .war-tracker__balance {
+  height: 3px;
+  display: block;
+  overflow: hidden;
+  border-radius: 99px;
+  background: color-mix(in srgb, var(--enemy) 72%, rgba(255,255,255,.08));
+}
+.world-ui-v2 .war-tracker__balance b {
+  height: 100%;
+  display: block;
+  border-radius: inherit;
+  background: #65dfaa;
+}
 
 /* Persistent desktop post-war debrief. One queued campaign is shown at a time. */
 .world-ui-v2 .war-outcome-backdrop {
@@ -3397,13 +3724,20 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
   font-size: 9px;
   line-height: 1.4;
 }
-.world-ui-v2 .war-outcome-card--civilians {
-  border-color: rgba(238, 160, 104, .22);
-  background: linear-gradient(120deg, rgba(181, 91, 61, .075), rgba(7, 23, 35, .62));
+.world-ui-v2 .war-outcome-card--military {
+  border-color: rgba(255, 119, 113, .27);
+  background: linear-gradient(120deg, rgba(182, 67, 61, .10), rgba(7, 23, 35, .62));
 }
-.world-ui-v2 .war-outcome-card--civilians > span { color: #e9ae76; }
-.world-ui-v2 .war-outcome-card--civilians > strong { color: #f1c7a7; }
-.world-ui-v2 .war-outcome-card--civilians > small { color: #b29c8d; }
+.world-ui-v2 .war-outcome-card--military > span { color: #ff8d86; }
+.world-ui-v2 .war-outcome-card--military > strong { color: #ffd0cd; }
+.world-ui-v2 .war-outcome-card--military > small { color: #b99a98; }
+.world-ui-v2 .war-outcome-card--civilians {
+  border-color: rgba(238, 160, 104, .10);
+  background: rgba(7, 23, 35, .54);
+}
+.world-ui-v2 .war-outcome-card--civilians > span { color: #9f9288; }
+.world-ui-v2 .war-outcome-card--civilians > strong { color: #c6bab1; font-size: 11px; }
+.world-ui-v2 .war-outcome-card--civilians > small { color: #877d76; }
 .world-ui-v2 .war-outcome-quality {
   border-color: rgba(240, 189, 104, .2);
   background: linear-gradient(120deg, rgba(240, 189, 104, .055), rgba(7, 23, 35, .62));
@@ -3851,6 +4185,7 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
   .world-ui-v2 .war-intel-card { grid-template-columns: 30px minmax(0, 1fr) auto; }
   .world-ui-v2 .war-intel-metrics em { display: none; }
   .world-ui-v2 .national-strength-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .world-ui-v2 .national-stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .world-ui-v2 .simple-war-decision-grid,
   .world-ui-v2 .research-surge-programs { grid-template-columns: 1fr; }
   .world-ui-v2 .simple-war-decision-grid__wide { grid-column: 1; }
@@ -3862,6 +4197,15 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
   .world-ui-v2 .fusion-flow__arrow { justify-self: center; transform: rotate(90deg); }
   .world-ui-v2 .fusion-first-battle { align-items: flex-start; flex-wrap: wrap; }
   .world-ui-v2 .fusion-first-battle span { flex-basis: 100%; }
+}
+
+@media (max-width: 840px) {
+  .world-ui-v2 .war-tracker--compact {
+    right: 8px;
+    left: 8px;
+    width: auto;
+    min-width: 0;
+  }
 }
 
 /* Map territory inspector ------------------------------------------------- */
@@ -3884,9 +4228,6 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
   display: block;
   margin-top: 4px;
   line-height: 1.35;
-}
-.world-ui-v2 .territory-inspector .foreign-control-alert {
-  margin-bottom: 7px;
 }
 .world-ui-v2 .territory-owner-summary {
   margin-bottom: 7px;

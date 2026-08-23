@@ -31,6 +31,10 @@ const focusedAllocations: ResearchAllocationsV2 = {
   'defensive-systems': 0,
   'logistics-medicine': 0,
   'economy-science': 0,
+  'food-systems': 0,
+  'reserve-doctrine': 0,
+  'public-administration': 0,
+  'education-intelligence': 0,
 };
 
 function belgiumState(seed: number) {
@@ -115,7 +119,7 @@ describe('targeted Research Surge', () => {
     );
   });
 
-  it('rejects a runtime target that is not one of the six existing programs', () => {
+  it('rejects a runtime target that is not one of the ten existing programs', () => {
     const state = belgiumState(2_405);
     const invalid = selectResearchSurgeTermsV2(
       state,

@@ -69,7 +69,7 @@ function processMilitaryAndCondition(
       territory.army.baseDefense = projected.baseDefense;
     }
     const isConquered = territory.coreOwner !== territory.owner;
-    // Occupied infrastructure cannot recover at homeland speed. Restoration
+    // Newly conquered infrastructure cannot recover at homeland speed. Restoration
     // accelerates only as administration and local supply chains return.
     const reconstructionReadiness = isConquered
       ? 0.18 + 0.82 * clamp(territory.integration, 0, 1)
@@ -94,6 +94,7 @@ function processDevelopment(
     content,
     playerId,
     finance.populationGrowth,
+    finance.foodTargetStock,
   );
   const economyMultiplier = Math.max(0, 1 + annualEconomy) ** (1 / 52);
   for (const view of territories) {

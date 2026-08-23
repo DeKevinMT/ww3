@@ -24,7 +24,7 @@ import {
   NATIONAL_AI_WAR_FREE_CASHFLOW_SHARE_MAX,
   NATIONAL_AI_WAR_FREE_CASHFLOW_SHARE_MIN,
   NATIONAL_AI_WAR_FRONT_RUNWAY_WEEKS,
-  NATIONAL_IQ_SCORE_MAX,
+  NATIONAL_IQ_EFFECTIVE_SCORE_MAX,
   NATIONAL_IQ_SCORE_MIN,
   NATIONAL_IQ_SCORE_NEUTRAL,
   RESEARCH_BRANCHES,
@@ -117,7 +117,7 @@ function boost(
 
 function normalizedIqV2(iqScore: number): number {
   return Math.max(0, Math.min(1,
-    (iqScore - NATIONAL_IQ_SCORE_MIN) / (NATIONAL_IQ_SCORE_MAX - NATIONAL_IQ_SCORE_MIN),
+    (iqScore - NATIONAL_IQ_SCORE_MIN) / (NATIONAL_IQ_EFFECTIVE_SCORE_MAX - NATIONAL_IQ_SCORE_MIN),
   ));
 }
 
@@ -126,7 +126,7 @@ function normalizedIqV2(iqScore: number): number {
  * only skill input; selecting a country never changes its value.
  */
 export function nationalAiEfficiencyV2(iqScore: number): number {
-  const bounded = Math.max(NATIONAL_IQ_SCORE_MIN, Math.min(NATIONAL_IQ_SCORE_MAX, iqScore));
+  const bounded = Math.max(NATIONAL_IQ_SCORE_MIN, Math.min(NATIONAL_IQ_EFFECTIVE_SCORE_MAX, iqScore));
   return 1 + (bounded - NATIONAL_IQ_SCORE_NEUTRAL) * NATIONAL_AI_EFFICIENCY_PER_IQ_POINT;
 }
 

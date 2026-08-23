@@ -1,4 +1,12 @@
 import { describe, expect, it } from 'vitest';
+import {
+  CEASEFIRE_PAYEE_WEEKLY_REVENUE_CAP_SHARE,
+  CEASEFIRE_PAYMENT_WEEKS,
+  CEASEFIRE_PAYER_WEEKLY_REVENUE_SHARE,
+  CEASEFIRE_REPEAT_COST_MULTIPLIER,
+  PEACE_REQUEST_COOLDOWN_TICKS,
+  round,
+} from './balance';
 import { createWorldStateV2 } from './bootstrap';
 import { WORLD_CONTENT_V2 } from './content';
 import { createFinancePlansV2, processDevelopmentPhaseV2, processFinanceMilitaryV2 } from './economy';
@@ -10,7 +18,7 @@ import {
   selectWeeklyPopulationTrendV2,
 } from './selectors';
 import { nationIdV2, territoryIdV2, type WorldStateV2 } from './types';
-import { requestCeasefireV2, respondToOfferV2 } from './war';
+import { ceasefireTermsV2, requestCeasefireV2, respondToOfferV2 } from './war';
 
 function addFront(state: WorldStateV2, index: number, defenderId: 'nld' | 'lux'): void {
   state.wars.push({
@@ -49,15 +57,15 @@ describe('V2 wartime economy pressure', () => {
     const twoPressure = selectWarPressureV2(twoFronts, belgium);
 
     expect(peacePressure.outputPenalty).toBeGreaterThan(0);
-    expect(peacePressure.outputPenalty).toBeLessThanOrEqual(0.05);
+    expect(peacePressure.outputPenalty).toBeLessThanOrEqual(0.03);
     expect(peacePressure.populationGrowthDrag).toBeGreaterThan(0);
     expect(peacePressure.researchPenalty).toBeGreaterThan(0);
     expect(onePressure.outputPenalty).toBeGreaterThan(peacePressure.outputPenalty);
     expect(twoPressure.outputPenalty).toBeGreaterThan(onePressure.outputPenalty);
     expect(twoPressure.populationGrowthDrag).toBeGreaterThan(onePressure.populationGrowthDrag);
-    expect(onePressure.outputPenalty).toBeGreaterThan(0.08);
-    expect(onePressure.populationGrowthDrag).toBeGreaterThan(0.007);
-    expect(onePressure.researchPenalty).toBeGreaterThan(0.25);
+    expect(onePressure.outputPenalty).toBeCloseTo(0.074, 6);
+    expect(onePressure.populationGrowthDrag).toBeCloseTo(0.0052, 6);
+    expect(onePressure.researchPenalty).toBeCloseTo(0.178, 6);
 
     const peaceEconomy = selectNationalEconomyV2(peace, WORLD_CONTENT_V2, belgium);
     const oneEconomy = selectNationalEconomyV2(oneFront, WORLD_CONTENT_V2, belgium);
@@ -116,8 +124,8 @@ describe('V2 wartime economy pressure', () => {
     expect(state.players[nationIdV2('bel')].warFatigue).toBeGreaterThanOrEqual(8);
     expect(state.players[nationIdV2('nld')].warFatigue).toBeGreaterThanOrEqual(8);
     const transition = selectWarPressureV2(state, nationIdV2('bel'));
-    expect(transition.outputPenalty).toBeCloseTo(0.05, 6);
-    expect(transition.researchPenalty).toBeCloseTo(0.15, 6);
+    expect(transition.outputPenalty).toBeCloseTo(0.03, 6);
+    expect(transition.researchPenalty).toBeCloseTo(0.08, 6);
 
     const recoveryWeeks = Math.ceil(state.players[nationIdV2('bel')].warFatigue / 0.25);
     for (let week = 0; week < recoveryWeeks; week += 1) {
@@ -155,6 +163,57 @@ describe('V2 wartime economy pressure', () => {
     expect(state.players[belgium]!.warFatigue).toBe(16);
   });
 
+  it('prices surrender as a major one-year burden and escalates repeat exits', () => {
+    const state = pressureState(1);
+    const belgium = nationIdV2('bel');
+    const opponent = nationIdV2('nld');
+    state.tick = 52;
+    const payerRevenue = selectNationalEconomyV2(state, WORLD_CONTENT_V2, belgium).weeklyRevenue;
+    const payeeRevenue = selectNationalEconomyV2(state, WORLD_CONTENT_V2, opponent).weeklyRevenue;
+    const first = ceasefireTermsV2(state, WORLD_CONTENT_V2, state.wars[0]!.id, belgium);
+    const balancedBase = Math.min(
+      payerRevenue * CEASEFIRE_PAYER_WEEKLY_REVENUE_SHARE,
+      payeeRevenue * CEASEFIRE_PAYEE_WEEKLY_REVENUE_CAP_SHARE,
+    );
+    const expectedWeekly = round(Math.max(0.001, balancedBase));
+
+    expect(first.allowed).toBe(true);
+    expect(first.weeklyCost).toBe(expectedWeekly);
+    expect(first.totalCost).toBe(round(expectedWeekly * CEASEFIRE_PAYMENT_WEEKS));
+
+    state.players[belgium]!.ceasefiresRequested = 1;
+    const repeat = ceasefireTermsV2(state, WORLD_CONTENT_V2, state.wars[0]!.id, belgium);
+    expect(repeat.repeatMultiplier).toBe(CEASEFIRE_REPEAT_COST_MULTIPLIER);
+    expect(repeat.weeklyCost).toBe(round(Math.max(
+      0.001,
+      balancedBase * CEASEFIRE_REPEAT_COST_MULTIPLIER,
+    )));
+  });
+
+  it('replaces the one-off peace request with a clear retry cooldown', () => {
+    const state = pressureState(1);
+    const belgium = nationIdV2('bel');
+    const war = state.wars[0]!;
+    state.tick = 52;
+
+    expect(requestCeasefireV2(state, WORLD_CONTENT_V2, war.id, belgium).accepted).toBe(true);
+    const offer = state.offers.find((candidate) => candidate.warId === war.id)!;
+    expect(respondToOfferV2(state, WORLD_CONTENT_V2, offer.id, false).accepted).toBe(true);
+    expect(ceasefireTermsV2(state, WORLD_CONTENT_V2, war.id, belgium).cooldownRemaining)
+      .toBe(PEACE_REQUEST_COOLDOWN_TICKS);
+
+    state.tick += PEACE_REQUEST_COOLDOWN_TICKS - 1;
+    const waiting = ceasefireTermsV2(state, WORLD_CONTENT_V2, war.id, belgium);
+    expect(waiting.allowed).toBe(false);
+    expect(waiting.cooldownRemaining).toBe(1);
+
+    state.tick += 1;
+    const retry = ceasefireTermsV2(state, WORLD_CONTENT_V2, war.id, belgium);
+    expect(retry.allowed).toBe(true);
+    expect(retry.cooldownRemaining).toBe(0);
+    expect(requestCeasefireV2(state, WORLD_CONTENT_V2, war.id, belgium).accepted).toBe(true);
+  });
+
   it('makes repeat-war operations progressively more expensive with a bounded surcharge', () => {
     const belgium = nationIdV2('bel');
     const operationsAt = (fatigue: number): number => {
@@ -164,9 +223,9 @@ describe('V2 wartime economy pressure', () => {
     };
 
     const fresh = operationsAt(0);
-    expect(operationsAt(8) / fresh).toBeCloseTo(1.20, 4);
-    expect(operationsAt(16) / fresh).toBeCloseTo(1.40, 4);
-    expect(operationsAt(20) / fresh).toBeCloseTo(1.50, 4);
+    expect(operationsAt(8) / fresh).toBeCloseTo(1.12, 4);
+    expect(operationsAt(16) / fresh).toBeCloseTo(1.24, 4);
+    expect(operationsAt(20) / fresh).toBeCloseTo(1.30, 4);
     expect(operationsAt(80)).toBeCloseTo(operationsAt(20), 6);
   });
 });

@@ -9,6 +9,11 @@ import { createWorldStateV2 } from './bootstrap';
 import { WORLD_CONTENT_V2, type WorldContentV2 } from './content';
 import { createFinancePlansV2, processFinanceMilitaryV2 } from './economy';
 import {
+  INITIAL_RESERVE_CADRE_CAPACITY_SHARE_V2,
+  INITIAL_REPORTED_RESERVE_READY_SHARE_V2,
+  initialTrainedReserveManpowerV2,
+} from './reserveForces';
+import {
   projectFinanceManpowerPhaseV2,
   activeArmyReadyForReserveTrainingV2,
   selectRecruitmentTrainingPipelineV2,
@@ -62,6 +67,49 @@ function fundedState(seed: number): WorldStateV2 {
 }
 
 describe('finite trained reserves', () => {
+  it('starts every country with a positive reserve inside the shared one-army cap', () => {
+    const state = createWorldStateV2(71_000);
+    for (const id of WORLD_CONTENT_V2.nationIds) {
+      const capacity = selectTrainedReserveCapacityV2(state, id);
+      expect(state.players[id]!.trainedReserves, String(id)).toBeGreaterThan(0);
+      expect(state.players[id]!.trainedReserves, String(id)).toBeLessThanOrEqual(capacity);
+    }
+  });
+
+  it('preserves real reserve-system differences while adapting them to the game cap', () => {
+    const state = createWorldStateV2(71_011);
+    const finland = nationIdV2('fin');
+    const israel = nationIdV2('isr');
+    const india = nationIdV2('ind');
+    const china = nationIdV2('chn');
+    const albania = nationIdV2('alb');
+
+    expect(state.players[finland]!.trainedReserves).toBe(
+      selectTrainedReserveCapacityV2(state, finland),
+    );
+    expect(state.players[israel]!.trainedReserves).toBe(
+      selectTrainedReserveCapacityV2(state, israel),
+    );
+    expect(state.players[india]!.trainedReserves).toBeCloseTo(
+      1.155 * INITIAL_REPORTED_RESERVE_READY_SHARE_V2,
+      9,
+    );
+    expect(state.players[china]!.trainedReserves).toBeCloseTo(
+      0.510 * INITIAL_REPORTED_RESERVE_READY_SHARE_V2,
+      9,
+    );
+    expect(state.players[india]!.trainedReserves).toBeGreaterThan(
+      state.players[china]!.trainedReserves,
+    );
+    expect(state.players[albania]!.trainedReserves).toBeCloseTo(
+      selectTrainedReserveCapacityV2(state, albania) * INITIAL_RESERVE_CADRE_CAPACITY_SHARE_V2,
+      9,
+    );
+    expect(initialTrainedReserveManpowerV2('unreported-fixture', 1)).toBe(
+      INITIAL_RESERVE_CADRE_CAPACITY_SHARE_V2,
+    );
+  });
+
   it('uses only a one-millionth rounding tolerance at the full-active boundary', () => {
     expect(activeArmyReadyForReserveTrainingV2(0.999998, 1)).toBe(false);
     expect(activeArmyReadyForReserveTrainingV2(0.999999, 1)).toBe(true);
@@ -78,6 +126,7 @@ describe('finite trained reserves', () => {
     expect(restoring.reserveTraining).toBe(0);
 
     setActiveFill(state, belgium, 1);
+    state.players[belgium]!.trainedReserves = 0;
     const full = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, belgium);
     expect(full.reserveTraining).toBeGreaterThan(0);
     expect(full.trainedReservesAfter).toBe(full.reserveTraining);

@@ -3,6 +3,7 @@ import { WorldEngineV2 } from '../sim/v2/WorldEngineV2';
 import { WORLD_CONTENT_V2 } from '../sim/v2/content';
 import {
   compareIntroNationMetricsV2,
+  INTRO_SORT_OPTIONS,
   IntroOpeningMetricsCacheV2,
 } from './WorldUIV2';
 
@@ -49,5 +50,28 @@ describe('intro opening metrics cache', () => {
       .map((nation) => nation.id);
 
     expect(sorted).toEqual(opening.ranking.map((entry) => entry.player.id));
+  });
+
+  it('keeps global rank and military power as distinct, clearly ordered choices', () => {
+    expect(INTRO_SORT_OPTIONS.map((option) => option.value)).toEqual([
+      'power', 'military', 'attack', 'defense', 'iq', 'manpower',
+      'economy', 'economic-growth', 'tax', 'population', 'growth',
+    ]);
+    expect(INTRO_SORT_OPTIONS.find((option) => option.value === 'military')?.label).toBe('Military power');
+  });
+
+  it('sorts the country picker by cached military power without replacing global rank', () => {
+    const engine = new WorldEngineV2(12_003);
+    const opening = new IntroOpeningMetricsCacheV2().read(engine);
+    const sorted = WORLD_CONTENT_V2.nationIds
+      .map((id) => WORLD_CONTENT_V2.nations[id])
+      .filter((nation): nation is NonNullable<typeof nation> => Boolean(nation))
+      .sort((left, right) => compareIntroNationMetricsV2(left, right, 'military', opening));
+    const sortedPower = sorted.map((nation) => opening.byNation.get(nation.id)?.military ?? 0);
+
+    expect(sortedPower).toEqual([...sortedPower].sort((left, right) => right - left));
+    for (const metrics of opening.byNation.values()) {
+      expect(metrics.military).toBe(metrics.combatPower);
+    }
   });
 });

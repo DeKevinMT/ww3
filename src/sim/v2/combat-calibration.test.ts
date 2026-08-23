@@ -279,8 +279,11 @@ describe('V2 coherent combat and forecast calibration', () => {
 
   it('never inverts an overwhelming advantage or adds a synthetic wipe', () => {
     const state = calibratedState(4_002);
-    state.territories[belTerritory].army.manpower = 0.5;
-    state.territories[belTerritory].army.capacity = 0.5;
+    // The bounded DEF curve makes larger versions of this fixture a legitimate
+    // calculated wipe. A still-overwhelming 50:1 force stays below that natural
+    // boundary so this case continues to detect synthetic route damage.
+    state.territories[belTerritory].army.manpower = 0.15;
+    state.territories[belTerritory].army.capacity = 0.15;
     state.territories[nldTerritory].army.manpower = 0.003;
     state.territories[nldTerritory].army.capacity = 0.10;
     const projected = projectCombatExchangeV2(
@@ -290,7 +293,7 @@ describe('V2 coherent combat and forecast calibration', () => {
     expect(projected.attackerLosses).toBeLessThan(0.05 * projected.defenderStrength);
     const event = resolveBattlePulseV2(state, WORLD_CONTENT_V2, war(state), operation())!;
     expect(event.defenderLosses).toBeGreaterThan(event.attackerLosses);
-    expect(event.defenderLosses).toBeGreaterThan(0.003 * 0.90);
+    expect(event.defenderLosses).toBeGreaterThan(0.003 * 0.60);
     expect(event.defenderLosses).toBeLessThan(0.003);
     expect(event.defenderLosses).toBeLessThanOrEqual(projected.defenderStrength);
     expect(state.territories[nldTerritory].army.manpower).toBeGreaterThan(0);
@@ -382,7 +385,7 @@ describe('V2 coherent combat and forecast calibration', () => {
     const midWar = result.engine.activeWarBetween('chn', 'ind');
     const indiaManpowerAtMidWar = result.engine.totalManpower('ind').deployed;
     const indiaReservesAtMidWar = result.engine.state.players[ind].trainedReserves;
-    const indiaControlAtMidWar = result.engine.state.territories[territoryIdV2('ind')].control?.share ?? 0;
+    const indiaOwnerAtMidWar = result.engine.state.territories[territoryIdV2('ind')].owner;
     let weeks = result.weeks;
     while (weeks < 200 && result.engine.activeWarBetween('chn', 'ind')) {
       result.engine.step();
@@ -396,7 +399,7 @@ describe('V2 coherent combat and forecast calibration', () => {
     expect(indiaManpowerAtMidWar).toBeGreaterThan(0);
     expect(indiaManpowerAtMidWar).toBeLessThan(result.defenderManpowerStart);
     expect(indiaReservesAtMidWar).toBeLessThan(0.001);
-    expect(indiaControlAtMidWar).toBeGreaterThan(0);
+    expect(indiaOwnerAtMidWar).toBe(ind);
     expect(result.engine.activeWarBetween('chn', 'ind')).toBeUndefined();
     expect(result.engine.territoriesOf('ind')).toHaveLength(0);
     expect(weeks).toBeGreaterThan(80);

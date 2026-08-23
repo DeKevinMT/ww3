@@ -5,6 +5,7 @@ import { stateTerritoryArmyCapacityTargetV2, synchronizeArmyCapacityV2 } from '.
 import { WORLD_CONTENT_V2 } from './content';
 import {
   beginTerritoryIntegrationV2,
+  INTEGRATION_DURATION_MULTIPLIER_V2,
   territoryIntegrationAnnualCostV2,
   territoryIntegrationDurationWeeksV2,
 } from './integration';
@@ -19,6 +20,7 @@ const LEGACY_CONTENT_VERSION_V16 = 'natural-earth-countries-2026-v6-naval';
 
 function legacySaveV16(seed: number): Record<string, any> {
   const current = structuredClone(createSaveV2(createWorldStateV2(seed), WORLD_CONTENT_V2)) as Record<string, any>;
+  delete current.humanPlayerIds;
   current.schemaVersion = 16;
   current.rulesVersion = 'frontier-command-v2.51-fixed-manual-actions';
   current.contentVersion = LEGACY_CONTENT_VERSION_V16;
@@ -57,6 +59,7 @@ function legacySaveV16(seed: number): Record<string, any> {
 
 function legacySaveV17(seed: number): Record<string, any> {
   const current = structuredClone(createSaveV2(createWorldStateV2(seed), WORLD_CONTENT_V2)) as Record<string, any>;
+  delete current.humanPlayerIds;
   current.schemaVersion = 17;
   current.rulesVersion = 'frontier-command-v2.52-integration-multifront';
   for (const nation of Object.values(current.players) as Array<Record<string, any>>) {
@@ -76,6 +79,7 @@ function legacySaveV17(seed: number): Record<string, any> {
 
 function legacySaveV19(seed: number): Record<string, any> {
   const current = structuredClone(createSaveV2(createWorldStateV2(seed), WORLD_CONTENT_V2)) as Record<string, any>;
+  delete current.humanPlayerIds;
   current.schemaVersion = 19;
   current.rulesVersion = 'frontier-command-v2.54-faster-integration';
   for (const nation of Object.values(current.players) as Array<Record<string, any>>) {
@@ -149,7 +153,7 @@ describe('V2 legacy save migration', () => {
     const belgium = nationIdV2('bel');
 
     const loaded = loadSaveV2(legacy as never, WORLD_CONTENT_V2);
-    expect(loaded.schemaVersion).toBe(20);
+    expect(loaded.schemaVersion).toBe(21);
     expect(loaded.rulesVersion).toBe(V2_RULES_VERSION);
     expect(loaded.players[belgium]).not.toHaveProperty('combatExperience');
     expect(Object.values(loaded.players).every((nation) => nation.trainedReserves === 0)).toBe(true);
@@ -172,6 +176,7 @@ describe('V2 legacy save migration', () => {
 
     const legacy = structuredClone(createSaveV2(state, WORLD_CONTENT_V2)) as Record<string, any>;
     legacy.schemaVersion = 19;
+    delete legacy.humanPlayerIds;
     legacy.rulesVersion = 'frontier-command-v2.54-faster-integration';
     for (const nation of Object.values(legacy.players) as Array<Record<string, any>>) {
       delete nation.trainedReserves;
@@ -272,7 +277,9 @@ describe('V2 legacy save migration', () => {
     const luxTerritory = territoryIdV2('lux');
     const newDuration = territoryIntegrationDurationWeeksV2(WORLD_CONTENT_V2, luxTerritory);
     const migratedRemainingDuration = Math.ceil(newDuration / 2);
-    const schema18RemainingDuration = Math.round(newDuration / 1.2);
+    const schema18RemainingDuration = Math.round(
+      newDuration / INTEGRATION_DURATION_MULTIPLIER_V2,
+    );
     beginTerritoryIntegrationV2(state, WORLD_CONTENT_V2, luxTerritory, bel);
     invalidateTerritoryIndexV2(state);
     state.tick = 200;
@@ -288,13 +295,15 @@ describe('V2 legacy save migration', () => {
     synchronizeArmyCapacityV2(state, WORLD_CONTENT_V2);
     const legacy = structuredClone(createSaveV2(state, WORLD_CONTENT_V2)) as Record<string, any>;
     legacy.schemaVersion = 18;
+    delete legacy.humanPlayerIds;
     legacy.rulesVersion = 'frontier-command-v2.53-combat-experience';
     for (const nation of Object.values(legacy.players) as Array<Record<string, any>>) {
       delete nation.domesticFoodCapacity;
       delete nation.trainedReserves;
       nation.combatExperience = 3;
     }
-    // The current 1.2x calendar is 40% shorter than schema 18 at this share.
+    // Schema 18 used twice the base calendar; current migration applies the
+    // latest immutable calendar to the exact visible remaining share.
     // Migration shortens that old promise once without moving visible progress.
     legacy.territories[luxTerritory].integrationProgram.completesTick = state.tick
       + schema18RemainingDuration;
@@ -305,7 +314,7 @@ describe('V2 legacy save migration', () => {
 
     const loaded = loadSaveV2(legacy as never, WORLD_CONTENT_V2);
     const migratedProgram = loaded.territories[luxTerritory].integrationProgram!;
-    expect(loaded.schemaVersion).toBe(20);
+    expect(loaded.schemaVersion).toBe(21);
     expect(Object.values(loaded.players).every((nation) => nation.trainedReserves === 0)).toBe(true);
     expect(loaded.players[bel]).not.toHaveProperty('combatExperience');
     expect(loaded.territories[luxTerritory].integration).toBe(0.55);
@@ -339,7 +348,7 @@ describe('V2 legacy save migration', () => {
     legacy.canonicalStateHash = canonicalStateHashV2(legacy);
 
     const loaded = loadSaveV2(legacy as never, WORLD_CONTENT_V2);
-    expect(loaded.schemaVersion).toBe(20);
+    expect(loaded.schemaVersion).toBe(21);
     expect(Object.values(loaded.players).every((nation) => nation.trainedReserves === 0)).toBe(true);
     expect(loaded.players[bel]).not.toHaveProperty('combatExperience');
     expect(loaded.territories[belTerritory].army).not.toHaveProperty('veteranManpower');
@@ -358,7 +367,7 @@ describe('V2 legacy save migration', () => {
     const usa = nationIdV2('usa');
     const usaTerritory = territoryIdV2('usa');
     const loaded = loadSaveV2(legacy as never, WORLD_CONTENT_V2);
-    expect(loaded.schemaVersion).toBe(20);
+    expect(loaded.schemaVersion).toBe(21);
     expect(Object.values(loaded.players).every((nation) => nation.trainedReserves === 0)).toBe(true);
     expect(loaded.rulesVersion).toBe(V2_RULES_VERSION);
     expect(loaded.players[usa]).not.toHaveProperty('battleBots');
@@ -422,7 +431,7 @@ describe('V2 legacy save migration', () => {
     legacy.canonicalStateHash = canonicalStateHashV2(legacy);
 
     const loaded = loadSaveV2(legacy as never, WORLD_CONTENT_V2);
-    expect(loaded.schemaVersion).toBe(20);
+    expect(loaded.schemaVersion).toBe(21);
     expect(Object.values(loaded.players).every((nation) => nation.trainedReserves === 0)).toBe(true);
     expect(loaded.rulesVersion).toBe(V2_RULES_VERSION);
     expect(loaded.territories[belTerritory].army.baseAttack).toBe(expectedAttack);
@@ -453,7 +462,7 @@ describe('V2 legacy save migration', () => {
     legacy.canonicalStateHash = canonicalStateHashV2(legacy);
 
     const loaded = loadSaveV2(legacy as never, WORLD_CONTENT_V2);
-    expect(loaded.schemaVersion).toBe(20);
+    expect(loaded.schemaVersion).toBe(21);
     expect(Object.values(loaded.players).every((nation) => nation.trainedReserves === 0)).toBe(true);
     expect(loaded.players[nationIdV2('bel')].manualActionUses).toEqual({
       rapidRecruitment: 0,
@@ -489,7 +498,7 @@ describe('V2 legacy save migration', () => {
     legacy.canonicalStateHash = canonicalStateHashV2(legacy);
 
     const loaded = loadSaveV2(legacy as never, WORLD_CONTENT_V2);
-    expect(loaded.schemaVersion).toBe(20);
+    expect(loaded.schemaVersion).toBe(21);
     expect(Object.values(loaded.players).every((nation) => nation.trainedReserves === 0)).toBe(true);
     expect(loaded.territories[territoryIdV2('grl')].owner).toBe(nationIdV2('dnk'));
     expect(loaded.territories[territoryIdV2('dnk')].population
@@ -501,5 +510,75 @@ describe('V2 legacy save migration', () => {
     expect(loaded.wars[0]?.attackerOperations).toHaveLength(1);
     expect(loaded.wars[0]?.defenderOperations).toEqual([]);
     expect(Object.values(loaded.territories).every((territory) => territory.integration === 1)).toBe(true);
+  });
+
+  it('authenticates and expands the final six-program schema-20 save format', () => {
+    const legacy = structuredClone(createSaveV2(
+      createWorldStateV2(95), WORLD_CONTENT_V2,
+    )) as Record<string, any>;
+    legacy.schemaVersion = 20;
+    delete legacy.humanPlayerIds;
+    legacy.rulesVersion = 'frontier-command-v2.55-combat-rebalance';
+    for (const nation of Object.values(legacy.players) as Array<Record<string, any>>) {
+      nation.research.effectLevels.control = 4;
+      nation.research.effectLevels['reinforcement-efficiency'] = 2;
+      for (const branch of [
+        'food-systems', 'reserve-doctrine', 'public-administration', 'education-intelligence',
+      ]) {
+        delete nation.research.allocations[branch];
+        delete nation.research.progress[branch];
+        delete nation.research.breakthroughs[branch];
+      }
+      for (const effect of [
+        'food-production', 'food-storage', 'reserve-training', 'reserve-mobilization',
+        'tax-efficiency', 'operating-efficiency', 'iq-increase',
+      ]) delete nation.research.effectLevels[effect];
+    }
+    legacy.canonicalStateHash = canonicalStateHashV2(legacy);
+
+    const loaded = loadSaveV2(legacy as never, WORLD_CONTENT_V2);
+    const research = loaded.players[nationIdV2('bel')].research;
+    expect(loaded.rulesVersion).toBe(V2_RULES_VERSION);
+    expect(research.allocations['military-industry']).toBe(40);
+    expect(research.allocations['economy-science']).toBe(60);
+    expect(research.allocations['education-intelligence']).toBe(0);
+    expect(research.progress['food-systems']).toBe(0);
+    expect(research.effectLevels['iq-increase']).toBe(0);
+    expect(research.effectLevels['reinforcement-efficiency']).toBe(6);
+    expect('control' in research.effectLevels).toBe(false);
+    expect(research.breakthroughs['public-administration']).toBe(0);
+  });
+
+  it('retires authenticated v2.56 partial control and territorial peace offers', () => {
+    const legacy = structuredClone(createSaveV2(
+      createWorldStateV2(96), WORLD_CONTENT_V2,
+    )) as Record<string, any>;
+    legacy.schemaVersion = 20;
+    delete legacy.humanPlayerIds;
+    legacy.rulesVersion = 'frontier-command-v2.56-research-expansion';
+    legacy.territories.nld.control = { controller: 'bel', share: 0.62 };
+    legacy.players.bel.research.effectLevels.control = 3;
+    legacy.players.bel.research.effectLevels['reinforcement-efficiency'] = 5;
+    legacy.offers.push({
+      id: 'offer-retired-control',
+      fromId: 'nld',
+      toId: 'bel',
+      warId: 'war-retired-control',
+      settlement: 'control',
+      createdTick: 0,
+      expiresTick: 26,
+      status: 'pending',
+      territoryId: 'nld',
+    });
+    legacy.canonicalStateHash = canonicalStateHashV2(legacy);
+
+    const loaded = loadSaveV2(legacy as never, WORLD_CONTENT_V2);
+
+    expect(loaded.rulesVersion).toBe(V2_RULES_VERSION);
+    expect('control' in loaded.territories[territoryIdV2('nld')]).toBe(false);
+    expect('control' in loaded.players[nationIdV2('bel')].research.effectLevels).toBe(false);
+    expect(loaded.players[nationIdV2('bel')].research.effectLevels['reinforcement-efficiency']).toBe(8);
+    expect(loaded.offers).toEqual([]);
+    expect(() => createSaveV2(loaded, WORLD_CONTENT_V2)).not.toThrow();
   });
 });

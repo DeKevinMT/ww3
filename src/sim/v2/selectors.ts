@@ -1,6 +1,7 @@
 import {
   AI_HEALTHY_ARMY_TARGET,
   AI_SEVERE_DEBT_REVENUE_WEEKS,
+  BASE_OPERATING_COST_MIN_TAX_REVENUE_SHARE,
   BASE_OPERATING_COST_TAX_REVENUE_SHARE,
   CONQUEST_INITIAL_INTEGRATION_SHARE,
   ECONOMY_ANNUAL_GROWTH_MAX,
@@ -15,6 +16,7 @@ import {
   nuclearPowerTierCostV2,
   DEFENSE_RESEARCH_HALF_SATURATION,
   DEFENSE_RESEARCH_MAX_BONUS,
+  effectiveDefenseStatV2,
   FOOD_ACCESS_RESEARCH_RELIEF_PER_LEVEL,
   FOOD_ARMY_LOGISTICS_POWER,
   FOOD_ARMY_LOGISTICS_RATE,
@@ -22,6 +24,7 @@ import {
   FOOD_COST_GLOBAL_MULTIPLIER,
   FOOD_DOMESTIC_COST_PER_MILLION,
   FOOD_EMPTY_RESERVE_ANNUAL_MORTALITY_MAX,
+  FOOD_MORTALITY_RESERVE_START_SHARE,
   FOOD_EXPORT_MARKET_PRICE_LEVEL,
   FOOD_EXPORT_PRICE_MULTIPLIER,
   FOOD_IMPORT_COST_PER_MILLION,
@@ -35,6 +38,12 @@ import {
   FOOD_SHORTAGE_POPULATION_LOSS,
   FOOD_STORAGE_BASE_WEEKS,
   FOOD_STORAGE_MILLIONS_PER_KM2,
+  FOOD_PRODUCTION_RESEARCH_BONUS_PER_EFFECTIVE_LEVEL,
+  FOOD_PRODUCTION_RESEARCH_EFFECTIVE_CEILING,
+  FOOD_PRODUCTION_RESEARCH_HALF_SATURATION,
+  FOOD_STORAGE_RESEARCH_BONUS_PER_EFFECTIVE_LEVEL,
+  FOOD_STORAGE_RESEARCH_EFFECTIVE_CEILING,
+  FOOD_STORAGE_RESEARCH_HALF_SATURATION,
   FOOD_MAX_STOCK_WEEKS,
   FOOD_TARGET_WEEKS,
   FOOD_WAR_DEMAND_SHARE_OF_PRESSURE,
@@ -42,6 +51,10 @@ import {
   FOOD_WAR_LOGISTICS_PRESSURE_PER_LOAD,
   FOOD_WAR_SUPPLY_RELIEF_PER_LEVEL,
   NATIONAL_IQ_ECONOMY_GROWTH_PER_POINT,
+  NATIONAL_IQ_EFFECTIVE_SCORE_MAX,
+  NATIONAL_COMBAT_GDP_PER_CAPITA_CEILING,
+  NATIONAL_COMBAT_GDP_PER_CAPITA_FLOOR,
+  NATIONAL_COMBAT_SYSTEM_QUALITY_SPAN,
   NATIONAL_COMBAT_ECONOMY_RESEARCH_HALF_SATURATION,
   NATIONAL_COMBAT_ECONOMY_RESEARCH_MAX_BONUS,
   NATIONAL_COMBAT_RESEARCH_CONVERSION_MAX,
@@ -52,15 +65,22 @@ import {
   NATIONAL_IQ_LOGISTICS_PER_POINT,
   NATIONAL_IQ_POPULATION_GROWTH_PER_POINT,
   NATIONAL_IQ_RESEARCH_PER_POINT,
+  NATIONAL_IQ_RESEARCH_HALF_SATURATION,
+  NATIONAL_IQ_RESEARCH_MAX_BONUS,
   NATIONAL_IQ_SCORE_MAX,
   NATIONAL_IQ_SCORE_MIN,
   NATIONAL_IQ_SCORE_NEUTRAL,
+  NATIONAL_QUALITY_GDP_WEIGHT,
+  NATIONAL_QUALITY_IQ_WEIGHT,
   EXTREME_CRISIS_DEMOBILIZATION_RATE,
   EXTREME_CRISIS_FOOD_COVERAGE,
   EXTREME_CRISIS_FOOD_RESERVE_WEEKS,
   EXTREME_CRISIS_MAX_UPKEEP_FUNDING,
   PASSIVE_RECRUITMENT_CAPACITY_RATE,
   PASSIVE_RECRUITMENT_TRAINING_BONUS,
+  OPERATING_EFFICIENCY_RESEARCH_EFFECTIVE_CEILING,
+  OPERATING_EFFICIENCY_RESEARCH_HALF_SATURATION,
+  OPERATING_EFFICIENCY_RESEARCH_REDUCTION_PER_EFFECTIVE_LEVEL,
   PEACE_RECRUITMENT_ACCELERATION_COST_MULTIPLIER,
   PEACE_RECRUITMENT_ACCELERATION_MULTIPLIER,
   TRAINED_RESERVE_ACTIVE_READY_RATIO,
@@ -68,6 +88,12 @@ import {
   TRAINED_RESERVE_DEPLOYMENT_THROUGHPUT_MULTIPLIER,
   TRAINED_RESERVE_TRAINING_COST_MULTIPLIER,
   TRAINED_RESERVE_WARTIME_TRAINING_FACTOR,
+  RESERVE_MOBILIZATION_RESEARCH_BONUS_PER_EFFECTIVE_LEVEL,
+  RESERVE_MOBILIZATION_RESEARCH_EFFECTIVE_CEILING,
+  RESERVE_MOBILIZATION_RESEARCH_HALF_SATURATION,
+  RESERVE_TRAINING_RESEARCH_BONUS_PER_EFFECTIVE_LEVEL,
+  RESERVE_TRAINING_RESEARCH_EFFECTIVE_CEILING,
+  RESERVE_TRAINING_RESEARCH_HALF_SATURATION,
   RAPID_RECRUITMENT_COOLDOWN_TICKS,
   RAPID_RECRUITMENT_COST_MULTIPLIER,
   RESEARCH_SURGE_COOLDOWN_TICKS,
@@ -90,10 +116,13 @@ import {
   RESEARCH_INSTITUTION_MULTIPLIER_MAX,
   RESEARCH_INSTITUTION_MULTIPLIER_MIN,
   RESEARCH_MASTERY_POWER,
+  TAX_EFFICIENCY_RESEARCH_BONUS_PER_EFFECTIVE_LEVEL,
+  TAX_EFFICIENCY_RESEARCH_EFFECTIVE_CEILING,
+  TAX_EFFICIENCY_RESEARCH_HALF_SATURATION,
   NATIONAL_AI_FUNDED_FREE_CASHFLOW_SHARE,
   WAR_RECRUITMENT_ACCELERATION_COST_MULTIPLIER,
   WAR_RECRUITMENT_ACCELERATION_MULTIPLIER,
-  WAR_ACCESS_OPERATION_MULTIPLIER,
+  warAccessOperationMultiplierV2,
   WAR_FATIGUE_OPERATION_COST_MAX_BONUS,
   WAR_FATIGUE_OPERATION_COST_PER_POINT,
   WAR_OPERATION_COST_PER_MILLION,
@@ -125,6 +154,7 @@ import {
   redirectDevelopmentFundingToFoodV2,
 } from './nationalAi';
 import { initialManualActionCostV2, manualActionUseMultiplierV2 } from './manualActions';
+import { isHumanPlayerV2 } from './humanPlayers';
 import {
   nationIdV2,
   type ArmyStateV2,
@@ -142,6 +172,7 @@ import {
   PopulationDynamicsV2,
   RapidRecruitmentTermsV2,
   RankingEntryV2,
+  ResearchAllocationsV2,
   ResearchBranchV2,
   ResearchEffectV2,
   ResearchPortfolioV2,
@@ -159,6 +190,8 @@ import {
 
 const nationIdCache = new WeakMap<WorldStateV2, PlayerId[]>();
 const territoryIdCache = new WeakMap<WorldStateV2, TerritoryId[]>();
+const ordinaryResearchFundingSharesCache = new WeakMap<ResearchAllocationsV2, Readonly<Record<ResearchBranchV2, number>>>();
+const cappedEducationFundingSharesCache = new WeakMap<ResearchAllocationsV2, Readonly<Record<ResearchBranchV2, number>>>();
 interface TerritoryIndexV2 {
   owned: Map<PlayerId, TerritoryId[]>;
 }
@@ -180,6 +213,10 @@ export interface MilitaryBaseRatingsV2 {
 export interface NationalCombatQualityV2 {
   /** Live integrated GDP per person, in dollars. */
   gdpPerCapita: number;
+  /** Signed additive share of system quality supplied by live GDP per capita. */
+  gdpSystemContribution: number;
+  /** Signed additive share of system quality supplied by live national IQ. */
+  iqSystemContribution: number;
   /** Owner-wide quality created by current GDP per capita plus national IQ. */
   systemMultiplier: number;
   /** IQ-scaled conversion of completed research into practical capability. */
@@ -245,13 +282,9 @@ function nationalCombatQualityFromWealthV2(
 ): NationalCombatQualityV2 {
   const nation = state.players[playerId];
   const definition = content.nations[playerId];
-  const iqScore = clamp(
-    definition?.iqScore ?? NATIONAL_IQ_SCORE_NEUTRAL,
-    NATIONAL_IQ_SCORE_MIN,
-    NATIONAL_IQ_SCORE_MAX,
-  );
+  const iqScore = selectNationalIqViewV2(state, content, playerId).score;
   const iqProgress = (iqScore - NATIONAL_IQ_SCORE_MIN)
-    / Math.max(0.000001, NATIONAL_IQ_SCORE_MAX - NATIONAL_IQ_SCORE_MIN);
+    / Math.max(0.000001, NATIONAL_IQ_EFFECTIVE_SCORE_MAX - NATIONAL_IQ_SCORE_MIN);
   const researchConversion = NATIONAL_COMBAT_RESEARCH_CONVERSION_MIN
     + (NATIONAL_COMBAT_RESEARCH_CONVERSION_MAX - NATIONAL_COMBAT_RESEARCH_CONVERSION_MIN)
       * iqProgress;
@@ -262,9 +295,29 @@ function nationalCombatQualityFromWealthV2(
       / (economyLevel + NATIONAL_COMBAT_ECONOMY_RESEARCH_HALF_SATURATION);
   const gdpPerCapita = Math.max(0, wealthPerPersonThousands) * 1_000;
   const systemMultiplier = nationalCombatSystemQualityMultiplierV2(gdpPerCapita, iqScore);
+  const safeGdpFloor = Math.max(0.000001, NATIONAL_COMBAT_GDP_PER_CAPITA_FLOOR);
+  const incomeProgress = clamp(
+    Math.log(Math.max(safeGdpFloor, gdpPerCapita) / safeGdpFloor)
+      / Math.log(NATIONAL_COMBAT_GDP_PER_CAPITA_CEILING / safeGdpFloor),
+    0,
+    1,
+  );
+  const iqProgressForSystems = clamp(
+    (iqScore - NATIONAL_IQ_SCORE_MIN)
+      / Math.max(0.000001, NATIONAL_IQ_SCORE_MAX - NATIONAL_IQ_SCORE_MIN),
+    0,
+    (NATIONAL_IQ_EFFECTIVE_SCORE_MAX - NATIONAL_IQ_SCORE_MIN)
+      / Math.max(0.000001, NATIONAL_IQ_SCORE_MAX - NATIONAL_IQ_SCORE_MIN),
+  );
+  const gdpSystemContribution = NATIONAL_COMBAT_SYSTEM_QUALITY_SPAN
+    * NATIONAL_QUALITY_GDP_WEIGHT * (incomeProgress - 0.5);
+  const iqSystemContribution = NATIONAL_COMBAT_SYSTEM_QUALITY_SPAN
+    * NATIONAL_QUALITY_IQ_WEIGHT * (iqProgressForSystems - 0.5);
   const economyResearchMultiplier = 1 + economyResearchBonus;
   return {
     gdpPerCapita: round(gdpPerCapita, 6),
+    gdpSystemContribution: round(gdpSystemContribution, 9),
+    iqSystemContribution: round(iqSystemContribution, 9),
     systemMultiplier,
     researchConversion: round(researchConversion, 9),
     economyResearchMultiplier: round(economyResearchMultiplier, 9),
@@ -355,8 +408,10 @@ export function selectNationalCombatQualityV2(
 }
 
 export interface NationalIqViewV2 {
+  baselineScore: number;
+  researchBonus: number;
   score: number;
-  source: 'country-learning-gameplay-baseline';
+  source: 'country-learning-gameplay-baseline' | 'country-learning-gameplay-baseline-plus-research';
   combatQualityMultiplier: number;
   economyGrowthMultiplier: number;
   researchMultiplier: number;
@@ -364,27 +419,74 @@ export interface NationalIqViewV2 {
   populationGrowthMultiplier: number;
 }
 
+interface NationalIqViewCacheEntryV2 {
+  content: WorldContentV2;
+  baselineScore: number;
+  researchLevel: number;
+  view: NationalIqViewV2;
+}
+
+const nationalIqViewCache = new WeakMap<
+  WorldStateV2,
+  Map<PlayerId, NationalIqViewCacheEntryV2>
+>();
+
 /**
  * One bounded, inspectable quality view shared by every IQ-influenced system.
  * The score is a gameplay proxy, not a scientific real-world IQ measurement.
  */
+export function selectNationalIqViewV2(content: WorldContentV2, playerId: PlayerId): NationalIqViewV2;
 export function selectNationalIqViewV2(
+  state: WorldStateV2,
   content: WorldContentV2,
   playerId: PlayerId,
+): NationalIqViewV2;
+export function selectNationalIqViewV2(
+  stateOrContent: WorldStateV2 | WorldContentV2,
+  contentOrPlayerId: WorldContentV2 | PlayerId,
+  effectivePlayerId?: PlayerId,
 ): NationalIqViewV2 {
+  const state = effectivePlayerId === undefined ? undefined : stateOrContent as WorldStateV2;
+  const content = effectivePlayerId === undefined
+    ? stateOrContent as WorldContentV2 : contentOrPlayerId as WorldContentV2;
+  const playerId = effectivePlayerId ?? contentOrPlayerId as PlayerId;
   const definition = content.nations[playerId];
-  const score = clamp(
+  const baselineScore = clamp(
     definition?.iqScore ?? NATIONAL_IQ_SCORE_NEUTRAL,
     NATIONAL_IQ_SCORE_MIN,
     NATIONAL_IQ_SCORE_MAX,
   );
+  const researchLevel = Math.max(
+    0,
+    state?.players[playerId]?.research.effectLevels['iq-increase'] ?? 0,
+  );
+  const cached = state ? nationalIqViewCache.get(state)?.get(playerId) : undefined;
+  if (cached
+    && cached.content === content
+    && cached.baselineScore === baselineScore
+    && cached.researchLevel === researchLevel) return cached.view;
+  const uncappedResearchBonus = diminishingResearchLevelV2(
+    researchLevel,
+    NATIONAL_IQ_RESEARCH_MAX_BONUS,
+    NATIONAL_IQ_RESEARCH_HALF_SATURATION,
+  );
+  const score = clamp(
+    baselineScore + uncappedResearchBonus,
+    NATIONAL_IQ_SCORE_MIN,
+    NATIONAL_IQ_EFFECTIVE_SCORE_MAX,
+  );
+  const researchBonus = score - baselineScore;
   const delta = score - NATIONAL_IQ_SCORE_NEUTRAL;
   const gdpPerCapita = definition
     ? definition.real.gdp / Math.max(0.000001, definition.real.population) * 1_000
     : NATIONAL_IQ_GDP_PER_CAPITA_FLOOR;
-  return {
+  const view: NationalIqViewV2 = {
+    baselineScore: round(baselineScore, 3),
+    researchBonus: round(researchBonus, 3),
     score: round(score, 3),
-    source: 'country-learning-gameplay-baseline',
+    source: researchBonus > 0
+      ? 'country-learning-gameplay-baseline-plus-research'
+      : 'country-learning-gameplay-baseline',
     combatQualityMultiplier: definition
       ? openingCombatQualityMultiplierV2(gdpPerCapita, score) : 1,
     economyGrowthMultiplier: round(1 + delta * NATIONAL_IQ_ECONOMY_GROWTH_PER_POINT, 9),
@@ -395,6 +497,15 @@ export function selectNationalIqViewV2(
       9,
     ),
   };
+  if (state) {
+    let byPlayer = nationalIqViewCache.get(state);
+    if (!byPlayer) {
+      byPlayer = new Map();
+      nationalIqViewCache.set(state, byPlayer);
+    }
+    byPlayer.set(playerId, { content, baselineScore, researchLevel, view });
+  }
+  return view;
 }
 
 export function selectNationStateV2(state: WorldStateV2, playerId: PlayerId): NationStateV2 | undefined {
@@ -431,7 +542,7 @@ export function selectNationViewV2(
     darkColor: definition.darkColor,
     sigil: definition.sigil,
     profile: definition.profile,
-    isHuman: state.humanPlayerId === playerId,
+    isHuman: isHumanPlayerV2(state, playerId),
     eliminated: selectIsEliminatedV2(state, playerId),
   };
 }
@@ -465,26 +576,26 @@ export function selectWarPressureV2(state: WorldStateV2, playerId: PlayerId): {
   return {
     fronts,
     outputPenalty: round(clamp(
-      fronts > 0 ? 0.07 + 0.04 * (fronts - 1) + 0.0012 * fatigue : 0.05 * peaceTransition,
+      fronts > 0 ? 0.05 + 0.025 * (fronts - 1) + 0.0008 * fatigue : 0.03 * peaceTransition,
       0,
-      fronts > 0 ? 0.35 : 0.05,
+      fronts > 0 ? 0.25 : 0.03,
     )),
     economyGrowthDrag: round(fronts > 0
-      ? 0.018 + 0.008 * (fronts - 1) + 0.00010 * fatigue
-      : 0.012 * peaceTransition),
-    populationGrowthDrag: round(fronts > 0 ? 0.006 * fronts + 0.00006 * fatigue : 0.004 * peaceTransition),
+      ? 0.014 + 0.005 * (fronts - 1) + 0.00006 * fatigue
+      : 0.007 * peaceTransition),
+    populationGrowthDrag: round(fronts > 0 ? 0.004 * fronts + 0.00004 * fatigue : 0.0025 * peaceTransition),
     researchPenalty: round(clamp(
-      fronts > 0 ? 0.25 + 0.10 * (fronts - 1) + 0.001 * fatigue : 0.15 * peaceTransition,
+      fronts > 0 ? 0.16 + 0.06 * (fronts - 1) + 0.0006 * fatigue : 0.08 * peaceTransition,
       0,
-      0.65,
+      0.45,
     )),
   };
 }
 
 function attributedShare(territory: TerritoryStateV2, playerId: PlayerId): number {
-  // Front-line control is purely military and visual. After legal capture,
-  // integration is the one visible share used by population capacity, output,
-  // revenue and food until the annexed territory is fully incorporated.
+  // Ownership changes only after decisive conquest. Integration is the one
+  // visible share used by population capacity, output, revenue and food until
+  // the conquered territory is fully incorporated.
   return territory.owner === playerId ? clamp(territory.integration, 0, 1) : 0;
 }
 
@@ -518,6 +629,30 @@ export function selectNationalEconomyV2(
     dynamicTaxRate: ledger.dynamicTaxRate,
     weeklyRevenue: ledger.weeklyTaxRevenue,
   };
+}
+
+export function selectTaxEfficiencyMultiplierV2(state: WorldStateV2, playerId: PlayerId): number {
+  const level = state.players[playerId]?.research.effectLevels['tax-efficiency'] ?? 0;
+  const effectiveLevel = diminishingResearchLevelV2(
+    level,
+    TAX_EFFICIENCY_RESEARCH_EFFECTIVE_CEILING,
+    TAX_EFFICIENCY_RESEARCH_HALF_SATURATION,
+  );
+  return round(1 + TAX_EFFICIENCY_RESEARCH_BONUS_PER_EFFECTIVE_LEVEL * effectiveLevel, 9);
+}
+
+export function selectBaseOperatingCostShareV2(state: WorldStateV2, playerId: PlayerId): number {
+  const level = state.players[playerId]?.research.effectLevels['operating-efficiency'] ?? 0;
+  const effectiveLevel = diminishingResearchLevelV2(
+    level,
+    OPERATING_EFFICIENCY_RESEARCH_EFFECTIVE_CEILING,
+    OPERATING_EFFICIENCY_RESEARCH_HALF_SATURATION,
+  );
+  return round(Math.max(
+    BASE_OPERATING_COST_MIN_TAX_REVENUE_SHARE,
+    BASE_OPERATING_COST_TAX_REVENUE_SHARE
+      - OPERATING_EFFICIENCY_RESEARCH_REDUCTION_PER_EFFECTIVE_LEVEL * effectiveLevel,
+  ), 9);
 }
 
 export function selectEconomicOutputLedgerV2(
@@ -578,7 +713,9 @@ export function selectEconomicOutputLedgerV2(
     dynamicTaxRate: round(fiscalCapacity.dynamicTaxRate, 9),
     taxRate: round(fiscalCapacity.dynamicTaxRate, 9),
     referenceTaxRate: referenceTaxRate === null ? null : round(referenceTaxRate, 9),
-    weeklyTaxRevenue: round(fiscalCapacity.weeklyTaxRevenue),
+    weeklyTaxRevenue: round(
+      fiscalCapacity.weeklyTaxRevenue * selectTaxEfficiencyMultiplierV2(state, playerId),
+    ),
   };
 }
 
@@ -665,7 +802,8 @@ export function selectEffectiveDefenseV2(
     : DEFENSE_RESEARCH_MAX_BONUS * convertedLevel
       / (convertedLevel + DEFENSE_RESEARCH_HALF_SATURATION);
   const researchMultiplier = 1 + researchBonus;
-  return round(army.baseDefense * nationalQuality.combinedMultiplier * researchMultiplier);
+  const rawDefense = army.baseDefense * nationalQuality.combinedMultiplier * researchMultiplier;
+  return round(effectiveDefenseStatV2(rawDefense));
 }
 
 export function selectTerritoryPowerV2(
@@ -841,7 +979,7 @@ export function selectRecruitmentUnitCostV2(
   // prevent elite countries from becoming economically unplayable.
   const qualityPremium = clamp(0.75 + 0.25 * Math.sqrt(combinedQuality), 0.85, 1.75);
   return round(2 * qualityPremium * (1 - 0.01 * efficiency)
-    / nationalAiEfficiencyV2(content.nations[playerId]?.iqScore ?? NATIONAL_IQ_SCORE_NEUTRAL));
+    / nationalAiEfficiencyV2(selectNationalIqViewV2(state, content, playerId).score));
 }
 
 /** Immediate reserves and mercenary cadres restore at most 5% of the live cap. */
@@ -954,12 +1092,19 @@ export function selectFoodLandCapacityV2(
   state: WorldStateV2,
   content: WorldContentV2,
   playerId: PlayerId,
+  demandOverride?: number,
 ): number {
   const nation = state.players[playerId];
   if (!nation) return 0;
-  const yieldResearch = 1 + 0.005 * nation.research.effectLevels['economy-growth'];
+  const foodProductionLevel = diminishingResearchLevelV2(
+    nation.research.effectLevels['food-production'],
+    FOOD_PRODUCTION_RESEARCH_EFFECTIVE_CEILING,
+    FOOD_PRODUCTION_RESEARCH_HALF_SATURATION,
+  );
+  const yieldResearch = (1 + 0.005 * nation.research.effectLevels['economy-growth'])
+    * (1 + FOOD_PRODUCTION_RESEARCH_BONUS_PER_EFFECTIVE_LEVEL * foodProductionLevel);
   const warDisruption = clamp(1 - 1.50 * selectWarPressureV2(state, playerId).outputPenalty, 0.35, 1);
-  const demand = selectFoodDemandV2(state, playerId);
+  const demand = demandOverride ?? selectFoodDemandV2(state, playerId);
   let productivePopulation = 0;
   let calibratedProduction = 0;
   for (const view of selectTerritoriesOfV2(state, playerId)) {
@@ -1078,6 +1223,7 @@ export function selectFoodStorageCapacityV2(
   content: WorldContentV2,
   playerId: PlayerId,
   demandOverride?: number,
+  economyOverride?: NationalEconomyV2,
 ): number {
   const nation = state.players[playerId];
   if (!nation) return 0;
@@ -1086,11 +1232,17 @@ export function selectFoodStorageCapacityV2(
   const landArea = territories.reduce((sum, territory) => (
     sum + (content.territories[territory.id]?.baseline.landArea ?? 0)
   ), 0);
-  const economy = selectNationalEconomyV2(state, content, playerId);
+  const economy = economyOverride ?? selectNationalEconomyV2(state, content, playerId);
   const economicInfrastructure = 0.75
     + 0.25 * clamp(economy.wealthPerPerson / 50, 0, 1);
-  const researchInfrastructure = 1
-    + 0.01 * diminishingResearchLevelV2(nation.research.effectLevels.supply);
+  const foodStorageLevel = diminishingResearchLevelV2(
+    nation.research.effectLevels['food-storage'],
+    FOOD_STORAGE_RESEARCH_EFFECTIVE_CEILING,
+    FOOD_STORAGE_RESEARCH_HALF_SATURATION,
+  );
+  const researchInfrastructure = (1
+    + 0.01 * diminishingResearchLevelV2(nation.research.effectLevels.supply))
+    * (1 + FOOD_STORAGE_RESEARCH_BONUS_PER_EFFECTIVE_LEVEL * foodStorageLevel);
   const physicalCapacity = (demand * FOOD_STORAGE_BASE_WEEKS
     + landArea * FOOD_STORAGE_MILLIONS_PER_KM2)
     * economicInfrastructure * researchInfrastructure;
@@ -1143,18 +1295,7 @@ function selectWartimeFoodLogisticsPressureV2(
   content: WorldContentV2,
   playerId: PlayerId,
 ): number {
-  const operationalLoad = selectWarsOfV2(state, playerId).reduce((sum, war) => {
-    const opponentId = war.attackerId === playerId ? war.defenderId : war.attackerId;
-    const operations = war.attackerId === playerId ? war.attackerOperations : war.defenderOperations;
-    if (operations.length === 0) {
-      const inferredAccess = selectWarAccessTypeV2(state, content, playerId, opponentId);
-      const access = inferredAccess === 'none' ? 'land' : inferredAccess;
-      return sum + WAR_ACCESS_OPERATION_MULTIPLIER[access];
-    }
-    return sum + operations.reduce((fronts, operation) => (
-      fronts + WAR_ACCESS_OPERATION_MULTIPLIER[operation.access]
-    ), 0);
-  }, 0);
+  const operationalLoad = selectWarOperationsLogisticsLoadV2(state, content, playerId);
   if (operationalLoad <= 0) return 0;
   const nation = state.players[playerId]!;
   const supplyRelief = 1 / (1 + FOOD_WAR_SUPPLY_RELIEF_PER_LEVEL
@@ -1171,18 +1312,27 @@ function selectFoodCapacityPlanV2(
   state: WorldStateV2,
   content: WorldContentV2,
   playerId: PlayerId,
+  demandOverride?: number,
+  economyOverride?: NationalEconomyV2,
 ): FoodCapacityPlanV2 {
   const nation = state.players[playerId]!;
   const wartimeLogisticsPressure = selectWartimeFoodLogisticsPressureV2(state, content, playerId);
-  const demand = Math.max(0.01, selectFoodDemandV2(state, playerId)
+  const baseDemand = Math.max(0.01, demandOverride ?? selectFoodDemandV2(state, playerId));
+  const demand = Math.max(0.01, baseDemand
     * (1 + FOOD_WAR_DEMAND_SHARE_OF_PRESSURE * wartimeLogisticsPressure));
-  const physicalLandCapacity = selectFoodLandCapacityV2(state, content, playerId);
+  const physicalLandCapacity = selectFoodLandCapacityV2(state, content, playerId, baseDemand);
   const accessCeiling = selectFoodAccessCeilingV2(state, content, playerId);
   const importThroughput = clamp(1 - wartimeLogisticsPressure, 0.45, 1);
   // Domestic capacity is data-calibrated. Import-dependent microstates remain
   // genuinely import-dependent instead of receiving an artificial 70-80% floor.
   const landCapacity = physicalLandCapacity;
-  const storageCapacity = selectFoodStorageCapacityV2(state, content, playerId, demand);
+  const storageCapacity = selectFoodStorageCapacityV2(
+    state,
+    content,
+    playerId,
+    demand,
+    economyOverride,
+  );
   const targetStock = Math.min(storageCapacity, demand * FOOD_TARGET_WEEKS * accessCeiling);
   // A healthy country never deliberately produces less than this week's needs.
   // Extra supply above 100% refills storage; storage is only drawn down when
@@ -1218,9 +1368,21 @@ export function selectFoodDomesticCapacityTargetV2(
   return round(plan.landCapacity);
 }
 
-function selectFoodPlanV2(state: WorldStateV2, content: WorldContentV2, playerId: PlayerId): FoodPlanV2 {
+function selectFoodPlanV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  playerId: PlayerId,
+  demandOverride?: number,
+  economyOverride?: NationalEconomyV2,
+): FoodPlanV2 {
   const nation = state.players[playerId]!;
-  const capacityPlan = selectFoodCapacityPlanV2(state, content, playerId);
+  const capacityPlan = selectFoodCapacityPlanV2(
+    state,
+    content,
+    playerId,
+    demandOverride,
+    economyOverride,
+  );
   const domesticTarget = Number.isFinite(nation.domesticFoodCapacity)
     ? Math.max(0, nation.domesticFoodCapacity)
     : Math.min(capacityPlan.desiredProduction, capacityPlan.landCapacity);
@@ -1236,7 +1398,7 @@ function selectFoodPlanV2(state: WorldStateV2, content: WorldContentV2, playerId
     0,
     Math.min(capacityPlan.desiredProduction, usefulSupplyLimit) - domesticTarget,
   );
-  const economy = selectNationalEconomyV2(state, content, playerId);
+  const economy = economyOverride ?? selectNationalEconomyV2(state, content, playerId);
   const outputPerPerson = economy.output / Math.max(0.01, economy.population);
   const dependency = clamp(importTarget / capacityPlan.demand, 0, 1);
   // The public efficiency view is deliberately compressed into a 70–99.5%
@@ -1334,8 +1496,45 @@ function fundFoodPlanV2(
   };
 }
 
-function allBranchCapped(state: WorldStateV2, playerId: PlayerId, branch: ResearchBranchV2): boolean {
-  return !state.players[playerId] || !RESEARCH_BRANCH_EFFECTS[branch];
+export function selectResearchBranchMaxedV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  playerId: PlayerId,
+  branch: ResearchBranchV2,
+): boolean {
+  if (!state.players[playerId] || !RESEARCH_BRANCH_EFFECTS[branch]) return true;
+  return branch === 'education-intelligence'
+    && selectNationalIqViewV2(state, content, playerId).score
+      >= NATIONAL_IQ_EFFECTIVE_SCORE_MAX - 0.000001;
+}
+
+/** Reassigns every passive and focused research dollar when a program reaches its useful cap. */
+export function selectResearchFundingSharesV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  playerId: PlayerId,
+): Readonly<Record<ResearchBranchV2, number>> {
+  const nation = state.players[playerId];
+  if (!nation) return Object.fromEntries(RESEARCH_BRANCHES.map((branch) => [branch, 0])) as Record<ResearchBranchV2, number>;
+  const educationMaxed = nation.research.effectLevels['iq-increase'] > 0
+    && selectResearchBranchMaxedV2(state, content, playerId, 'education-intelligence');
+  const cache = educationMaxed
+    ? cappedEducationFundingSharesCache : ordinaryResearchFundingSharesCache;
+  const cached = cache.get(nation.research.allocations);
+  if (cached) return cached;
+  const raw = Object.fromEntries(RESEARCH_BRANCHES.map((branch) => [
+    branch,
+    educationMaxed && branch === 'education-intelligence'
+      ? 0 : researchFundingShareV2(nation.research.allocations, branch),
+  ])) as Record<ResearchBranchV2, number>;
+  const total = RESEARCH_BRANCHES.reduce((sum, branch) => sum + raw[branch], 0);
+  if (total <= 0) return raw;
+  const normalized = Object.fromEntries(RESEARCH_BRANCHES.map((branch) => [
+    branch,
+    raw[branch] / total,
+  ])) as Record<ResearchBranchV2, number>;
+  cache.set(nation.research.allocations, normalized);
+  return normalized;
 }
 
 function researchBranchCostForCompletionsV2(
@@ -1372,7 +1571,7 @@ export function selectResearchBranchCostV2(
   powerSnapshot: PowerSnapshotV2 = createPowerSnapshotV2(state, content),
 ): number {
   const nation = state.players[playerId];
-  if (!nation || allBranchCapped(state, playerId, branch)) return 0;
+  if (!nation || selectResearchBranchMaxedV2(state, content, playerId, branch)) return 0;
   return researchBranchCostForCompletionsV2(
     state, content, playerId, branch, nation.research.breakthroughs[branch], powerSnapshot,
   );
@@ -1386,7 +1585,9 @@ export function selectResearchOutputV2(
   catchUpOverride?: number,
 ): number {
   const nation = state.players[playerId];
-  if (!nation || RESEARCH_BRANCHES.every((branch) => allBranchCapped(state, playerId, branch))) return 0;
+  if (!nation || RESEARCH_BRANCHES.every((branch) => (
+    selectResearchBranchMaxedV2(state, content, playerId, branch)
+  ))) return 0;
   const fundingRatio = finance.research / Math.max(0.001, finance.revenue * 0.25);
   // Research has an institutional base, but cash still has to activate it.
   // Logarithmic cash returns stop giant economies converting raw scale into an
@@ -1395,18 +1596,29 @@ export function selectResearchOutputV2(
   const base = 0.22 + 0.08 * Math.log2(1 + Math.max(0, finance.research));
   return round(base * Math.sqrt(clamp(fundingRatio, 0, 1.25))
     * (1 + 0.01 * nation.research.effectLevels['research-speed'])
-    * selectResearchInstitutionalCapacityV2(content, playerId)
+    * selectResearchInstitutionalCapacityV2(state, content, playerId)
     * (catchUpOverride ?? selectResearchCatchUpFactorV2(state, content, playerId))
-    * nationalAiEfficiencyV2(content.nations[playerId]?.iqScore ?? NATIONAL_IQ_SCORE_NEUTRAL)
+    * nationalAiEfficiencyV2(selectNationalIqViewV2(state, content, playerId).score)
     * (1 - finance.warResearchPenalty)
     * (0.55 + 0.45 * clamp(nation.foodSecurity, 0, 1)));
 }
 
 /** Bounded IQ gameplay-proxy effect used by ordinary R&D. */
+export function selectResearchInstitutionalCapacityV2(content: WorldContentV2, playerId: PlayerId): number;
 export function selectResearchInstitutionalCapacityV2(
+  state: WorldStateV2,
   content: WorldContentV2,
   playerId: PlayerId,
+): number;
+export function selectResearchInstitutionalCapacityV2(
+  stateOrContent: WorldStateV2 | WorldContentV2,
+  contentOrPlayerId: WorldContentV2 | PlayerId,
+  effectivePlayerId?: PlayerId,
 ): number {
+  const state = effectivePlayerId === undefined ? undefined : stateOrContent as WorldStateV2;
+  const content = effectivePlayerId === undefined
+    ? stateOrContent as WorldContentV2 : contentOrPlayerId as WorldContentV2;
+  const playerId = effectivePlayerId ?? contentOrPlayerId as PlayerId;
   const researchCapacity = content.nations[playerId]?.real.researchCapacity
     ?? NATIONAL_IQ_INSTITUTIONAL_CAPACITY_FLOOR;
   const capacityShare = clamp(
@@ -1420,10 +1632,22 @@ export function selectResearchInstitutionalCapacityV2(
     + (RESEARCH_INSTITUTION_CAPACITY_BASE_MAX
       - RESEARCH_INSTITUTION_CAPACITY_BASE_MIN) * capacityShare;
   return round(clamp(
-    capacityBase * selectNationalIqViewV2(content, playerId).researchMultiplier,
+    capacityBase * (state
+      ? selectNationalIqViewV2(state, content, playerId)
+      : selectNationalIqViewV2(content, playerId)).researchMultiplier,
     RESEARCH_INSTITUTION_MULTIPLIER_MIN,
     RESEARCH_INSTITUTION_MULTIPLIER_MAX,
   ));
+}
+
+interface NationalAiPlanSelectorInputsV2 {
+  army: TotalManpowerV2;
+  territories: readonly TerritoryViewV2[];
+  economy: NationalEconomyV2;
+  foodDemand: number;
+  populationTrend: PopulationDynamicsV2;
+  activeWarCount: number;
+  iqScore: number;
 }
 
 export function selectNationalAiPlanV2(
@@ -1432,20 +1656,23 @@ export function selectNationalAiPlanV2(
   playerId: PlayerId,
   powerSnapshot: PowerSnapshotV2 = createPowerSnapshotV2(state, content),
   intentOverride?: BudgetPolicyV2,
+  selectorInputs?: NationalAiPlanSelectorInputsV2,
 ): NationalAiPlanV2 {
   const nation = state.players[playerId];
   if (!nation) throw new Error(`Unknown nation ${playerId}.`);
-  const army = selectTotalManpowerV2(state, playerId);
-  const territories = selectTerritoriesOfV2(state, playerId);
+  const army = selectorInputs?.army ?? selectTotalManpowerV2(state, playerId);
+  const territories = selectorInputs?.territories ?? selectTerritoriesOfV2(state, playerId);
   const averageCondition = territories.length > 0
     ? territories.reduce((sum, territory) => sum + territory.condition, 0) / territories.length : 0;
   const breakthroughs = Object.values(nation.research.breakthroughs).reduce((sum, value) => sum + value, 0);
-  const economy = selectNationalEconomyV2(state, content, playerId);
-  const foodDemand = Math.max(0.01, selectFoodDemandV2(state, playerId));
-  const populationTrend = selectPopulationDynamicsV2(state, content, playerId, 0);
+  const economy = selectorInputs?.economy ?? selectNationalEconomyV2(state, content, playerId);
+  const foodDemand = selectorInputs?.foodDemand
+    ?? Math.max(0.01, selectFoodDemandV2(state, playerId));
+  const populationTrend = selectorInputs?.populationTrend
+    ?? selectPopulationDynamicsV2(state, content, playerId, 0);
   return optimizeNationalAiPlanV2({
     intent: intentOverride ?? nation.budget,
-    activeWars: selectWarsOfV2(state, playerId).length,
+    activeWars: selectorInputs?.activeWarCount ?? selectWarsOfV2(state, playerId).length,
     fillRatio: army.capacity > 0 ? clamp(army.deployed / army.capacity, 0, 1) : 0,
     averageCondition,
     researchGap: Math.max(0, powerSnapshot.leaderBreakthroughs - breakthroughs),
@@ -1453,7 +1680,7 @@ export function selectNationalAiPlanV2(
     foodSecurity: nation.foodSecurity,
     populationGrowthRate: populationTrend.annualNetRate,
     foodReserveWeeks: nation.foodStock / foodDemand,
-    iqScore: content.nations[playerId]?.iqScore ?? NATIONAL_IQ_SCORE_NEUTRAL,
+    iqScore: selectorInputs?.iqScore ?? selectNationalIqViewV2(state, content, playerId).score,
   });
 }
 
@@ -1487,7 +1714,7 @@ function economicGrowthRatesV2(
   const rawResearch = Math.min(0.012,
     ECONOMY_RESEARCH_GROWTH_PER_LEVEL
       * nation.research.effectLevels['economy-growth'] * researchImpact);
-  const iqGrowthMultiplier = selectNationalIqViewV2(content, playerId).economyGrowthMultiplier;
+  const iqGrowthMultiplier = selectNationalIqViewV2(state, content, playerId).economyGrowthMultiplier;
   const base = ECONOMY_BASE_ANNUAL_GROWTH * iqGrowthMultiplier;
   const investment = rawInvestment * iqGrowthMultiplier;
   const research = rawResearch * iqGrowthMultiplier;
@@ -1516,18 +1743,24 @@ export function selectResearchPortfolioV2(
   const nation = state.players[playerId];
   if (!nation) return [];
   const poolOutput = selectResearchOutputV2(state, content, playerId, finance, catchUpOverride);
+  const fundingShares = selectResearchFundingSharesV2(state, content, playerId);
+  const lastFundedIndex = RESEARCH_BRANCHES.reduce((last, branch, index) => (
+    fundingShares[branch] > 0 ? index : last
+  ), -1);
   let assignedFunding = 0;
   let assignedOutput = 0;
   return RESEARCH_BRANCHES.map((branch, index) => {
-    const isLast = index === RESEARCH_BRANCHES.length - 1;
-    const fundingShare = researchFundingShareV2(nation.research.allocations, branch);
-    const weeklyFunding = isLast ? round(Math.max(0, finance.research - assignedFunding), 9)
+    const maxed = selectResearchBranchMaxedV2(state, content, playerId, branch);
+    const isLastFunded = index === lastFundedIndex;
+    const fundingShare = fundingShares[branch];
+    const weeklyFunding = maxed ? 0 : isLastFunded
+      ? round(Math.max(0, finance.research - assignedFunding), 9)
       : round(finance.research * fundingShare, 9);
-    const outputShare = isLast ? round(Math.max(0, poolOutput - assignedOutput), 9)
+    const outputShare = maxed ? 0 : isLastFunded
+      ? round(Math.max(0, poolOutput - assignedOutput), 9)
       : round(poolOutput * fundingShare, 9);
     assignedFunding = round(assignedFunding + weeklyFunding, 9);
     assignedOutput = round(assignedOutput + outputShare, 9);
-    const maxed = allBranchCapped(state, playerId, branch);
     const nextCost = selectResearchBranchCostV2(state, content, playerId, branch, powerSnapshot);
     const followingCost = maxed ? 0 : researchBranchCostForCompletionsV2(
       state, content, playerId, branch, nation.research.breakthroughs[branch] + 1, powerSnapshot,
@@ -1606,13 +1839,45 @@ export function selectWeeklyFinanceBreakdownV2(
 ): WeeklyFinanceBreakdownV2 {
   const nation = state.players[playerId];
   if (!nation) throw new Error(`Unknown nation ${playerId}.`);
-  const aiPlan = selectNationalAiPlanV2(state, content, playerId, powerSnapshot, budgetOverride);
   const budget = { ...(budgetOverride ?? nation.budget) };
   const economy = selectNationalEconomyV2(state, content, playerId);
   const army = selectTotalManpowerV2(state, playerId);
   const activeWars = selectWarsOfV2(state, playerId).length;
   const warPressure = selectWarPressureV2(state, playerId);
   const atWar = activeWars > 0;
+  const territories = selectTerritoriesOfV2(state, playerId);
+  const baseFoodDemand = Math.max(0.01, selectFoodDemandV2(state, playerId));
+  const foodPlan = selectFoodPlanV2(
+    state,
+    content,
+    playerId,
+    baseFoodDemand,
+    economy,
+  );
+  const iq = selectNationalIqViewV2(state, content, playerId);
+  const populationTrend = selectPopulationDynamicsV2(
+    state,
+    content,
+    playerId,
+    0,
+    foodPlan.targetStock,
+  );
+  const aiPlan = selectNationalAiPlanV2(
+    state,
+    content,
+    playerId,
+    powerSnapshot,
+    budgetOverride,
+    {
+      army,
+      territories,
+      economy,
+      foodDemand: baseFoodDemand,
+      populationTrend,
+      activeWarCount: activeWars,
+      iqScore: iq.score,
+    },
+  );
   const ownerIndex = territoryIndexV2(state).owned;
   const activeObligations = state.ceasefireObligations
     .filter((obligation) => state.tick > obligation.startsTick && state.tick <= obligation.expiresTick
@@ -1626,10 +1891,9 @@ export function selectWeeklyFinanceBreakdownV2(
   const ceasefirePayment = activeObligations
     .filter((obligation) => obligation.payerId === playerId)
     .reduce((sum, obligation) => sum + obligation.weeklyCost, 0);
-  const integrationCost = selectTerritoriesOfV2(state, playerId)
-    .reduce((sum, territory) => sum
+  const integrationCost = territories.reduce((sum, territory) => sum
       + (territory.integrationProgram?.annualCost ?? 0) / 52, 0);
-  const baseOperatingCost = economy.weeklyRevenue * BASE_OPERATING_COST_TAX_REVENUE_SHARE;
+  const baseOperatingCost = economy.weeklyRevenue * selectBaseOperatingCostShareV2(state, playerId);
   const availableTaxRevenue = Math.max(0, economy.weeklyRevenue - baseOperatingCost);
   // A negative treasury is debt, not the disappearance of the country's new
   // weekly revenue. Positive reserves can fund a surge; debt cannot.
@@ -1638,7 +1902,6 @@ export function selectWeeklyFinanceBreakdownV2(
     0,
     cashAfterRevenue - ceasefirePayment - integrationCost - baseOperatingCost,
   );
-  const foodPlan = selectFoodPlanV2(state, content, playerId);
   // Food remains first priority, but it cannot consume several years of a
   // fragile country's public revenue in one week. Severe access crises may
   // command up to 72% of weekly revenue; the resulting unmet need remains a
@@ -1646,20 +1909,30 @@ export function selectWeeklyFinanceBreakdownV2(
   // other national system.
   const foodFundingStress = clamp((0.98 - nation.foodSecurity) / 0.58, 0, 1);
   const foodSystemInefficiency = clamp((1 - foodPlan.accessCeiling) / 0.35, 0, 1);
+  const foodReserveRatio = clamp(
+    nation.foodStock / Math.max(0.01, foodPlan.targetStock),
+    0,
+    1,
+  );
+  const foodReserveStress = 1 - foodReserveRatio;
   const foodBudgetShare = clamp(
-    0.12 + 0.40 * foodSystemInefficiency + 0.35 * foodFundingStress,
+    0.12 + 0.32 * foodSystemInefficiency + 0.25 * foodFundingStress
+      + 0.30 * foodReserveStress,
     0.12,
-    0.72,
+    0.78,
   );
   const ordinaryFoodAllowance = availableTaxRevenue * foodBudgetShare;
   const reserveWeeks = nation.foodStock / Math.max(0.01, foodPlan.demand);
   const foodEmergency = reserveWeeks < 1 || nation.foodSecurity < 0.65;
+  const preventiveReserveDrawShare = foodEmergency ? 1
+    : smoothstep(0.15, 0.90, foodReserveStress);
   // In a genuine food emergency the national cash reserve is a survival fund.
   // It may bridge the remaining bill after normal weekly food funding, but it
   // never borrows extra money or spends beyond the actual food request.
-  const emergencyReserveDraw = foodEmergency
-    ? Math.min(Math.max(0, nation.treasury), Math.max(0, foodPlan.request - ordinaryFoodAllowance))
-    : 0;
+  const emergencyReserveDraw = Math.min(
+    Math.max(0, nation.treasury),
+    Math.max(0, foodPlan.request - ordinaryFoodAllowance) * preventiveReserveDrawShare,
+  );
   const foodSpendable = Math.min(
     cashAfterMandatory,
     ordinaryFoodAllowance + emergencyReserveDraw,
@@ -1679,7 +1952,7 @@ export function selectWeeklyFinanceBreakdownV2(
   // shared cash discipline; selection status never changes the rules.
   const economyScale = clamp(Math.log10(economy.weeklyRevenue + 1) / 2, 0, 1);
   const treasuryPolicy = nationalAiTreasuryPolicyV2(
-    content.nations[playerId]?.iqScore ?? NATIONAL_IQ_SCORE_NEUTRAL,
+    iq.score,
     activeWars,
     economyScale,
   );
@@ -1713,18 +1986,7 @@ export function selectWeeklyFinanceBreakdownV2(
   // sovereign borrowing below; without this, the treasury could never become
   // negative and expensive peace contracts merely switched the country off.
   const envelope = discretionaryRevenue * envelopeRate;
-  const frontLoad = selectWarsOfV2(state, playerId).reduce((sum, war) => {
-    const opponentId = war.attackerId === playerId ? war.defenderId : war.attackerId;
-    const operations = war.attackerId === playerId ? war.attackerOperations : war.defenderOperations;
-    const inferredAccess = selectWarAccessTypeV2(state, content, playerId, opponentId);
-    if (operations.length === 0) {
-      const access = inferredAccess === 'none' ? 'land' : inferredAccess;
-      return sum + WAR_ACCESS_OPERATION_MULTIPLIER[access];
-    }
-    return sum + operations.reduce((fronts, operation) => (
-      fronts + WAR_ACCESS_OPERATION_MULTIPLIER[operation.access]
-    ), 0);
-  }, 0);
+  const frontLoad = selectWarOperationsLogisticsLoadV2(state, content, playerId);
   const warFatigueCostMultiplier = 1 + clamp(
     nation.warFatigue * WAR_FATIGUE_OPERATION_COST_PER_POINT,
     0,
@@ -1758,7 +2020,7 @@ export function selectWeeklyFinanceBreakdownV2(
     foodReserveWeeks: reserveWeeks,
     foodStockChange: ordinaryFood.foodStockChange,
     foodDemand: foodPlan.demand,
-    iqScore: content.nations[playerId]?.iqScore ?? NATIONAL_IQ_SCORE_NEUTRAL,
+    iqScore: iq.score,
   });
   const development = foodDevelopmentRedirect.development;
   const foodDevelopmentTransfer = foodDevelopmentRedirect.transfer;
@@ -1778,7 +2040,7 @@ export function selectWeeklyFinanceBreakdownV2(
     foodCoverage,
     foodStockChange,
   } = fundedFood;
-  // The six-program portfolio divides this actually funded pot once; capped shares remain spent.
+  // The ten-program portfolio divides this actually funded pot once; capped shares remain spent.
   // Front operations are paid directly below. They do not consume the Armed
   // Forces envelope a second time or masquerade as ordinary standing upkeep.
   const mandatoryRequest = armyUpkeep;
@@ -1809,22 +2071,30 @@ export function selectWeeklyFinanceBreakdownV2(
   // Peace creates new active soldiers first. War does not: the finite trained
   // pool supplies replacements. Existing reservists can mobilise faster than
   // fresh soldiers can be trained, without creating a second manpower source.
+  const reserveMobilizationLevel = diminishingResearchLevelV2(
+    nation.research.effectLevels['reserve-mobilization'],
+    RESERVE_MOBILIZATION_RESEARCH_EFFECTIVE_CEILING,
+    RESERVE_MOBILIZATION_RESEARCH_HALF_SATURATION,
+  );
+  const reserveDeploymentThroughput = TRAINED_RESERVE_DEPLOYMENT_THROUGHPUT_MULTIPLIER
+    * (1 + RESERVE_MOBILIZATION_RESEARCH_BONUS_PER_EFFECTIVE_LEVEL
+      * reserveMobilizationLevel);
   const passiveRecruitment = atWar ? 0 : fundedPassiveCapacity;
   const acceleratedRecruitment = atWar ? 0 : affordableAcceleratedRecruitment;
   const reservePassiveDeployment = atWar ? Math.min(
     nation.trainedReserves,
     Math.max(0, army.capacity - army.deployed),
-    fundedPassiveCapacity * TRAINED_RESERVE_DEPLOYMENT_THROUGHPUT_MULTIPLIER,
+    fundedPassiveCapacity * reserveDeploymentThroughput,
   ) : 0;
   const reserveAcceleratedDeployment = atWar ? Math.min(
     Math.max(0, nation.trainedReserves - reservePassiveDeployment),
     Math.max(0, army.capacity - army.deployed - reservePassiveDeployment),
-    affordableAcceleratedRecruitment * TRAINED_RESERVE_DEPLOYMENT_THROUGHPUT_MULTIPLIER,
+    affordableAcceleratedRecruitment * reserveDeploymentThroughput,
   ) : 0;
   const reserveDeployment = reservePassiveDeployment + reserveAcceleratedDeployment;
   const recruitment = atWar
     ? reserveAcceleratedDeployment
-      / TRAINED_RESERVE_DEPLOYMENT_THROUGHPUT_MULTIPLIER
+      / reserveDeploymentThroughput
       * recruitmentUnitCost * accelerationCostMultiplier
     : affordableRecruitmentCost;
   const trainedReserveCapacity = selectTrainedReserveCapacityV2(state, playerId);
@@ -1838,8 +2108,16 @@ export function selectWeeklyFinanceBreakdownV2(
     deployedAfterFinanceRecruitment,
     army.capacity,
   );
+  const reserveTrainingLevel = diminishingResearchLevelV2(
+    nation.research.effectLevels['reserve-training'],
+    RESERVE_TRAINING_RESEARCH_EFFECTIVE_CEILING,
+    RESERVE_TRAINING_RESEARCH_HALF_SATURATION,
+  );
+  const reserveTrainingMultiplier = 1
+    + RESERVE_TRAINING_RESEARCH_BONUS_PER_EFFECTIVE_LEVEL * reserveTrainingLevel;
   const reserveTrainingRequest = (atWar || activeReadyForReserve)
     ? trainingPipeline * (atWar ? TRAINED_RESERVE_WARTIME_TRAINING_FACTOR : 1)
+      * reserveTrainingMultiplier
     : 0;
   const reserveTrainingCostPerUnit = recruitmentUnitCost * TRAINED_RESERVE_TRAINING_COST_MULTIPLIER;
   const reserveTrainingFunds = Math.max(0, remainingMilitary - recruitment);
@@ -2166,34 +2444,34 @@ export function selectWeeklyPopulationTrendV2(state: WorldStateV2, content: Worl
 }
 
 /**
- * Explicit demographic accounting. The World Bank population-growth input is
- * already net of normal deaths, so births/migration are reconstructed from
- * that net rate plus the separate crude death rate. Crisis mortality is then
- * added once, avoiding both immortal populations and double-counted deaths.
+ * Explicit demographic accounting. The source population-growth input is net
+ * of normal deaths, so the calibrated birth estimate reconstructs it by adding
+ * the separate crude death rate. There is no cross-border migration system.
+ * Crisis mortality is then added once to avoid double-counting deaths.
  */
 export function selectPopulationDynamicsV2(
   state: WorldStateV2,
   content: WorldContentV2,
   playerId: PlayerId,
   populationGrowthFunding?: number,
+  foodTargetStockOverride?: number,
 ): PopulationDynamicsV2 {
   const nation = state.players[playerId];
   if (!nation) return {
-    annualBirthMigrationRate: 0,
+    annualBirthRate: 0,
     annualDeathRate: 0,
-    annualDisplacementRate: 0,
+    annualWarPenaltyRate: 0,
     annualNetRate: 0,
     weeklyDeaths: 0,
     weeklyNet: 0,
   };
-  const population = selectTerritoriesOfV2(state, playerId)
-    .reduce((sum, territory) => sum + territory.population, 0);
+  const owned = selectTerritoriesOfV2(state, playerId);
+  const population = owned.reduce((sum, territory) => sum + territory.population, 0);
   const funds = populationGrowthFunding
     ?? selectWeeklyFinanceBreakdownV2(state, content, playerId).populationGrowth;
-  const owned = selectTerritoriesOfV2(state, playerId);
   const baselineNetRate = owned.reduce((sum, territory) => sum
     + (content.territories[territory.id]?.baseline.populationGrowthRate ?? 0) / 100 * territory.population, 0)
-    / Math.max(0.01, owned.reduce((sum, territory) => sum + territory.population, 0));
+    / Math.max(0.01, population);
   const baselineDeathRate = owned.reduce((sum, territory) => sum
     + (content.territories[territory.id]?.baseline.deathRatePerThousand ?? 8) / 1_000 * territory.population, 0)
     / Math.max(0.01, population);
@@ -2206,40 +2484,43 @@ export function selectPopulationDynamicsV2(
   const researchedNet = baselineNetRate >= 0
     ? baselineNetRate * (1 + 0.005 * level * impact)
     : baselineNetRate * (1 - 0.004 * level * impact);
+  const iq = selectNationalIqViewV2(state, content, playerId);
   const supportedNet = researchedNet
-    + 0.0005 * Math.sqrt(funds * nationalAiEfficiencyV2(
-      content.nations[playerId]?.iqScore ?? NATIONAL_IQ_SCORE_NEUTRAL,
-    )
+    + 0.0005 * Math.sqrt(funds * nationalAiEfficiencyV2(iq.score)
       / Math.max(0.01, population));
-  const iqPopulationMultiplier = selectNationalIqViewV2(
-    content,
-    playerId,
-  ).populationGrowthMultiplier;
-  const annualBirthMigrationRate = Math.max(
+  const iqPopulationMultiplier = iq.populationGrowthMultiplier;
+  const annualBirthRate = Math.max(
     0,
     (baselineDeathRate + supportedNet) * iqPopulationMultiplier,
   );
   const medicalReduction = 0.20 * nation.research.effectLevels.recovery
     / (nation.research.effectLevels.recovery + 46.67);
   const foodCrisis = clamp((0.90 - foodSecurity) / 0.50, 0, 1);
-  const foodReserveWeeks = nation.foodStock / Math.max(0.01, selectFoodDemandV2(state, playerId));
-  const depletedReserve = clamp((0.50 - foodReserveWeeks) / 0.50, 0, 1);
+  const foodTargetStock = foodTargetStockOverride
+    ?? selectFoodCapacityPlanV2(state, content, playerId).targetStock;
+  const foodReserveShare = nation.foodStock / Math.max(0.01, foodTargetStock);
+  const depletedReserve = clamp(
+    (FOOD_MORTALITY_RESERVE_START_SHARE - foodReserveShare)
+      / FOOD_MORTALITY_RESERVE_START_SHARE,
+    0,
+    1,
+  );
   const acuteShortage = clamp((0.95 - foodSecurity) / 0.45, 0, 1);
   const foodMortality = FOOD_SHORTAGE_POPULATION_LOSS * 52 * foodCrisis
     + FOOD_EMPTY_RESERVE_ANNUAL_MORTALITY_MAX * depletedReserve * acuteShortage;
   const conditionMortality = Math.max(0, 0.65 - averageCondition) * 0.015;
   const annualDeathRate = Math.max(0,
     baselineDeathRate * (1 - medicalReduction) + foodMortality + conditionMortality);
-  const annualDisplacementRate = Math.max(0, warPressure.populationGrowthDrag);
+  const annualWarPenaltyRate = Math.max(0, warPressure.populationGrowthDrag);
   const annualNetRate = clamp(
-    annualBirthMigrationRate - annualDeathRate - annualDisplacementRate,
+    annualBirthRate - annualDeathRate - annualWarPenaltyRate,
     -0.08,
     0.04,
   );
   return {
-    annualBirthMigrationRate: round(annualBirthMigrationRate),
+    annualBirthRate: round(annualBirthRate),
     annualDeathRate: round(annualDeathRate),
-    annualDisplacementRate: round(annualDisplacementRate),
+    annualWarPenaltyRate: round(annualWarPenaltyRate),
     annualNetRate: round(annualNetRate),
     weeklyDeaths: round(population * (1 - Math.max(0, 1 - annualDeathRate) ** (1 / 52))),
     weeklyNet: round(population * ((1 + annualNetRate) ** (1 / 52) - 1)),
@@ -2255,18 +2536,18 @@ export function selectConquestForecastV2(
   const territories = selectTerritoriesOfV2(state, targetId);
   const retainedPopulation = territories.reduce((sum, territory) => sum + territory.population, 0);
   const retainedEconomy = territories.reduce((sum, territory) => sum + territory.economy, 0);
-  const initialOccupationOutput = retainedEconomy * CONQUEST_INITIAL_INTEGRATION_SHARE;
+  const initialIntegratedOutput = retainedEconomy * CONQUEST_INITIAL_INTEGRATION_SHARE;
   return {
     attackerId,
     targetId,
     territoryCount: territories.length,
     retainedPopulation: round(retainedPopulation),
     retainedEconomy: round(retainedEconomy),
-    initialOccupationOutput: round(initialOccupationOutput),
+    initialIntegratedOutput: round(initialIntegratedOutput),
     maxTreasurySeized: round((state.players[targetId]?.treasury ?? 0) * 0.25),
     inheritedEnemyManpower: 0,
     asOfTick: state.tick,
-    assumptions: ['10% initial integration', '15–~204 year immutable size curve', 'occupation army transferred from attacker', '25% treasury only on final elimination', 'no enemy manpower inheritance'],
+    assumptions: ['10% initial integration', '15–~204 year immutable size curve', 'conquest guard transferred from attacker', '25% treasury only on final elimination', 'no enemy manpower inheritance'],
   };
 }
 
@@ -2376,36 +2657,106 @@ export function stableTerritoryPairV2(leftId: TerritoryId, rightId: TerritoryId)
 }
 
 export function finiteStateNumbersV2(state: WorldStateV2): boolean {
-  const values: number[] = [state.seed, state.rngState, state.tick];
-  for (const nation of Object.values(state.players)) values.push(
-    nation.treasury,
-    nation.foodStock,
-    nation.domesticFoodCapacity,
-    nation.foodSecurity,
-    nation.trainedReserves,
-    nation.warFatigue,
-    nation.propagandaAvailableTick,
-    nation.propagandaProgram?.startedTick ?? 0,
-    nation.propagandaProgram?.endsTick ?? 0,
-    nation.propagandaProgram?.totalSuspicionReduction ?? 0,
-    nation.propagandaProgram?.weeklySuspicionReduction ?? 0,
-    ...Object.values(nation.research.allocations),
-    ...Object.values(nation.research.progress),
-    ...Object.values(nation.research.effectLevels),
-    ...Object.values(nation.research.breakthroughs),
-  );
-  for (const territory of Object.values(state.territories)) values.push(territory.population, territory.economy, territory.condition, territory.integration,
-    territory.army.manpower, territory.army.capacity,
-    territory.army.baseAttack, territory.army.baseDefense,
-    territory.integrationProgram?.startedTick ?? 0,
-    territory.integrationProgram?.completesTick ?? 0,
-    territory.integrationProgram?.annualCost ?? 0,
-    territory.control?.share ?? 0);
-  return values.every(Number.isFinite);
+  if (!Number.isFinite(state.seed) || !Number.isFinite(state.rngState)
+    || !Number.isFinite(state.tick)) return false;
+  const finiteRecord = (record: object): boolean => {
+    for (const key in record) {
+      if (Object.prototype.hasOwnProperty.call(record, key)
+        && !Number.isFinite((record as Record<string, unknown>)[key])) return false;
+    }
+    return true;
+  };
+  for (const nation of Object.values(state.players)) {
+    if (!Number.isFinite(nation.treasury)
+      || !Number.isFinite(nation.foodStock)
+      || !Number.isFinite(nation.domesticFoodCapacity)
+      || !Number.isFinite(nation.foodSecurity)
+      || !Number.isFinite(nation.trainedReserves)
+      || !Number.isFinite(nation.warFatigue)
+      || !Number.isFinite(nation.propagandaAvailableTick)
+      || !Number.isFinite(nation.propagandaProgram?.startedTick ?? 0)
+      || !Number.isFinite(nation.propagandaProgram?.endsTick ?? 0)
+      || !Number.isFinite(nation.propagandaProgram?.totalSuspicionReduction ?? 0)
+      || !Number.isFinite(nation.propagandaProgram?.weeklySuspicionReduction ?? 0)
+      || !finiteRecord(nation.research.allocations)
+      || !finiteRecord(nation.research.progress)
+      || !finiteRecord(nation.research.effectLevels)
+      || !finiteRecord(nation.research.breakthroughs)) return false;
+  }
+  for (const territory of Object.values(state.territories)) {
+    if (!Number.isFinite(territory.population)
+      || !Number.isFinite(territory.economy)
+      || !Number.isFinite(territory.condition)
+      || !Number.isFinite(territory.integration)
+      || !Number.isFinite(territory.army.manpower)
+      || !Number.isFinite(territory.army.capacity)
+      || !Number.isFinite(territory.army.baseAttack)
+      || !Number.isFinite(territory.army.baseDefense)
+      || !Number.isFinite(territory.integrationProgram?.startedTick ?? 0)
+      || !Number.isFinite(territory.integrationProgram?.completesTick ?? 0)
+      || !Number.isFinite(territory.integrationProgram?.annualCost ?? 0)) return false;
+  }
+  return true;
+}
+
+/** Shortest direct route between two empires; land reports zero kilometres. */
+export function selectWarRouteDistanceKmV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  attackerId: PlayerId,
+  defenderId: PlayerId,
+): number | undefined {
+  let shortest = Number.POSITIVE_INFINITY;
+  for (const source of selectTerritoriesOfV2(state, attackerId)) {
+    for (const connection of content.territories[source.id]?.connections ?? []) {
+      if (state.territories[connection.targetId]?.owner !== defenderId) continue;
+      if (connection.kind === 'land') return 0;
+      shortest = Math.min(shortest, connection.distanceKm ?? 0);
+    }
+  }
+  return Number.isFinite(shortest) ? shortest : undefined;
+}
+
+export function selectTerritoryRouteDistanceKmV2(
+  content: WorldContentV2,
+  sourceId: TerritoryId,
+  targetId: TerritoryId,
+): number | undefined {
+  return content.territories[sourceId]?.connections
+    .find((connection) => connection.targetId === targetId)?.distanceKm;
+}
+
+function selectWarOperationsLogisticsLoadV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  playerId: PlayerId,
+): number {
+  return selectWarsOfV2(state, playerId).reduce((sum, war) => {
+    const opponentId = war.attackerId === playerId ? war.defenderId : war.attackerId;
+    const operations = war.attackerId === playerId ? war.attackerOperations : war.defenderOperations;
+    if (operations.length === 0) {
+      const inferredAccess = selectWarAccessTypeV2(state, content, playerId, opponentId);
+      const access = inferredAccess === 'none' ? 'land' : inferredAccess;
+      const distance = access === 'naval'
+        ? selectWarRouteDistanceKmV2(state, content, playerId, opponentId) : undefined;
+      return sum + warAccessOperationMultiplierV2(access, distance);
+    }
+    return sum + operations.reduce((fronts, operation) => (
+      fronts + warAccessOperationMultiplierV2(
+        operation.access,
+        selectTerritoryRouteDistanceKmV2(content, operation.sourceId, operation.targetId),
+      )
+    ), 0);
+  }, 0);
 }
 
 export function roundedFinanceV2(value: WeeklyFinanceBreakdownV2): WeeklyFinanceBreakdownV2 {
-  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, typeof item === 'number' ? round(item) : item])) as unknown as WeeklyFinanceBreakdownV2;
+  const rounded = { ...value } as WeeklyFinanceBreakdownV2 & Record<string, unknown>;
+  for (const key in rounded) {
+    const item = rounded[key];
+    if (typeof item === 'number') rounded[key] = round(item);
+  }
+  return rounded;
 }
 
 export const selectDefaultContentV2 = (): WorldContentV2 => WORLD_CONTENT_V2;

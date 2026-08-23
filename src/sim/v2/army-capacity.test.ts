@@ -5,7 +5,10 @@ import {
 } from './balance';
 import { createWorldStateV2 } from './bootstrap';
 import {
+  CONQUERED_TERRITORY_EMPIRE_COMBAT_CAP_SHARE_V2,
+  INTEGRATED_CORE_EMPIRE_COMBAT_CAP_SHARE_V2,
   nationalArmyCapacityTargetV2,
+  stateTerritoryArmyCapacityTargetV2,
   stateTerritoryArmySupportCeilingV2,
   synchronizeArmyCapacityV2,
 } from './capacity';
@@ -106,7 +109,7 @@ describe('population and research army cap', () => {
     );
   });
 
-  it('never recruits new personnel above twice a territory local capacity', () => {
+  it('never recruits new personnel above a territory combat deployment ceiling', () => {
     const state = createWorldStateV2(8_106);
     const supported = state.territories[territoryIdV2('bel')]!;
     const reserve = state.territories[deuTerritory]!;
@@ -136,6 +139,52 @@ describe('population and research army cap', () => {
         stateTerritoryArmySupportCeilingV2(state, WORLD_CONTENT_V2, projected.id, bel) + 1e-9,
       );
     }
+  });
+
+  it('uses one percent empire support after conquest and 2.5 percent after full integration', () => {
+    const state = createWorldStateV2(8_107);
+    const capturedId = territoryIdV2('nld');
+    const captured = state.territories[capturedId]!;
+    captured.owner = bel;
+    captured.integration = 0.10;
+    synchronizeArmyCapacityV2(state, WORLD_CONTENT_V2);
+
+    const nationalCap = nationalArmyCapacityTargetV2(state, WORLD_CONTENT_V2, bel);
+    const occupiedLocalCap = stateTerritoryArmyCapacityTargetV2(
+      state, WORLD_CONTENT_V2, capturedId, bel,
+    );
+    const visibleArmyCap = selectTotalManpowerV2(state, bel).capacity;
+    expect(stateTerritoryArmySupportCeilingV2(state, WORLD_CONTENT_V2, capturedId, bel))
+      .toBeCloseTo(
+        occupiedLocalCap
+          + nationalCap * CONQUERED_TERRITORY_EMPIRE_COMBAT_CAP_SHARE_V2,
+        8,
+      );
+    expect(selectTotalManpowerV2(state, bel).capacity).toBe(visibleArmyCap);
+
+    captured.integration = 1;
+    captured.coreOwner = bel;
+    delete captured.integrationProgram;
+    synchronizeArmyCapacityV2(state, WORLD_CONTENT_V2);
+    const integratedNationalCap = nationalArmyCapacityTargetV2(
+      state, WORLD_CONTENT_V2, bel,
+    );
+    const integratedLocalCap = stateTerritoryArmyCapacityTargetV2(
+      state, WORLD_CONTENT_V2, capturedId, bel,
+    );
+    expect(stateTerritoryArmySupportCeilingV2(state, WORLD_CONTENT_V2, capturedId, bel))
+      .toBeCloseTo(
+        integratedLocalCap
+          + integratedNationalCap * INTEGRATED_CORE_EMPIRE_COMBAT_CAP_SHARE_V2,
+        8,
+      );
+    const homeId = territoryIdV2('bel');
+    expect(stateTerritoryArmySupportCeilingV2(state, WORLD_CONTENT_V2, homeId, bel))
+      .toBeCloseTo(
+        stateTerritoryArmyCapacityTargetV2(state, WORLD_CONTENT_V2, homeId, bel),
+        8,
+      );
+    expect(selectTotalManpowerV2(state, bel).capacity).toBeCloseTo(integratedNationalCap, 8);
   });
 
   it('adds normal recruits with the original military quality of their territory', () => {

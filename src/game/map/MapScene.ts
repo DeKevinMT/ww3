@@ -298,13 +298,18 @@ export class MapScene extends Phaser.Scene implements MapSceneAdapter {
   setSelection(selection: MapSelectionState): void {
     this.selection = selection;
     const legal = new Set(selection.legalTargetIds);
+    const hinted = new Set(selection.hintTargetIds ?? []);
     for (const [territoryId, visual] of this.visuals) {
       const selected = territoryId === selection.sourceId;
       const target = territoryId === selection.targetId;
       const isLegal = legal.has(territoryId);
+      const isHinted = hinted.has(territoryId);
       visual.glow.setFillStyle(target ? 0xffd36b : 0x79e3ff, selected || target ? 0.09 : 0);
-      visual.glow.setStrokeStyle(selected || target || isLegal ? (selected || target ? 6 : 3) : 0, target ? 0xffd36b : 0x79e3ff, selected || target ? 0.9 : isLegal ? 0.42 : 0);
-      visual.container.setDepth(selected || target ? 8 : isLegal ? 4 : 1);
+      visual.glow.setStrokeStyle(selected || target || isLegal || isHinted
+        ? selected || target ? 6 : isLegal ? 3 : 1.5 : 0,
+      target ? 0xffd36b : 0x79e3ff,
+      selected || target ? 0.9 : isLegal ? 0.42 : isHinted ? 0.22 : 0);
+      visual.container.setDepth(selected || target ? 8 : isLegal ? 4 : isHinted ? 2 : 1);
       visual.body.setAlpha(legal.size > 0 && !selected && !target && !isLegal ? 0.72 : 1);
     }
   }

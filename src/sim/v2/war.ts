@@ -7,35 +7,34 @@ import {
   CEASEFIRE_POST_PAYMENT_TRUCE_TICKS,
   CEASEFIRE_PAYER_WEEKLY_REVENUE_SHARE,
   CEASEFIRE_REPEAT_COST_MULTIPLIER,
-  COLLAPSED_OCCUPATION_CAPTURE_SHARE,
   COMBAT_DAMAGE_EFFECTIVENESS,
   COMBAT_POWER_RATIO_EXPONENT,
   COMBAT_ROUTE_STRENGTH_RATIO,
   CONQUEST_CAPTURE_GUARD_MAX_TRANSFER_SHARE,
   CONQUEST_CAPTURE_GUARD_TICKS,
-  CONQUEST_OCCUPATION_FORCE_TRANSFER_SHARE,
-  CONTESTED_CONTROL_EROSION_PER_PULSE,
+  CONQUEST_GUARD_MIN_TRANSFER_SHARE,
+  DECISIVE_SURRENDER_MAX_DEFENDER_FILL,
+  DECISIVE_SURRENDER_MIN_CUMULATIVE_LOSS_SHARE,
+  DECISIVE_SURRENDER_MIN_FORCE_RATIO,
+  DECISIVE_SURRENDER_MIN_FRONT_TICKS,
+  DECISIVE_SURRENDER_MIN_MOMENTUM,
   ATTACKER_CIVILIAN_LOSS_DEFENDER_SHARE,
   ATTACKER_CIVILIAN_LOSS_INTENSITY,
   ATTACKER_CIVILIAN_LOSS_POPULATION_CAP,
-  ATTACKER_REFUGEE_DISPLACEMENT_DEATH_SHARE,
-  ATTACKER_REFUGEE_DISPLACEMENT_POPULATION_CAP,
   DEFENDER_CIVILIAN_LOSS_INTENSITY,
   DEFENDER_CIVILIAN_LOSS_POPULATION_CAP,
-  DEFENDER_REFUGEE_DISPLACEMENT_DEATH_SHARE,
-  DEFENDER_REFUGEE_DISPLACEMENT_POPULATION_CAP,
   DEFENDER_COUNTERFIRE_MULTIPLIER,
   DEFENDER_POSITION_MULTIPLIER,
   PEACE_OFFER_DURATION_TICKS,
+  PEACE_REQUEST_COOLDOWN_TICKS,
   PEACE_REQUEST_MIN_WAR_AGE_TICKS,
   POST_WAR_TRANSITION_FATIGUE,
-  REFUGEE_HOST_MIN_CONDITION,
   STALE_WAR_TICKS,
   TERRAIN_DEFENSE_MODIFIER,
   TRUCE_TICKS,
   WAR_ACCESS_ASSAULT_MULTIPLIER,
   WAR_ACCESS_CASUALTY_MULTIPLIER,
-  WAR_ACCESS_SUPPLY_MULTIPLIER,
+  warAccessSupplyMultiplierV2,
   WAR_MOBILIZATION_TICKS,
   clamp,
   diminishingResearchLevelV2,
@@ -44,6 +43,7 @@ import {
 } from './balance';
 import type { WorldContentV2 } from './content';
 import {
+  nationalArmyCapacityTargetV2,
   stateTerritoryArmyCapacityTargetV2,
   stateTerritoryArmySupportCeilingV2,
 } from './capacity';
@@ -52,6 +52,7 @@ import {
   resetEmptyArmyBaseQualityV2,
 } from './armyQuality';
 import { addWorldEventV2 } from './events';
+import { isHumanPlayerV2 } from './humanPlayers';
 import { beginTerritoryIntegrationV2 } from './integration';
 import { resistanceCombatMultiplierV2 } from './resistance';
 import {
@@ -67,6 +68,7 @@ import {
   selectNationalEconomyV2,
   selectTerritoriesOfV2,
   selectTerritoryPowerV2,
+  selectTerritoryRouteDistanceKmV2,
   selectTerritoryWarAccessV2,
   selectTotalManpowerV2,
   selectWarAccessTypeV2,
@@ -103,7 +105,6 @@ export interface WarConclusionSettlementV2 {
   amount?: number;
   weeklyCost?: number;
   paymentWeeks?: number;
-  territoryId?: TerritoryId;
 }
 
 /** Transient exact conclusion data collected by WorldEngineV2; never canonical state. */
@@ -158,12 +159,16 @@ export interface CombatExchangeProjectionV2 {
   defenderLosses: number;
 }
 
-function nationalDefenseCoordinationV2(content: WorldContentV2, defenderId: PlayerId): {
+function nationalDefenseCoordinationV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  defenderId: PlayerId,
+): {
   coordination: number;
   counterattack: number;
   casualty: number;
 } {
-  const coordination = selectNationalIqViewV2(content, defenderId).logisticsMultiplier;
+  const coordination = selectNationalIqViewV2(state, content, defenderId).logisticsMultiplier;
   return {
     coordination,
     counterattack: coordination,
@@ -302,7 +307,7 @@ export function declareWarV2(
   };
   openWar(attackerId, defenderId);
   for (const rivalId of rivalInvaders) openWar(attackerId, rivalId);
-  if (attackerId !== state.humanPlayerId) state.aiEscalation.lastWarStartTick = state.tick;
+  if (!isHumanPlayerV2(state, attackerId)) state.aiEscalation.lastWarStartTick = state.tick;
   const rivalryMessage = rivalInvaders.length > 0
     ? ` The contested invasion also opened war with ${rivalInvaders.map((id) => content.nations[id]?.shortName ?? id).join(', ')}.`
     : '';
@@ -346,16 +351,18 @@ export function supplyFactorV2(
   playerId: PlayerId,
   sourceId: TerritoryId,
   access: boolean | 'land' | 'naval',
+  targetId?: TerritoryId,
 ): number {
   const territory = state.territories[sourceId];
   if (!territory) return 0.25;
   const route = supplyDistanceV2(state, content, playerId, sourceId);
-  const enemyControl = territory.control && territory.control.controller !== playerId ? territory.control.share : 0;
   const supplyResearch = 1 + 0.01 * (state.players[playerId]?.research.effectLevels.supply ?? 0);
   const mode = typeof access === 'boolean' ? (access ? 'naval' : 'land') : access;
-  const accessLogistics = WAR_ACCESS_SUPPLY_MULTIPLIER[mode];
+  const routeDistance = mode === 'naval' && targetId
+    ? selectTerritoryRouteDistanceKmV2(content, sourceId, targetId) : undefined;
+  const accessLogistics = warAccessSupplyMultiplierV2(mode, routeDistance);
   return clamp((1 - 0.035 * route.distance) * (0.60 + 0.40 * territory.condition)
-    * (route.connected ? 1 : 0.55) * accessLogistics * (1 - 0.45 * enemyControl)
+    * (route.connected ? 1 : 0.55) * accessLogistics
     * supplyResearch, 0.25, 1);
 }
 
@@ -393,12 +400,12 @@ export function projectCombatExchangeV2(
   const terrain = content.territories[targetId]?.terrain;
   if (!source || !target || !terrain || source.owner !== attackerId || target.owner !== defenderId) return undefined;
 
-  const attackerSupply = supplyFactorV2(state, content, attackerId, sourceId, access);
+  const attackerSupply = supplyFactorV2(state, content, attackerId, sourceId, access, targetId);
   const defenderSupply = supplyFactorV2(state, content, defenderId, targetId, false);
   const supportingForces = supportCountV2(state, content, sourceId, attackerId);
   const supportModifier = 1 + Math.min(0.20, 0.05 * supportingForces);
   const resistance = resistanceCombatMultiplierV2(state, attackerId, defenderId);
-  const defensiveCoordination = nationalDefenseCoordinationV2(content, defenderId);
+  const defensiveCoordination = nationalDefenseCoordinationV2(state, content, defenderId);
   const attackerAttack = selectEffectiveAttackV2(
     state, content, attackerId, source.army, militaryBaseSnapshot,
   );
@@ -488,12 +495,11 @@ function frontCandidatesV2(
       const target = state.territories[targetId];
       if (!target || target.owner !== enemyId) return;
       const sourceStrength = selectArmyCombatManpowerV2(state, commanderId, source.army);
-      const supply = supplyFactorV2(state, content, commanderId, source.id, access);
+      const supply = supplyFactorV2(state, content, commanderId, source.id, access, targetId);
       const support = Math.min(4, supportCountV2(state, content, source.id, commanderId));
       const targetStrength = selectArmyCombatManpowerV2(state, enemyId, target.army);
       const targetCapacity = armyCombatCapacityV2(state, enemyId, target.army);
       const targetFill = targetStrength / Math.max(1e-9, targetCapacity);
-      const existingControl = target.control?.controller === commanderId ? target.control.share : 0;
       const economyValue = Math.log10(1 + target.economy);
       const capitalValue = capital === targetId ? 4 : 0;
       const powerRatio = selectTerritoryPowerV2(state, content, source.id, militaryBaseSnapshot)
@@ -504,7 +510,7 @@ function frontCandidatesV2(
       const viable = targetStrength <= 0.000001
         || sourceStrength > targetStrength * COMBAT_ROUTE_STRENGTH_RATIO;
       const accessPenalty = access === 'naval' ? 0.75 : 0;
-      const score = 5 * supply + support + 4 * (1 - targetFill) + 2 * existingControl + economyValue
+      const score = 5 * supply + support + 4 * (1 - targetFill) + economyValue
         + capitalValue + 2 * clamp(powerRatio, 0, 2)
         + 4 * Math.sqrt(clamp(commitmentShare, 0, 1)) - accessPenalty;
       candidates.push({ sourceId: source.id, targetId, access, score, viable });
@@ -583,8 +589,8 @@ export function forecastWarV2(
   content: WorldContentV2,
   attackerId: PlayerId,
   defenderId: PlayerId,
+  militaryBaseSnapshot: MilitaryBaseSnapshotV2 = createMilitaryBaseSnapshotV2(state, content),
 ): WarForecastV2 {
-  const militaryBaseSnapshot = createMilitaryBaseSnapshotV2(state, content);
   const access = selectWarAccessTypeV2(state, content, attackerId, defenderId);
   const candidate = frontCandidatesV2(
     state, content, attackerId, defenderId, militaryBaseSnapshot,
@@ -628,7 +634,9 @@ export function forecastWarV2(
   // cash and extra fronts move the estimate without overriding the battle.
   const combinedRatio = Math.max(0.02, attritionEdge) ** 0.78
     * Math.max(0.02, strategicEdge) ** 0.22;
-  const winChance = Math.round(clamp(50 + Math.log(combinedRatio) * 24, 5, 95));
+  // One decimal preserves real ATK/DEF movement that whole-percent rounding
+  // can hide, while the live tactical exchange remains the forecast anchor.
+  const winChance = round(clamp(50 + Math.log(combinedRatio) * 24, 5, 95), 1);
   const defeatPulses = pulsesUntilEliminatedV2(
     defenderStrength, projection.defenderLosses,
   );
@@ -790,7 +798,7 @@ function createOperationV2(
   const doctrine: OperationDoctrineV2 = counteroffensive ? 'counteroffensive'
     : selectArmyCombatManpowerV2(state, enemyId, target.army)
       <= armyCombatCapacityV2(state, enemyId, target.army) * 0.30 ? 'breakthrough'
-      : target.control?.controller === commanderId ? 'siege' : 'pressure';
+      : target.condition < 0.55 ? 'siege' : 'pressure';
   return {
     commanderId,
     sourceId: candidate.sourceId,
@@ -889,25 +897,24 @@ function captureTerritoryV2(
   sourceId: TerritoryId,
   targetId: TerritoryId,
   newOwner: PlayerId,
-  claimEstablished: boolean,
+  decisiveVictory: boolean,
 ): CaptureOutcomeV2 {
   const source = state.territories[sourceId]!;
   const target = state.territories[targetId]!;
   const none: CaptureOutcomeV2 = { conquered: false, capturedPopulation: 0, capturedEconomy: 0, treasurySeized: 0 };
-  if (!claimEstablished
+  if (!decisiveVictory
     || selectArmyCombatManpowerV2(state, target.owner, target.army) > 0.000000001
     || selectArmyCombatManpowerV2(state, newOwner, source.army) <= 0.000000001) return none;
   const oldOwner = target.owner;
-  // A conquest establishes only a light occupation force. The attacker keeps
+  // A decisive conquest transfers ownership immediately. The attacker keeps
   // its field army on the original side of the border; the new territory must
   // subsequently be reinforced through the deliberately slow logistics net.
   const sourceManpowerBefore = source.army.manpower;
   const sourceBaseAttack = source.army.baseAttack;
   const sourceBaseDefense = source.army.baseDefense;
-  const requestedOccupationForce = sourceManpowerBefore
-    * CONQUEST_OCCUPATION_FORCE_TRANSFER_SHARE;
+  const requestedGuardForce = sourceManpowerBefore
+    * CONQUEST_GUARD_MIN_TRANSFER_SHARE;
   beginTerritoryIntegrationV2(state, content, targetId, newOwner);
-  delete target.control;
   invalidateTerritoryIndexV2(state);
   // Battle damage has already been committed above. Annexation preserves the
   // surviving people, production and infrastructure as latent potential;
@@ -916,20 +923,21 @@ function captureTerritoryV2(
   const supportCeiling = stateTerritoryArmySupportCeilingV2(
     state, content, targetId, newOwner,
   );
-  const occupationForce = Math.min(requestedOccupationForce, supportCeiling);
+  const minimumGuardForce = Math.min(requestedGuardForce, supportCeiling);
   const guardTransferBudget = sourceManpowerBefore
     * CONQUEST_CAPTURE_GUARD_MAX_TRANSFER_SHARE;
   const guardReinforcement = Math.min(
-    Math.max(0, supportCeiling - occupationForce),
-    Math.max(0, guardTransferBudget - occupationForce),
+    Math.max(0, supportCeiling - minimumGuardForce),
+    Math.max(0, guardTransferBudget - minimumGuardForce),
   );
   // Every defender is transferred from the surviving source formation. The
-  // destination can reach 2x its new local cap, while one capture can consume
-  // no more than 10% of the source and therefore leaves at least 90% behind.
+  // destination uses its local cap plus the scalable conquered-territory
+  // empire allowance, while one capture can consume no more than 10% of the
+  // source and therefore leaves at least 90% behind.
   const transferredManpower = Math.min(
     sourceManpowerBefore,
     supportCeiling,
-    occupationForce + guardReinforcement,
+    minimumGuardForce + guardReinforcement,
   );
   source.army.manpower = round(Math.max(0, sourceManpowerBefore - transferredManpower), 9);
   target.army.manpower = round(transferredManpower, 9);
@@ -997,100 +1005,11 @@ export function civilianPopulationExposureV2(populationMillions: number): number
   return clamp(1 / Math.sqrt(1 + Math.max(0, populationMillions) / 120), 0.30, 1);
 }
 
-interface BattleDisplacementRoundV2 {
-  bySource: Map<TerritoryId, {
-    populationBefore: number;
-    exposure: number;
-    moved: number;
-  }>;
-}
-
-function safeRefugeeHostV2(
-  state: WorldStateV2,
-  content: WorldContentV2,
-  sourceId: TerritoryId,
-  attackerId: PlayerId,
-  defenderId: PlayerId,
-): TerritoryId | undefined {
-  const activeBelligerents = new Set<PlayerId>();
-  for (const activeWar of state.wars) {
-    activeBelligerents.add(activeWar.attackerId);
-    activeBelligerents.add(activeWar.defenderId);
-  }
-  return (content.territories[sourceId]?.connections ?? [])
-    .filter((connection) => connection.kind === 'land')
-    .map((connection) => connection.targetId)
-    .filter((candidateId) => {
-      const candidate = state.territories[candidateId];
-      return Boolean(candidate
-        && candidate.owner !== attackerId
-        && candidate.owner !== defenderId
-        && !activeBelligerents.has(candidate.owner)
-        && candidate.coreOwner === candidate.owner
-        && candidate.integration === 1
-        && !candidate.control
-        && candidate.condition >= REFUGEE_HOST_MIN_CONDITION);
-    })
-    .sort((left, right) => (
-      state.territories[right]!.condition - state.territories[left]!.condition
-        || left.localeCompare(right)
-    ))[0];
-}
-
-function transferBattleDisplacementV2(
-  state: WorldStateV2,
-  content: WorldContentV2,
-  sourceId: TerritoryId,
-  attackerId: PlayerId,
-  defenderId: PlayerId,
-  civilianDeaths: number,
-  deathShare: number,
-  populationCap: number,
-  populationBeforeBattle: number,
-  populationExposure: number,
-  displacementRound?: BattleDisplacementRoundV2,
-): number {
-  if (civilianDeaths <= 0) return 0;
-  const hostId = safeRefugeeHostV2(state, content, sourceId, attackerId, defenderId);
-  if (!hostId) return 0;
-  const source = state.territories[sourceId]!;
-  const host = state.territories[hostId]!;
-  const roundState = displacementRound?.bySource.get(sourceId) ?? {
-    populationBefore: populationBeforeBattle,
-    exposure: populationExposure,
-    moved: 0,
-  };
-  if (displacementRound && !displacementRound.bySource.has(sourceId)) {
-    displacementRound.bySource.set(sourceId, roundState);
-  }
-  // The population cap is one weekly budget per source territory, shared by
-  // every battle and war that can touch it during this processWars round.
-  // Floor it to canonical population precision so rounding can never exceed it.
-  const weeklyPopulationCap = Math.floor(
-    roundState.populationBefore * populationCap * roundState.exposure * 1_000_000,
-  ) / 1_000_000;
-  const remainingPopulationCap = round(Math.max(0, weeklyPopulationCap - roundState.moved));
-  const moved = round(Math.min(
-    civilianDeaths * deathShare,
-    remainingPopulationCap,
-    Math.max(0, source.population - 0.01),
-  ));
-  if (moved <= 0) return 0;
-  source.population = round(source.population - moved);
-  host.population = round(host.population + moved);
-  host.army.capacity = stateTerritoryArmyCapacityTargetV2(
-    state, content, hostId, host.owner,
-  );
-  roundState.moved = round(roundState.moved + moved);
-  return moved;
-}
-
 export function resolveBattlePulseV2(
   state: WorldStateV2,
   content: WorldContentV2,
   war: WarStateV2,
   operation: FrontOperationV2,
-  displacementRound?: BattleDisplacementRoundV2,
 ): BattleEventV2 | undefined {
   const source = state.territories[operation.sourceId];
   const target = state.territories[operation.targetId];
@@ -1153,32 +1072,6 @@ export function resolveBattlePulseV2(
   const attackerPopulationLoss = round(Math.max(0, sourcePopulationBefore - source.population));
   const defenderPopulationLoss = round(Math.max(0, targetPopulationBefore - target.population));
   const populationLoss = defenderPopulationLoss;
-  transferBattleDisplacementV2(
-    state,
-    content,
-    operation.sourceId,
-    attackerId,
-    defenderId,
-    attackerPopulationLoss,
-    ATTACKER_REFUGEE_DISPLACEMENT_DEATH_SHARE,
-    ATTACKER_REFUGEE_DISPLACEMENT_POPULATION_CAP,
-    sourcePopulationBefore,
-    attackerPopulationExposure,
-    displacementRound,
-  );
-  transferBattleDisplacementV2(
-    state,
-    content,
-    operation.targetId,
-    attackerId,
-    defenderId,
-    defenderPopulationLoss,
-    DEFENDER_REFUGEE_DISPLACEMENT_DEATH_SHARE,
-    DEFENDER_REFUGEE_DISPLACEMENT_POPULATION_CAP,
-    targetPopulationBefore,
-    defenderPopulationExposure,
-    displacementRound,
-  );
   target.economy = round(Math.max(0.10, target.economy - economyLoss));
   source.condition = round(clamp(source.condition - (0.004 + damageToAttacker / Math.max(0.000001, sourceCapacity) * 0.08), 0.15, 1));
   target.condition = round(clamp(target.condition - (0.005 + damageToDefender / Math.max(0.000001, targetCapacity) * 0.10), 0.15, 1));
@@ -1191,56 +1084,46 @@ export function resolveBattlePulseV2(
   const battlefieldDominance = attackPressure / Math.max(0.000001, attackPressure + defenseShield);
   const collapse = smoothstep(0.50, 0.98, battlefieldDominance);
   const pressure = clamp(0.60 * damageEdge + 0.20 * supplyEdge + 0.20 * collapse, -1, 1);
-  const forward = smoothstep(0.05, 0.65, pressure);
-  const retreat = smoothstep(0.05, 0.65, -pressure);
-  const previousControl = target.control;
-  const previousShare = previousControl?.controller === attackerId ? previousControl.share : 0;
   const undefendedNation = targetStrength <= 0.000001
     && nationalCombatManpowerV2(state, defenderId) <= 0.000001;
   const leadingClaimant = undefendedNation ? capitulationVictorV2(state, defenderId) : undefined;
-  const blockedByLeadingClaim = Boolean(leadingClaimant && leadingClaimant !== attackerId);
-  const controlEffect = state.players[attackerId]!.research.effectLevels.control;
-  const occupationTarget = pressure > 0 ? 0.90 * collapse ** 2 : 0;
-  const tracking = (occupationTarget - previousShare) * 0.20 * (1 + 0.01 * controlEffect);
-  const deltaControl = clamp(tracking + 0.010 * forward - 0.025 * retreat, -0.04, 0.08);
-  let newShare = clamp(previousShare + deltaControl, 0, 0.95);
-  let controlGained = newShare - previousShare;
-  if (blockedByLeadingClaim) {
-    // When several powers attack an army-less empire, the established war
-    // contributor gets first claim. A late entrant cannot paint occupation on
-    // an empty territory and steal the campaign one pulse before capture.
-    newShare = 0;
-    controlGained = 0;
-  } else if (previousControl && previousControl.controller !== attackerId) {
-    // A late entrant cannot overwrite another front's occupation marker. Its
-    // pressure first contests that claim, while the established attacker can
-    // continue converting its own battlefield progress into control.
-    const contestedShare = clamp(previousControl.share
-      - CONTESTED_CONTROL_EROSION_PER_PULSE * forward, 0, 0.95);
-    if (contestedShare <= 0.005) delete target.control;
-    else target.control = { controller: previousControl.controller, share: round(contestedShare) };
-    newShare = 0;
-    controlGained = 0;
-  } else if (newShare <= 0.005) delete target.control;
-  else target.control = { controller: attackerId, share: round(newShare) };
-  invalidateTerritoryIndexV2(state);
   const attackerFormal = attackerId === war.attackerId;
   const priorInflictedLosses = attackerFormal ? war.defenderLosses : war.attackerLosses;
   const contributionThreshold = Math.max(0.000001,
     targetCapacity * CAPTURE_MIN_CONTRIBUTION_SHARE);
   const earnedDecisiveClaim = targetStrength > 0
     && priorInflictedLosses + damageToDefender >= contributionThreshold;
-  const earnedOccupationClaim = target.control?.controller === attackerId
-    && target.control.share >= COLLAPSED_OCCUPATION_CAPTURE_SHARE;
-  const earnedUnopposedClaim = leadingClaimant === attackerId
-    && (!previousControl || previousControl.controller === attackerId);
+  const sourceStrengthAfter = selectArmyCombatManpowerV2(state, attackerId, source.army);
+  const targetStrengthAfter = selectArmyCombatManpowerV2(state, defenderId, target.army);
+  const decisiveSurrender = targetStrengthAfter > 0.000000001
+    && state.tick - operation.startedTick >= DECISIVE_SURRENDER_MIN_FRONT_TICKS
+    && targetStrengthAfter / Math.max(0.000001, targetCapacity)
+      <= DECISIVE_SURRENDER_MAX_DEFENDER_FILL
+    && sourceStrengthAfter / Math.max(0.000001, targetStrengthAfter)
+      >= DECISIVE_SURRENDER_MIN_FORCE_RATIO
+    && priorInflictedLosses + damageToDefender
+      >= targetCapacity * DECISIVE_SURRENDER_MIN_CUMULATIVE_LOSS_SHARE
+    && operation.momentum >= DECISIVE_SURRENDER_MIN_MOMENTUM
+    && pressure > 0;
+  if (decisiveSurrender) {
+    // The remaining formation lays down its arms; it is removed from active
+    // manpower but is not rewritten as battle casualties. No ownership or
+    // partial-control state changes before the decisive capture below.
+    target.army.manpower = 0;
+    resetEmptyArmyBaseQualityV2(target.army, content, operation.targetId);
+  }
+  // Empty local land is decided in one real battle pulse. If the whole nation
+  // has already collapsed across simultaneous wars, its leading contributor
+  // receives the claim deterministically instead of a late entrant.
+  const earnedUnopposedClaim = targetStrength <= 0.000001
+    && (!undefendedNation || leadingClaimant === attackerId);
   const capture = captureTerritoryV2(
     state,
     content,
     operation.sourceId,
     operation.targetId,
     attackerId,
-    earnedDecisiveClaim || earnedOccupationClaim || earnedUnopposedClaim,
+    earnedDecisiveClaim || earnedUnopposedClaim || decisiveSurrender,
   );
   const conquered = capture.conquered;
   for (const territoryId of [operation.sourceId, operation.targetId]) {
@@ -1309,8 +1192,6 @@ export function resolveBattlePulseV2(
     capturedPopulation: capture.capturedPopulation,
     capturedEconomy: capture.capturedEconomy,
     treasurySeized: capture.treasurySeized,
-    controlGained: round(controlGained),
-    controlShare: round(newShare),
     conquered,
     terrain,
     tactic: doctrineTactic[operation.doctrine],
@@ -1396,7 +1277,16 @@ function endWarV2(
     }
   }
   addTruceV2(state, war.attackerId, war.defenderId, truceTicks);
-  addWorldEventV2(state, 'peace', 'action', reason, undefined, state.humanPlayerId);
+  const humanBelligerent = [war.attackerId, war.defenderId]
+    .find((playerId) => isHumanPlayerV2(state, playerId));
+  addWorldEventV2(
+    state,
+    'peace',
+    'action',
+    reason,
+    undefined,
+    humanBelligerent ?? state.humanPlayerId,
+  );
 }
 
 export function ceasefireTermsV2(
@@ -1412,6 +1302,7 @@ export function ceasefireTermsV2(
     paymentWeeks: CEASEFIRE_PAYMENT_WEEKS,
     totalCost: 0,
     repeatMultiplier: 1,
+    cooldownRemaining: 0,
     truceTicks: CEASEFIRE_PAYMENT_WEEKS + CEASEFIRE_POST_PAYMENT_TRUCE_TICKS,
     postPaymentTruceTicks: CEASEFIRE_POST_PAYMENT_TRUCE_TICKS,
   };
@@ -1429,8 +1320,22 @@ export function ceasefireTermsV2(
       opponentId,
     };
   }
-  if (war.lastPeaceOfferTick >= war.startedTick) {
-    return { ...base, allowed: false, reason: 'A ceasefire has already been requested during this war.', warId, opponentId };
+  if (state.offers.some((offer) => offer.warId === war.id
+    && offer.status === 'pending' && offer.expiresTick > state.tick)) {
+    return { ...base, allowed: false, reason: 'A peace offer is already pending.', warId, opponentId };
+  }
+  const cooldownRemaining = war.lastPeaceOfferTick >= war.startedTick
+    ? Math.max(0, war.lastPeaceOfferTick + PEACE_REQUEST_COOLDOWN_TICKS - state.tick)
+    : 0;
+  if (cooldownRemaining > 0) {
+    return {
+      ...base,
+      allowed: false,
+      reason: `Peace can be requested again in ${cooldownRemaining} weeks.`,
+      warId,
+      opponentId,
+      cooldownRemaining,
+    };
   }
   const weeklyRevenue = selectNationalEconomyV2(state, content, requesterId).weeklyRevenue;
   const opponentRevenue = selectNationalEconomyV2(state, content, opponentId).weeklyRevenue;
@@ -1575,6 +1480,10 @@ export function redistributeArmiesV2(state: WorldStateV2, content: WorldContentV
     // Nearly every country starts with one territory. It has nowhere to move
     // forces internally, so skip all route/threat work for that common case.
     if (ownedIds.length < 2) continue;
+    // Imperial support is a national cap share. It is immutable throughout
+    // this redistribution pass, so compute the world scan once per owner and
+    // feed the result into every local ceiling query below.
+    const empireArmyCapacity = nationalArmyCapacityTargetV2(state, content, playerId);
     const hostile = new Set(selectWarsOfV2(state, playerId).map((war) => war.attackerId === playerId ? war.defenderId : war.attackerId));
     const ownOperationSources = new Set<TerritoryId>();
     const threatenedTargets = new Set<TerritoryId>();
@@ -1609,7 +1518,13 @@ export function redistributeArmiesV2(state: WorldStateV2, content: WorldContentV
       const totalManpowerBefore = ids.reduce((sum, id) => sum + state.territories[id]!.army.manpower, 0);
       const weighted = ids.map((id) => {
         const territory = state.territories[id]!;
-        const supportCeiling = stateTerritoryArmySupportCeilingV2(state, content, id, playerId);
+        const supportCeiling = stateTerritoryArmySupportCeilingV2(
+          state,
+          content,
+          id,
+          playerId,
+          empireArmyCapacity,
+        );
         const edges = content.territories[id]?.connections ?? [];
         const adjacentOwners = edges.map((edge) => state.territories[edge.targetId]?.owner).filter(Boolean) as PlayerId[];
         const activeBorder = adjacentOwners.some((owner) => hostile.has(owner));
@@ -1677,7 +1592,7 @@ export function redistributeArmiesV2(state: WorldStateV2, content: WorldContentV
       let remainingMove = totalManpowerBefore * logisticsThroughputShareV2(
         totalManpowerBefore,
         supplyLevel,
-        selectNationalIqViewV2(content, playerId).logisticsMultiplier,
+        selectNationalIqViewV2(state, content, playerId).logisticsMultiplier,
       );
       const outgoing = new Map(weighted.map((item) => [
         item.id,
@@ -1704,7 +1619,13 @@ export function redistributeArmiesV2(state: WorldStateV2, content: WorldContentV
           const available = outgoing.get(donor.id) ?? 0;
           const destinationRoom = Math.max(
             0,
-            stateTerritoryArmySupportCeilingV2(state, content, hop, playerId) - to.army.manpower,
+            stateTerritoryArmySupportCeilingV2(
+              state,
+              content,
+              hop,
+              playerId,
+              empireArmyCapacity,
+            ) - to.army.manpower,
           );
           const moveManpower = Math.min(needed, available, remainingMove, destinationRoom);
           if (moveManpower <= 1e-9) continue;
@@ -1751,7 +1672,6 @@ export function processWarsV2(
   if (logisticsMovements) logisticsMovements.push(...weeklyMovements);
   const battles: BattleEventV2[] = [];
   const usedSourceIds = new Set<TerritoryId>();
-  const displacementRound: BattleDisplacementRoundV2 = { bySource: new Map() };
   for (const war of [...state.wars].sort((a, b) => a.id.localeCompare(b.id))) {
     if (!state.wars.some((candidate) => candidate.id === war.id)) continue;
     if (selectIsEliminatedV2(state, war.attackerId)) {
@@ -1768,10 +1688,9 @@ export function processWarsV2(
       endWarV2(state, war, 'Mutual army exhaustion ended the war without absorption.', TRUCE_TICKS, endedWars);
       continue;
     }
-    // Zero national manpower no longer hands over a multi-territory empire in
-    // one global capitulation. The surviving army must occupy each connected
-    // territory in successive battle pulses, so the campaign visibly advances
-    // from one conquered border to the next.
+    // Zero national manpower never hands over a multi-territory empire in one
+    // global capitulation. The surviving army must win each connected territory
+    // in successive battle pulses, so the campaign still advances by fronts.
     const legalFront = frontCandidatesV2(state, content, war.attackerId, war.defenderId).length > 0
       || frontCandidatesV2(state, content, war.defenderId, war.attackerId).length > 0;
     if (!legalFront || state.tick - war.lastBattleTick >= STALE_WAR_TICKS) {
@@ -1788,7 +1707,7 @@ export function processWarsV2(
       if (usedSourceIds.has(operation.sourceId)) continue;
       const enemyId = operation.commanderId === war.attackerId ? war.defenderId : war.attackerId;
       if (!operationValidV2(state, content, operation, operation.commanderId, enemyId)) continue;
-      const battle = resolveBattlePulseV2(state, content, war, operation, displacementRound);
+      const battle = resolveBattlePulseV2(state, content, war, operation);
       if (!battle) continue;
       usedSourceIds.add(operation.sourceId);
       battles.push(battle);
@@ -1845,17 +1764,29 @@ export function peaceProposalTermsV2(
     };
   }
   if (war.battles < 10) return { allowed: false, reason: 'Ten battle pulses are required.', warId, strengthGap: round(gap) };
-  if (war.lastPeaceOfferTick >= war.startedTick) return { allowed: false, reason: 'Peace has already been requested during this war.', warId, strengthGap: round(gap) };
+  if (state.offers.some((offer) => offer.warId === war.id
+    && offer.status === 'pending' && offer.expiresTick > state.tick)) {
+    return { allowed: false, reason: 'A peace offer is already pending.', warId, strengthGap: round(gap) };
+  }
+  const cooldownRemaining = war.lastPeaceOfferTick >= war.startedTick
+    ? Math.max(0, war.lastPeaceOfferTick + PEACE_REQUEST_COOLDOWN_TICKS - state.tick)
+    : 0;
+  if (cooldownRemaining > 0) {
+    return {
+      allowed: false,
+      reason: `Peace can be requested again in ${cooldownRemaining} weeks.`,
+      warId,
+      strengthGap: round(gap),
+    };
+  }
   if (gap < 10) return { allowed: false, reason: 'Only the weaker side may offer terms.', warId, strengthGap: round(gap) };
-  const controlled = selectTerritoriesOfV2(state, playerId).find((territory) => territory.control?.controller === enemyId);
   const cash = Math.max(0.2, Math.min(state.players[playerId]!.treasury * 0.50,
     4 * selectNationalEconomyV2(state, content, enemyId).weeklyRevenue));
   return {
     allowed: true,
     warId,
     strengthGap: round(gap),
-    suggestedSettlement: controlled ? 'control' : 'reparations',
-    territoryId: controlled?.id,
+    suggestedSettlement: 'reparations',
     cashAmount: round(cash),
   };
 }
@@ -1873,7 +1804,6 @@ export function proposePeaceSettlementV2(
   if (!terms.allowed) return { accepted: false, reason: terms.reason };
   if (settlement === 'ceasefire') return requestCeasefireV2(state, content, war.id, fromId);
   if (state.offers.some((offer) => offer.warId === war.id && offer.status === 'pending')) return { accepted: false, reason: 'A peace offer is already pending.' };
-  if (settlement === 'control' && !terms.territoryId) return { accepted: false, reason: 'No existing partial control can be preserved.' };
   state.offers.push({
     id: `offer-${state.nextOfferId++}`,
     fromId,
@@ -1884,7 +1814,6 @@ export function proposePeaceSettlementV2(
     expiresTick: state.tick + PEACE_OFFER_DURATION_TICKS,
     status: 'pending',
     cashAmount: settlement === 'reparations' ? terms.cashAmount : undefined,
-    territoryId: settlement === 'control' ? terms.territoryId : undefined,
   });
   war.lastPeaceOfferTick = state.tick;
   return { accepted: true };
@@ -1930,12 +1859,6 @@ export function respondToOfferV2(
       weeklyCost,
       paymentWeeks,
     };
-    for (const territory of Object.values(state.territories)) {
-      if (territory.control && (
-        (territory.owner === offer.fromId && territory.control.controller === offer.toId)
-        || (territory.owner === offer.toId && territory.control.controller === offer.fromId)
-      )) delete territory.control;
-    }
   } else if (offer.settlement === 'reparations') {
     const amount = Math.min(offer.cashAmount ?? 0, Math.max(0, state.players[offer.fromId]!.treasury));
     state.players[offer.fromId]!.treasury = round(state.players[offer.fromId]!.treasury - amount);
@@ -1946,10 +1869,6 @@ export function respondToOfferV2(
       payeeId: offer.toId,
       amount,
     };
-  } else if (offer.territoryId) {
-    const territory = state.territories[offer.territoryId];
-    if (territory?.control?.controller === offer.toId) territory.control.share = round(Math.min(0.75, territory.control.share));
-    settlement = { kind: 'control', territoryId: offer.territoryId };
   }
   offer.status = 'accepted';
   endWarV2(state, war, peaceReason, treatyTruceTicks, endedWars, settlement);

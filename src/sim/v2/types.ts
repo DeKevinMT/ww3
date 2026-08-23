@@ -21,26 +21,36 @@ export type ResearchBranchV2 =
   | 'advanced-weapons'
   | 'defensive-systems'
   | 'logistics-medicine'
-  | 'economy-science';
+  | 'economy-science'
+  | 'food-systems'
+  | 'reserve-doctrine'
+  | 'public-administration'
+  | 'education-intelligence';
 export type ResearchEffectV2 =
   | 'population-growth'
   | 'training'
   | 'force-capacity'
   | 'reinforcement-efficiency'
   | 'attack'
-  | 'control'
   | 'defense'
   | 'casualty-reduction'
   | 'recovery'
   | 'supply'
   | 'economy-growth'
   | 'research-speed'
-  | 'research-efficiency';
+  | 'research-efficiency'
+  | 'food-production'
+  | 'food-storage'
+  | 'reserve-training'
+  | 'reserve-mobilization'
+  | 'tax-efficiency'
+  | 'operating-efficiency'
+  | 'iq-increase';
 export type OperationDoctrineV2 = 'pressure' | 'breakthrough' | 'siege' | 'counteroffensive' | 'consolidation';
 export type WarAccessV2 = 'land' | 'naval' | 'none';
 export type FinanceModeV2 = 'normal' | 'conserving' | 'war' | 'insolvent';
 export type NationalAiModeV2 = 'growth' | 'rebuild' | 'recovery' | 'catch-up' | 'war';
-export type PeaceSettlementV2 = 'reparations' | 'control' | 'ceasefire';
+export type PeaceSettlementV2 = 'reparations' | 'ceasefire';
 export type OfferStatusV2 = 'pending' | 'accepted' | 'declined' | 'expired';
 
 export interface BudgetPolicyV2 {
@@ -170,11 +180,6 @@ export interface ArmyStateV2 {
   baseDefense: number;
 }
 
-export interface ControlStateV2 {
-  controller: PlayerId;
-  share: number;
-}
-
 export interface IntegrationProgramStateV2 {
   /** The sovereign owner displaced when this specific capture began. */
   fromOwnerId: PlayerId;
@@ -201,7 +206,6 @@ export interface TerritoryStateV2 {
   /** Fixed calendar promise created on conquest; absent for stable core territory. */
   integrationProgram?: IntegrationProgramStateV2;
   army: ArmyStateV2;
-  control?: ControlStateV2;
 }
 
 export interface TerritoryViewV2 extends TerritoryStateV2 {
@@ -265,7 +269,6 @@ export interface PeaceOfferV2 {
   expiresTick: number;
   status: OfferStatusV2;
   cashAmount?: number;
-  territoryId?: TerritoryId;
   weeklyCost?: number;
   paymentWeeks?: number;
 }
@@ -306,8 +309,6 @@ export interface BattleEventV2 {
   capturedPopulation: number;
   capturedEconomy: number;
   treasurySeized: number;
-  controlGained: number;
-  controlShare: number;
   conquered: boolean;
   terrain: TerrainType;
   tactic: BattleTactic;
@@ -343,7 +344,7 @@ export interface AiEscalationStateV2 {
 
 /** Live facade state. speed/winner/gameOver are transient projections and omitted from saves/hashes. */
 export interface WorldStateV2 {
-  schemaVersion: 20;
+  schemaVersion: 21;
   rulesVersion: string;
   contentVersion: string;
   mapId: string;
@@ -352,7 +353,10 @@ export interface WorldStateV2 {
   tick: number;
   actionSequence: number;
   speed: WorldSpeedV2;
+  /** Legacy/global focus used by solo saves and primary containment pacing. */
   humanPlayerId: PlayerId;
+  /** Sorted active countries whose war and peace choices belong to people. */
+  humanPlayerIds: PlayerId[];
   players: Record<PlayerId, NationStateV2>;
   territories: Record<TerritoryId, TerritoryStateV2>;
   wars: WarStateV2[];
@@ -399,7 +403,7 @@ export interface WeeklyFinanceBreakdownV2 {
   ceasefireIncome: number;
   /** Mandatory weekly administration and reconstruction cost for unfinished integrations. */
   integrationCost: number;
-  /** Universal weekly state operating cost: exactly 20% of ordinary weekly tax revenue. */
+  /** Weekly state operations: starts at 20% of tax revenue and can fall toward 15% through research. */
   baseOperatingCost: number;
   /** Principal newly borrowed this week because committed payments exceeded liquidity. */
   newBorrowing: number;
@@ -587,12 +591,12 @@ export interface EconomicOutputLedgerV2 {
 }
 
 export interface PopulationDynamicsV2 {
-  /** Births plus net migration as an annual share of population. */
-  annualBirthMigrationRate: number;
+  /** Estimated births as an annual share of population. */
+  annualBirthRate: number;
   /** Baseline and crisis mortality as an annual share of population. */
   annualDeathRate: number;
-  /** Non-lethal wartime displacement/growth disruption. */
-  annualDisplacementRate: number;
+  /** Non-lethal demographic drag from active wars and war strain. */
+  annualWarPenaltyRate: number;
   /** Final annual population change after every component. */
   annualNetRate: number;
   weeklyDeaths: number;
@@ -633,7 +637,6 @@ export interface PeaceProposalTermsV2 {
   warId?: string;
   suggestedSettlement?: PeaceSettlementV2;
   cashAmount?: number;
-  territoryId?: TerritoryId;
   strengthGap: number;
 }
 
@@ -702,6 +705,7 @@ export interface CeasefireTermsV2 {
   paymentWeeks: number;
   totalCost: number;
   repeatMultiplier: number;
+  cooldownRemaining: number;
   truceTicks: number;
   postPaymentTruceTicks: number;
 }
@@ -732,7 +736,7 @@ export interface ConquestForecastV2 {
   territoryCount: number;
   retainedPopulation: number;
   retainedEconomy: number;
-  initialOccupationOutput: number;
+  initialIntegratedOutput: number;
   maxTreasurySeized: number;
   inheritedEnemyManpower: 0;
   asOfTick: number;
@@ -772,10 +776,14 @@ export interface WarOutcomeV2 {
   reparationsPaid: number;
   treatyWeeklyPayment: number;
   treatyPaymentWeeks: number;
-  baseAttackBefore: number;
-  baseAttackAfter: number;
-  baseDefenseBefore: number;
-  baseDefenseAfter: number;
+  /** National effective ATK at war start, including IQ, GDP/capita and research. */
+  effectiveAttackBefore: number;
+  /** National effective ATK after peace, on the same basis used everywhere else. */
+  effectiveAttackAfter: number;
+  /** National effective DEF at war start, including IQ, GDP/capita and research. */
+  effectiveDefenseBefore: number;
+  /** National effective DEF after peace, on the same basis used everywhere else. */
+  effectiveDefenseAfter: number;
   combatPowerBefore: number;
   combatPowerAfter: number;
   capacityBefore: number;

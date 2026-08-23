@@ -4,6 +4,7 @@ import type {
   WorldEventKindV2,
   WorldStateV2,
 } from './types';
+import { selectHumanPlayerIdsV2 } from './humanPlayers';
 
 export function addWorldEventV2(
   state: WorldStateV2,
@@ -13,9 +14,9 @@ export function addWorldEventV2(
   territoryId?: TerritoryId,
   playerId?: PlayerId,
 ): void {
-  const humanOwnsTerritory = territoryId
-    ? state.territories[territoryId]?.owner === state.humanPlayerId
-    : false;
+  const humanPlayerIds = new Set(selectHumanPlayerIdsV2(state));
+  const territoryOwner = territoryId ? state.territories[territoryId]?.owner : undefined;
+  const humanOwnsTerritory = Boolean(territoryOwner && humanPlayerIds.has(territoryOwner));
   state.events.push({
     id: state.nextEventId++,
     tick: state.tick,
@@ -24,7 +25,8 @@ export function addWorldEventV2(
     message,
     territoryId,
     playerId,
-    unread: severity !== 'info' && (playerId === state.humanPlayerId || humanOwnsTerritory),
+    unread: severity !== 'info'
+      && (Boolean(playerId && humanPlayerIds.has(playerId)) || humanOwnsTerritory),
   });
 }
 

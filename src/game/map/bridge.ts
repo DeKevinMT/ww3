@@ -13,13 +13,6 @@ export interface MapArmyState {
   defense: number;
 }
 
-export interface MapForeignControlState {
-  controllerId: string;
-  share: number;
-  axis: 'horizontal' | 'vertical';
-  fromEdge: 'start' | 'end';
-}
-
 export interface MapTerritoryState {
   id: string;
   ownerId: string;
@@ -30,7 +23,6 @@ export interface MapTerritoryState {
   /** Fixed calendar endpoint for an active integration program. */
   integrationCompletesTick?: number;
   army: MapArmyState;
-  foreignControl?: MapForeignControlState;
 }
 
 export interface MapNationView {
@@ -65,7 +57,6 @@ export interface MapBattleEvent {
   targetId: string;
   attackerId: string;
   defenderId: string;
-  controlGained: number;
   attackerLosses?: number;
   defenderLosses?: number;
   conquered: boolean;
@@ -101,6 +92,8 @@ export interface MapSelectionState {
   sourceId?: string;
   targetId?: string;
   legalTargetIds: readonly string[];
+  /** Quiet strategic hints; unlike legalTargetIds these never dim the rest of the map. */
+  hintTargetIds?: readonly string[];
 }
 
 export interface MapSceneAdapter {

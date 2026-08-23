@@ -16,6 +16,7 @@ import { createFinancePlansV2, processDevelopmentPhaseV2, processFinanceMilitary
 import { pruneWorldHistoryV2 } from './events';
 import { retireAbsorbedNationV2 } from './integration';
 import { assertInvariantsV2 } from './invariants';
+import { isHumanPlayerV2, selectHumanPlayerIdsV2 } from './humanPlayers';
 import { createSaveV2, loadSaveV2, serializeSaveV2, type SaveGameV2 } from './persistence';
 import { processPropagandaProgramsV2, selectPropagandaTermsV2 } from './propaganda';
 import { processResearchV2 } from './research';
@@ -121,6 +122,14 @@ import { nationIdV2, territoryIdV2 } from './types';
 
 type WorldListenerV2 = (state: WorldStateV2, change: WorldChangeV2) => void;
 
+export interface QueuedWorldActionV2 {
+  sequence: number;
+  command: WorldCommandV2;
+}
+
+export type ClientCommandSinkV2 = (command: WorldCommandV2) => CommandResultV2;
+type QueuedWorldActionListenerV2 = (action: QueuedWorldActionV2) => void;
+
 interface HumanWarBaselineV2 {
   humanId: PlayerId;
   opponentId: PlayerId;
@@ -130,8 +139,8 @@ interface HumanWarBaselineV2 {
   treasuryBefore: number;
   treasurySeized: number;
   treasuryLost: number;
-  baseAttackBefore: number;
-  baseDefenseBefore: number;
+  effectiveAttackBefore: number;
+  effectiveDefenseBefore: number;
   combatPowerBefore: number;
   capacityBefore: number;
 }
@@ -140,13 +149,14 @@ interface HumanNationBaselineV2 {
   humanId: PlayerId;
   ownedTerritories: Set<TerritoryId>;
   treasuryBefore: number;
-  baseAttackBefore: number;
-  baseDefenseBefore: number;
+  effectiveAttackBefore: number;
+  effectiveDefenseBefore: number;
   combatPowerBefore: number;
   capacityBefore: number;
 }
 
 const BUDGET_DOMAINS: readonly BudgetDomainV2[] = ['military', 'research', 'development'];
+const PRODUCTION_FULL_INVARIANT_INTERVAL_TICKS = 8;
 
 function validBudgetV2(budget: BudgetPolicyV2): boolean {
   return BUDGET_DOMAINS.every((domain) => Number.isInteger(budget[domain]) && budget[domain] >= 5 && budget[domain] <= 90)
@@ -157,8 +167,12 @@ export class WorldEngineV2 {
   readonly content: WorldContentV2;
   readonly state: WorldStateV2;
   private readonly listeners = new Set<WorldListenerV2>();
+  private readonly queuedActionListeners = new Set<QueuedWorldActionListenerV2>();
   private clock?: ReturnType<typeof setInterval>;
-  private readonly pendingActions: Array<{ sequence: number; command: WorldCommandV2 }> = [];
+  private readonly pendingActions: QueuedWorldActionV2[] = [];
+  private clientCommandSink?: ClientCommandSinkV2;
+  private hasClockAuthority = true;
+  private _viewerPlayerId: PlayerId;
   private applyingCommand = false;
   private sequenceAlreadyAssigned = false;
   private logisticsMovements: LogisticsMovementV2[] = [];
@@ -167,6 +181,8 @@ export class WorldEngineV2 {
   constructor(seed = 1, content: WorldContentV2 = WORLD_CONTENT_V2, initialState?: WorldStateV2) {
     this.content = content;
     this.state = initialState ?? createWorldStateV2(seed, content);
+    this.state.humanPlayerIds = [...selectHumanPlayerIdsV2(this.state)];
+    this._viewerPlayerId = this.state.humanPlayerId;
     this.trackHumanWars();
   }
 
@@ -188,13 +204,92 @@ export class WorldEngineV2 {
     return () => this.listeners.delete(listener);
   }
 
+  subscribeQueuedActions(listener: QueuedWorldActionListenerV2): () => void {
+    this.queuedActionListeners.add(listener);
+    return () => this.queuedActionListeners.delete(listener);
+  }
+
+  setClientCommandSink(sink?: ClientCommandSinkV2): void {
+    this.clientCommandSink = sink;
+  }
+
+  get clockAuthority(): boolean {
+    return this.hasClockAuthority;
+  }
+
+  setClockAuthority(authoritative: boolean): void {
+    if (this.hasClockAuthority === authoritative) return;
+    this.hasClockAuthority = authoritative;
+    if (authoritative) this.startClock();
+    else this.stopClock();
+  }
+
+  get viewerPlayerId(): PlayerId {
+    return this._viewerPlayerId;
+  }
+
+  setViewerPlayerId(playerId: string): CommandResultV2 {
+    const id = nationIdV2(playerId);
+    if (!isHumanPlayerV2(this.state, id)) {
+      return { accepted: false, reason: 'The viewer must be assigned to a human-controlled country.' };
+    }
+    if (this._viewerPlayerId === id) return { accepted: true };
+    this._viewerPlayerId = id;
+    this.humanWarBaselines.clear();
+    this.trackHumanWars();
+    this.emit({ reason: 'viewer-changed' });
+    return { accepted: true };
+  }
+
   private emit(change: WorldChangeV2): void {
     for (const listener of this.listeners) listener(this.state, change);
   }
 
+  private emitQueuedAction(action: QueuedWorldActionV2): void {
+    for (const listener of this.queuedActionListeners) listener(action);
+  }
+
+  private assertStateIntegrity(force = false): void {
+    // Full world invariants remain exhaustive in development and tests. In the
+    // production loop they run at a bounded cadence, plus every terminal path,
+    // instead of rescanning the entire world after every visible week.
+    if (force || import.meta.env.DEV
+      || this.state.tick % PRODUCTION_FULL_INVARIANT_INTERVAL_TICKS === 0) {
+      assertInvariantsV2(this.state, this.content);
+    }
+  }
+
+  private forwardClientCommand(command: WorldCommandV2): CommandResultV2 | undefined {
+    if (!this.hasClockAuthority && !this.applyingCommand) {
+      if (!this.clientCommandSink) {
+        return { accepted: false, reason: 'The authoritative host is not connected.' };
+      }
+      return this.clientCommandSink(command);
+    }
+    return undefined;
+  }
+
   private queue(command: WorldCommandV2): CommandResultV2 {
+    const forwarded = this.forwardClientCommand(command);
+    if (forwarded) return forwarded;
     const sequence = ++this.state.actionSequence;
-    this.pendingActions.push({ sequence, command });
+    const action = { sequence, command };
+    this.pendingActions.push(action);
+    this.emitQueuedAction(action);
+    this.emit({ reason: 'action-queued' });
+    return { accepted: true };
+  }
+
+  enqueueAuthoritativeAction(action: QueuedWorldActionV2): CommandResultV2 {
+    const expectedSequence = this.state.actionSequence + 1;
+    if (!Number.isSafeInteger(action.sequence) || action.sequence !== expectedSequence) {
+      return {
+        accepted: false,
+        reason: `Expected authoritative action sequence ${expectedSequence}, received ${String(action.sequence)}.`,
+      };
+    }
+    this.state.actionSequence = action.sequence;
+    this.pendingActions.push({ sequence: action.sequence, command: action.command });
     this.emit({ reason: 'action-queued' });
     return { accepted: true };
   }
@@ -203,23 +298,40 @@ export class WorldEngineV2 {
     if (!this.sequenceAlreadyAssigned) this.state.actionSequence += 1;
   }
 
+  /** Same national ATK/DEF view used by the HUD, forecasts and live combat. */
+  private effectiveNationalRatings(playerId: PlayerId): { attack: number; defense: number } {
+    const snapshot = createMilitaryBaseSnapshotV2(this.state, this.content);
+    const base = snapshot.byNation.get(playerId) ?? { attack: 1, defense: 1 };
+    const manpower = selectTotalManpowerV2(this.state, playerId);
+    const army: ArmyStateV2 = {
+      manpower: manpower.deployed,
+      capacity: manpower.capacity,
+      baseAttack: base.attack,
+      baseDefense: base.defense,
+    };
+    return {
+      attack: selectEffectiveAttackV2(this.state, this.content, playerId, army, snapshot),
+      defense: selectEffectiveDefenseV2(this.state, this.content, playerId, army, snapshot),
+    };
+  }
+
   private captureHumanNationBaseline(): HumanNationBaselineV2 {
-    const humanId = this.state.humanPlayerId;
-    const ratings = createMilitaryBaseSnapshotV2(this.state, this.content).byNation.get(humanId);
+    const humanId = this._viewerPlayerId;
+    const ratings = this.effectiveNationalRatings(humanId);
     const manpower = selectTotalManpowerV2(this.state, humanId);
     return {
       humanId,
       ownedTerritories: new Set(selectTerritoriesOfV2(this.state, humanId).map((territory) => territory.id)),
       treasuryBefore: this.state.players[humanId]?.treasury ?? 0,
-      baseAttackBefore: ratings?.attack ?? 1,
-      baseDefenseBefore: ratings?.defense ?? 1,
+      effectiveAttackBefore: ratings.attack,
+      effectiveDefenseBefore: ratings.defense,
       combatPowerBefore: selectCurrentPowerV2(this.state, this.content, humanId),
       capacityBefore: manpower.capacity,
     };
   }
 
   private trackHumanWars(baseline?: HumanNationBaselineV2): void {
-    const humanId = this.state.humanPlayerId;
+    const humanId = this._viewerPlayerId;
     let source = baseline?.humanId === humanId ? baseline : undefined;
     for (const war of this.state.wars) {
       if (war.attackerId !== humanId && war.defenderId !== humanId) continue;
@@ -234,8 +346,8 @@ export class WorldEngineV2 {
         treasuryBefore: source.treasuryBefore,
         treasurySeized: 0,
         treasuryLost: 0,
-        baseAttackBefore: source.baseAttackBefore,
-        baseDefenseBefore: source.baseDefenseBefore,
+        effectiveAttackBefore: source.effectiveAttackBefore,
+        effectiveDefenseBefore: source.effectiveDefenseBefore,
         combatPowerBefore: source.combatPowerBefore,
         capacityBefore: source.capacityBefore,
       });
@@ -258,7 +370,7 @@ export class WorldEngineV2 {
   private emitWarConclusions(conclusions: readonly WarConclusionV2[]): void {
     for (const conclusion of conclusions) {
       const { war, settlement } = conclusion;
-      const humanId = this.state.humanPlayerId;
+      const humanId = this._viewerPlayerId;
       if (war.attackerId !== humanId && war.defenderId !== humanId) continue;
       const fallback = this.captureHumanNationBaseline();
       const baseline = this.humanWarBaselines.get(war.id) ?? {
@@ -270,8 +382,8 @@ export class WorldEngineV2 {
         treasuryBefore: fallback.treasuryBefore,
         treasurySeized: 0,
         treasuryLost: 0,
-        baseAttackBefore: fallback.baseAttackBefore,
-        baseDefenseBefore: fallback.baseDefenseBefore,
+        effectiveAttackBefore: fallback.effectiveAttackBefore,
+        effectiveDefenseBefore: fallback.effectiveDefenseBefore,
         combatPowerBefore: fallback.combatPowerBefore,
         capacityBefore: fallback.capacityBefore,
       };
@@ -286,7 +398,7 @@ export class WorldEngineV2 {
       const sumTerritories = (territoryIds: readonly TerritoryId[], field: 'population' | 'economy'): number => round(
         territoryIds.reduce((sum, territoryId) => sum + (this.state.territories[territoryId]?.[field] ?? 0), 0),
       );
-      const ratingsAfter = createMilitaryBaseSnapshotV2(this.state, this.content).byNation.get(humanId);
+      const ratingsAfter = this.effectiveNationalRatings(humanId);
       const reparationsReceived = settlement?.kind === 'reparations' && settlement.payeeId === humanId
         ? settlement.amount ?? 0 : 0;
       const reparationsPaid = settlement?.kind === 'reparations' && settlement.payerId === humanId
@@ -340,10 +452,10 @@ export class WorldEngineV2 {
         reparationsPaid,
         treatyWeeklyPayment,
         treatyPaymentWeeks: settlement?.kind === 'ceasefire' ? settlement.paymentWeeks ?? 0 : 0,
-        baseAttackBefore: baseline.baseAttackBefore,
-        baseAttackAfter: ratingsAfter?.attack ?? baseline.baseAttackBefore,
-        baseDefenseBefore: baseline.baseDefenseBefore,
-        baseDefenseAfter: ratingsAfter?.defense ?? baseline.baseDefenseBefore,
+        effectiveAttackBefore: baseline.effectiveAttackBefore,
+        effectiveAttackAfter: ratingsAfter.attack,
+        effectiveDefenseBefore: baseline.effectiveDefenseBefore,
+        effectiveDefenseAfter: ratingsAfter.defense,
         combatPowerBefore: baseline.combatPowerBefore,
         combatPowerAfter: selectCurrentPowerV2(this.state, this.content, humanId),
         capacityBefore: baseline.capacityBefore,
@@ -362,16 +474,59 @@ export class WorldEngineV2 {
     return selectTerritoriesOfV2(this.state, nationIdV2(playerId));
   }
 
+  /** Configures the immutable multiplayer seats before the first shared tick. */
+  configureHumanPlayers(playerIds: readonly string[], viewerPlayerId: string): CommandResultV2 {
+    if (this.state.tick > 0) return { accepted: false, reason: 'Human seats are locked after the campaign begins.' };
+    const ids = [...new Set(playerIds.map(nationIdV2))]
+      .sort((left, right) => left.localeCompare(right));
+    const viewerId = nationIdV2(viewerPlayerId);
+    if (ids.length < 1 || ids.length > 8) return { accepted: false, reason: 'A campaign supports 1–8 human countries.' };
+    if (!ids.includes(viewerId)) return { accepted: false, reason: 'The viewer needs an assigned human country.' };
+    if (ids.some((id) => !this.state.players[id] || this.territoriesOf(id).length === 0)) {
+      return { accepted: false, reason: 'Every human seat needs a living country.' };
+    }
+    const primaryId = ids.includes(this.state.humanPlayerId)
+      ? this.state.humanPlayerId
+      : ids[0]!;
+
+    this.stopClock();
+    // The primary id is canonical shared state; the viewer is local runtime
+    // state. Never let different client seats produce different save hashes.
+    this.state.humanPlayerId = primaryId;
+    this.state.humanPlayerIds = ids;
+    this._viewerPlayerId = viewerId;
+    this.state.speed = 1;
+    this.state.aiEscalation = {
+      lastWarStartTick: -1_000_000,
+      lastFederationTick: -1_000_000,
+      resistanceLevel: 0,
+      globalThreat: 0,
+      coalitionMembers: [],
+      lastHumanTerritoryCount: this.territoriesOf(primaryId).length,
+      lastHumanPower: selectCurrentPowerV2(this.state, this.content, primaryId),
+    };
+    this.humanWarBaselines.clear();
+    this.trackHumanWars();
+    this.emit({ reason: 'human-players-configured' });
+    return { accepted: true };
+  }
+
   chooseCountry(countryId: string): CommandResultV2 {
     const id = nationIdV2(countryId);
     if (this.state.tick > 0) return { accepted: false, reason: 'Country selection is locked after the campaign begins.' };
     if (!this.state.players[id] || this.territoriesOf(id).length === 0) return { accepted: false, reason: 'Unknown or eliminated country.' };
+    const command: WorldCommandV2 = { type: 'choose-country', countryId: id };
+    const forwarded = this.forwardClientCommand(command);
+    if (forwarded) return forwarded;
+    const publishAction = !this.applyingCommand;
     const formerHumanId = this.state.humanPlayerId;
     if (this.state.tick === 0 && formerHumanId !== id) {
       this.state.players[formerHumanId]!.propagandaProgram = null;
       this.state.players[formerHumanId]!.propagandaAvailableTick = 0;
     }
     this.state.humanPlayerId = id;
+    this.state.humanPlayerIds = [id];
+    this._viewerPlayerId = id;
     this.humanWarBaselines.clear();
     this.trackHumanWars();
     this.state.aiEscalation = {
@@ -384,7 +539,8 @@ export class WorldEngineV2 {
       lastHumanPower: selectCurrentPowerV2(this.state, this.content, id),
     };
     this.state.speed = 1;
-    this.state.actionSequence += 1;
+    this.recordAppliedAction();
+    if (publishAction) this.emitQueuedAction({ sequence: this.state.actionSequence, command });
     this.startClock();
     this.emit({ reason: 'country-chosen' });
     return { accepted: true };
@@ -392,7 +548,7 @@ export class WorldEngineV2 {
 
   startClock(): void {
     this.stopClock();
-    if (this.state.speed === 0) return;
+    if (!this.hasClockAuthority || this.state.speed === 0) return;
     this.clock = setInterval(() => this.step(), V2_TICK_DURATION_MS / this.state.speed);
   }
 
@@ -401,11 +557,20 @@ export class WorldEngineV2 {
     this.clock = undefined;
   }
 
-  setSpeed(speed: WorldSpeedV2): void {
-    if (![0, 1, 2].includes(speed)) return;
+  setSpeed(speed: WorldSpeedV2): CommandResultV2 {
+    if (![0, 1, 2].includes(speed)) return { accepted: false, reason: 'Speed must be 0, 1 or 2.' };
+    const forwarded = this.forwardClientCommand({ type: 'set-speed', speed });
+    if (forwarded) return forwarded;
+    return this.setAuthoritativeSpeed(speed);
+  }
+
+  /** Applies host-broadcast speed without feeding it back into the client sink. */
+  setAuthoritativeSpeed(speed: WorldSpeedV2): CommandResultV2 {
+    if (![0, 1, 2].includes(speed)) return { accepted: false, reason: 'Speed must be 0, 1 or 2.' };
     this.state.speed = speed;
     this.startClock();
     this.emit({ reason: 'speed-changed' });
+    return { accepted: true };
   }
 
   setEmpireName(playerId: string, name: string): CommandResultV2 {
@@ -414,7 +579,7 @@ export class WorldEngineV2 {
     const initialTerritories = this.content.territoryIds.filter((territoryId) => (
       this.content.territories[territoryId]?.initialOwnerId === id
     )).length;
-    if (id !== this.state.humanPlayerId) return { accepted: false, reason: 'Only the player empire can be named.' };
+    if (!isHumanPlayerV2(this.state, id)) return { accepted: false, reason: 'Only a human player empire can be named.' };
     if (this.territoriesOf(id).length <= initialTerritories) return { accepted: false, reason: 'Win your first conquest before naming the empire.' };
     if (canonical.length < 3 || canonical.length > 36
       || !/^[\p{L}\p{N}][\p{L}\p{N} .,'’&-]*$/u.test(canonical)) {
@@ -613,7 +778,7 @@ export class WorldEngineV2 {
     return selectWeeklyRecruitmentV2(this.state, this.content, nationIdV2(playerId));
   }
 
-  /** Ordered six-program view. Weekly funding sums to the one committed Research pot. */
+  /** Ordered ten-program view. Weekly funding sums to the one committed Research pot. */
   researchPortfolio(playerId: string): ResearchPortfolioV2 {
     return selectResearchPortfolioV2(this.state, this.content, nationIdV2(playerId));
   }
@@ -670,7 +835,7 @@ export class WorldEngineV2 {
     const id = nationIdV2(playerId);
     const nation = this.state.players[id];
     if (!nation || this.territoriesOf(id).length === 0) return { accepted: false, reason: 'Nation has no gameplay agency.' };
-    if (!validResearchAllocationsV2(allocations)) return { accepted: false, reason: 'Development allocations must contain all six integer programs and sum to 100.' };
+    if (!validResearchAllocationsV2(allocations)) return { accepted: false, reason: 'Development allocations must contain all ten integer programs and sum to 100.' };
     const canonical = copyResearchAllocationsV2(allocations);
     if (!this.applyingCommand) return this.queue({ type: 'set-research-allocations', playerId: id, allocations: canonical });
     nation.research.allocations = canonical;
@@ -827,22 +992,28 @@ export class WorldEngineV2 {
     this.emit({ reason: 'events-read' });
   }
 
-  private applyCommand(command: WorldCommandV2): void {
+  submitCommand(command: WorldCommandV2): CommandResultV2 {
     switch (command.type) {
-      case 'choose-country': this.chooseCountry(command.countryId); break;
-      case 'set-speed': this.setSpeed(command.speed); break;
-      case 'set-research-allocations': this.setResearchAllocations(command.playerId, command.allocations); break;
-      case 'adjust-budget': this.adjustBudget(command.playerId, command.domain, command.delta); break;
-      case 'set-budget-policy': this.applyBudgetPolicy(command.playerId, command.budget, false); break;
-      case 'rapid-recruitment': this.rapidRecruitment(command.playerId); break;
-      case 'research-surge': this.researchSurge(command.playerId, command.targetBranch); break;
-      case 'launch-propaganda': this.launchPropaganda(command.playerId); break;
-      case 'set-empire-name': this.setEmpireName(command.playerId, command.name); break;
-      case 'declare-war': this.declareWar(command.attackerId, command.defenderId, command.escalatedFromWarId); break;
-      case 'request-ceasefire': this.requestCeasefire(command.warId, command.requesterId); break;
-      case 'propose-peace': this.proposePeaceSettlement(command.fromId, command.targetId, command.settlement); break;
-      case 'respond-to-offer': this.respondToOffer(command.offerId, command.accept); break;
+      case 'choose-country': return this.chooseCountry(command.countryId);
+      case 'set-speed': return this.applyingCommand
+        ? this.setAuthoritativeSpeed(command.speed)
+        : this.setSpeed(command.speed);
+      case 'set-research-allocations': return this.setResearchAllocations(command.playerId, command.allocations);
+      case 'adjust-budget': return this.adjustBudget(command.playerId, command.domain, command.delta);
+      case 'set-budget-policy': return this.setBudgetPolicy(command.playerId, command.budget);
+      case 'rapid-recruitment': return this.rapidRecruitment(command.playerId);
+      case 'research-surge': return this.researchSurge(command.playerId, command.targetBranch);
+      case 'launch-propaganda': return this.launchPropaganda(command.playerId);
+      case 'set-empire-name': return this.setEmpireName(command.playerId, command.name);
+      case 'declare-war': return this.declareWar(command.attackerId, command.defenderId, command.escalatedFromWarId);
+      case 'request-ceasefire': return this.requestCeasefire(command.warId, command.requesterId);
+      case 'propose-peace': return this.proposePeaceSettlement(command.fromId, command.targetId, command.settlement);
+      case 'respond-to-offer': return this.respondToOffer(command.offerId, command.accept);
     }
+  }
+
+  private applyCommand(command: WorldCommandV2): CommandResultV2 {
+    return this.submitCommand(command);
   }
 
   private flushQueuedActions(): void {
@@ -905,7 +1076,6 @@ export class WorldEngineV2 {
       this.state.tick += 1;
       processOpeningConflictsV2(this.state, this.content);
       this.trackHumanWars();
-      synchronizeArmyCapacityV2(this.state, this.content);
       const financePowers = createPowerSnapshotV2(this.state, this.content);
       const finance = createFinancePlansV2(this.state, this.content, financePowers);
       const integrationCompletions = processFinanceMilitaryV2(this.state, this.content, finance);
@@ -913,22 +1083,23 @@ export class WorldEngineV2 {
         reason: 'integration-complete',
         victorId: completion.ownerId,
         defeatedId: completion.formerCoreOwnerId,
-        critical: completion.ownerId === this.state.humanPlayerId,
+        critical: completion.ownerId === this._viewerPlayerId,
       });
       if (this.state.gameOver) {
         pruneWorldHistoryV2(this.state);
-        assertInvariantsV2(this.state, this.content);
+        this.assertStateIntegrity(true);
         this.emit({ reason: 'tick', critical: true });
         return;
       }
       const researchPowers = createPowerSnapshotV2(this.state, this.content);
       processResearchV2(this.state, this.content, finance, researchPowers);
       processDevelopmentPhaseV2(this.state, this.content, finance);
-      synchronizeArmyCapacityV2(this.state, this.content);
-      const ownersBeforeWar = new Map(this.content.territoryIds.map((territoryId) => [
-        territoryId,
-        this.state.territories[territoryId]!.owner,
-      ]));
+      const ownersBeforeWar = this.state.wars.length > 0
+        ? new Map(this.content.territoryIds.map((territoryId) => [
+            territoryId,
+            this.state.territories[territoryId]!.owner,
+          ]))
+        : undefined;
       this.logisticsMovements = [];
       const conclusions: WarConclusionV2[] = [];
       const battles = processWarsV2(this.state, this.content, this.logisticsMovements, conclusions);
@@ -938,11 +1109,11 @@ export class WorldEngineV2 {
         this.emit({ reason: battle.conquered ? 'conquest' : 'battle', battle, critical: battle.conquered });
       }
       this.emitWarConclusions(conclusions);
-      const formerOwners = new Set(ownersBeforeWar.values());
+      const formerOwners = new Set(ownersBeforeWar?.values() ?? []);
       const livingOwners = new Set(Object.values(this.state.territories).map((territory) => territory.owner));
       for (const defeatedId of [...formerOwners].filter((id) => !livingOwners.has(id)).sort((a, b) => a.localeCompare(b))) {
         const conquerors = new Map<PlayerId, number>();
-        for (const [territoryId, formerOwner] of ownersBeforeWar) {
+        for (const [territoryId, formerOwner] of ownersBeforeWar ?? []) {
           if (formerOwner !== defeatedId) continue;
           const victorId = this.state.territories[territoryId]!.owner;
           if (victorId !== defeatedId) conquerors.set(victorId, (conquerors.get(victorId) ?? 0) + 1);
@@ -972,7 +1143,7 @@ export class WorldEngineV2 {
       }
       if (this.state.gameOver) {
         pruneWorldHistoryV2(this.state);
-        assertInvariantsV2(this.state, this.content);
+        this.assertStateIntegrity(true);
         this.emit({ reason: 'tick', critical: true });
         return;
       }
@@ -985,7 +1156,7 @@ export class WorldEngineV2 {
       for (const command of planAiCommandsV2(this.state, this.content)) this.applyAiCommand(command);
       this.deriveVictory();
       pruneWorldHistoryV2(this.state);
-      assertInvariantsV2(this.state, this.content);
+      this.assertStateIntegrity();
       this.emit({ reason: 'tick' });
     }
   }

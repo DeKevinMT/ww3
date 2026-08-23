@@ -28,26 +28,27 @@ function previousCalendarDurationWeeks(territoryId: TerritoryId): number {
 }
 
 describe('V2 country-size integration calendar', () => {
-  it('uses exactly 1.2x the original calendar after the requested speed-up', () => {
-    expect(INTEGRATION_DURATION_MULTIPLIER_V2).toBe(1.2);
+  it('uses exactly 1.02x the original calendar after another 15% speed-up', () => {
+    expect(INTEGRATION_DURATION_MULTIPLIER_V2).toBe(1.02);
     for (const territoryId of WORLD_CONTENT_V2.territoryIds) {
       expect(territoryIntegrationDurationWeeksV2(WORLD_CONTENT_V2, territoryId)).toBe(
-        Math.round(previousCalendarDurationWeeks(territoryId) * 1.2),
+        Math.round(previousCalendarDurationWeeks(territoryId) * 1.02),
       );
     }
   });
 
-  it('anchors Luxembourg at 15 years, Belgium near 30 and China near 204', () => {
+  it('anchors Luxembourg near 12.8 years, Belgium near 26 and China near 173', () => {
     const years = (id: string) => territoryIntegrationDurationWeeksV2(
       WORLD_CONTENT_V2,
       territoryIdV2(id),
     ) / WEEKS_PER_YEAR;
 
-    expect(years('lux')).toBe(15);
-    expect(years('bel')).toBeGreaterThanOrEqual(30);
-    expect(years('bel')).toBeLessThanOrEqual(31.5);
-    expect(years('chn')).toBeGreaterThanOrEqual(198);
-    expect(years('chn')).toBeLessThanOrEqual(210);
+    expect(years('lux')).toBeGreaterThanOrEqual(12.7);
+    expect(years('lux')).toBeLessThanOrEqual(12.9);
+    expect(years('bel')).toBeGreaterThanOrEqual(25.5);
+    expect(years('bel')).toBeLessThanOrEqual(27);
+    expect(years('chn')).toBeGreaterThanOrEqual(168);
+    expect(years('chn')).toBeLessThanOrEqual(180);
   });
 
   it('never gives a larger country-size score a shorter calendar', () => {

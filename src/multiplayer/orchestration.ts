@@ -1,0 +1,27 @@
+import type { PlayerId } from '../sim/v2/types';
+import { MAX_MULTIPLAYER_PLAYERS, MIN_MULTIPLAYER_PLAYERS, type LobbyStateMessage } from './protocol';
+
+export function multiplayerSeatsFromLobby(lobby: LobbyStateMessage): Map<string, PlayerId> {
+  if (!lobby.started) throw new Error('The multiplayer lobby has not started.');
+  const connected = lobby.players
+    .filter((player) => player.connected)
+    .sort((left, right) => left.peerId.localeCompare(right.peerId));
+  if (!connected.some((player) => player.peerId === lobby.hostPeerId)) {
+    throw new Error('The room host is not connected.');
+  }
+  if (connected.length < MIN_MULTIPLAYER_PLAYERS || connected.length > MAX_MULTIPLAYER_PLAYERS) {
+    throw new Error(`A campaign requires ${MIN_MULTIPLAYER_PLAYERS}-${MAX_MULTIPLAYER_PLAYERS} connected players.`);
+  }
+  if (connected.some((player) => !player.countryId)) {
+    throw new Error('Every connected player must have a country seat.');
+  }
+  const countries = connected.map((player) => player.countryId!);
+  if (new Set(countries).size !== countries.length) throw new Error('Country seats must be unique.');
+  return new Map(connected.map((player) => [player.peerId, player.countryId!]));
+}
+
+export function localCountryFromLobby(lobby: LobbyStateMessage, peerId: string): PlayerId {
+  const countryId = multiplayerSeatsFromLobby(lobby).get(peerId);
+  if (!countryId) throw new Error('This player has no active country seat.');
+  return countryId;
+}

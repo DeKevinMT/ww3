@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  NATIONAL_IQ_EFFECTIVE_SCORE_MAX,
   NATIONAL_IQ_SCORE_MAX,
   NATIONAL_IQ_SCORE_MIN,
 } from './balance';
@@ -90,8 +91,8 @@ describe('national IQ gameplay proxy', () => {
       nationIdV2('deu'),
       nationIdV2('jpn'),
       nationIdV2('gbr'),
-      nationIdV2('fra'),
       nationIdV2('ind'),
+      nationIdV2('fra'),
       nationIdV2('rus'),
       nationIdV2('ita'),
       nationIdV2('can'),
@@ -131,6 +132,41 @@ describe('national IQ gameplay proxy', () => {
       .toBeGreaterThan(logisticsThroughputShareV2(0.25, 0, lowView.logisticsMultiplier));
     expect(selectPopulationDynamicsV2(state, highContent, belgium, 0).annualNetRate)
       .toBeLessThan(selectPopulationDynamicsV2(state, lowContent, belgium, 0).annualNetRate);
+  });
+
+  it('turns costly education research into a diminishing, hard-capped live IQ gain', () => {
+    const belgium = nationIdV2('bel');
+    const state = createWorldStateV2(8_205);
+    const baseline = selectNationalIqViewV2(state, WORLD_CONTENT_V2, belgium);
+    state.players[belgium].research.effectLevels['iq-increase'] = 5;
+    const developed = selectNationalIqViewV2(state, WORLD_CONTENT_V2, belgium);
+    state.players[belgium].research.effectLevels['iq-increase'] = 1_000_000;
+    const capped = selectNationalIqViewV2(state, WORLD_CONTENT_V2, belgium);
+
+    expect(developed.baselineScore).toBe(baseline.score);
+    expect(developed.researchBonus).toBeGreaterThan(0);
+    expect(developed.score).toBeGreaterThan(baseline.score);
+    expect(developed.researchMultiplier).toBeGreaterThan(baseline.researchMultiplier);
+    expect(capped.score).toBeLessThanOrEqual(NATIONAL_IQ_EFFECTIVE_SCORE_MAX);
+    expect(capped.researchBonus).toBeLessThanOrEqual(8);
+  });
+
+  it('reuses an unchanged live IQ view and invalidates it for research or content changes', () => {
+    const belgium = nationIdV2('bel');
+    const state = createWorldStateV2(8_206);
+    const baseline = selectNationalIqViewV2(state, WORLD_CONTENT_V2, belgium);
+
+    expect(selectNationalIqViewV2(state, WORLD_CONTENT_V2, belgium)).toBe(baseline);
+
+    state.players[belgium].research.effectLevels['iq-increase'] = 1;
+    const researched = selectNationalIqViewV2(state, WORLD_CONTENT_V2, belgium);
+    expect(researched).not.toBe(baseline);
+    expect(researched.score).toBeGreaterThan(baseline.score);
+
+    const alternateContent = contentWithIq(belgium, NATIONAL_IQ_SCORE_MIN);
+    const alternate = selectNationalIqViewV2(state, alternateContent, belgium);
+    expect(alternate).not.toBe(researched);
+    expect(alternate.baselineScore).toBe(NATIONAL_IQ_SCORE_MIN);
   });
 
   it('uses the same IQ-bound defensive coordination for every country', () => {

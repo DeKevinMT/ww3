@@ -44,6 +44,17 @@ describe('transient post-war outcomes', () => {
     }];
     const treasuryBefore = state.players[humanId].treasury;
     const engine = new WorldEngineV2(1, WORLD_CONTENT_V2, state);
+    const beforeSnapshot = engine.militaryBaseSnapshot();
+    const beforeStrength = engine.armyStrength(humanId);
+    const beforeBase = beforeSnapshot.byNation.get(humanId)!;
+    const beforeArmy = {
+      manpower: beforeStrength.deployed,
+      capacity: beforeStrength.capacity,
+      baseAttack: beforeBase.attack,
+      baseDefense: beforeBase.defense,
+    };
+    const expectedAttackBefore = engine.effectiveAttack(humanId, beforeArmy, beforeSnapshot);
+    const expectedDefenseBefore = engine.effectiveDefense(humanId, beforeArmy, beforeSnapshot);
     const outcomes: WarOutcomeV2[] = [];
     engine.subscribe((_next, change) => {
       if (change.warOutcome) outcomes.push(change.warOutcome);
@@ -71,8 +82,10 @@ describe('transient post-war outcomes', () => {
     expect(outcomes[0]).not.toHaveProperty('combatExperienceBefore');
     expect(outcomes[0]).not.toHaveProperty('combatExperienceAfter');
     expect(outcomes[0]).not.toHaveProperty('combatExperienceGained');
-    expect(outcomes[0]!.baseAttackAfter).toBeCloseTo(outcomes[0]!.baseAttackBefore, 8);
-    expect(outcomes[0]!.baseDefenseAfter).toBeCloseTo(outcomes[0]!.baseDefenseBefore, 8);
+    expect(outcomes[0]!.effectiveAttackBefore).toBe(expectedAttackBefore);
+    expect(outcomes[0]!.effectiveDefenseBefore).toBe(expectedDefenseBefore);
+    expect(outcomes[0]!.effectiveAttackAfter).toBeCloseTo(outcomes[0]!.effectiveAttackBefore, 8);
+    expect(outcomes[0]!.effectiveDefenseAfter).toBeCloseTo(outcomes[0]!.effectiveDefenseBefore, 8);
     expect(engine.state.wars).toHaveLength(0);
   });
 });

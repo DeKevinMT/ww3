@@ -43,22 +43,24 @@ describe('V2 finance and research', () => {
     state.players[bel].research.allocations = {
       'population-recruitment': 0, 'military-industry': 0, 'advanced-weapons': 100,
       'defensive-systems': 0, 'logistics-medicine': 0, 'economy-science': 0,
+      'food-systems': 0, 'reserve-doctrine': 0, 'public-administration': 0,
+      'education-intelligence': 0,
     };
     state.players[bel].research.effectLevels.attack = 20;
-    state.players[bel].research.effectLevels.control = 20;
+    state.players[bel].research.effectLevels['reinforcement-efficiency'] = 20;
     state.players[bel].research.progress['advanced-weapons'] = selectResearchBranchCostV2(
       state, WORLD_CONTENT_V2, bel, 'advanced-weapons',
     );
     const plans = createFinancePlansV2(state, WORLD_CONTENT_V2);
     const plan = plans.get(bel)!;
     const beforeLevels = state.players[bel].research.effectLevels.attack
-      + state.players[bel].research.effectLevels.control;
+      + state.players[bel].research.effectLevels['reinforcement-efficiency'];
     expect(plan.research).toBeGreaterThan(0);
     expect(plan.baseOperatingCost + plan.foodProduction + plan.military + plan.research + plan.development)
       .toBeCloseTo(plan.expenses, 5);
     processResearchV2(state, WORLD_CONTENT_V2, plans);
     expect(state.players[bel].research.effectLevels.attack
-      + state.players[bel].research.effectLevels.control).toBe(beforeLevels + 1);
+      + state.players[bel].research.effectLevels['reinforcement-efficiency']).toBe(beforeLevels + 1);
     expect(state.players[bel].research.progress['population-recruitment']).toBeGreaterThan(0);
   });
 
@@ -270,8 +272,8 @@ describe('V2 finance and research', () => {
     const right = { rngState: 1234 };
     expect(drawResearchEffectV2(left, 'economy-science', levels)).toBe(drawResearchEffectV2(right, 'economy-science', levels));
     levels.attack = 200;
-    levels.control = 200;
-    expect(['attack', 'control']).toContain(drawResearchEffectV2({ rngState: 1 }, 'advanced-weapons', levels));
+    levels['reinforcement-efficiency'] = 200;
+    expect(['attack', 'reinforcement-efficiency']).toContain(drawResearchEffectV2({ rngState: 1 }, 'advanced-weapons', levels));
   });
 
   it('turns one completion into exactly one +1 effect and one branch count', () => {

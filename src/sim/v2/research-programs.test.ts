@@ -29,7 +29,7 @@ const ind = nationIdV2('ind');
 const belTerritory = territoryIdV2('bel');
 
 describe('V2 integrated research programs and army economy', () => {
-  it('defines exactly the six programs and keeps drawing +1 effects beyond former caps', () => {
+  it('defines exactly the ten programs and keeps drawing +1 effects beyond former caps', () => {
     expect(RESEARCH_BRANCHES).toEqual([
       'population-recruitment',
       'military-industry',
@@ -37,14 +37,22 @@ describe('V2 integrated research programs and army economy', () => {
       'defensive-systems',
       'logistics-medicine',
       'economy-science',
+      'food-systems',
+      'reserve-doctrine',
+      'public-administration',
+      'education-intelligence',
     ]);
     expect(RESEARCH_BRANCH_EFFECTS).toEqual({
       'population-recruitment': ['population-growth', 'training'],
       'military-industry': ['force-capacity', 'reinforcement-efficiency'],
-      'advanced-weapons': ['attack', 'control'],
+      'advanced-weapons': ['attack', 'reinforcement-efficiency'],
       'defensive-systems': ['defense', 'casualty-reduction'],
       'logistics-medicine': ['recovery', 'supply'],
       'economy-science': ['economy-growth', 'research-speed', 'research-efficiency'],
+      'food-systems': ['food-production', 'food-storage'],
+      'reserve-doctrine': ['reserve-training', 'reserve-mobilization'],
+      'public-administration': ['tax-efficiency', 'operating-efficiency'],
+      'education-intelligence': ['iq-increase'],
     });
     const levels = createWorldStateV2(401).players[bel].research.effectLevels;
     const left = { rngState: 12345 };
@@ -218,6 +226,7 @@ describe('V2 integrated research programs and army economy', () => {
     state.territories[belTerritory].army.manpower = target * 0.50;
     state.players[bel].treasury = 100;
     state.players[bel].budget = { military: 90, research: 5, development: 5 };
+    const reservesBefore = state.players[bel].trainedReserves;
     const before = { ...state.territories[belTerritory].army };
     const plans = createFinancePlansV2(state, WORLD_CONTENT_V2);
     expect(plans.get(bel)!.recruitment).toBeGreaterThan(0);
@@ -225,7 +234,7 @@ describe('V2 integrated research programs and army economy', () => {
     expect(state.territories[belTerritory].army.capacity).toBe(before.capacity);
     expect(state.territories[belTerritory].army.manpower).toBeGreaterThan(before.manpower);
     expect(state.players[bel]).not.toHaveProperty('manpower');
-    expect(state.players[bel].trainedReserves).toBe(0);
+    expect(state.players[bel].trainedReserves).toBe(reservesBefore);
   });
 
   it('exposes one canonical finance projection including operating and reserve flows', () => {

@@ -10,6 +10,7 @@ import {
   round,
 } from './balance';
 import type { WorldContentV2 } from './content';
+import { isHumanPlayerV2, selectHumanPlayerIdsV2 } from './humanPlayers';
 import {
   initialManualActionCostV2,
   initialStructuralWeeklyRevenueV2,
@@ -71,7 +72,7 @@ export function selectPropagandaTermsV2(
   if (!nation || selectIsEliminatedV2(state, playerId)) {
     return { ...terms, allowed: false, reason: 'Nation has no gameplay agency.' };
   }
-  if (playerId !== state.humanPlayerId) {
+  if (!isHumanPlayerV2(state, playerId)) {
     return { ...terms, allowed: false, reason: 'Propaganda is a manual player program.' };
   }
   if (nation.propagandaProgram) {
@@ -88,17 +89,21 @@ export function selectPropagandaTermsV2(
 
 /** Apply one of exactly 52 equal instalments after the normal suspicion update. */
 export function processPropagandaProgramsV2(state: WorldStateV2): void {
-  const nation = state.players[state.humanPlayerId];
-  const program = nation?.propagandaProgram;
-  if (!nation || !program || state.tick <= program.startedTick) return;
-  const reduction = state.tick >= program.endsTick
-    ? program.totalSuspicionReduction
-      - program.weeklySuspicionReduction * (PROPAGANDA_DURATION_TICKS - 1)
-    : program.weeklySuspicionReduction;
+  let totalReduction = 0;
+  for (const playerId of selectHumanPlayerIdsV2(state)) {
+    const nation = state.players[playerId];
+    const program = nation?.propagandaProgram;
+    if (!nation || !program || state.tick <= program.startedTick) continue;
+    totalReduction += state.tick >= program.endsTick
+      ? program.totalSuspicionReduction
+        - program.weeklySuspicionReduction * (PROPAGANDA_DURATION_TICKS - 1)
+      : program.weeklySuspicionReduction;
+    if (state.tick >= program.endsTick) nation.propagandaProgram = null;
+  }
+  if (totalReduction <= 0) return;
   state.aiEscalation.globalThreat = round(clamp(
-    state.aiEscalation.globalThreat - reduction,
+    state.aiEscalation.globalThreat - totalReduction,
     0,
     100,
   ));
-  if (state.tick >= program.endsTick) nation.propagandaProgram = null;
 }

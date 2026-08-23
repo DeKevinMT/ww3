@@ -8,6 +8,7 @@ import {
 import type { WorldContentV2 } from './content';
 import { synchronizeArmyCapacityV2 } from './capacity';
 import { addWorldEventV2 } from './events';
+import { selectHumanPlayerIdsV2 } from './humanPlayers';
 import {
   beginFederationTerritoryIntegrationV2,
   retireAbsorbedNationV2,
@@ -15,7 +16,6 @@ import {
 import {
   createPowerSnapshotV2,
   invalidateTerritoryIndexV2,
-  selectCurrentPowerV2,
   selectTerritoriesOfV2,
   type PowerSnapshotV2,
 } from './selectors';
@@ -111,7 +111,9 @@ function updateThreatV2(state: WorldStateV2, content: WorldContentV2, powers: Po
   for (let gain = 0; gain < territoryGain; gain += 1) {
     conquestThreat += 4 + Math.min(8, (previousExpansion + gain) * 2);
   }
-  const power = selectCurrentPowerV2(state, content, state.humanPlayerId);
+  // The caller already built this exact post-war snapshot. Reusing it avoids
+  // rebuilding every nation's military and power view a second time each week.
+  const power = powers.byNation.get(state.humanPlayerId) ?? 0;
   const powerGrowth = state.aiEscalation.lastHumanPower > 0
     ? Math.max(0, power / Math.max(1, state.aiEscalation.lastHumanPower) - 1) : 0;
   const offensiveWars = state.wars.filter((war) => war.attackerId === state.humanPlayerId).length;
@@ -130,13 +132,18 @@ function recruitCoalitionMembersV2(
   content: WorldContentV2,
   topology: OwnerTopologyV2,
 ): PlayerId[] {
+  const humanPlayerIds = new Set(selectHumanPlayerIdsV2(state));
+  const living = new Set(topology.living);
+  for (const playerId of humanPlayerIds) living.delete(playerId);
+  const members = new Set(state.aiEscalation.coalitionMembers.filter((id) => living.has(id)));
+  // Old or externally assembled state can still contain a newly claimed
+  // human country. Remove it immediately, even between annual recruitment
+  // windows, before any federation path consumes coalition membership.
+  state.aiEscalation.coalitionMembers = [...members].sort((a, b) => a.localeCompare(b));
   // Diplomatic alignment takes years. Recruitment cannot start before year
   // three and at most one country commits per year.
   if (state.tick < COALITION_RECRUITMENT_MIN_TICK
     || state.tick % COALITION_RECRUITMENT_INTERVAL !== 0) return [];
-  const living = new Set(topology.living);
-  living.delete(state.humanPlayerId);
-  const members = new Set(state.aiEscalation.coalitionMembers.filter((id) => living.has(id)));
   const atWarWithHuman = new Set<PlayerId>();
   for (const war of state.wars) {
     if (war.attackerId === state.humanPlayerId) atWarWithHuman.add(war.defenderId);
@@ -266,7 +273,6 @@ export function absorbFederationMemberV2(
     .map(([territoryId]) => territoryId as TerritoryId)
     .sort((left, right) => left.localeCompare(right));
   for (const territoryId of joiningTerritories) {
-    delete state.territories[territoryId]!.control;
     beginFederationTerritoryIntegrationV2(
       state,
       content,
@@ -299,9 +305,10 @@ function maybeFormDefensiveFederationV2(
   const adjacency = topology.adjacency;
   const humanPower = Math.max(1, powers.byNation.get(humanId) ?? 0);
   const living = new Set(topology.living);
+  const humanPlayerIds = new Set(selectHumanPlayerIdsV2(state));
   const candidates = state.aiEscalation.coalitionMembers.filter((id) => (
     living.has(id)
-    && id !== humanId
+    && !humanPlayerIds.has(id)
     && selectTerritoriesOfV2(state, id).length <= (isDefensiveFederationV2(state, id) ? policy.maxFederationTerritories : 3)
     && !state.wars.some((war) => war.attackerId === id || war.defenderId === id)
     && (powers.byNation.get(id) ?? 0) <= humanPower
@@ -386,11 +393,12 @@ function maybeFormAiDefensiveFederationV2(
   if (state.tick < 520 || state.tick % 52 !== 0
     || state.tick - state.aiEscalation.lastFederationTick < DEFENSIVE_FEDERATION_COOLDOWN_TICKS) return false;
   const living = new Set(topology.living);
+  const humanPlayerIds = new Set(selectHumanPlayerIdsV2(state));
   const initialTerritoryCount = (playerId: PlayerId) => content.territoryIds.filter((id) => (
     content.territories[id]?.initialOwnerId === playerId
   )).length;
   const aggressor = topology.living
-    .filter((id) => id !== state.humanPlayerId && !isDefensiveFederationV2(state, id))
+    .filter((id) => !humanPlayerIds.has(id) && !isDefensiveFederationV2(state, id))
     .map((id) => {
       const owned = selectTerritoriesOfV2(state, id).length;
       const conquests = Math.max(0, owned - initialTerritoryCount(id));
@@ -406,7 +414,7 @@ function maybeFormAiDefensiveFederationV2(
   const aggressorPower = Math.max(1, powers.byNation.get(aggressor.id) ?? 0);
   const adjacency = topology.adjacency;
   const eligible = topology.living.filter((id) => (
-    id !== state.humanPlayerId && id !== aggressor.id && living.has(id)
+    !humanPlayerIds.has(id) && id !== aggressor.id && living.has(id)
     && selectTerritoriesOfV2(state, id).length <= (isDefensiveFederationV2(state, id) ? 8 : 3)
     && !state.wars.some((war) => war.attackerId === id || war.defenderId === id)
     && (powers.byNation.get(id) ?? 0) <= aggressorPower * (isDefensiveFederationV2(state, id) ? 0.65 : 0.38)
@@ -452,7 +460,9 @@ function maybeFormAiDefensiveFederationV2(
 export function selectGlobalResistanceV2(state: WorldStateV2): GlobalResistanceV2 {
   const level = state.aiEscalation.resistanceLevel;
   const threat = state.aiEscalation.globalThreat;
-  const memberIds = [...state.aiEscalation.coalitionMembers];
+  const humanPlayerIds = new Set(selectHumanPlayerIdsV2(state));
+  const memberIds = state.aiEscalation.coalitionMembers
+    .filter((playerId) => !humanPlayerIds.has(playerId));
   return {
     level,
     threat,
@@ -476,7 +486,8 @@ export function updateGlobalResistanceV2(
   const previousLevel = state.aiEscalation.resistanceLevel;
   const topology = ownerTopologyV2(state, content);
   const added = recruitCoalitionMembersV2(state, content, topology);
-  const livingOpponents = Math.max(1, topology.living.filter((id) => id !== state.humanPlayerId).length);
+  const humanPlayerIds = new Set(selectHumanPlayerIdsV2(state));
+  const livingOpponents = Math.max(1, topology.living.filter((id) => !humanPlayerIds.has(id)).length);
   const unitedMembers = Math.max(8, Math.ceil(livingOpponents * 0.20));
   const desired: 0 | 1 | 2 = state.aiEscalation.globalThreat >= UNITED_THREAT
     && state.aiEscalation.coalitionMembers.length >= unitedMembers ? 2
