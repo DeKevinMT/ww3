@@ -2,7 +2,12 @@ import './styles.css';
 import { validateMap } from './game/data/worldMap';
 import { createPhaserGame } from './game/map/config';
 import { GuestGameSession, HostGameSession, type GameSessionEngineV2 } from './multiplayer/gameSession';
-import { localCountryFromLobby, multiplayerSeatsFromLobby } from './multiplayer/orchestration';
+import {
+  localCountryFromLobby,
+  multiplayerControllerNamesFromLobby,
+  multiplayerSeatsFromLobby,
+} from './multiplayer/orchestration';
+import type { PlayerId } from './sim/v2/types';
 import { WorldEngineV2 } from './sim/v2/WorldEngineV2';
 import {
   MultiplayerLobby,
@@ -30,6 +35,7 @@ let activeLobby: MultiplayerLobby | undefined;
 let activeSession: HostGameSession | GuestGameSession | undefined;
 let activeSessionStatus: MultiplayerSessionStatus | undefined;
 let unsubscribeSessionStatus: (() => void) | undefined;
+let activeControllerNames: ReadonlyMap<PlayerId, string> = new Map();
 
 createPhaserGame();
 
@@ -50,14 +56,19 @@ function destroyActiveGame(closeSession = true): void {
   const session = activeSession;
   activeSession = undefined;
   session?.close(closeSession);
+  activeControllerNames = new Map();
 }
 
-function mountWorldUi(engine: WorldEngineV2, multiplayer: boolean): void {
+function mountWorldUi(
+  engine: WorldEngineV2,
+  multiplayer: boolean,
+  controllerNames: ReadonlyMap<PlayerId, string> = activeControllerNames,
+): void {
   if (activeEngine && activeEngine !== engine) activeEngine.stopClock();
   activeUi?.destroy();
   activeEngine = engine;
   activeUi = new WorldUIV2(engine, multiplayer
-    ? { introOpen: false, multiplayer: true }
+    ? { introOpen: false, multiplayer: true, controllerNames }
     : { onMultiplayerRequested: openMultiplayerLobby });
 }
 
@@ -75,13 +86,14 @@ function attachGuestStatus(session: GuestGameSession): void {
     onCommandResult: (event) => activeSessionStatus?.showCommandResult(event),
     onSnapshot: ({ engine }) => {
       if (activeSession !== session) return;
-      mountWorldUi(worldEngineFromSession(engine), true);
+      mountWorldUi(worldEngineFromSession(engine), true, activeControllerNames);
     },
   });
 }
 
 async function launchHostGame(launch: MultiplayerHostLaunch): Promise<void> {
   const seats = multiplayerSeatsFromLobby(launch.lobby);
+  const controllerNames = multiplayerControllerNamesFromLobby(launch.lobby);
   const hostCountryId = localCountryFromLobby(launch.lobby, launch.transport.hostPeerId);
   const engine = new WorldEngineV2(freshSeed());
   const countrySelection = engine.chooseCountry(hostCountryId);
@@ -104,13 +116,15 @@ async function launchHostGame(launch: MultiplayerHostLaunch): Promise<void> {
   activeLobby?.destroy(false);
   activeLobby = undefined;
   destroyActiveGame();
+  activeControllerNames = controllerNames;
   activeSession = session;
-  mountWorldUi(engine, true);
+  mountWorldUi(engine, true, controllerNames);
   attachHostStatus(session);
 }
 
 async function launchGuestGame(launch: MultiplayerGuestLaunch): Promise<void> {
   const seats = multiplayerSeatsFromLobby(launch.lobby);
+  const controllerNames = multiplayerControllerNamesFromLobby(launch.lobby);
   const countryId = localCountryFromLobby(launch.lobby, launch.transport.peerId);
   const session = new GuestGameSession({
     transport: launch.transport,
@@ -127,8 +141,9 @@ async function launchGuestGame(launch: MultiplayerGuestLaunch): Promise<void> {
   activeLobby?.destroy(false);
   activeLobby = undefined;
   destroyActiveGame();
+  activeControllerNames = controllerNames;
   activeSession = session;
-  mountWorldUi(engine, true);
+  mountWorldUi(engine, true, controllerNames);
   attachGuestStatus(session);
 }
 

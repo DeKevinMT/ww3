@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { projectMapArmyV2 } from '../../ui/mapArmyProjection';
-import { createMapSnapshot } from '../../ui/WorldUIV2';
+import { createMapEngineAdapter, createMapSnapshot } from '../../ui/WorldUIV2';
 import { WorldEngineV2 } from './WorldEngineV2';
 import { nationIdV2, territoryIdV2 } from './types';
 
@@ -51,5 +51,16 @@ describe('map military projection', () => {
     const projected = createMapSnapshot(engine);
     expect(engine.state.humanPlayerId).toBe(usa);
     expect(projected.humanPlayerId).toBe(belgium);
+    expect(projected.humanPlayerIds).toEqual([belgium, usa].sort());
+
+    const adapter = createMapEngineAdapter(
+      engine,
+      () => engine.globalRanking(),
+      new Map([[usa, 'Alice'], [belgium, 'Bob']]),
+    );
+    adapter.refreshSnapshot?.();
+    expect(adapter.player(usa)).toMatchObject({ isHuman: true, controllerName: 'Alice' });
+    expect(adapter.player(belgium)).toMatchObject({ isHuman: true, controllerName: 'Bob' });
+    expect(adapter.player(nationIdV2('can'))).toMatchObject({ isHuman: false, controllerName: undefined });
   });
 });

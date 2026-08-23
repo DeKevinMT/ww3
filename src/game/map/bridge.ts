@@ -33,6 +33,8 @@ export interface MapNationView {
   sigil: string;
   capitalId: string;
   isHuman: boolean;
+  /** Multiplayer display name; omitted for AI nations and legacy saves. */
+  controllerName?: string;
 }
 
 export interface MapFrontOperation {
@@ -75,6 +77,7 @@ export interface WorldMapEngineContract {
   readonly state: {
     tick: number;
     humanPlayerId: string;
+    humanPlayerIds: readonly string[];
     territories: Record<string, MapTerritoryState>;
     wars: readonly MapWarState[];
     logisticsMovements: readonly MapLogisticsMovement[];

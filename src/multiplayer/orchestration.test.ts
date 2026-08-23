@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { nationIdV2 } from '../sim/v2/types';
-import { localCountryFromLobby, multiplayerSeatsFromLobby } from './orchestration';
+import {
+  localCountryFromLobby,
+  multiplayerControllerNamesFromLobby,
+  multiplayerSeatsFromLobby,
+} from './orchestration';
 import type { LobbyStateMessage } from './protocol';
 
 function lobby(): LobbyStateMessage {
@@ -25,6 +29,10 @@ describe('multiplayer launch orchestration', () => {
       ['host_12345678', nationIdV2('BEL')],
     ]);
     expect(localCountryFromLobby(lobby(), 'guest_12345678')).toBe(nationIdV2('NLD'));
+    expect([...multiplayerControllerNamesFromLobby(lobby()).entries()]).toEqual([
+      [nationIdV2('BEL'), 'Host'],
+      [nationIdV2('NLD'), 'Guest'],
+    ]);
   });
 
   it('rejects a launch without a host or unique selected countries', () => {
