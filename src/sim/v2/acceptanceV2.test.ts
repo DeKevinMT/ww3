@@ -152,7 +152,7 @@ function operation(state: WorldStateV2, sourceId = A_HOME, targetId = B_FRONT): 
   };
 }
 
-function pulseFixture(options: { sourceHp?: number; sourceMaxHp?: number; targetHp?: number; targetMaxHp?: number; control?: number } = {}) {
+function pulseFixture(options: { sourceHp?: number; sourceMaxHp?: number; targetHp?: number; targetMaxHp?: number } = {}) {
   const state = createWorldStateV2(7, FIXTURE_CONTENT);
   state.tick = 2;
   const source = state.territories[A_HOME];
@@ -169,7 +169,6 @@ function pulseFixture(options: { sourceHp?: number; sourceMaxHp?: number; target
     manpower: options.targetHp ?? 100,
     capacity: options.targetMaxHp ?? 100,
   };
-  if (options.control !== undefined) target.control = { controller: A, share: options.control };
   const currentWar = war(state);
   const currentOperation = operation(state);
   currentWar.attackerOperations = [currentOperation];
@@ -266,19 +265,17 @@ describe('V2 combat and absorption acceptance', () => {
     expect(event.defenderPower).not.toBeCloseTo(round(target.army.manpower * defense * 1.25 * 1.25 * defenderSupply), 4);
   });
 
-  it('never gains control from a failed pressure pulse', () => {
+  it('keeps ownership unchanged after a failed pressure pulse', () => {
     const { state, currentWar, currentOperation, target } = pulseFixture({ sourceHp: 5, sourceMaxHp: 100 });
     const event = resolveBattlePulseV2(state, FIXTURE_CONTENT, currentWar, currentOperation)!;
-    expect(event.controlGained).toBeLessThanOrEqual(0);
-    expect(target.control).toBeUndefined();
+    expect(event.conquered).toBe(false);
     expect(target.owner).toBe(B);
   });
 
   it.each([
-    ['living defender', { sourceHp: 50, sourceMaxHp: 100, targetHp: 100, targetMaxHp: 100, control: 0.95 }, false],
-    ['zero defender without an earned claim', { sourceHp: 50, sourceMaxHp: 100, targetHp: 0, targetMaxHp: 100 }, false],
-    ['failed attacker survival', { sourceHp: 0, sourceMaxHp: 60, targetHp: 0, targetMaxHp: 100, control: 0.60 }, false],
-    ['zero defender with control', { sourceHp: 50, sourceMaxHp: 100, targetHp: 0, targetMaxHp: 100, control: 0.60 }, true],
+    ['living defender', { sourceHp: 50, sourceMaxHp: 100, targetHp: 100, targetMaxHp: 100 }, false],
+    ['zero defender after a decisive pulse', { sourceHp: 50, sourceMaxHp: 100, targetHp: 0, targetMaxHp: 100 }, true],
+    ['failed attacker survival', { sourceHp: 0, sourceMaxHp: 60, targetHp: 0, targetMaxHp: 100 }, false],
   ] as const)('enforces the manpower-only capture guards: %s', (_label, options, captured) => {
     const { state, currentWar, currentOperation, target } = pulseFixture(options);
     const event = resolveBattlePulseV2(state, FIXTURE_CONTENT, currentWar, currentOperation)!;
@@ -286,13 +283,12 @@ describe('V2 combat and absorption acceptance', () => {
     expect(target.owner).toBe(captured ? A : B);
   });
 
-  it('absorbs population/economy, transfers occupation force, and pays no spoils before elimination', () => {
+  it('absorbs population/economy, transfers a conquest guard, and pays no spoils before elimination', () => {
     const { state, currentWar, currentOperation, source, target } = pulseFixture({
       sourceHp: 100,
       sourceMaxHp: 100,
       targetHp: 0,
       targetMaxHp: 200,
-      control: 0.60,
     });
     state.players[A].treasury = 10;
     state.players[B].treasury = 40;
@@ -310,7 +306,6 @@ describe('V2 combat and absorption acceptance', () => {
     const event = resolveBattlePulseV2(state, FIXTURE_CONTENT, currentWar, currentOperation)!;
     expect(event.conquered).toBe(true);
     expect(target.owner).toBe(A);
-    expect(target.control).toBeUndefined();
     expect(target.population).toBe(round(before.population - event.populationLoss));
     expect(target.economy).toBe(round(before.economy - event.economyLoss));
     expect(target.integration).toBe(0.10);
@@ -334,7 +329,6 @@ describe('V2 combat and absorption acceptance', () => {
       sourceMaxHp: 100,
       targetHp: 0,
       targetMaxHp: 200,
-      control: 0.60,
     });
     state.territories[B_HOME].owner = A;
     state.territories[B_HOME].coreOwner = A;
@@ -373,11 +367,10 @@ describe('V2 determinism, saves, and invariants acceptance', () => {
     expect(left.canonicalHash()).not.toBe(initialHash);
   });
 
-  it('round-trips an active war/control/research save and preserves the next 100 hashes', () => {
+  it('round-trips an active war/research save and preserves the next 100 hashes', () => {
     const continuous = new WorldEngineV2(92, FIXTURE_CONTENT);
     continuous.state.tick = 51;
     continuous.state.players[A].research.progress['advanced-weapons'] = 3.25;
-    continuous.state.territories[B_FRONT].control = { controller: A, share: 0.20 };
     const currentWar = war(continuous.state);
     currentWar.startedTick = 40;
     currentWar.lastBattleTick = 50;
@@ -395,17 +388,17 @@ describe('V2 determinism, saves, and invariants acceptance', () => {
     expect(() => WorldEngineV2.fromSave(tampered as never, FIXTURE_CONTENT)).toThrow(/hash mismatch/i);
   });
 
-  it('reports canonical state bloat and invalid owner/control/force state', () => {
+  it('reports canonical state bloat, retired control state, and invalid force state', () => {
     const state = createWorldStateV2(93, FIXTURE_CONTENT);
     (state.players[A] as unknown as Record<string, unknown>).stability = 0.8;
     (state.territories[A_HOME] as unknown as Record<string, unknown>).fortification = 3;
     state.territories[A_HOME].army.manpower = -1;
-    state.territories[B_FRONT].control = { controller: B, share: 1 };
+    (state.territories[B_FRONT] as unknown as Record<string, unknown>).control = { controller: B, share: 1 };
     const errors = invariantErrorsV2(state, FIXTURE_CONTENT);
     expect(errors).toContain(`Nation ${A} has non-canonical keys.`);
     expect(errors).toContain(`Territory ${A_HOME} has non-canonical keys.`);
     expect(errors).toContain(`Territory ${A_HOME} has invalid canonical values.`);
-    expect(errors).toContain(`Territory ${B_FRONT} has invalid control.`);
+    expect(errors).toContain(`Territory ${B_FRONT} has non-canonical keys.`);
   });
 });
 

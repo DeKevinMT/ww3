@@ -233,20 +233,50 @@ describe('V2 automated food security', () => {
     );
   });
 
-  it('turns an empty reserve during a live shortage into population decline', () => {
+  it('starts extra reserve-starvation mortality below ten percent instead of waiting for zero', () => {
     const state = createWorldStateV2(2_117);
     const nigeria = nationIdV2('nga');
-    const demand = selectFoodDemandV2(state, nigeria);
     state.players[nigeria].foodSecurity = 0.80;
-    state.players[nigeria].foodStock = demand * 2;
-    const buffered = selectPopulationDynamicsV2(state, WORLD_CONTENT_V2, nigeria, 0);
+    const targetStock = selectWeeklyFinanceBreakdownV2(
+      state, WORLD_CONTENT_V2, nigeria,
+    ).foodTargetStock;
+    state.players[nigeria].foodStock = targetStock * 0.10;
+    const threshold = selectPopulationDynamicsV2(state, WORLD_CONTENT_V2, nigeria, 0);
+
+    state.players[nigeria].foodStock = targetStock * 0.09;
+    const belowTenPercent = selectPopulationDynamicsV2(
+      state, WORLD_CONTENT_V2, nigeria, 0,
+    );
 
     state.players[nigeria].foodStock = 0;
     const empty = selectPopulationDynamicsV2(state, WORLD_CONTENT_V2, nigeria, 0);
 
-    expect(empty.annualDeathRate).toBeGreaterThan(buffered.annualDeathRate + 0.015);
+    expect(belowTenPercent.annualDeathRate).toBeGreaterThan(threshold.annualDeathRate);
+    expect(empty.annualDeathRate).toBeGreaterThan(threshold.annualDeathRate + 0.015);
     expect(empty.annualNetRate).toBeLessThan(0);
     expect(empty.weeklyNet).toBeLessThan(0);
+  });
+
+  it('raises preventive food purchasing smoothly as the strategic stock falls', () => {
+    const state = createWorldStateV2(2_118);
+    const singapore = nationIdV2('sgp');
+    state.players[singapore].treasury = 1_000;
+    state.players[singapore].foodSecurity = 1;
+    const targetStock = selectWeeklyFinanceBreakdownV2(
+      state, WORLD_CONTENT_V2, singapore,
+    ).foodTargetStock;
+    const spendingAt = (stockShare: number) => {
+      state.players[singapore].foodStock = targetStock * stockShare;
+      return selectWeeklyFinanceBreakdownV2(
+        state, WORLD_CONTENT_V2, singapore,
+      ).foodProduction;
+    };
+
+    const full = spendingAt(1);
+    const half = spendingAt(0.5);
+    const critical = spendingAt(0.1);
+    expect(half).toBeGreaterThan(full);
+    expect(critical).toBeGreaterThan(half);
   });
 
   it('makes more land materially increase domestic food capacity', () => {

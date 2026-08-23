@@ -8,6 +8,7 @@ import {
   selectCurrentPowerV2,
   selectGlobalRankingV2,
   selectMilitaryBaseRatingsV2,
+  selectNationalCombatQualityV2,
   selectNationalEconomyV2,
   selectStrategicScoreV2,
   selectTerritoryPowerV2,
@@ -52,8 +53,8 @@ describe('V2 real-world military power calibration', () => {
       nationIdV2('deu'),
       nationIdV2('jpn'),
       nationIdV2('gbr'),
-      nationIdV2('fra'),
       nationIdV2('ind'),
+      nationIdV2('fra'),
       nationIdV2('rus'),
       nationIdV2('ita'),
       nationIdV2('can'),
@@ -136,7 +137,7 @@ describe('V2 real-world military power calibration', () => {
         + selectTerritoryPowerV2(state, WORLD_CONTENT_V2, dutchTerritory),
       8,
     );
-    expect(state.schemaVersion).toBe(20);
+    expect(state.schemaVersion).toBe(21);
     expect('militaryBaseRatings' in state.players[belgium]).toBe(false);
   });
 
@@ -148,6 +149,33 @@ describe('V2 real-world military power calibration', () => {
 
     const forceDepth = calibratedMilitaryRatingsV2(40, 1, 0.40);
     expect(forceDepth.defense).toBeGreaterThan(forceDepth.attack);
+  });
+
+  it('exposes exact separate GDP and live-IQ contributions to national systems', () => {
+    const state = createWorldStateV2(2_026);
+    const belgium = nationIdV2('bel');
+    const opening = selectNationalCombatQualityV2(state, WORLD_CONTENT_V2, belgium);
+    expect(1 + opening.gdpSystemContribution + opening.iqSystemContribution)
+      .toBeCloseTo(opening.systemMultiplier, 8);
+
+    state.players[belgium]!.research.effectLevels['iq-increase'] = 8;
+    const educated = selectNationalCombatQualityV2(state, WORLD_CONTENT_V2, belgium);
+    expect(educated.iqSystemContribution).toBeGreaterThan(opening.iqSystemContribution);
+    expect(1 + educated.gdpSystemContribution + educated.iqSystemContribution)
+      .toBeCloseTo(educated.systemMultiplier, 8);
+
+    const highBaselineId = nationIdV2('sgp');
+    expect(WORLD_CONTENT_V2.nations[highBaselineId]!.iqScore + 8).toBeGreaterThan(108);
+    state.players[highBaselineId]!.research.effectLevels['iq-increase'] = 1_000_000;
+    const aboveOpeningCap = selectNationalCombatQualityV2(
+      state, WORLD_CONTENT_V2, highBaselineId,
+    );
+    expect(aboveOpeningCap.iqSystemContribution).toBeGreaterThan(
+      selectNationalCombatQualityV2(createWorldStateV2(2_026), WORLD_CONTENT_V2, highBaselineId)
+        .iqSystemContribution,
+    );
+    expect(1 + aboveOpeningCap.gdpSystemContribution + aboveOpeningCap.iqSystemContribution)
+      .toBeCloseTo(aboveOpeningCap.systemMultiplier, 8);
   });
 
   it('always adds power when weak regular recruits join a strong elite army', () => {

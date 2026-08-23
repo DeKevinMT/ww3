@@ -9,6 +9,7 @@ import {
 } from './balance';
 import type { WorldContentV2 } from './content';
 import { addWorldEventV2 } from './events';
+import { isHumanPlayerV2, selectHumanPlayerIdsV2 } from './humanPlayers';
 import { invalidateNationIndexV2 } from './selectors';
 import {
   territoryIdV2,
@@ -29,8 +30,8 @@ const SMALL_COUNTRY_INTEGRATION_YEARS = 12.5;
 const INTEGRATION_LINEAR_YEARS = 25;
 const INTEGRATION_QUADRATIC_YEARS = 50;
 const INTEGRATION_LARGE_COUNTRY_YEARS = 100;
-/** Current captures use a 1.2x calendar: exactly 20% faster than the former 1.5x calendar. */
-export const INTEGRATION_DURATION_MULTIPLIER_V2 = 1.2;
+/** New captures complete 15% faster than the preceding 1.2x calendar. */
+export const INTEGRATION_DURATION_MULTIPLIER_V2 = 1.02;
 /** Voluntary defensive unions complete four times faster than conquest. */
 export const FEDERATION_INTEGRATION_DURATION_FACTOR_V2 = 0.25;
 
@@ -109,8 +110,8 @@ export function territoryIntegrationDurationWeeksV2(
   territoryId: TerritoryId,
 ): number {
   // The underlying size curve remains unchanged; new captures receive the
-  // universal 1.2x calendar after its old whole-week promise is calculated.
-  // This makes the extension exact for every territory and avoids changing
+  // universal 1.02x calendar after its old whole-week promise is calculated.
+  // This makes the current speed-up exact for every territory and avoids changing
   // the relative ordering through fractional-week rounding.
   const luxembourgId = territoryIdV2('lux');
   const luxembourgSize = content.territories[luxembourgId]
@@ -225,7 +226,6 @@ function nationStillHasBackendIdentityV2(
   return Object.values(state.territories).some((territory) => (
     territory.owner === playerId
       || territory.coreOwner === playerId
-      || territory.control?.controller === playerId
       || territory.integrationProgram?.fromOwnerId === playerId
       || territory.integrationProgram?.fromCoreOwnerId === playerId
       || territory.integrationProgram?.toOwnerId === playerId
@@ -246,8 +246,8 @@ export function retireAbsorbedNationV2(
   mergeKnowledge = true,
 ): boolean {
   if (formerNationId === ownerId) return false;
-  // A country that owns, controls or remains referenced by any unfinished
-  // integration is still a real institution and cannot be retired yet.
+  // A country that owns land, retains a core or remains referenced by any
+  // unfinished integration is still a real institution and cannot retire yet.
   if (nationStillHasBackendIdentityV2(state, formerNationId)) return false;
   const former = state.players[formerNationId];
   const canonicalSuccessorId = absorbedNationSuccessorV2(
@@ -294,14 +294,30 @@ export function retireAbsorbedNationV2(
   state.ceasefireObligations = state.ceasefireObligations.filter((obligation) => (
     obligation.payerId !== formerNationId && obligation.payeeId !== formerNationId
   ));
-  // Full integration has no selected-country exception. If the former nation
-  // was the player's country, the campaign ends with the absorbing country as
-  // victor while the obsolete backend record still disappears normally.
-  if (formerNationId === state.humanPlayerId) {
-    state.winnerId = owner === state.players[canonicalSuccessorId]
-      ? canonicalSuccessorId : ownerId;
-    state.gameOver = true;
-    state.speed = 0;
+  // Focused simulations and legacy callers may still replace only the primary
+  // id. Canonicalise that effective roster before retirement decisions so a
+  // stale bootstrap seat cannot masquerade as a second living human.
+  const humanPlayerIds = [...selectHumanPlayerIdsV2(state)];
+  state.humanPlayerIds = humanPlayerIds;
+  // One defeated seat becomes a spectator without ending the shared campaign.
+  // The legacy/global focus moves deterministically to another living human;
+  // only the loss of every human-controlled country ends the room.
+  if (isHumanPlayerV2(state, formerNationId)) {
+    const livingHumanId = humanPlayerIds
+      .filter((playerId) => playerId !== formerNationId && Boolean(state.players[playerId]))
+      .sort((left, right) => left.localeCompare(right))[0];
+    if (formerNationId === state.humanPlayerId && livingHumanId) {
+      state.humanPlayerId = livingHumanId;
+      state.aiEscalation.lastHumanTerritoryCount = Object.values(state.territories)
+        .filter((territory) => territory.owner === livingHumanId).length;
+      state.aiEscalation.lastHumanPower = 0;
+    }
+    if (!livingHumanId) {
+      state.winnerId = owner === state.players[canonicalSuccessorId]
+        ? canonicalSuccessorId : ownerId;
+      state.gameOver = true;
+      state.speed = 0;
+    }
   }
   delete state.players[formerNationId];
   invalidateNationIndexV2(state);
@@ -385,7 +401,7 @@ export function advanceTerritoryIntegrationProgramsV2(
     addWorldEventV2(
       state,
       'conquest',
-      ownerId === state.humanPlayerId ? 'action' : 'info',
+      isHumanPlayerV2(state, ownerId) ? 'action' : 'info',
       `${formerName} completed integration into ${ownerName} and is now permanent core territory.`,
       territoryId,
       ownerId,

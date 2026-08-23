@@ -2,6 +2,7 @@ import {
   COUNTRIES,
   TERRITORIES,
   colorToCss,
+  countryDistanceKm,
   countryColor,
   terrainForTerritory,
 } from '../../game/data/worldMap';
@@ -19,6 +20,7 @@ import {
   NATIONAL_IQ_INSTITUTIONAL_CAPACITY_FLOOR,
   NATIONAL_IQ_PROXY_GDP_WEIGHT,
   NATIONAL_IQ_PROXY_INSTITUTION_WEIGHT,
+  NATIONAL_IQ_EFFECTIVE_SCORE_MAX,
   NATIONAL_IQ_SCORE_MAX,
   NATIONAL_IQ_SCORE_MIN,
   NATIONAL_QUALITY_COMBAT_SPAN,
@@ -96,6 +98,8 @@ export interface NationContentV2 {
 export interface TerritoryConnectionV2 {
   targetId: TerritoryId;
   kind: 'land' | 'sea';
+  /** Great-circle distance between national map anchors; chiefly used by naval logistics. */
+  distanceKm?: number;
 }
 
 export interface TerritoryContentV2 {
@@ -477,7 +481,8 @@ export function nationalQualityIndexV2(gdpPerCapita: number, iqScore: number): n
   const iq = clamp(
     (iqScore - NATIONAL_IQ_SCORE_MIN) / (NATIONAL_IQ_SCORE_MAX - NATIONAL_IQ_SCORE_MIN),
     0,
-    1,
+    (NATIONAL_IQ_EFFECTIVE_SCORE_MAX - NATIONAL_IQ_SCORE_MIN)
+      / (NATIONAL_IQ_SCORE_MAX - NATIONAL_IQ_SCORE_MIN),
   );
   return round(NATIONAL_QUALITY_GDP_WEIGHT * income + NATIONAL_QUALITY_IQ_WEIGHT * iq, 9);
 }
@@ -507,7 +512,8 @@ export function nationalCombatSystemQualityMultiplierV2(
   const iq = clamp(
     (iqScore - NATIONAL_IQ_SCORE_MIN) / (NATIONAL_IQ_SCORE_MAX - NATIONAL_IQ_SCORE_MIN),
     0,
-    1,
+    (NATIONAL_IQ_EFFECTIVE_SCORE_MAX - NATIONAL_IQ_SCORE_MIN)
+      / (NATIONAL_IQ_SCORE_MAX - NATIONAL_IQ_SCORE_MIN),
   );
   const quality = NATIONAL_QUALITY_GDP_WEIGHT * income + NATIONAL_QUALITY_IQ_WEIGHT * iq;
   return round(1 + NATIONAL_COMBAT_SYSTEM_QUALITY_SPAN * (quality - 0.5), 9);
@@ -681,6 +687,7 @@ const territories = Object.fromEntries(TERRITORIES.map((territory) => {
     connections: territory.neighbors.map((targetId) => ({
       targetId: territoryIdV2(targetId),
       kind: seaNeighbours.has(targetId) ? 'sea' : 'land',
+      distanceKm: round(countryDistanceKm(territory.id, targetId), 3),
     })),
   };
   return [territoryIdV2(territory.id), value];

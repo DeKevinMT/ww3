@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { planAiCommandsV2 } from './ai';
+import { planAiCommandsV2, selectAiResearchAllocationsV2 } from './ai';
 import { DEFAULT_BUDGET_V2, DEFAULT_RESEARCH_ALLOCATIONS_V2, aiActiveWarCapV2 } from './balance';
 import { createWorldStateV2 } from './bootstrap';
 import { stateTerritoryArmyCapacityTargetV2 } from './capacity';
@@ -25,7 +25,9 @@ import {
 } from './resistance';
 import {
   invalidateTerritoryIndexV2,
+  createPowerSnapshotV2,
   selectNationalAiPlanV2,
+  selectResearchFundingSharesV2,
   selectRecruitmentUnitCostV2,
   selectTerritoriesOfV2,
   selectWeeklyFinanceBreakdownV2,
@@ -35,6 +37,34 @@ import { nationIdV2, territoryIdV2 } from './types';
 import { WorldEngineV2 } from './WorldEngineV2';
 
 describe('V2 shared national AI', () => {
+  it('redirects every research share once costly Education reaches the useful IQ cap', () => {
+    const state = createWorldStateV2(8_230_001);
+    const singapore = nationIdV2('sgp');
+    state.players[singapore]!.research.effectLevels['iq-increase'] = 1_000_000;
+    state.players[singapore]!.research.allocations = {
+      ...DEFAULT_RESEARCH_ALLOCATIONS_V2,
+      'military-industry': 0,
+      'economy-science': 0,
+      'education-intelligence': 100,
+    };
+    const shares = selectResearchFundingSharesV2(
+      state, WORLD_CONTENT_V2, singapore,
+    );
+    expect(shares['education-intelligence']).toBe(0);
+    expect(Object.values(shares).reduce((sum, share) => sum + share, 0)).toBeCloseTo(1, 10);
+    expect(Object.entries(shares).filter(([branch]) => branch !== 'education-intelligence')
+      .every(([, share]) => share > 0)).toBe(true);
+
+    const allocation = selectAiResearchAllocationsV2(
+      state,
+      WORLD_CONTENT_V2,
+      singapore,
+      createPowerSnapshotV2(state, WORLD_CONTENT_V2),
+    );
+    expect(allocation['education-intelligence']).toBe(0);
+    expect(Object.values(allocation).reduce((sum, value) => sum + value, 0)).toBe(100);
+  });
+
   it('usually accepts a ceasefire offer but retains a real chance to refuse', () => {
     let accepted = 0;
     const samples = 40;
@@ -157,6 +187,10 @@ describe('V2 shared national AI', () => {
       'defensive-systems': 15,
       'logistics-medicine': 15,
       'economy-science': 15,
+      'food-systems': 0,
+      'reserve-doctrine': 0,
+      'public-administration': 0,
+      'education-intelligence': 0,
     } as const;
     const research = moveResearchTowardTargetV2(
       { ...DEFAULT_RESEARCH_ALLOCATIONS_V2 }, researchTarget, 100,

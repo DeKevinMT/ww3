@@ -17,7 +17,6 @@ import { assertInvariantsV2 } from './invariants';
 import {
   createMilitaryBaseSnapshotV2,
   selectArmyCapacityTargetV2,
-  selectControlledPopulationV2,
   selectEffectiveAttackV2,
   selectEffectiveDefenseV2,
   selectNationalIqViewV2,
@@ -67,18 +66,12 @@ function operation(sourceId = belTerritory, targetId = nldTerritory, commanderId
 describe('V2 combat, capture and absorption', () => {
   it('does not grant enemy population or output before a territory is actually conquered', () => {
     const state = createWorldStateV2(100);
-    const belgianPopulation = selectControlledPopulationV2(state, bel);
-    const dutchPopulation = selectControlledPopulationV2(state, nld);
     const belgianOutput = selectNationalEconomyV2(state, WORLD_CONTENT_V2, bel).controlledOutput;
-    const dutchOutput = selectNationalEconomyV2(state, WORLD_CONTENT_V2, nld).controlledOutput;
+    const event = resolveBattlePulseV2(state, WORLD_CONTENT_V2, testWar(state), operation())!;
 
-    state.territories[nldTerritory].control = { controller: bel, share: 0.90 };
-    invalidateTerritoryIndexV2(state);
-
-    expect(selectControlledPopulationV2(state, bel)).toBeCloseTo(belgianPopulation, 8);
-    expect(selectControlledPopulationV2(state, nld)).toBeCloseTo(dutchPopulation, 8);
+    expect(event.conquered).toBe(false);
+    expect(state.territories[nldTerritory].owner).toBe(nld);
     expect(selectNationalEconomyV2(state, WORLD_CONTENT_V2, bel).controlledOutput).toBeCloseTo(belgianOutput, 8);
-    expect(selectNationalEconomyV2(state, WORLD_CONTENT_V2, nld).controlledOutput).toBeCloseTo(dutchOutput, 8);
   });
 
   it('unlocks absorbed-land capacity in direct proportion to integration', () => {
@@ -136,48 +129,45 @@ describe('V2 combat, capture and absorption', () => {
     expect(event.attackerSupply).toBeLessThanOrEqual(1);
   });
 
-  it('captures a decisive collapse immediately but requires occupation for pre-collapsed land', () => {
+  it('captures only after decisive collapse and transfers pre-collapsed land in one pulse', () => {
     const healthy = createWorldStateV2(21);
-    healthy.territories[nldTerritory].control = { controller: bel, share: 0.95 };
     expect(resolveBattlePulseV2(healthy, WORLD_CONTENT_V2, testWar(healthy), operation())!.conquered).toBe(false);
 
-    const noControl = createWorldStateV2(22);
+    const collapsed = createWorldStateV2(22);
     const reserveTerritory = territoryIdV2('lux');
-    noControl.territories[reserveTerritory].owner = nld;
-    noControl.territories[reserveTerritory].coreOwner = nld;
-    noControl.territories[reserveTerritory].integration = 1;
-    invalidateTerritoryIndexV2(noControl);
-    noControl.territories[nldTerritory].army.manpower = 0;
-    const occupationWar = testWar(noControl);
-    const occupationOperation = operation();
-    expect(resolveBattlePulseV2(noControl, WORLD_CONTENT_V2, occupationWar, occupationOperation)!.conquered).toBe(false);
-    for (let pulse = 0; pulse < 8 && noControl.territories[nldTerritory].owner === nld; pulse += 1) {
-      noControl.tick += 2;
-      resolveBattlePulseV2(noControl, WORLD_CONTENT_V2, occupationWar, occupationOperation);
-    }
-    expect(noControl.territories[nldTerritory].owner).toBe(bel);
+    collapsed.territories[reserveTerritory].owner = nld;
+    collapsed.territories[reserveTerritory].coreOwner = nld;
+    collapsed.territories[reserveTerritory].integration = 1;
+    invalidateTerritoryIndexV2(collapsed);
+    collapsed.territories[nldTerritory].army.manpower = 0;
+    expect(resolveBattlePulseV2(
+      collapsed, WORLD_CONTENT_V2, testWar(collapsed), operation(),
+    )!.conquered).toBe(true);
+    expect(collapsed.territories[nldTerritory].owner).toBe(bel);
 
     const noSurvival = createWorldStateV2(23);
     noSurvival.territories[nldTerritory].army.manpower = 0;
-    noSurvival.territories[nldTerritory].control = { controller: bel, share: 0.95 };
     noSurvival.territories[belTerritory].army.manpower = 0;
     expect(resolveBattlePulseV2(noSurvival, WORLD_CONTENT_V2, testWar(noSurvival), operation())!.conquered).toBe(false);
   });
 
   it('does not let a late neighbouring attacker overwrite the established conquest claim', () => {
     const state = createWorldStateV2(2301);
+    state.wars = [];
     const target = state.territories[nldTerritory];
     target.army.manpower = 0;
-    target.control = { controller: bel, share: 0.45 };
+    const establishedWar = testWar(state, bel, nld, 'war-established-claim');
+    establishedWar.defenderLosses = 0.25;
+    establishedWar.battles = 12;
     const lateWar = testWar(state, deu, nld, 'war-late-entry');
+    lateWar.defenderLosses = 0.001;
+    lateWar.battles = 1;
     const lateOperation = operation(deuTerritory, nldTerritory, deu);
 
     const event = resolveBattlePulseV2(state, WORLD_CONTENT_V2, lateWar, lateOperation)!;
 
     expect(event.conquered).toBe(false);
     expect(target.owner).toBe(nld);
-    expect(target.control?.controller).toBe(bel);
-    expect(target.control?.share).toBeGreaterThan(0.35);
   });
 
   it('awards the next unopposed territory to the real war contributor, not the last entrant', () => {
@@ -249,7 +239,6 @@ describe('V2 combat, capture and absorption', () => {
     invalidateTerritoryIndexV2(state);
     const target = state.territories[nldTerritory];
     target.army.manpower = 0;
-    target.control = { controller: deu, share: 0.95 };
     const war = testWar(state, deu, nld, 'war-limited-objective');
     const battle = resolveBattlePulseV2(state, WORLD_CONTENT_V2, war, operation(deuTerritory, nldTerritory, deu))!;
     expect(battle.conquered).toBe(true);
@@ -261,12 +250,11 @@ describe('V2 combat, capture and absorption', () => {
     ))).toBe(false);
   });
 
-  it('absorbs retained value, transfers occupation force, and applies final-elimination spoils only', () => {
+  it('absorbs retained value, transfers a conquest guard, and applies final-elimination spoils only', () => {
     const state = createWorldStateV2(24);
     const source = state.territories[belTerritory];
     const target = state.territories[nldTerritory];
     target.army.manpower = 0;
-    target.control = { controller: bel, share: 0.95 };
     const beforeSourceManpower = source.army.manpower;
     const beforePopulation = target.population;
     const beforeEconomy = target.economy;
@@ -334,12 +322,11 @@ describe('V2 combat, capture and absorption', () => {
     expect(engine.adjustBudget(nld, 'military', 5).accepted).toBe(false);
   });
 
-  it('preserves the occupying force quality and applies conqueror research after absorption', () => {
+  it('preserves the conquest guard quality and applies conqueror research after absorption', () => {
     const state = createWorldStateV2(25);
     state.players[bel].research.effectLevels.attack = 20;
     state.players[nld].research.effectLevels.attack = 0;
     state.territories[nldTerritory].army.manpower = 0;
-    state.territories[nldTerritory].control = { controller: bel, share: 0.95 };
     resolveBattlePulseV2(state, WORLD_CONTENT_V2, testWar(state), operation());
     state.wars = [];
     expect(state.territories[nldTerritory].army.baseAttack).toBe(

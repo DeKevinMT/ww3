@@ -38,4 +38,18 @@ describe('map military projection', () => {
     expect(attack.mock.calls.every((call) => call[2] === snapshot.mock.results[0]?.value)).toBe(true);
     expect(defense.mock.calls.every((call) => call[2] === snapshot.mock.results[0]?.value)).toBe(true);
   });
+
+  it('highlights the local viewer without changing the canonical multiplayer host', () => {
+    const engine = new WorldEngineV2(8_803);
+    const usa = nationIdV2('usa');
+    const belgium = nationIdV2('bel');
+
+    expect(engine.chooseCountry(usa).accepted).toBe(true);
+    expect(engine.configureHumanPlayers([usa, belgium], usa).accepted).toBe(true);
+    expect(engine.setViewerPlayerId(belgium).accepted).toBe(true);
+
+    const projected = createMapSnapshot(engine);
+    expect(engine.state.humanPlayerId).toBe(usa);
+    expect(projected.humanPlayerId).toBe(belgium);
+  });
 });

@@ -2,12 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   ATTACKER_CIVILIAN_LOSS_INTENSITY,
   ATTACKER_CIVILIAN_LOSS_POPULATION_CAP,
-  ATTACKER_REFUGEE_DISPLACEMENT_DEATH_SHARE,
-  ATTACKER_REFUGEE_DISPLACEMENT_POPULATION_CAP,
   DEFENDER_CIVILIAN_LOSS_INTENSITY,
   DEFENDER_CIVILIAN_LOSS_POPULATION_CAP,
-  DEFENDER_REFUGEE_DISPLACEMENT_DEATH_SHARE,
-  DEFENDER_REFUGEE_DISPLACEMENT_POPULATION_CAP,
   WAR_MOBILIZATION_TICKS,
 } from './balance';
 import { createWorldStateV2 } from './bootstrap';
@@ -33,11 +29,9 @@ import {
 
 const belgium = nationIdV2('bel');
 const netherlands = nationIdV2('nld');
-const germany = nationIdV2('deu');
 const belgiumTerritory = territoryIdV2('bel');
 const netherlandsTerritory = territoryIdV2('nld');
 const germanyTerritory = territoryIdV2('deu');
-const greatBritainTerritory = territoryIdV2('gbr');
 
 function battleFixture(seed: number, forceScale = 1): {
   state: WorldStateV2;
@@ -109,10 +103,10 @@ describe('V2 battle collateral population damage', () => {
     expect(event.attackerPopulationLoss).toBeGreaterThan(0);
     expect(event.defenderPopulationLoss).toBeGreaterThan(0);
     expect(state.territories[belgiumTerritory].population)
-      .toBeLessThan(sourceBefore - event.attackerPopulationLoss);
+      .toBeCloseTo(sourceBefore - event.attackerPopulationLoss, 6);
     expect(state.territories[netherlandsTerritory].population)
-      .toBeLessThan(targetBefore - event.defenderPopulationLoss);
-    expect(state.territories[germanyTerritory].population).toBeGreaterThan(hostBefore);
+      .toBeCloseTo(targetBefore - event.defenderPopulationLoss, 6);
+    expect(state.territories[germanyTerritory].population).toBe(hostBefore);
     const worldPopulationAfter = Object.values(state.territories)
       .reduce((sum, territory) => sum + territory.population, 0);
     expect(worldPopulationAfter).toBeCloseTo(
@@ -156,155 +150,6 @@ describe('V2 battle collateral population damage', () => {
     expect(defenderToAttacker).toBeLessThanOrEqual(2);
     expect(currentTotal).toBeGreaterThan(retiredTotal * 2);
     expect(currentTotal).toBeLessThan(retiredTotal * 3);
-  });
-
-  it('moves only a small bounded refugee share to a deterministic safe land neighbour', () => {
-    const { state, war, operation } = battleFixture(7_701_2);
-    const sourcePopulation = state.territories[belgiumTerritory].population;
-    const targetPopulation = state.territories[netherlandsTerritory].population;
-    const hostBefore = state.territories[germanyTerritory].population;
-    const event = resolveBattlePulseV2(state, WORLD_CONTENT_V2, war, operation)!;
-    const moved = state.territories[germanyTerritory].population - hostBefore;
-    const populationCap = sourcePopulation * ATTACKER_REFUGEE_DISPLACEMENT_POPULATION_CAP
-      * civilianPopulationExposureV2(sourcePopulation)
-      + targetPopulation * DEFENDER_REFUGEE_DISPLACEMENT_POPULATION_CAP
-      * civilianPopulationExposureV2(targetPopulation);
-    const deathLinkedCap = event.attackerPopulationLoss * ATTACKER_REFUGEE_DISPLACEMENT_DEATH_SHARE
-      + event.defenderPopulationLoss * DEFENDER_REFUGEE_DISPLACEMENT_DEATH_SHARE;
-
-    expect(moved).toBeGreaterThan(0);
-    expect(moved).toBeLessThanOrEqual(populationCap + 0.000001);
-    expect(moved).toBeLessThanOrEqual(deathLinkedCap + 0.000001);
-  });
-
-  it('shares one displacement cap when multiple wars hit the same territory in one week', () => {
-    const { state, war, operation } = battleFixture(7_701_21);
-    const target = state.territories[netherlandsTerritory];
-    const germanSource = state.territories[germanyTerritory];
-    state.territories[belgiumTerritory].army = {
-      ...state.territories[belgiumTerritory].army,
-      manpower: 30,
-      capacity: 30,
-    };
-    germanSource.condition = 1;
-    germanSource.army = { ...germanSource.army, manpower: 30, capacity: 30 };
-    target.army = { ...target.army, manpower: 10, capacity: 10 };
-    const germanOperation: FrontOperationV2 = {
-      ...operation,
-      commanderId: germany,
-      sourceId: germanyTerritory,
-    };
-    war.attackerOperations = [operation];
-    const secondWar: WarStateV2 = {
-      ...war,
-      id: 'war-civilian-collateral-second',
-      attackerId: germany,
-      attackerLosses: 0,
-      defenderLosses: 0,
-      attackerCivilianLosses: 0,
-      defenderCivilianLosses: 0,
-      attackerOperations: [germanOperation],
-      defenderOperations: [],
-    };
-    state.wars = [war, secondWar];
-    const refugeeContent = {
-      ...WORLD_CONTENT_V2,
-      territories: {
-        ...WORLD_CONTENT_V2.territories,
-        [netherlandsTerritory]: {
-          ...WORLD_CONTENT_V2.territories[netherlandsTerritory],
-          connections: [
-            ...WORLD_CONTENT_V2.territories[netherlandsTerritory].connections
-              .filter((connection) => connection.targetId !== greatBritainTerritory),
-            { targetId: greatBritainTerritory, kind: 'land' as const },
-          ],
-        },
-      },
-    };
-    const targetPopulationBefore = target.population;
-    const hostPopulationBefore = state.territories[greatBritainTerritory].population;
-    const worldPopulationBefore = Object.values(state.territories)
-      .reduce((sum, territory) => sum + territory.population, 0);
-
-    const events = processWarsV2(state, refugeeContent);
-    const targetBattles = events.filter((event) => event.targetId === netherlandsTerritory);
-    const moved = state.territories[greatBritainTerritory].population - hostPopulationBefore;
-    const weeklyCap = targetPopulationBefore * DEFENDER_REFUGEE_DISPLACEMENT_POPULATION_CAP
-      * civilianPopulationExposureV2(targetPopulationBefore);
-    const worldPopulationAfter = Object.values(state.territories)
-      .reduce((sum, territory) => sum + territory.population, 0);
-
-    expect(targetBattles).toHaveLength(2);
-    expect(moved).toBeGreaterThan(0);
-    expect(moved).toBeLessThanOrEqual(weeklyCap + 0.000001);
-    expect(worldPopulationAfter).toBeCloseTo(
-      worldPopulationBefore - events.reduce((sum, event) => (
-        sum + event.attackerPopulationLoss + event.defenderPopulationLoss
-      ), 0),
-      5,
-    );
-  });
-
-  it('excludes a belligerent neighbour and leaves that side undisplaced when no safe host remains', () => {
-    const { state, war, operation } = battleFixture(7_701_3);
-    const germany = nationIdV2('deu');
-    const france = nationIdV2('fra');
-    state.wars.push({
-      ...war,
-      id: 'war-unsafe-refugee-host',
-      attackerId: germany,
-      defenderId: france,
-      attackerOperations: [],
-      defenderOperations: [],
-    });
-    const unsafeContent = {
-      ...WORLD_CONTENT_V2,
-      territories: {
-        ...WORLD_CONTENT_V2.territories,
-        [netherlandsTerritory]: {
-          ...WORLD_CONTENT_V2.territories[netherlandsTerritory],
-          connections: WORLD_CONTENT_V2.territories[netherlandsTerritory].connections
-            .filter((connection) => (
-              connection.targetId === belgiumTerritory || connection.targetId === germanyTerritory
-            )),
-        },
-      },
-    };
-    const targetBefore = state.territories[netherlandsTerritory].population;
-    const germanyBefore = state.territories[germanyTerritory].population;
-    const event = resolveBattlePulseV2(state, unsafeContent, war, operation)!;
-
-    expect(state.territories[germanyTerritory].population).toBe(germanyBefore);
-    expect(state.territories[netherlandsTerritory].population)
-      .toBeCloseTo(targetBefore - event.defenderPopulationLoss, 6);
-  });
-
-  it('does not displace civilians when neither front has a safe third-country land neighbour', () => {
-    const { state, war, operation } = battleFixture(7_701_4);
-    const isolatedContent = {
-      ...WORLD_CONTENT_V2,
-      territories: {
-        ...WORLD_CONTENT_V2.territories,
-        [belgiumTerritory]: {
-          ...WORLD_CONTENT_V2.territories[belgiumTerritory],
-          connections: WORLD_CONTENT_V2.territories[belgiumTerritory].connections
-            .filter((connection) => connection.targetId === netherlandsTerritory),
-        },
-        [netherlandsTerritory]: {
-          ...WORLD_CONTENT_V2.territories[netherlandsTerritory],
-          connections: WORLD_CONTENT_V2.territories[netherlandsTerritory].connections
-            .filter((connection) => connection.targetId === belgiumTerritory),
-        },
-      },
-    };
-    const sourceBefore = state.territories[belgiumTerritory].population;
-    const targetBefore = state.territories[netherlandsTerritory].population;
-    const event = resolveBattlePulseV2(state, isolatedContent, war, operation)!;
-
-    expect(state.territories[belgiumTerritory].population)
-      .toBeCloseTo(sourceBefore - event.attackerPopulationLoss, 6);
-    expect(state.territories[netherlandsTerritory].population)
-      .toBeCloseTo(targetBefore - event.defenderPopulationLoss, 6);
   });
 
   it('causes no civilian loss before an actual battle pulse', () => {

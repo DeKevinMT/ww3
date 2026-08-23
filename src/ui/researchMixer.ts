@@ -7,6 +7,10 @@ export const RESEARCH_BRANCHES_V2: readonly ResearchBranchV2[] = [
   'defensive-systems',
   'logistics-medicine',
   'economy-science',
+  'food-systems',
+  'reserve-doctrine',
+  'public-administration',
+  'education-intelligence',
 ];
 
 export function sameResearchMix(left: ResearchAllocationsV2, right: ResearchAllocationsV2): boolean {
@@ -21,12 +25,16 @@ function emptyResearchMix(): ResearchAllocationsV2 {
     'defensive-systems': 0,
     'logistics-medicine': 0,
     'economy-science': 0,
+    'food-systems': 0,
+    'reserve-doctrine': 0,
+    'public-administration': 0,
+    'education-intelligence': 0,
   };
 }
 
 /**
  * Keeps the changed program at its requested integer percentage and distributes
- * the remainder proportionally over the other five. Largest-remainder rounding
+ * the remainder proportionally over the other programs. Largest-remainder rounding
  * makes the result deterministic and exactly 100 without rotating branch names.
  */
 export function rebalanceResearchMix(

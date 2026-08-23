@@ -26,23 +26,27 @@ const CONCENTRATED: ResearchAllocationsV2 = {
   'defensive-systems': 0,
   'logistics-medicine': 0,
   'economy-science': 0,
+  'food-systems': 0,
+  'reserve-doctrine': 0,
+  'public-administration': 0,
+  'education-intelligence': 0,
 };
 
 function totalBreakthroughs(state: WorldStateV2): number {
   return Object.values(state.players[bel].research.breakthroughs).reduce((sum, value) => sum + value, 0);
 }
 
-describe('V2 six-program Development portfolio', () => {
+describe('V2 ten-program Development portfolio', () => {
   it('keeps all unfinished programs active, including branches with 0% extra allocation', () => {
     const state = createWorldStateV2(501);
     state.players[bel].treasury = 100;
     state.players[bel].research.allocations = { ...CONCENTRATED };
     const portfolio = selectResearchPortfolioV2(state, WORLD_CONTENT_V2, bel);
-    expect(portfolio).toHaveLength(6);
-    expect(portfolio.find((branch) => branch.branch === 'advanced-weapons')?.fundingShare).toBeCloseTo(0.75, 9);
+    expect(portfolio).toHaveLength(10);
+    expect(portfolio.find((branch) => branch.branch === 'advanced-weapons')?.fundingShare).toBeCloseTo(0.73, 9);
     for (const branch of portfolio.filter((item) => item.branch !== 'advanced-weapons')) {
       expect(branch.allocation).toBe(0);
-      expect(branch.fundingShare).toBeCloseTo(0.05, 9);
+      expect(branch.fundingShare).toBeCloseTo(0.03, 9);
       expect(branch.weeklyProgress).toBeGreaterThan(0);
     }
     processResearchV2(state, WORLD_CONTENT_V2, createFinancePlansV2(state, WORLD_CONTENT_V2));
@@ -86,7 +90,7 @@ describe('V2 six-program Development portfolio', () => {
     const longRunningResearch = createWorldStateV2(510);
     longRunningResearch.players[bel].research.breakthroughs['advanced-weapons'] = 41;
     longRunningResearch.players[bel].research.effectLevels.attack = 21;
-    longRunningResearch.players[bel].research.effectLevels.control = 20;
+    longRunningResearch.players[bel].research.effectLevels['reinforcement-efficiency'] = 20;
     expect(() => assertInvariantsV2(longRunningResearch, WORLD_CONTENT_V2)).not.toThrow();
   });
 
@@ -147,7 +151,7 @@ describe('V2 six-program Development portfolio', () => {
     const at260 = totalBreakthroughs(state);
     expect(firstCompletion).toBeDefined();
     expect(firstCompletion).toBeGreaterThanOrEqual(30);
-    expect(firstCompletion).toBeLessThanOrEqual(130);
+    expect(firstCompletion).toBeLessThanOrEqual(140);
     expect(at52).toBeLessThanOrEqual(1);
     // The shared IQ-scaled planner keeps progress visible without restoring a
     // selected-country research acceleration.

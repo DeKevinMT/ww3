@@ -13,8 +13,13 @@ import {
   round,
 } from './balance';
 import { WORLD_CONTENT_V2, type WorldContentV2 } from './content';
-import { initialArmyCapacityRatioV2, initialTerritoryArmyCapacityV2 } from './capacity';
+import {
+  initialArmyCapacityRatioV2,
+  initialNationArmyCapacityBenchmarkV2,
+  initialTerritoryArmyCapacityV2,
+} from './capacity';
 import { calculateBlendedFiscalCapacityV2 } from './fiscal';
+import { initialTrainedReserveManpowerV2 } from './reserveForces';
 import {
   invalidateTerritoryIndexV2,
   selectFoodDomesticCapacityTargetV2,
@@ -57,6 +62,7 @@ function createNationState(id: PlayerId, content: WorldContentV2): NationStateV2
   const startingCashWeeks = clamp(2 + 2.25 * wealthTier * largeEconomyDamping, 2, 9);
   const initialFoodBufferWeeks = FOOD_TARGET_WEEKS
     * clamp(1 - 4 * definition.real.foodInsecurityRate, 0.08, 1);
+  const initialArmyCapacity = initialNationArmyCapacityBenchmarkV2(content, id);
   return {
     empireName: '',
     treasury: round(Math.max(0.10, weeklyRevenue * startingCashWeeks), 3),
@@ -67,7 +73,7 @@ function createNationState(id: PlayerId, content: WorldContentV2): NationStateV2
     // vulnerability still starts fragile systems with a smaller buffer and a
     // higher production/import burden below.
     foodSecurity: 1,
-    trainedReserves: 0,
+    trainedReserves: initialTrainedReserveManpowerV2(String(id), initialArmyCapacity),
     budget: { ...DEFAULT_BUDGET_V2 },
     research: {
       allocations: { ...DEFAULT_RESEARCH_ALLOCATIONS_V2 },
@@ -261,7 +267,7 @@ export function createWorldStateV2(
     content.territoryIds.map((id) => [id, createTerritoryState(id, content)]),
   );
   const state: WorldStateV2 = {
-    schemaVersion: 20,
+    schemaVersion: 21,
     rulesVersion: V2_RULES_VERSION,
     contentVersion: V2_CONTENT_VERSION,
     mapId: V2_MAP_ID,
@@ -271,6 +277,7 @@ export function createWorldStateV2(
     actionSequence: 0,
     speed: 0,
     humanPlayerId,
+    humanPlayerIds: [humanPlayerId],
     players,
     territories,
     wars: [],

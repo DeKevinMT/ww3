@@ -170,6 +170,7 @@ describe('V2 permanent territory integration lifecycle', () => {
     state.players[netherlands].research.effectLevels.attack = 1;
     state.players[luxembourg].trainedReserves = 1.25;
     state.players[netherlands].trainedReserves = 0.5;
+    const reservesAfterBothAbsorptions = 1.75 + state.players[belgium].trainedReserves;
 
     beginTerritoryIntegrationV2(state, WORLD_CONTENT_V2, luxembourgTerritory, netherlands);
     // Model a second territory that still carries the same former national
@@ -201,7 +202,7 @@ describe('V2 permanent territory integration lifecycle', () => {
       territory.owner === luxembourg || territory.coreOwner === luxembourg
     ))).toBe(false);
     expect(state.players[netherlands].research.effectLevels.attack).toBe(9);
-    expect(state.players[netherlands].trainedReserves).toBe(1.75);
+    expect(state.players[netherlands].trainedReserves).toBe(reservesAfterBothAbsorptions);
     expect(state.players[luxembourg]).toBeUndefined();
   });
 
@@ -220,7 +221,7 @@ describe('V2 permanent territory integration lifecycle', () => {
     expect(territory.integrationProgram).toBeUndefined();
   });
 
-  it('resets a partial occupation when a third empire takes control', () => {
+  it('resets unfinished integration when a third empire conquers the territory', () => {
     const state = createWorldStateV2(260824);
     const territory = state.territories[luxembourgTerritory];
     const duration = territoryIntegrationDurationWeeksV2(WORLD_CONTENT_V2, luxembourgTerritory);

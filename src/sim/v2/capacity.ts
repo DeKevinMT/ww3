@@ -9,8 +9,10 @@ import type { PlayerId, TerritoryId, WorldStateV2 } from './types';
 
 const initialNationCapacityCache = new WeakMap<WorldContentV2, Map<PlayerId, number>>();
 
-/** Empire logistics may support at most one additional local-cap equivalent. */
-export const EMPIRE_SUPPORT_LOCAL_CAP_MULTIPLIER_V2 = 2;
+/** A newly conquered foreign territory can host this extra share of empire forces. */
+export const CONQUERED_TERRITORY_EMPIRE_COMBAT_CAP_SHARE_V2 = 0.01;
+/** Full integration expands that scalable foreign-territory deployment allowance. */
+export const INTEGRATED_CORE_EMPIRE_COMBAT_CAP_SHARE_V2 = 0.025;
 
 /**
  * The one canonical army-cap rule. Captured territory unlocks its structural
@@ -141,13 +143,31 @@ export function stateTerritoryArmySupportCeilingV2(
   content: WorldContentV2,
   territoryId: TerritoryId,
   ownerId: PlayerId,
+  empireArmyCapacityOverride?: number,
 ): number {
-  return round(stateTerritoryArmyCapacityTargetV2(
+  const localCapacity = stateTerritoryArmyCapacityTargetV2(
     state,
     content,
     territoryId,
     ownerId,
-  ) * EMPIRE_SUPPORT_LOCAL_CAP_MULTIPLIER_V2, 9);
+  );
+  const territory = state.territories[territoryId];
+  const isForeignTerritory = Boolean(
+    territory
+      && territory.owner === ownerId
+      && content.territories[territoryId]?.initialOwnerId !== ownerId,
+  );
+  const empireSupportShare = !isForeignTerritory ? 0
+    : territory!.integration >= 1
+      ? INTEGRATED_CORE_EMPIRE_COMBAT_CAP_SHARE_V2
+      : CONQUERED_TERRITORY_EMPIRE_COMBAT_CAP_SHARE_V2;
+  const empireSupport = empireSupportShare <= 0 ? 0
+    : (empireArmyCapacityOverride
+      ?? nationalArmyCapacityTargetV2(state, content, ownerId)) * empireSupportShare;
+  return round(
+    localCapacity + empireSupport,
+    9,
+  );
 }
 
 /**

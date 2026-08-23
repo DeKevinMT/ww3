@@ -30,6 +30,8 @@ describe('V2 deterministic ticks, queues and saves', () => {
     const next = {
       'population-recruitment': 0, 'military-industry': 0, 'advanced-weapons': 60,
       'defensive-systems': 20, 'logistics-medicine': 10, 'economy-science': 10,
+      'food-systems': 0, 'reserve-doctrine': 0, 'public-administration': 0,
+      'education-intelligence': 0,
     } as const;
     expect(engine.setResearchAllocations(bel, next).accepted).toBe(true);
     expect(engine.state.players[bel].research.allocations).toEqual(before);

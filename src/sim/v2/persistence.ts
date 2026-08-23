@@ -1,5 +1,9 @@
 import {
   CONQUEST_INITIAL_INTEGRATION_SHARE,
+  EMPTY_RESEARCH_BREAKTHROUGHS,
+  EMPTY_RESEARCH_EFFECT_LEVELS,
+  EMPTY_RESEARCH_PROGRESS,
+  DEFAULT_RESEARCH_ALLOCATIONS_V2,
   V2_CONTENT_VERSION,
   V2_MAP_ID,
   V2_RULES_VERSION,
@@ -32,7 +36,7 @@ import type {
 } from './types';
 
 export interface SaveGameV2 {
-  schemaVersion: 20;
+  schemaVersion: 21;
   rulesVersion: string;
   contentVersion: string;
   mapId: string;
@@ -41,6 +45,7 @@ export interface SaveGameV2 {
   tick: number;
   actionSequence: number;
   humanPlayerId: PlayerId;
+  humanPlayerIds: PlayerId[];
   players: Record<PlayerId, NationStateV2>;
   territories: Record<TerritoryId, TerritoryStateV2>;
   wars: WarStateV2[];
@@ -61,6 +66,8 @@ const LEGACY_RULES_VERSION_V16 = 'frontier-command-v2.51-fixed-manual-actions';
 const LEGACY_RULES_VERSION_V17 = 'frontier-command-v2.52-integration-multifront';
 const LEGACY_RULES_VERSION_V18 = 'frontier-command-v2.53-combat-experience';
 const LEGACY_RULES_VERSION_V19 = 'frontier-command-v2.54-faster-integration';
+const LEGACY_RULES_VERSION_V20 = 'frontier-command-v2.55-combat-rebalance';
+const LEGACY_RULES_VERSION_V20_RESEARCH = 'frontier-command-v2.56-research-expansion';
 const LEGACY_CONTENT_VERSION_V16 = 'natural-earth-countries-2026-v6-naval';
 const LEGACY_CONTENT_VERSION_V17 = 'natural-earth-countries-2026-v7-greenland';
 const LEGACY_BOT_MANPOWER_PER_UNIT = 0.10;
@@ -99,14 +106,40 @@ type LegacyNationV18 = Omit<NationStateV2, 'domesticFoodCapacity' | 'trainedRese
 type LegacyNationV17 = Omit<NationStateV2, 'domesticFoodCapacity' | 'trainedReserves'>;
 type LegacyNationV15 = Omit<LegacyNationV17, 'manualActionUses'>;
 type LegacyNationV13 = LegacyNationV15 & { battleBots: LegacyBattleBotProgramV13 };
-type LegacyTerritoryBaseV17 = Omit<TerritoryStateV2, 'army' | 'coreOwner' | 'integrationProgram'>;
+interface LegacyControlStateV2 {
+  controller: PlayerId;
+  share: number;
+}
+type LegacyTerritoryBaseV17 = Omit<TerritoryStateV2, 'army' | 'coreOwner' | 'integrationProgram'> & {
+  control?: LegacyControlStateV2;
+};
 type LegacyTerritoryV13 = LegacyTerritoryBaseV17 & { army: LegacyArmyV13 };
 type LegacyTerritoryV14 = LegacyTerritoryBaseV17 & { army: LegacyArmyV14 };
 type LegacyTerritoryV17 = LegacyTerritoryBaseV17 & { army: LegacyArmyV17 };
 type LegacyIntegrationProgramV18 = Omit<IntegrationProgramStateV2, 'annualCost' | 'fromOwnerId'>;
 type LegacyTerritoryV18 = Omit<TerritoryStateV2, 'integrationProgram'> & {
   integrationProgram?: LegacyIntegrationProgramV18;
+  control?: LegacyControlStateV2;
 };
+
+type LegacyNationV20 = NationStateV2 & {
+  research: NationStateV2['research'] & {
+    effectLevels: NationStateV2['research']['effectLevels'] & { control?: number };
+  };
+};
+type LegacyTerritoryV20 = TerritoryStateV2 & { control?: LegacyControlStateV2 };
+type LegacyPeaceOfferV20 = Omit<PeaceOfferV2, 'settlement'> & {
+  settlement: PeaceOfferV2['settlement'] | 'control';
+  territoryId?: TerritoryId;
+};
+interface LegacySaveGameV20 extends Omit<SaveGameV2,
+  'schemaVersion' | 'rulesVersion' | 'humanPlayerIds' | 'players' | 'territories' | 'offers'> {
+  schemaVersion: 20;
+  rulesVersion: string;
+  players: Record<PlayerId, LegacyNationV20>;
+  territories: Record<TerritoryId, LegacyTerritoryV20>;
+  offers: LegacyPeaceOfferV20[];
+}
 
 type LegacyWarStateV16 = Omit<WarStateV2, 'attackerOperations' | 'defenderOperations'> & {
   attackerOperation?: FrontOperationV2;
@@ -115,7 +148,7 @@ type LegacyWarStateV16 = Omit<WarStateV2, 'attackerOperations' | 'defenderOperat
 
 /** Read-only compatibility shape for the last Combat Experience save format. */
 export interface LegacySaveGameV19 extends Omit<SaveGameV2,
-  'schemaVersion' | 'rulesVersion' | 'players'> {
+  'schemaVersion' | 'rulesVersion' | 'humanPlayerIds' | 'players'> {
   schemaVersion: 19;
   rulesVersion: typeof LEGACY_RULES_VERSION_V19;
   players: Record<PlayerId, LegacyNationV19>;
@@ -123,7 +156,7 @@ export interface LegacySaveGameV19 extends Omit<SaveGameV2,
 
 /** Read-only compatibility shape for the original long integration calendar. */
 export interface LegacySaveGameV18 extends Omit<SaveGameV2,
-  'schemaVersion' | 'rulesVersion' | 'players' | 'territories'> {
+  'schemaVersion' | 'rulesVersion' | 'humanPlayerIds' | 'players' | 'territories'> {
   schemaVersion: 18;
   rulesVersion: typeof LEGACY_RULES_VERSION_V18;
   players: Record<PlayerId, LegacyNationV18>;
@@ -132,7 +165,7 @@ export interface LegacySaveGameV18 extends Omit<SaveGameV2,
 
 /** Read-only compatibility shape for the final veteran/multi-front format. */
 export interface LegacySaveGameV17 extends Omit<SaveGameV2,
-  'schemaVersion' | 'rulesVersion' | 'contentVersion' | 'players' | 'territories'> {
+  'schemaVersion' | 'rulesVersion' | 'contentVersion' | 'humanPlayerIds' | 'players' | 'territories'> {
   schemaVersion: 17;
   rulesVersion: typeof LEGACY_RULES_VERSION_V17;
   contentVersion: typeof LEGACY_CONTENT_VERSION_V17;
@@ -175,7 +208,7 @@ export interface LegacySaveGameV13 extends Omit<LegacySaveGameV14,
 }
 
 interface LegacyWorldStateV17 extends Omit<WorldStateV2,
-  'schemaVersion' | 'rulesVersion' | 'contentVersion' | 'players' | 'territories'> {
+  'schemaVersion' | 'rulesVersion' | 'contentVersion' | 'humanPlayerIds' | 'players' | 'territories'> {
   schemaVersion: 17;
   rulesVersion: typeof LEGACY_RULES_VERSION_V17;
   contentVersion: typeof LEGACY_CONTENT_VERSION_V17;
@@ -207,10 +240,11 @@ interface LegacyWorldStateV15 extends Omit<LegacyWorldStateV16,
 }
 
 const SAVE_KEYS = [
-  'actionSequence', 'aiEscalation', 'canonicalStateHash', 'ceasefireObligations', 'contentVersion', 'humanPlayerId', 'mapId',
+  'actionSequence', 'aiEscalation', 'canonicalStateHash', 'ceasefireObligations', 'contentVersion', 'humanPlayerId', 'humanPlayerIds', 'mapId',
   'nextEventId', 'nextOfferId', 'nextWarId', 'offers', 'players', 'rngState', 'rulesVersion', 'schemaVersion',
   'seed', 'territories', 'tick', 'truces', 'wars',
 ].sort();
+const LEGACY_SAVE_KEYS = SAVE_KEYS.filter((key) => key !== 'humanPlayerIds');
 
 const LEGACY_NATION_KEYS_V13 = [
   'battleBots', 'budget', 'capitalId', 'ceasefiresRequested', 'empireName', 'foodSecurity', 'foodStock',
@@ -276,7 +310,7 @@ export function canonicalStateHashV2(value: object): string {
 export function createSaveV2(state: WorldStateV2, content: WorldContentV2): SaveGameV2 {
   assertInvariantsV2(state, content);
   const payload: Omit<SaveGameV2, 'canonicalStateHash'> = {
-    schemaVersion: 20,
+    schemaVersion: 21,
     rulesVersion: state.rulesVersion,
     contentVersion: state.contentVersion,
     mapId: state.mapId,
@@ -285,6 +319,7 @@ export function createSaveV2(state: WorldStateV2, content: WorldContentV2): Save
     tick: state.tick,
     actionSequence: state.actionSequence,
     humanPlayerId: state.humanPlayerId,
+    humanPlayerIds: [...state.humanPlayerIds].sort((left, right) => left.localeCompare(right)),
     players: sortedRecord(state.players) as Record<PlayerId, NationStateV2>,
     territories: sortedRecord(state.territories) as Record<TerritoryId, TerritoryStateV2>,
     wars: [...state.wars]
@@ -681,7 +716,6 @@ function legacyTerritoryFromCurrentV2(territory: TerritoryStateV2): LegacyTerrit
       veteranManpower: 0,
       veteranExperience: 0,
     },
-    ...(territory.control ? { control: { ...territory.control } } : {}),
   };
 }
 
@@ -888,9 +922,10 @@ function migrateLegacyStateV17(
 
   const state: WorldStateV2 = {
     ...legacyState,
-    schemaVersion: 20,
+    schemaVersion: 21,
     rulesVersion: V2_RULES_VERSION,
     contentVersion: V2_CONTENT_VERSION,
+    humanPlayerIds: [legacyState.humanPlayerId],
     players,
     territories,
     wars: legacyState.wars.map((war) => ({
@@ -913,7 +948,7 @@ function migrateLegacyStateV17(
 }
 
 function currentStateFromSave(
-  save: SaveGameV2 | LegacySaveGameV19 | LegacySaveGameV18,
+  save: SaveGameV2 | LegacySaveGameV20 | LegacySaveGameV19 | LegacySaveGameV18,
   content: WorldContentV2,
   retireLegacyCombatExperience = false,
 ): WorldStateV2 {
@@ -972,13 +1007,15 @@ function currentStateFromSave(
         },
       } : {}),
       army: { ...serializedTerritory.army },
-      ...(serializedTerritory.control ? { control: { ...serializedTerritory.control } } : {}),
     }];
   })) as Record<TerritoryId, TerritoryStateV2>;
   const state: WorldStateV2 = {
     ...payloadWithoutHash(save),
-    schemaVersion: 20,
+    schemaVersion: 21,
     rulesVersion: V2_RULES_VERSION,
+    humanPlayerIds: 'humanPlayerIds' in save
+      ? [...save.humanPlayerIds].sort((left, right) => left.localeCompare(right))
+      : [save.humanPlayerId],
     players,
     territories,
     wars: save.wars.map((war) => ({
@@ -992,6 +1029,9 @@ function currentStateFromSave(
       attackerOperations: war.attackerOperations.map((operation) => ({ ...operation })),
       defenderOperations: war.defenderOperations.map((operation) => ({ ...operation })),
     })),
+    // Legacy schema-20 land offers are filtered only after their authenticated
+    // payload has been reconstructed below.
+    offers: save.offers.map((offer) => ({ ...offer })) as PeaceOfferV2[],
     speed: 0,
     events: [],
     winnerId: undefined,
@@ -1011,7 +1051,7 @@ function currentStateFromSave(
 /**
  * Schema 18 used twice the V2.54 country-size calendar. An authenticated old
  * save keeps its exact visible integration share, but receives the current
- * 1.2x-calendar remainder once. Subsequent saves keep that endpoint, so it can
+ * integration-calendar remainder once. Subsequent saves keep that endpoint, so it can
  * never be shortened again by another round-trip. Schema-19 programs bypass
  * this migration and retain their already promised endpoint exactly.
  */
@@ -1045,6 +1085,7 @@ function migrateLegacyStateV18(
     ...currentStateFromSave(save, content, true),
     territories: canonicalTerritories,
   };
+  migrateRetiredSystemsV2(legacyState);
   // Validate the authenticated old payload before the new calendar is allowed
   // to normalize its endpoint.
   assertInvariantsV2(legacyState, content);
@@ -1054,7 +1095,6 @@ function migrateLegacyStateV18(
     if (!program) return [territoryId, {
       ...territory,
       army: { ...territory.army },
-      ...(territory.control ? { control: { ...territory.control } } : {}),
     }];
     const remainingShare = clamp(
       (1 - territory.integration) / Math.max(0.000001, 1 - CONQUEST_INITIAL_INTEGRATION_SHARE),
@@ -1071,14 +1111,59 @@ function migrateLegacyStateV18(
         completesTick: legacyState.tick + remainingDuration,
       },
       army: { ...territory.army },
-      ...(territory.control ? { control: { ...territory.control } } : {}),
     }];
   })) as Record<TerritoryId, TerritoryStateV2>;
   return { ...legacyState, territories };
 }
 
+/**
+ * V2.57 retires partial control and cross-border settlement state. Authenticated
+ * older saves discard those transient claims, preserve every completed research
+ * level, and map former control research to replacement efficiency so no paid
+ * breakthrough becomes worthless. V2.55 portfolios also gain the four V2.56
+ * branches at zero without changing their exact-100 allocation.
+ */
+function migrateRetiredSystemsV2(state: WorldStateV2): void {
+  for (const territory of Object.values(state.territories)) {
+    delete (territory as LegacyTerritoryV20).control;
+  }
+  state.offers = state.offers
+    .filter((offer) => (offer as LegacyPeaceOfferV20).settlement !== 'control')
+    .map((offer) => {
+      const { territoryId: _retiredTerritoryId, ...canonicalOffer } = offer as LegacyPeaceOfferV20;
+      return canonicalOffer as PeaceOfferV2;
+    });
+  for (const nation of Object.values(state.players)) {
+    const legacyLevels = nation.research.effectLevels as NationStateV2['research']['effectLevels'] & {
+      control?: number;
+    };
+    const retiredControlLevel = Number.isFinite(legacyLevels.control) ? legacyLevels.control! : 0;
+    const { control: _retiredControl, ...currentLevels } = legacyLevels;
+    nation.research = {
+      allocations: {
+        ...DEFAULT_RESEARCH_ALLOCATIONS_V2,
+        ...nation.research.allocations,
+      },
+      progress: {
+        ...EMPTY_RESEARCH_PROGRESS,
+        ...nation.research.progress,
+      },
+      effectLevels: {
+        ...EMPTY_RESEARCH_EFFECT_LEVELS,
+        ...currentLevels,
+        'reinforcement-efficiency': Math.max(0,
+          (currentLevels['reinforcement-efficiency'] ?? 0) + retiredControlLevel),
+      },
+      breakthroughs: {
+        ...EMPTY_RESEARCH_BREAKTHROUGHS,
+        ...nation.research.breakthroughs,
+      },
+    };
+  }
+}
+
 export function loadSaveV2(
-  input: string | SaveGameV2 | LegacySaveGameV19 | LegacySaveGameV18 | LegacySaveGameV17 | LegacySaveGameV16 | LegacySaveGameV15 | LegacySaveGameV14 | LegacySaveGameV13,
+  input: string | SaveGameV2 | LegacySaveGameV20 | LegacySaveGameV19 | LegacySaveGameV18 | LegacySaveGameV17 | LegacySaveGameV16 | LegacySaveGameV15 | LegacySaveGameV14 | LegacySaveGameV13,
   content: WorldContentV2,
 ): WorldStateV2 {
   const unknownSave = typeof input === 'string' ? JSON.parse(input) as unknown : input;
@@ -1086,24 +1171,30 @@ export function loadSaveV2(
     throw new Error('V2 save is not an object.');
   }
   const parsed = unknownSave as Record<string, unknown>;
+  const schemaVersion = parsed.schemaVersion;
+  if (schemaVersion !== 21 && schemaVersion !== 20 && schemaVersion !== 19 && schemaVersion !== 18 && schemaVersion !== 17 && schemaVersion !== 16 && schemaVersion !== 15 && schemaVersion !== 14 && schemaVersion !== 13) {
+    throw new Error(`Unsupported V2 schemaVersion: ${String(schemaVersion)}. Current saves use schema 21; canonical schema 13–20 saves can be migrated.`);
+  }
   const keys = Object.keys(parsed).sort();
-  if (keys.length !== SAVE_KEYS.length || keys.some((key, index) => key !== SAVE_KEYS[index])) {
+  const expectedSaveKeys = schemaVersion === 21 ? SAVE_KEYS : LEGACY_SAVE_KEYS;
+  if (keys.length !== expectedSaveKeys.length || keys.some((key, index) => key !== expectedSaveKeys[index])) {
     throw new Error('V2 save has missing or extra top-level keys.');
   }
-
-  const schemaVersion = parsed.schemaVersion;
-  if (schemaVersion !== 20 && schemaVersion !== 19 && schemaVersion !== 18 && schemaVersion !== 17 && schemaVersion !== 16 && schemaVersion !== 15 && schemaVersion !== 14 && schemaVersion !== 13) {
-    throw new Error(`Unsupported V2 schemaVersion: ${String(schemaVersion)}. Current saves use schema 20; canonical schema 13–19 saves can be migrated.`);
-  }
-  const expectedRules = schemaVersion === 20 ? V2_RULES_VERSION
-    : schemaVersion === 19 ? LEGACY_RULES_VERSION_V19
+  const expectedRules = schemaVersion === 19 ? LEGACY_RULES_VERSION_V19
       : schemaVersion === 18 ? LEGACY_RULES_VERSION_V18
         : schemaVersion === 17 ? LEGACY_RULES_VERSION_V17
           : schemaVersion === 16 ? LEGACY_RULES_VERSION_V16
             : schemaVersion === 15 ? LEGACY_RULES_VERSION_V15
               : schemaVersion === 14 ? LEGACY_RULES_VERSION_V14
                 : LEGACY_RULES_VERSION_V13;
-  if (parsed.rulesVersion !== expectedRules) throw new Error(`Unsupported V2 rulesVersion: ${String(parsed.rulesVersion)}.`);
+  const supportedRules = schemaVersion === 21
+    ? parsed.rulesVersion === V2_RULES_VERSION
+    : schemaVersion === 20
+    ? parsed.rulesVersion === V2_RULES_VERSION
+      || parsed.rulesVersion === LEGACY_RULES_VERSION_V20_RESEARCH
+      || parsed.rulesVersion === LEGACY_RULES_VERSION_V20
+    : parsed.rulesVersion === expectedRules;
+  if (!supportedRules) throw new Error(`Unsupported V2 rulesVersion: ${String(parsed.rulesVersion)}.`);
   const expectedContent = schemaVersion >= 17 ? V2_CONTENT_VERSION : LEGACY_CONTENT_VERSION_V16;
   if (parsed.contentVersion !== expectedContent) throw new Error(`Unsupported V2 contentVersion: ${String(parsed.contentVersion)}.`);
   if (parsed.mapId !== V2_MAP_ID) throw new Error(`Unsupported V2 mapId: ${String(parsed.mapId)}.`);
@@ -1116,9 +1207,11 @@ export function loadSaveV2(
     throw new Error(`V2 canonical hash mismatch: expected ${parsed.canonicalStateHash}, got ${hash}.`);
   }
 
-  const state = schemaVersion === 20
+  const state = schemaVersion === 21
     ? currentStateFromSave(parsed as unknown as SaveGameV2, content)
-    : schemaVersion === 19
+    : schemaVersion === 20
+      ? currentStateFromSave(parsed as unknown as LegacySaveGameV20, content)
+      : schemaVersion === 19
       ? currentStateFromSave(parsed as unknown as LegacySaveGameV19, content, true)
       : schemaVersion === 18
         ? migrateLegacyStateV18(parsed as unknown as LegacySaveGameV18, content)
@@ -1134,17 +1227,27 @@ export function loadSaveV2(
                   : migrateLegacySaveV13(parsed as unknown as LegacySaveGameV13),
                 content,
               )), content), content);
+  if (parsed.rulesVersion !== V2_RULES_VERSION) migrateRetiredSystemsV2(state);
   // Normalize authenticated legacy/current saves at the load boundary. This
   // never mutates the caller's live state or changes the authenticated input.
   retireDormantAbsorbedNationsV2(state, content);
-  // winnerId/gameOver are transient and intentionally omitted from saves.
-  // A missing selected nation proves its final integration completed.
+  // winnerId/gameOver are transient and intentionally omitted from saves. In
+  // multiplayer, move the legacy/global focus to another living human seat;
+  // the absorbed local seat remains known to the room as a spectator.
   if (!state.players[state.humanPlayerId]) {
-    const successorId = absorbedNationSuccessorV2(state, content, state.humanPlayerId);
-    if (successorId && state.players[successorId]) {
-      state.winnerId = successorId;
-      state.gameOver = true;
-      state.speed = 0;
+    const livingHumanId = state.humanPlayerIds.find((playerId) => Boolean(state.players[playerId]));
+    if (livingHumanId) {
+      state.humanPlayerId = livingHumanId;
+      state.aiEscalation.lastHumanTerritoryCount = Object.values(state.territories)
+        .filter((territory) => territory.owner === livingHumanId).length;
+      state.aiEscalation.lastHumanPower = 0;
+    } else {
+      const successorId = absorbedNationSuccessorV2(state, content, state.humanPlayerId);
+      if (successorId && state.players[successorId]) {
+        state.winnerId = successorId;
+        state.gameOver = true;
+        state.speed = 0;
+      }
     }
   }
   assertInvariantsV2(state, content);

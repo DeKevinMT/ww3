@@ -371,6 +371,7 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
   private visuals = new Map<string, TerritoryVisual>();
   private selection: MapSelectionState = { legalTargetIds: [] };
   private legalTargetIds = new Set<string>();
+  private hintTargetIds = new Set<string>();
   private engine?: WorldMapEngineContract;
   private frontGraphics?: Phaser.GameObjects.Graphics;
   private routeGraphics?: Phaser.GameObjects.Graphics;
@@ -570,6 +571,14 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
     draw(this.ordinaryBoundarySegments, 1.15, 0xd4e7eb, 0.58);
     draw(this.humanBoundarySegments, 1.7, 0x8cf3ff, 0.88);
     draw(this.integrationBoundarySegments, 0.85, 0xf2c879, 0.42);
+    const hintedBoundarySegments = this.ownershipBoundarySegments.filter((segment) => {
+      const hintedCount = segment.territoryIds.reduce((count, territoryId) => (
+        count + (this.hintTargetIds.has(territoryId) ? 1 : 0)
+      ), 0);
+      return hintedCount > 0 && (segment.territoryIds.length === 1
+        || hintedCount < segment.territoryIds.length);
+    });
+    draw(hintedBoundarySegments, 0.85, 0x79e3ff, 0.30);
   }
 
   private createCountries(): void {
@@ -1484,6 +1493,10 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
     if (selection.legalTargetIds !== this.selection.legalTargetIds) {
       this.legalTargetIds = new Set(selection.legalTargetIds);
     }
+    const nextHints = selection.hintTargetIds ?? [];
+    const hintsChanged = nextHints.length !== this.hintTargetIds.size
+      || nextHints.some((territoryId) => !this.hintTargetIds.has(territoryId));
+    if (hintsChanged) this.hintTargetIds = new Set(nextHints);
     this.selection = selection;
     const state = this.mapState;
     const humanId = state?.humanPlayerId;
@@ -1492,6 +1505,7 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       const selected = territoryId === selection.sourceId;
       const target = territoryId === selection.targetId;
       const isLegal = legal.has(territoryId);
+      const isHinted = this.hintTargetIds.has(territoryId);
       const hovered = territoryId === this.hoveredId;
       const humanOwned = this.humanOwnedIds.has(territoryId);
       const territoryState = state?.territories[territoryId];
@@ -1513,14 +1527,19 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
           part.setAlpha(legal.size > 0 && !selected && !target && !isLegal ? 0.62 : 1);
           continue;
         }
-        const width = selected || target ? 1.85 : hovered ? 1.35 : humanOwned ? 1.3 : isLegal ? 1.1 : integrating ? 0.9 : 0.7;
-        const color = target ? 0xffd36b : selected || isLegal || humanOwned ? 0x8cf3ff : integrating ? 0xf2c879 : 0xa9c5cd;
-        const alpha = selected || target ? 1 : hovered ? 0.98 : humanOwned ? 0.92 : isLegal ? 0.72 : integrating ? 0.56 : 0.28;
+        const width = selected || target ? 1.85 : hovered ? 1.35 : humanOwned ? 1.3
+          : isLegal ? 1.1 : integrating ? 0.9 : 0.7;
+        const color = target ? 0xffd36b : selected || isLegal || humanOwned
+          ? 0x8cf3ff : integrating ? 0xf2c879 : 0xa9c5cd;
+        const alpha = selected || target ? 1 : hovered ? 0.98 : humanOwned ? 0.92
+          : isLegal ? 0.72 : integrating ? 0.56 : 0.28;
         part.setStrokeStyle(this.screenWorldSize(width), color, alpha).setDepth(0.8);
         part.setAlpha(legal.size > 0 && !selected && !target && !isLegal ? 0.62 : 1);
       }
-      visual.hud.setDepth(selected || target ? 14 : hovered ? 13 : humanOwned ? 12 : isLegal ? 11 : 8);
+      visual.hud.setDepth(selected || target ? 14 : hovered ? 13 : humanOwned ? 12
+        : isLegal ? 11 : isHinted ? 9 : 8);
     }
+    if (hintsChanged) this.drawOwnershipPerimeters();
     if (refreshZoom) this.refreshZoomDetails();
   }
 

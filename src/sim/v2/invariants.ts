@@ -1,6 +1,7 @@
 import { CEASEFIRE_PAYMENT_WEEKS, PROPAGANDA_DURATION_TICKS, RESEARCH_BRANCHES } from './balance';
 import type { WorldContentV2 } from './content';
 import { stateTerritoryArmyCapacityTargetV2 } from './capacity';
+import { isHumanPlayerV2 } from './humanPlayers';
 import {
   finiteStateNumbersV2,
   relationKeyV2,
@@ -11,62 +12,94 @@ import {
 import type { PlayerId, TerritoryId, WorldStateV2 } from './types';
 
 const NATION_KEYS = ['budget', 'capitalId', 'ceasefiresRequested', 'domesticFoodCapacity', 'empireName', 'foodSecurity', 'foodStock', 'manualActionUses', 'propagandaAvailableTick', 'propagandaProgram', 'rapidRecruitmentAvailableTick', 'research', 'researchSurgeAvailableTick', 'trainedReserves', 'treasury', 'warFatigue'];
-const TERRITORY_KEYS = ['army', 'condition', 'control', 'coreOwner', 'economy', 'integration', 'integrationProgram', 'owner', 'population'];
+const TERRITORY_KEYS = ['army', 'condition', 'coreOwner', 'economy', 'integration', 'integrationProgram', 'owner', 'population'];
 const RESEARCH_KEYS = ['allocations', 'breakthroughs', 'effectLevels', 'progress'];
 const BUDGET_KEYS = ['development', 'military', 'research'];
 const MANUAL_ACTION_USE_KEYS = ['propaganda', 'rapidRecruitment', 'researchSurge'];
 const EFFECT_KEYS = [
   'attack',
   'casualty-reduction',
-  'control',
   'defense',
   'economy-growth',
+  'food-production',
+  'food-storage',
   'force-capacity',
+  'iq-increase',
+  'operating-efficiency',
   'population-growth',
   'recovery',
   'reinforcement-efficiency',
+  'reserve-mobilization',
+  'reserve-training',
   'research-efficiency',
   'research-speed',
   'supply',
+  'tax-efficiency',
   'training',
 ];
 const BREAKTHROUGH_KEYS = [
   'advanced-weapons',
   'defensive-systems',
+  'education-intelligence',
   'economy-science',
+  'food-systems',
   'logistics-medicine',
   'military-industry',
   'population-recruitment',
+  'public-administration',
+  'reserve-doctrine',
 ];
 const ARMY_KEYS = ['baseAttack', 'baseDefense', 'capacity', 'manpower'];
 const PROPAGANDA_PROGRAM_KEYS = ['endsTick', 'startedTick', 'totalSuspicionReduction', 'weeklySuspicionReduction'];
-const CONTROL_KEYS = ['controller', 'share'];
 const INTEGRATION_PROGRAM_KEYS = ['annualCost', 'completesTick', 'fromCoreOwnerId', 'fromOwnerId', 'startedTick', 'toOwnerId'];
 const WAR_KEYS = ['attackerCivilianLosses', 'attackerId', 'attackerLosses', 'attackerOperations', 'battles', 'defenderCivilianLosses', 'defenderId', 'defenderLosses', 'defenderOperations', 'id', 'lastBattleTick', 'lastPeaceOfferTick', 'startedTick', 'warScore'];
 const OPERATION_KEYS = ['access', 'commanderId', 'doctrine', 'holdUntilTick', 'lastBattleTick', 'momentum', 'sourceId', 'startedTick', 'targetId'];
 const TRUCE_KEYS = ['expiresTick', 'leftId', 'rightId'];
 const CEASEFIRE_OBLIGATION_KEYS = ['expiresTick', 'payeeId', 'payerId', 'startsTick', 'warId', 'weeklyCost'];
-const OFFER_KEYS = ['cashAmount', 'createdTick', 'expiresTick', 'fromId', 'id', 'paymentWeeks', 'settlement', 'status', 'territoryId', 'toId', 'warId', 'weeklyCost'];
+const OFFER_KEYS = ['cashAmount', 'createdTick', 'expiresTick', 'fromId', 'id', 'paymentWeeks', 'settlement', 'status', 'toId', 'warId', 'weeklyCost'];
 const AI_ESCALATION_KEYS = ['coalitionMembers', 'globalThreat', 'lastFederationTick', 'lastHumanPower', 'lastHumanTerritoryCount', 'lastWarStartTick', 'resistanceLevel'];
+const OPTIONAL_CANONICAL_KEYS = ['integrationProgram'] as const;
+const allowedKeySetCache = new WeakMap<readonly string[], ReadonlySet<string>>();
+
+function allowedKeySet(allowed: readonly string[]): ReadonlySet<string> {
+  let keys = allowedKeySetCache.get(allowed);
+  if (!keys) {
+    keys = new Set(allowed);
+    allowedKeySetCache.set(allowed, keys);
+  }
+  return keys;
+}
 
 function exactKeys(value: object, allowed: readonly string[]): boolean {
-  const actual = Object.keys(value).sort();
-  const presentAllowed = allowed.filter((key) => (
-    (key !== 'control' && key !== 'integrationProgram') || key in value
-  )).sort();
-  return actual.length === presentAllowed.length && actual.every((key, index) => key === presentAllowed[index]);
+  const actual = Object.keys(value);
+  const allowedSet = allowedKeySet(allowed);
+  let expectedCount = allowed.length;
+  for (const key of OPTIONAL_CANONICAL_KEYS) {
+    if (allowedSet.has(key) && !(key in value)) expectedCount -= 1;
+  }
+  return actual.length === expectedCount && actual.every((key) => allowedSet.has(key));
 }
 
 function hasOnlyKeys(value: object, allowed: readonly string[]): boolean {
-  return Object.keys(value).every((key) => allowed.includes(key));
+  const allowedSet = allowedKeySet(allowed);
+  return Object.keys(value).every((key) => allowedSet.has(key));
 }
 
 export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2): string[] {
   const errors: string[] = [];
-  if (state.schemaVersion !== 20) errors.push('Canonical state must use schema version 20.');
+  if (state.schemaVersion !== 21) errors.push('Canonical state must use schema version 21.');
   if (!finiteStateNumbersV2(state)) errors.push('Canonical state contains a non-finite number.');
   const playerIds = Object.keys(state.players) as PlayerId[];
   const territoryIds = Object.keys(state.territories) as TerritoryId[];
+  const humanPlayerIds = state.humanPlayerIds;
+  if (!Array.isArray(humanPlayerIds)
+    || humanPlayerIds.length < 1 || humanPlayerIds.length > 8
+    || !humanPlayerIds.includes(state.humanPlayerId)
+    || new Set(humanPlayerIds).size !== humanPlayerIds.length
+    || humanPlayerIds.some((id) => !content.nations[id])
+    || humanPlayerIds.join('|') !== [...humanPlayerIds].sort((left, right) => left.localeCompare(right)).join('|')) {
+    errors.push('Human player roster is invalid.');
+  }
   if (!exactKeys(state.aiEscalation, AI_ESCALATION_KEYS)
     || ![0, 1, 2].includes(state.aiEscalation.resistanceLevel)
     || ![state.aiEscalation.lastWarStartTick, state.aiEscalation.lastFederationTick, state.aiEscalation.globalThreat, state.aiEscalation.lastHumanPower, state.aiEscalation.lastHumanTerritoryCount].every(Number.isFinite)
@@ -74,7 +107,7 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
     || !Number.isInteger(state.aiEscalation.lastHumanTerritoryCount) || state.aiEscalation.lastHumanTerritoryCount < 0) errors.push('AI escalation state is invalid.');
   const coalitionMembers = state.aiEscalation.coalitionMembers;
   if ([...new Set(coalitionMembers)].length !== coalitionMembers.length
-    || coalitionMembers.some((id) => id === state.humanPlayerId || !state.players[id])
+    || coalitionMembers.some((id) => isHumanPlayerV2(state, id) || !state.players[id])
     || coalitionMembers.join('|') !== [...coalitionMembers].sort((a, b) => a.localeCompare(b)).join('|')) {
     errors.push('AI coalition membership is invalid.');
   }
@@ -89,7 +122,7 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
     if (!exactKeys(nation, NATION_KEYS)) errors.push(`Nation ${id} has non-canonical keys.`);
     if (nation.propagandaProgram) {
       const program = nation.propagandaProgram;
-      if (id !== state.humanPlayerId
+      if (!isHumanPlayerV2(state, id)
         || !exactKeys(program, PROPAGANDA_PROGRAM_KEYS)
         || ![program.startedTick, program.endsTick, program.totalSuspicionReduction, program.weeklySuspicionReduction].every(Number.isFinite)
         || !Number.isInteger(program.startedTick) || !Number.isInteger(program.endsTick)
@@ -156,9 +189,6 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
       || !Number.isFinite(territory.army.baseAttack) || territory.army.baseAttack <= 0 || territory.army.baseAttack > 20
       || !Number.isFinite(territory.army.baseDefense) || territory.army.baseDefense <= 0 || territory.army.baseDefense > 20
       || Math.abs(territory.army.capacity - expectedCapacity) > 0.000001) errors.push(`Territory ${id} has invalid canonical values.`);
-    if (territory.control && (!state.players[territory.control.controller]
-      || territory.control.controller === territory.owner || territory.control.share <= 0 || territory.control.share > 0.95)) errors.push(`Territory ${id} has invalid control.`);
-    if (territory.control && !exactKeys(territory.control, CONTROL_KEYS)) errors.push(`Territory ${id} control has non-canonical keys.`);
     const program = territory.integrationProgram;
     if (program) {
       if (!exactKeys(program, INTEGRATION_PROGRAM_KEYS)
@@ -179,11 +209,10 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
     }
   }
   const referencedNations = new Set<PlayerId>();
-  if (humanNationExists) referencedNations.add(state.humanPlayerId);
+  for (const humanId of humanPlayerIds) if (state.players[humanId]) referencedNations.add(humanId);
   for (const territory of Object.values(state.territories)) {
     referencedNations.add(territory.owner);
     referencedNations.add(territory.coreOwner);
-    if (territory.control) referencedNations.add(territory.control.controller);
     if (territory.integrationProgram) {
       referencedNations.add(territory.integrationProgram.fromOwnerId);
       referencedNations.add(territory.integrationProgram.fromCoreOwnerId);
@@ -280,7 +309,6 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
   for (const offer of state.offers) {
     if (!hasOnlyKeys(offer, OFFER_KEYS)) errors.push(`Offer ${offer.id} has non-canonical keys.`);
     if (!state.players[offer.fromId] || !state.players[offer.toId] || !state.wars.some((war) => war.id === offer.warId)) errors.push(`Offer ${offer.id} has invalid references.`);
-    if (offer.territoryId && !state.territories[offer.territoryId]) errors.push(`Offer ${offer.id} has an invalid territory.`);
     if (![offer.createdTick, offer.expiresTick, offer.cashAmount ?? 0, offer.weeklyCost ?? 0, offer.paymentWeeks ?? 0].every(Number.isFinite)
       || (offer.settlement === 'ceasefire' && (!(offer.weeklyCost! > 0) || offer.paymentWeeks !== CEASEFIRE_PAYMENT_WEEKS))) {
       errors.push(`Offer ${offer.id} has invalid numeric state.`);

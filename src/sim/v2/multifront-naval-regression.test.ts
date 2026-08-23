@@ -5,6 +5,8 @@ import {
   WAR_ACCESS_OPERATION_MULTIPLIER,
   WAR_ACCESS_SUPPLY_MULTIPLIER,
   WAR_MOBILIZATION_TICKS,
+  warAccessOperationMultiplierV2,
+  warAccessSupplyMultiplierV2,
 } from './balance';
 import { createWorldStateV2 } from './bootstrap';
 import { WORLD_CONTENT_V2 } from './content';
@@ -110,5 +112,41 @@ describe('V2 multi-front and naval balance regressions', () => {
     // Finance values are rounded before exposure, so allow only that final
     // presentation precision while the canonical multiplier above stays exact.
     expect(navalOperations / landOperations).toBeCloseTo(1.35, 5);
+  });
+
+  it('lets distant sea lanes reach much farther while scaling cost and supply with distance', () => {
+    const farRoute = Object.values(WORLD_CONTENT_V2.territories)
+      .flatMap((territory) => territory.connections
+        .filter((connection) => connection.kind === 'sea')
+        .map((connection) => ({
+          sourceId: territory.id,
+          targetId: connection.targetId,
+          distanceKm: connection.distanceKm ?? 0,
+        })))
+      .sort((left, right) => right.distanceKm - left.distanceKm)[0];
+    expect(farRoute).toBeDefined();
+    expect(farRoute!.distanceKm).toBeGreaterThan(6_000);
+    expect(warAccessOperationMultiplierV2('naval', farRoute!.distanceKm))
+      .toBeGreaterThan(WAR_ACCESS_OPERATION_MULTIPLIER.naval);
+    expect(warAccessSupplyMultiplierV2('naval', farRoute!.distanceKm))
+      .toBeLessThan(WAR_ACCESS_SUPPLY_MULTIPLIER.naval);
+
+    const state = createWorldStateV2(8_220_004);
+    const sourceOwner = state.territories[farRoute!.sourceId]!.owner;
+    state.territories[farRoute!.sourceId]!.condition = 1;
+    state.players[sourceOwner]!.research.effectLevels.supply = 0;
+    const localSupply = supplyFactorV2(
+      state, WORLD_CONTENT_V2, sourceOwner, farRoute!.sourceId, 'land',
+    );
+    const distantNavalSupply = supplyFactorV2(
+      state,
+      WORLD_CONTENT_V2,
+      sourceOwner,
+      farRoute!.sourceId,
+      'naval',
+      farRoute!.targetId,
+    );
+    expect(distantNavalSupply / localSupply)
+      .toBeCloseTo(warAccessSupplyMultiplierV2('naval', farRoute!.distanceKm), 8);
   });
 });

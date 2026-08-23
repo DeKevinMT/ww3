@@ -43,14 +43,14 @@ describe('V2 canonical architecture', () => {
     expect(WORLD_CONTENT_V2.nationIds).toEqual(expect.arrayContaining([nationIdV2('dnk'), nationIdV2('grl')]));
     expect(WORLD_CONTENT_V2.territoryIds).toEqual(expect.arrayContaining([territoryIdV2('dnk'), territoryIdV2('grl')]));
     expect(WORLD_CONTENT_V2.territories[territoryIdV2('grl')].connections).toEqual(expect.arrayContaining([
-      { targetId: territoryIdV2('can'), kind: 'sea' },
-      { targetId: territoryIdV2('isl'), kind: 'sea' },
+      expect.objectContaining({ targetId: territoryIdV2('can'), kind: 'sea' }),
+      expect.objectContaining({ targetId: territoryIdV2('isl'), kind: 'sea' }),
     ]));
     expect(WORLD_CONTENT_V2.territories[territoryIdV2('can')].connections).toContainEqual(
-      { targetId: territoryIdV2('grl'), kind: 'sea' },
+      expect.objectContaining({ targetId: territoryIdV2('grl'), kind: 'sea' }),
     );
     expect(WORLD_CONTENT_V2.territories[territoryIdV2('isl')].connections).toContainEqual(
-      { targetId: territoryIdV2('grl'), kind: 'sea' },
+      expect.objectContaining({ targetId: territoryIdV2('grl'), kind: 'sea' }),
     );
     expect(greenlandContent.real.taxRevenueSource).toBe('sovereign-proxy');
     expect(greenlandContent.real.taxRevenueShare).toBe(denmarkContent.real.taxRevenueShare);
@@ -63,7 +63,7 @@ describe('V2 canonical architecture', () => {
     const state = createWorldStateV2(2);
     const nation = state.players[nationIdV2('bel')];
     const territory = state.territories[territoryIdV2('bel')];
-    expect(state.schemaVersion).toBe(20);
+    expect(state.schemaVersion).toBe(21);
     expect(Object.keys(nation).sort()).toEqual(['budget', 'capitalId', 'ceasefiresRequested', 'domesticFoodCapacity', 'empireName', 'foodSecurity', 'foodStock', 'manualActionUses', 'propagandaAvailableTick', 'propagandaProgram', 'rapidRecruitmentAvailableTick', 'research', 'researchSurgeAvailableTick', 'trainedReserves', 'treasury', 'warFatigue']);
     expect(Object.keys(territory).sort()).toEqual(['army', 'condition', 'coreOwner', 'economy', 'integration', 'owner', 'population']);
     expect(Object.keys(territory.army).sort()).toEqual([
@@ -77,10 +77,14 @@ describe('V2 canonical architecture', () => {
     expect(RESEARCH_BRANCH_EFFECTS).toEqual({
       'population-recruitment': ['population-growth', 'training'],
       'military-industry': ['force-capacity', 'reinforcement-efficiency'],
-      'advanced-weapons': ['attack', 'control'],
+      'advanced-weapons': ['attack', 'reinforcement-efficiency'],
       'defensive-systems': ['defense', 'casualty-reduction'],
       'logistics-medicine': ['recovery', 'supply'],
       'economy-science': ['economy-growth', 'research-speed', 'research-efficiency'],
+      'food-systems': ['food-production', 'food-storage'],
+      'reserve-doctrine': ['reserve-training', 'reserve-mobilization'],
+      'public-administration': ['tax-efficiency', 'operating-efficiency'],
+      'education-intelligence': ['iq-increase'],
     });
     const save = createSaveV2(createWorldStateV2(3), WORLD_CONTENT_V2) as unknown as Record<string, unknown>;
     expect(save).not.toHaveProperty('speed');

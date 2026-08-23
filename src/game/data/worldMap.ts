@@ -188,7 +188,11 @@ function isSeaOnlyConnection(leftId: TerritoryId, rightId: TerritoryId): boolean
   return SEA_ONLY_CONNECTION_KEYS.has([leftId, rightId].sort().join(':'));
 }
 
+const ACTIVE_NEIGHBOURS_CACHE = new Map<TerritoryId, TerritoryId[]>();
+
 function activeNeighbours(countryId: TerritoryId): TerritoryId[] {
+  const cached = ACTIVE_NEIGHBOURS_CACHE.get(countryId);
+  if (cached) return cached;
   const result = new Set<TerritoryId>();
   const sources = SOURCE_IDS_BY_CANONICAL.get(countryId) ?? [countryId];
   const visited = new Set<TerritoryId>(sources);
@@ -204,10 +208,12 @@ function activeNeighbours(countryId: TerritoryId): TerritoryId[] {
     }
     for (const next of dataset.adjacency[candidate] ?? []) if (!visited.has(next)) queue.push(next);
   }
-  return [...result].sort();
+  const neighbors = [...result].sort();
+  ACTIVE_NEIGHBOURS_CACHE.set(countryId, neighbors);
+  return neighbors;
 }
 
-function distanceBetweenCountries(leftId: TerritoryId, rightId: TerritoryId): number {
+export function countryDistanceKm(leftId: TerritoryId, rightId: TerritoryId): number {
   const left = ACTIVE_COUNTRY_BY_ID.get(leftId);
   const right = ACTIVE_COUNTRY_BY_ID.get(rightId);
   if (!left || !right) return Number.POSITIVE_INFINITY;
@@ -241,13 +247,13 @@ function buildStrategicSeaRoutes(): readonly (readonly [TerritoryId, TerritoryId
     if (LANDLOCKED_COUNTRY_IDS.has(country.id)) continue;
     const landNeighbours = new Set(activeNeighbours(country.id));
     const isolated = landNeighbours.size === 0;
-    const desiredRoutes = isolated ? 7 : 4;
-    const maximumDistance = isolated ? 4_200 : 2_250;
+    const desiredRoutes = isolated ? 8 : 6;
+    const maximumDistance = isolated ? 9_000 : 6_000;
     const candidates = COUNTRIES
       .filter((candidate) => candidate.id !== country.id
         && !LANDLOCKED_COUNTRY_IDS.has(candidate.id)
         && !landNeighbours.has(candidate.id))
-      .map((candidate) => ({ id: candidate.id, distance: distanceBetweenCountries(country.id, candidate.id) }))
+      .map((candidate) => ({ id: candidate.id, distance: countryDistanceKm(country.id, candidate.id) }))
       .filter((candidate) => candidate.distance <= maximumDistance)
       .sort((left, right) => left.distance - right.distance || left.id.localeCompare(right.id));
     for (const candidate of candidates) {

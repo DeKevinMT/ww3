@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   BATTLE_INTERVAL_TICKS,
-  DEFENSE_RESEARCH_HALF_SATURATION,
-  DEFENSE_RESEARCH_MAX_BONUS,
+  effectiveDefenseStatV2,
   RAPID_RECRUITMENT_COOLDOWN_TICKS,
   RAPID_RECRUITMENT_COST_MULTIPLIER,
   WAR_ACCESS_COST_MULTIPLIER,
@@ -17,7 +16,6 @@ import {
   selectCatchUpFactorV2,
   selectCurrentPowerV2,
   selectEffectiveDefenseV2,
-  selectNationalCombatQualityV2,
   selectTotalManpowerV2,
 } from './selectors';
 import { nationIdV2, territoryIdV2, type FrontOperationV2, type WarStateV2, type WorldStateV2 } from './types';
@@ -82,7 +80,7 @@ function equalPulse(
 describe('V2 one-source manpower combat', () => {
   it('stores army manpower only on territories and derives national totals/views', () => {
     const state = createWorldStateV2(301);
-    expect(state.schemaVersion).toBe(20);
+    expect(state.schemaVersion).toBe(21);
     expect(state.players[bel]).not.toHaveProperty('manpower');
     expect(Object.keys(state.territories[belTerritory].army).sort()).toEqual([
       'baseAttack', 'baseDefense', 'capacity', 'manpower',
@@ -112,12 +110,18 @@ describe('V2 one-source manpower combat', () => {
     expect(defenderDefense.defenderLosses).toBeLessThan(baseline.defenderLosses);
   });
 
-  it('gives DEF research diminishing returns while preserving every positive upgrade', () => {
+  it('gives the whole displayed DEF stat diminishing returns above neutral', () => {
+    expect(effectiveDefenseStatV2(0.70)).toBeCloseTo(0.70, 9);
+    expect(effectiveDefenseStatV2(1)).toBe(1);
+    expect(effectiveDefenseStatV2(2)).toBeLessThan(2);
+    expect(effectiveDefenseStatV2(4) - effectiveDefenseStatV2(2))
+      .toBeLessThan(2 * (effectiveDefenseStatV2(2) - effectiveDefenseStatV2(1)));
+    expect(effectiveDefenseStatV2(100)).toBeLessThan(7);
+  });
+
+  it('keeps every DEF research upgrade useful inside the diminishing stat curve', () => {
     const state = createWorldStateV2(3031);
     const base = selectEffectiveDefenseV2(state, WORLD_CONTENT_V2, bel, state.territories[belTerritory].army);
-    const conversion = selectNationalCombatQualityV2(
-      state, WORLD_CONTENT_V2, bel,
-    ).researchConversion;
     const normalized: number[] = [];
     for (const level of [0, 5, 10, 20]) {
       state.players[bel].research.effectLevels.defense = level;
@@ -126,12 +130,9 @@ describe('V2 one-source manpower combat', () => {
       ) / base);
     }
     expect(normalized[0]).toBeCloseTo(1, 5);
-    expect(normalized[1]).toBeCloseTo(1 + DEFENSE_RESEARCH_MAX_BONUS * (5 * conversion)
-      / (5 * conversion + DEFENSE_RESEARCH_HALF_SATURATION), 5);
-    expect(normalized[2]).toBeCloseTo(1 + DEFENSE_RESEARCH_MAX_BONUS * (10 * conversion)
-      / (10 * conversion + DEFENSE_RESEARCH_HALF_SATURATION), 5);
-    expect(normalized[3]).toBeCloseTo(1 + DEFENSE_RESEARCH_MAX_BONUS * (20 * conversion)
-      / (20 * conversion + DEFENSE_RESEARCH_HALF_SATURATION), 5);
+    expect(normalized[1]).toBeGreaterThan(normalized[0]!);
+    expect(normalized[2]).toBeGreaterThan(normalized[1]!);
+    expect(normalized[3]).toBeGreaterThan(normalized[2]!);
     expect(normalized[2]! - normalized[1]!).toBeLessThan(normalized[1]! - normalized[0]!);
     expect(normalized[3]! - normalized[2]!).toBeLessThan((normalized[2]! - normalized[1]!) * 2);
   });
@@ -154,21 +155,6 @@ describe('V2 one-source manpower combat', () => {
     expect(casualtyProtected.defenderLosses).toBeLessThan(baseline.defenderLosses);
     expect(casualtyProtected.defenderLosses).toBeGreaterThan(baseline.defenderLosses * 0.70);
     expect(casualtyProtected.populationLoss).toBeLessThan(baseline.populationLoss);
-  });
-
-  it('keeps tiny-state control progression scale-independent before collapse', () => {
-    const event = equalPulse(305, (state) => {
-      state.territories[belTerritory].army = {
-        ...state.territories[belTerritory].army,
-        manpower: 0.001, capacity: 0.001,
-      };
-      state.territories[nldTerritory].army = {
-        ...state.territories[nldTerritory].army,
-        manpower: 0.0002, capacity: 0.001,
-      };
-    });
-    expect(event.controlGained).toBeGreaterThan(0);
-    expect(event.controlShare).toBeGreaterThan(0);
   });
 
   it('bases equally matched pulse damage on the troops actually present', () => {

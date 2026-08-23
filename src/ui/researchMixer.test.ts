@@ -9,6 +9,10 @@ const DEFAULT: ResearchAllocationsV2 = {
   'defensive-systems': 15,
   'logistics-medicine': 15,
   'economy-science': 20,
+  'food-systems': 0,
+  'reserve-doctrine': 0,
+  'public-administration': 0,
+  'education-intelligence': 0,
 };
 
 describe('rebalanceResearchMix', () => {
@@ -20,6 +24,10 @@ describe('rebalanceResearchMix', () => {
       'defensive-systems': 15,
       'logistics-medicine': 15,
       'economy-science': 19,
+      'food-systems': 0,
+      'reserve-doctrine': 0,
+      'public-administration': 0,
+      'education-intelligence': 0,
     });
   });
 
@@ -35,6 +43,8 @@ describe('rebalanceResearchMix', () => {
     const relaxed = rebalanceResearchMix(concentrated, 'advanced-weapons', 94);
     expect(relaxed['advanced-weapons']).toBe(94);
     expect(RESEARCH_BRANCHES_V2.reduce((sum, branch) => sum + relaxed[branch], 0)).toBe(100);
-    expect(RESEARCH_BRANCHES_V2.filter((branch) => branch !== 'advanced-weapons').every((branch) => relaxed[branch] >= 1)).toBe(true);
+    expect(RESEARCH_BRANCHES_V2.filter((branch) => branch !== 'advanced-weapons' && relaxed[branch] === 1))
+      .toHaveLength(6);
+    expect(RESEARCH_BRANCHES_V2.every((branch) => relaxed[branch] >= 0)).toBe(true);
   });
 });

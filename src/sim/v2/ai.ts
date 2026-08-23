@@ -11,7 +11,7 @@ import {
   AI_REGIONAL_ESCALATION_EXTRA_WAR_CAP,
   AI_REGIONAL_ESCALATION_MIN_AGE,
   AI_REGIONAL_ESCALATION_MIN_BATTLES,
-  NATIONAL_IQ_SCORE_MAX,
+  NATIONAL_IQ_EFFECTIVE_SCORE_MAX,
   NATIONAL_IQ_SCORE_MIN,
   aiActiveWarCapV2,
   PEACE_REQUEST_MIN_WAR_AGE_TICKS,
@@ -20,6 +20,7 @@ import {
 } from './balance';
 import { nextRandom } from '../../game/random';
 import type { WorldContentV2 } from './content';
+import { selectHumanPlayerIdsV2 } from './humanPlayers';
 import {
   moveBudgetTowardTargetV2,
   moveResearchTowardTargetV2,
@@ -30,15 +31,18 @@ import {
   strategicAlignmentScoreV2,
 } from './geopolitics';
 import {
+  createMilitaryBaseSnapshotV2,
   createPowerSnapshotV2,
   selectArmyStrengthV2,
   selectControlledPopulationV2,
   selectFoodDemandV2,
   selectIsEliminatedV2,
   selectNationalEconomyV2,
+  selectNationalIqViewV2,
   selectNuclearPowerV2,
   selectPopulationDynamicsV2,
   selectTerritoriesOfV2,
+  selectTrainedReserveCapacityV2,
   selectTotalManpowerV2,
   selectWarAccessTypeV2,
   selectWarMobilizationCostV2,
@@ -104,7 +108,7 @@ export interface AiWarDisciplineV2 {
 export function aiWarDisciplineV2(iqScore: number): AiWarDisciplineV2 {
   const judgement = clamp(
     (iqScore - NATIONAL_IQ_SCORE_MIN)
-      / Math.max(1, NATIONAL_IQ_SCORE_MAX - NATIONAL_IQ_SCORE_MIN),
+      / Math.max(1, NATIONAL_IQ_EFFECTIVE_SCORE_MAX - NATIONAL_IQ_SCORE_MIN),
     0,
     1,
   );
@@ -165,17 +169,38 @@ export function aiTargetWarLimitV2(regionalEscalation: boolean, defensiveAid: bo
   return defensiveAid ? 4 : regionalEscalation ? 2 : 1;
 }
 
-function accessibleOwnersV2(
+type AiWarAccessIndexV2 = ReadonlyMap<
+  PlayerId,
+  ReadonlyMap<PlayerId, Exclude<WarAccessV2, 'none'>>
+>;
+
+function createAiWarAccessIndexV2(
   state: WorldStateV2,
   content: WorldContentV2,
+): AiWarAccessIndexV2 {
+  const index = new Map<PlayerId, Map<PlayerId, Exclude<WarAccessV2, 'none'>>>();
+  for (const sourceId of content.territoryIds) {
+    const sourceOwner = state.territories[sourceId]?.owner;
+    if (!sourceOwner) continue;
+    const targets = index.get(sourceOwner) ?? new Map<PlayerId, Exclude<WarAccessV2, 'none'>>();
+    index.set(sourceOwner, targets);
+    for (const connection of content.territories[sourceId]?.connections ?? []) {
+      const targetOwner = state.territories[connection.targetId]?.owner;
+      if (!targetOwner || targetOwner === sourceOwner) continue;
+      const access = connection.kind === 'land' ? 'land' : 'naval';
+      if (access === 'land' || !targets.has(targetOwner)) targets.set(targetOwner, access);
+    }
+  }
+  return index;
+}
+
+function accessibleOwnersV2(
+  accessIndex: AiWarAccessIndexV2,
   playerId: PlayerId,
 ): Array<{ targetId: PlayerId; access: Exclude<WarAccessV2, 'none'> }> {
-  return sortedNationIdsV2(state).map((targetId) => ({
-    targetId,
-    access: targetId === playerId ? 'none' as const : selectWarAccessTypeV2(state, content, playerId, targetId),
-  })).filter((candidate): candidate is { targetId: PlayerId; access: Exclude<WarAccessV2, 'none'> } => (
-    candidate.access !== 'none'
-  ));
+  return [...(accessIndex.get(playerId)?.entries() ?? [])]
+    .map(([targetId, access]) => ({ targetId, access }))
+    .sort((left, right) => left.targetId.localeCompare(right.targetId));
 }
 
 function interventionAffinityV2(content: WorldContentV2, leftId: PlayerId, rightId: PlayerId): number {
@@ -207,8 +232,9 @@ export function selectDefensiveAidAssessmentV2(
   access: Exclude<WarAccessV2, 'none'>,
   powerSnapshot: PowerSnapshotV2 = createPowerSnapshotV2(state, content),
 ): DefensiveAidAssessmentV2 | undefined {
-  if (supporterId === state.humanPlayerId
-    || war.attackerId === state.humanPlayerId
+  const humanPlayerIds = selectHumanPlayerIdsV2(state);
+  if (humanPlayerIds.includes(supporterId)
+    || humanPlayerIds.includes(war.attackerId)
     || supporterId === war.attackerId
     || supporterId === war.defenderId
     || state.tick - war.lastBattleTick > 12
@@ -256,7 +282,8 @@ function regionalEscalationCandidateV2(
   warsByTarget: ReadonlyMap<PlayerId, readonly WarStateV2[]>,
   powerSnapshot: PowerSnapshotV2,
 ): RegionalEscalationCandidateV2 | undefined {
-  if (supporterId === state.humanPlayerId || targetId === state.humanPlayerId) return undefined;
+  const humanPlayerIds = selectHumanPlayerIdsV2(state);
+  if (humanPlayerIds.includes(supporterId) || humanPlayerIds.includes(targetId)) return undefined;
   const candidates = (warsByTarget.get(targetId) ?? []).filter((war) => (
     war.attackerId !== supporterId && war.defenderId !== supporterId
   )).map((war) => {
@@ -295,8 +322,9 @@ function regionalEscalationCandidateV2(
 
 function regionalWarsByTargetV2(state: WorldStateV2): ReadonlyMap<PlayerId, readonly WarStateV2[]> {
   const result = new Map<PlayerId, WarStateV2[]>();
+  const humanPlayerIds = new Set(selectHumanPlayerIdsV2(state));
   for (const war of state.wars) {
-    if (war.attackerId === state.humanPlayerId || state.tick - war.lastBattleTick > 12) continue;
+    if (humanPlayerIds.has(war.attackerId) || state.tick - war.lastBattleTick > 12) continue;
     const age = state.tick - war.startedTick;
     if (age >= AI_DEFENSIVE_AID_MIN_AGE && war.battles >= AI_DEFENSIVE_AID_MIN_BATTLES) {
       result.set(war.attackerId, [...(result.get(war.attackerId) ?? []), war]);
@@ -338,20 +366,59 @@ function weightedBudgetPolicyV2(scores: Readonly<BudgetPolicyV2>): BudgetPolicyV
   return Object.fromEntries(exact.map((item) => [item.domain, item.value])) as unknown as BudgetPolicyV2;
 }
 
+interface AiNationalPlanningViewV2 {
+  activeWars: ReturnType<typeof selectWarsOfV2>;
+  army: ReturnType<typeof selectArmyStrengthV2>;
+  economy: ReturnType<typeof selectNationalEconomyV2>;
+  territories: ReturnType<typeof selectTerritoriesOfV2>;
+  controlledPopulation: number;
+  populationAnnualNetRate: number;
+  foodDemand: number;
+  effectiveIq: number;
+}
+
+/**
+ * One immutable selector view for a country's eight-week AI review. Budget,
+ * research and expansion planning all inspect the same canonical instant, so
+ * recomputing these territory-heavy selectors cannot change a decision.
+ */
+function createAiNationalPlanningViewV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  playerId: PlayerId,
+): AiNationalPlanningViewV2 {
+  return {
+    activeWars: selectWarsOfV2(state, playerId),
+    army: selectArmyStrengthV2(state, content, playerId),
+    economy: selectNationalEconomyV2(state, content, playerId),
+    territories: selectTerritoriesOfV2(state, playerId),
+    controlledPopulation: Math.max(0.05, selectControlledPopulationV2(state, playerId)),
+    populationAnnualNetRate: selectPopulationDynamicsV2(
+      state,
+      content,
+      playerId,
+      0,
+    ).annualNetRate,
+    foodDemand: Math.max(0.01, selectFoodDemandV2(state, playerId)),
+    effectiveIq: selectNationalIqViewV2(state, content, playerId).score,
+  };
+}
+
 function aiBudgetTargetV2(
   state: WorldStateV2,
   content: WorldContentV2,
   playerId: PlayerId,
   leaderResearch: number,
+  view: AiNationalPlanningViewV2,
 ): BudgetPolicyV2 {
-  const wars = selectWarsOfV2(state, playerId);
+  const wars = view.activeWars;
   const player = state.players[playerId]!;
   const foodStress = clamp((0.98 - state.players[playerId]!.foodSecurity) / 0.58, 0, 1);
-  const army = selectArmyStrengthV2(state, content, playerId);
-  const territories = selectTerritoriesOfV2(state, playerId);
+  const army = view.army;
+  const territories = view.territories;
   const condition = territories.length > 0
     ? territories.reduce((sum, territory) => sum + territory.condition, 0) / territories.length : 0;
-  const economy = selectNationalEconomyV2(state, content, playerId);
+  const economy = view.economy;
   const treasuryWeeks = player.treasury / Math.max(0.01, economy.weeklyRevenue);
   const ownResearch = Object.values(player.research.breakthroughs).reduce((a, b) => a + b, 0);
   const nation = content.nations[playerId]!;
@@ -360,16 +427,16 @@ function aiBudgetTargetV2(
   // advances. AI planning must use that same population share as taxation,
   // army capacity and strategic power instead of gaining every resident on
   // the capture tick.
-  const controlledPopulation = Math.max(0.05, selectControlledPopulationV2(state, playerId));
+  const controlledPopulation = view.controlledPopulation;
   const poverty = clamp((20 - economy.controlledOutput / controlledPopulation) / 18, 0, 1);
   const debtStress = clamp(-treasuryWeeks / 8, 0, 1);
   const researchGap = clamp((leaderResearch - ownResearch) / 10, 0, 1);
   const populationDecline = clamp(
-    -selectPopulationDynamicsV2(state, content, playerId, 0).annualNetRate / 0.02,
+    -view.populationAnnualNetRate / 0.02,
     0,
     1,
   );
-  const foodReserveWeeks = player.foodStock / Math.max(0.01, selectFoodDemandV2(state, playerId));
+  const foodReserveWeeks = player.foodStock / view.foodDemand;
   const reserveStress = clamp((2 - foodReserveWeeks) / 2, 0, 1);
   const survivalStress = Math.max(foodStress, populationDecline, reserveStress, debtStress);
   if (wars.length === 0 && survivalStress > 0.02) {
@@ -393,11 +460,18 @@ function sameResearchAllocationsV2(left: ResearchAllocationsV2, right: ResearchA
   return RESEARCH_BRANCHES.every((branch) => left[branch] === right[branch]);
 }
 
-function weightedResearchAllocationsV2(scores: Readonly<Record<ResearchBranchV2, number>>): ResearchAllocationsV2 {
-  const baseline = 5;
-  const distributable = 100 - baseline * RESEARCH_BRANCHES.length;
-  const totalScore = RESEARCH_BRANCHES.reduce((sum, branch) => sum + Math.max(0.01, scores[branch]), 0);
+function weightedResearchAllocationsV2(
+  scores: Readonly<Record<ResearchBranchV2, number>>,
+  inactiveBranches: ReadonlySet<ResearchBranchV2> = new Set(),
+): ResearchAllocationsV2 {
+  // Passive funding already keeps every path alive. A small focus floor avoids
+  // zeroing a long program while leaving most attention available for need.
+  const activeBranches = RESEARCH_BRANCHES.filter((branch) => !inactiveBranches.has(branch));
+  const baseline = 2;
+  const distributable = 100 - baseline * activeBranches.length;
+  const totalScore = activeBranches.reduce((sum, branch) => sum + Math.max(0.01, scores[branch]), 0);
   const exact = RESEARCH_BRANCHES.map((branch, index) => {
+    if (inactiveBranches.has(branch)) return { branch, index, value: 0, remainder: 0 };
     const share = Math.max(0.01, scores[branch]) / totalScore * distributable;
     return { branch, index, value: baseline + Math.floor(share), remainder: share - Math.floor(share) };
   });
@@ -415,13 +489,15 @@ export function selectAiResearchAllocationsV2(
   content: WorldContentV2,
   playerId: PlayerId,
   powers: PowerSnapshotV2,
+  planningView?: AiNationalPlanningViewV2,
 ): ResearchAllocationsV2 {
-  const activeWars = selectWarsOfV2(state, playerId);
+  const view = planningView ?? createAiNationalPlanningViewV2(state, content, playerId);
+  const activeWars = view.activeWars;
   const nation = content.nations[playerId]!;
   const player = state.players[playerId]!;
-  const army = selectArmyStrengthV2(state, content, playerId);
-  const economy = selectNationalEconomyV2(state, content, playerId);
-  const territories = selectTerritoriesOfV2(state, playerId);
+  const army = view.army;
+  const economy = view.economy;
+  const territories = view.territories;
   const averageCondition = territories.length > 0
     ? territories.reduce((sum, territory) => sum + territory.condition, 0) / territories.length : 0;
   const ownPower = powers.byNation.get(playerId) ?? 0;
@@ -431,11 +507,11 @@ export function selectAiResearchAllocationsV2(
   }, 0);
   const ownResearch = Object.values(player.research.breakthroughs).reduce((a, b) => a + b, 0);
   const leaderResearch = powers.leaderBreakthroughs;
-  const population = Math.max(0.05, selectControlledPopulationV2(state, playerId));
+  const population = view.controlledPopulation;
   const outputPerPerson = economy.controlledOutput / population;
   const smallPopulation = clamp(Math.log(80 / population) / Math.log(80), 0, 1);
   const populationDecline = clamp(
-    -selectPopulationDynamicsV2(state, content, playerId, 0).annualNetRate / 0.02,
+    -view.populationAnnualNetRate / 0.02,
     0,
     1,
   );
@@ -456,9 +532,26 @@ export function selectAiResearchAllocationsV2(
   const ambition = clamp(nation.ambition, 0, 1);
   const fatigue = clamp(player.warFatigue / 70, 0, 1);
   const foodStress = clamp((0.98 - player.foodSecurity) / 0.58, 0, 1);
-  const foodReserveWeeks = player.foodStock / Math.max(0.01, selectFoodDemandV2(state, playerId));
+  const foodReserveWeeks = player.foodStock / view.foodDemand;
   const foodReserveStress = clamp((2 - foodReserveWeeks) / 2, 0, 1);
   const foodRecoveryStress = Math.max(foodStress, foodReserveStress);
+  const foodImportDependence = clamp(1 - nation.real.foodSelfSufficiencyRatio, 0, 1);
+  const reserveCapacity = Math.max(0.000001, selectTrainedReserveCapacityV2(state, playerId));
+  const reserveGap = clamp(1 - player.trainedReserves / reserveCapacity, 0, 1);
+  const treasuryWeeks = player.treasury / Math.max(0.01, economy.weeklyRevenue);
+  const debtStress = clamp(-treasuryWeeks / 8, 0, 1);
+  const empireScale = clamp(Math.log2(Math.max(1, territories.length)) / 4, 0, 1);
+  const integrationLoad = territories.length > 0
+    ? territories.reduce((sum, territory) => sum + (1 - territory.integration), 0) / territories.length
+    : 0;
+  const iqScore = view.effectiveIq;
+  const iqHeadroom = clamp(
+    (NATIONAL_IQ_EFFECTIVE_SCORE_MAX - iqScore)
+      / (NATIONAL_IQ_EFFECTIVE_SCORE_MAX - NATIONAL_IQ_SCORE_MIN),
+    0,
+    1,
+  );
+  const educationFeasibility = 0.25 + 0.75 * Math.max(wealth, elitePotential);
   const deterrence = selectNuclearPowerV2(state, content, playerId);
   const deterrenceResearchValue = deterrence.level === 0
     ? wealth * elitePotential : deterrence.maxed ? 0 : 0.25 * elitePotential;
@@ -476,6 +569,17 @@ export function selectAiResearchAllocationsV2(
       + 0.45 * overseasFronts + 0.45 * fillGap + 7.0 * foodRecoveryStress,
     'economy-science': 0.95 + 2.15 * poverty + 1.35 * researchGap + (activeWars.length === 0 ? 0.65 : 0)
       + 0.45 * (1 - elitePotential) + 5.0 * foodRecoveryStress,
+    'food-systems': 0.65 + 5.5 * foodRecoveryStress + 1.6 * foodImportDependence
+      + 0.65 * poverty + (activeWars.length === 0 ? 0.25 : 0),
+    'reserve-doctrine': 0.55 + 2.2 * reserveGap + 1.4 * fillGap + 0.90 * warPressure
+      + 0.75 * activeWars.length + 0.35 * ambition,
+    'public-administration': 0.70 + 1.2 * empireScale + 1.5 * integrationLoad
+      + 0.85 * debtStress + 0.45 * poverty + (activeWars.length === 0 ? 0.25 : 0),
+    'education-intelligence': iqScore >= NATIONAL_IQ_EFFECTIVE_SCORE_MAX - 0.01
+      ? 0.01
+      : Math.max(0.08, 0.20 + educationFeasibility * (0.65 + 1.65 * iqHeadroom)
+        + 0.40 * researchGap + (activeWars.length === 0 ? 0.45 : -0.35)
+        - 1.8 * foodRecoveryStress - 0.65 * debtStress),
   };
   for (const branch of RESEARCH_BRANCHES) {
     // Repeating the same branch becomes exponentially harder in the research
@@ -483,21 +587,28 @@ export function selectAiResearchAllocationsV2(
     // turns into an obviously wasteful default.
     scores[branch] /= 1.10 ** player.research.breakthroughs[branch];
   }
-  return weightedResearchAllocationsV2(scores);
+  const inactiveBranches = new Set<ResearchBranchV2>();
+  if (iqScore >= NATIONAL_IQ_EFFECTIVE_SCORE_MAX - 0.000001) {
+    inactiveBranches.add('education-intelligence');
+  }
+  return weightedResearchAllocationsV2(scores, inactiveBranches);
 }
 
 export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): WorldCommandV2[] {
   if (state.tick === 0 || state.tick % NATIONAL_AI_REVIEW_TICKS !== 0 || state.gameOver) return [];
   const commands: WorldCommandV2[] = [];
   const living = sortedNationIdsV2(state).filter((id) => !selectIsEliminatedV2(state, id));
-  const powerSnapshot = createPowerSnapshotV2(state, content);
+  const humanPlayerIds = new Set(selectHumanPlayerIdsV2(state));
+  const militaryBaseSnapshot = createMilitaryBaseSnapshotV2(state, content);
+  const powerSnapshot = createPowerSnapshotV2(state, content, militaryBaseSnapshot);
+  const warAccessIndex = createAiWarAccessIndexV2(state, content);
   // Rotate strategic initiative so every country gets credible expansion
   // windows instead of alphabetically early nations consuming the war slot.
   const initiativeOffset = living.length > 0
     ? (Math.floor(state.tick / NATIONAL_AI_REVIEW_TICKS) + state.seed) % living.length : 0;
   const rotatingOrder = [...living.slice(initiativeOffset), ...living.slice(0, initiativeOffset)];
-  const rotatingInitiative = rotatingOrder.filter((id) => id !== state.humanPlayerId).slice(0, 16);
-  const persistentMajorPowers = [...living].filter((id) => id !== state.humanPlayerId)
+  const rotatingInitiative = rotatingOrder.filter((id) => !humanPlayerIds.has(id)).slice(0, 16);
+  const persistentMajorPowers = [...living].filter((id) => !humanPlayerIds.has(id))
     .sort((left, right) => (content.nations[right]?.real.powerIndex ?? 0)
       - (content.nations[left]?.real.powerIndex ?? 0) || left.localeCompare(right))
     .slice(0, 8);
@@ -526,13 +637,14 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
   const regionalWarsByTarget = regionalWarsByTargetV2(state);
   const defensiveAidSupporters = new Set<PlayerId>();
   for (const war of state.wars) {
-    if (war.attackerId === state.humanPlayerId) continue;
+    if (humanPlayerIds.has(war.attackerId)) continue;
     const aggressorPower = powerSnapshot.byNation.get(war.attackerId) ?? 0;
     const defenderPower = powerSnapshot.byNation.get(war.defenderId) ?? 0;
     if (aggressorPower / Math.max(1, defenderPower) < AI_DEFENSIVE_AID_AGGRESSOR_RATIO) continue;
     for (const supporterId of living) {
-      if (supporterId === war.attackerId || supporterId === war.defenderId) continue;
-      if (selectWarAccessTypeV2(state, content, supporterId, war.defenderId) === 'land') {
+      if (humanPlayerIds.has(supporterId)
+        || supporterId === war.attackerId || supporterId === war.defenderId) continue;
+      if (warAccessIndex.get(supporterId)?.get(war.defenderId) === 'land') {
         defensiveAidSupporters.add(supporterId);
       }
     }
@@ -541,17 +653,26 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
   let expansionRollsUsed = 0;
   for (const playerId of planningOrder) {
     const player = state.players[playerId]!;
+    const planningView = createAiNationalPlanningViewV2(state, content, playerId);
+    const effectiveIq = planningView.effectiveIq;
     commands.push(...budgetCommands(playerId, player.budget, aiBudgetTargetV2(
       state,
       content,
       playerId,
       powerSnapshot.leaderBreakthroughs,
-    ), content.nations[playerId]?.iqScore ?? 100));
-    const targetAllocations = selectAiResearchAllocationsV2(state, content, playerId, powerSnapshot);
+      planningView,
+    ), effectiveIq));
+    const targetAllocations = selectAiResearchAllocationsV2(
+      state,
+      content,
+      playerId,
+      powerSnapshot,
+      planningView,
+    );
     const allocations = moveResearchTowardTargetV2(
       player.research.allocations,
       targetAllocations,
-      content.nations[playerId]?.iqScore ?? 100,
+      effectiveIq,
     );
     if (!sameResearchAllocationsV2(player.research.allocations, allocations)) {
       commands.push({ type: 'set-research-allocations', playerId, allocations });
@@ -560,9 +681,9 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
     // complete AI spending path. Manual one-off purchase commands stay
     // player-facing, so neither selected-country APEX nor rivals can turn a
     // cash windfall into a sudden army or research spike.
-    const army = selectArmyStrengthV2(state, content, playerId);
-    const wars = selectWarsOfV2(state, playerId);
-    if (playerId !== state.humanPlayerId) {
+    const army = planningView.army;
+    const wars = planningView.activeWars;
+    if (!humanPlayerIds.has(playerId)) {
       const incomingOffer = state.offers.filter((offer) => (
         offer.toId === playerId && offer.status === 'pending' && offer.expiresTick > state.tick
       )).sort((left, right) => left.createdTick - right.createdTick || left.id.localeCompare(right.id))[0];
@@ -607,7 +728,7 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
         }
       }
     }
-    if (playerId === state.humanPlayerId) continue;
+    if (humanPlayerIds.has(playerId)) continue;
     // Emergency neighbours review aid independently of the rotating expansion
     // initiative. This preserves rare defensive help without increasing the
     // frequency of ordinary wars.
@@ -615,7 +736,7 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
     const coalitionMember = resistance.memberIds.includes(playerId);
     const federation = isDefensiveFederationV2(state, playerId);
     const nation = content.nations[playerId]!;
-    const warDiscipline = aiWarDisciplineV2(nation.iqScore);
+    const warDiscipline = aiWarDisciplineV2(effectiveIq);
     const expansionAmbition = clamp(nation.ambition, 0, 1);
     const majorPowerDrive = clamp((nation.real.powerIndex - 35) / 65, 0, 1);
     const ownWars = selectWarsOfV2(state, playerId);
@@ -630,19 +751,19 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
       || (!normalWindowOpen && !escalationWindowOpen)
       || ownWars.length >= ownWarLimit || player.warFatigue >= Math.max(9, 18 - ownWars.length * 5)) continue;
     const ownPower = (powerSnapshot.byNation.get(playerId) ?? 0) / (1 + ownWars.length * 0.65);
-    const ownEconomy = selectNationalEconomyV2(state, content, playerId);
+    const ownEconomy = planningView.economy;
     const treasuryWeeks = player.treasury / Math.max(0.01, ownEconomy.weeklyRevenue);
-    const foodReserveWeeks = player.foodStock / Math.max(0.01, selectFoodDemandV2(state, playerId));
-    const populationTrend = selectPopulationDynamicsV2(state, content, playerId, 0).annualNetRate;
+    const foodReserveWeeks = player.foodStock / planningView.foodDemand;
+    const populationTrend = planningView.populationAnnualNetRate;
     const survivalBlocksExpansion = player.foodSecurity < 0.92 || foodReserveWeeks < 0.75
       || populationTrend < -0.005 || player.treasury < 0;
-    const candidates = accessibleOwnersV2(state, content, playerId).filter(({ targetId }) => (
+    const candidates = accessibleOwnersV2(warAccessIndex, playerId).filter(({ targetId }) => (
       !selectIsEliminatedV2(state, targetId)
       // A loose containment network is diplomatic preparation, not an
       // automatic pile-on. Its members neither attack one another nor open a
       // new player front; they wait to fuse into a real federation first.
       && !(coalitionMember && resistance.memberIds.includes(targetId))
-      && !(coalitionMember && !federation && targetId === state.humanPlayerId)
+      && !(coalitionMember && !federation && humanPlayerIds.has(targetId))
     )).map(({ targetId, access }) => {
       const regionalEscalation = (!coalitionMember || federation)
         && !resistance.memberIds.includes(targetId)
@@ -765,7 +886,13 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
       && candidate.remainingRunway >= candidate.requiredRunway)
       .sort((a, b) => b.priority - a.priority || a.targetId.localeCompare(b.targetId));
     const forecastedCandidates = candidates.slice(0, 8).map((candidate) => {
-      const forecast = forecastWarV2(state, content, playerId, candidate.targetId);
+      const forecast = forecastWarV2(
+        state,
+        content,
+        playerId,
+        candidate.targetId,
+        militaryBaseSnapshot,
+      );
       const lossTrade = forecast.projectedAttackerLosses > 0
         ? forecast.projectedDefenderLosses / forecast.projectedAttackerLosses : 3;
       return {
@@ -774,7 +901,7 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
         priority: candidate.priority + aiWarCandidateForecastScoreV2(
           forecast.winChance,
           lossTrade,
-          nation.iqScore,
+          effectiveIq,
         ),
       };
     }).filter((candidate) => {

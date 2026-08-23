@@ -136,7 +136,7 @@ describe('route-aware empire logistics', () => {
     expect(selectTerritoriesOfV2(state, bel).reduce((sum, territory) => sum + territory.army.manpower, 0))
       .toBeCloseTo(overshootEmpireManpower, 8);
 
-    // With every possible receiver already at 2x, logistics has nowhere legal
+    // With every possible receiver already at its combat ceiling, logistics has nowhere legal
     // to place the excess and therefore leaves it untouched.
     capital.army.manpower = stateTerritoryArmySupportCeilingV2(
       state, WORLD_CONTENT_V2, capitalId, bel,
