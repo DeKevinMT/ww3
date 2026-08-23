@@ -107,6 +107,11 @@ function compactCountryName(name: string): string {
   return compact.length > 18 ? `${compact.slice(0, 17).trimEnd()}…` : compact;
 }
 
+function compactControllerName(name: string | undefined): string {
+  const compact = name?.trim().replace(/\s+/g, ' ') || 'PLAYER';
+  return compact.length > 12 ? `${compact.slice(0, 11).trimEnd()}…` : compact;
+}
+
 // Map labels are intentionally closer to cartographic tags than HUD cards:
 // country first, one terse military line only when it is contextually useful.
 const LABEL_NAME_SIZE = 10;
@@ -389,6 +394,7 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
   private mapState?: MapStateSnapshot;
   private ownershipBoundarySegments: OwnershipBoundarySegment[] = [];
   private humanOwnedIds = new Set<string>();
+  private humanOwnerIds = new Set<string>();
   private humanCapitalId?: string;
   private warTerritoryIds = new Set<string>();
   private ownerTerritoryCounts = new Map<string, number>();
@@ -407,6 +413,7 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
   private hostileOwnerPairs = new Set<string>();
   private ordinaryBoundarySegments: readonly OwnershipBoundarySegment[] = [];
   private humanBoundarySegments: readonly OwnershipBoundarySegment[] = [];
+  private otherHumanBoundarySegments: readonly OwnershipBoundarySegment[] = [];
   private integrationBoundarySegments: readonly OwnershipBoundarySegment[] = [];
   private frontRenderOperations: readonly FrontRenderOperation[] = [];
   private humanLogisticsMovements: readonly MapLogisticsMovement[] = [];
@@ -533,27 +540,35 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
   private rebuildTopologyPresentation(state: MapStateSnapshot): void {
     const ordinary: OwnershipBoundarySegment[] = [];
     const human: OwnershipBoundarySegment[] = [];
+    const otherHuman: OwnershipBoundarySegment[] = [];
     const integration: OwnershipBoundarySegment[] = [];
     for (const segment of this.ownershipBoundarySegments) {
       if (segment.territoryIds.length === 1) continue;
       let firstOwnerId: string | undefined;
       let multipleOwners = false;
-      let touchesHuman = false;
+      let touchesLocalHuman = false;
+      let touchesOtherHuman = false;
       let integrating = false;
       for (const territoryId of segment.territoryIds) {
         const ownerId = state.territories[territoryId]?.ownerId;
         if (!ownerId) continue;
         if (!firstOwnerId) firstOwnerId = ownerId;
         else if (ownerId !== firstOwnerId) multipleOwners = true;
-        if (ownerId === state.humanPlayerId) touchesHuman = true;
+        if (ownerId === state.humanPlayerId) touchesLocalHuman = true;
+        else if (this.humanOwnerIds.has(ownerId)) touchesOtherHuman = true;
         if (this.integratingTerritoryIds.has(territoryId)) integrating = true;
       }
       if (!firstOwnerId) continue;
       if (!multipleOwners && integrating) integration.push(segment);
-      else if (multipleOwners) (touchesHuman ? human : ordinary).push(segment);
+      else if (multipleOwners) {
+        if (touchesLocalHuman) human.push(segment);
+        else if (touchesOtherHuman) otherHuman.push(segment);
+        else ordinary.push(segment);
+      }
     }
     this.ordinaryBoundarySegments = ordinary;
     this.humanBoundarySegments = human;
+    this.otherHumanBoundarySegments = otherHuman;
     this.integrationBoundarySegments = integration;
     this.hostileOwnerPairs = new Set(state.wars.map((war) => (
       ownerPairKey(war.attackerId, war.defenderId)
@@ -569,6 +584,7 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       for (const segment of segmentsToDraw) this.drawWrappedLine(graphics, segment.x1, segment.y1, segment.x2, segment.y2);
     };
     draw(this.ordinaryBoundarySegments, 1.15, 0xd4e7eb, 0.58);
+    draw(this.otherHumanBoundarySegments, 1.55, 0xd6a7ff, 0.82);
     draw(this.humanBoundarySegments, 1.7, 0x8cf3ff, 0.88);
     draw(this.integrationBoundarySegments, 0.85, 0xf2c879, 0.42);
     const hintedBoundarySegments = this.ownershipBoundarySegments.filter((segment) => {
@@ -819,6 +835,7 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       required: boolean;
       strategic: boolean;
       persistentTopPower: boolean;
+      persistentHuman: boolean;
       showDetail: boolean;
     }[] = [];
     for (const [territoryId, visual] of this.visuals) {
@@ -852,8 +869,10 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       const topPower = Boolean(ownerId && this.topPowerOwnerIds.has(ownerId));
       const persistentTopPower = topPower
         && this.ownerLabelTerritoryIds.get(ownerId!) === territoryId;
+      const persistentHuman = Boolean(ownerId && this.humanOwnerIds.has(ownerId)
+        && this.ownerLabelTerritoryIds.get(ownerId) === territoryId);
       const required = selected || hovered;
-      const strategic = required || ownCapital || atWar || integrating || topPower;
+      const strategic = required || persistentHuman || ownCapital || atWar || integrating || topPower;
       const bounds = COUNTRY_RENDER_BOUNDS.get(territoryId);
       const projectedSpan = bounds ? Math.max(bounds.width, bounds.height) * zoom : 0;
       const deepGeography = zoom >= Math.max(DEEP_LABEL_MIN_ZOOM, visual.minLabelZoom * 1.75)
@@ -878,9 +897,10 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
         required,
         strategic: strategic || deepGeography,
         persistentTopPower,
-        showDetail: required || atWar || integrating || (topPower && zoom >= 1.55)
+        persistentHuman,
+        showDetail: required || persistentHuman || atWar || integrating || (topPower && zoom >= 1.55)
           || (deepGeography && projectedSpan >= 48),
-        priority: (target ? 110_000 : source ? 105_000 : hovered ? 100_000 : persistentTopPower ? 95_000 : ownCapital ? 90_000 : atWar ? 80_000 : integrating ? 75_000 : topPower ? 70_000 : deepGeography ? 50_000 : 0)
+        priority: (target ? 110_000 : source ? 105_000 : hovered ? 100_000 : persistentHuman ? (ownCapital ? 98_000 : 97_000) : persistentTopPower ? 95_000 : ownCapital ? 90_000 : atWar ? 80_000 : integrating ? 75_000 : topPower ? 70_000 : deepGeography ? 50_000 : 0)
           + (deepGeography ? Math.min(5_000, projectedSpan * 10) : 0)
           + (this.mapState ? this.strategicScores.get(this.mapState.territories[territoryId]?.ownerId ?? territoryId) ?? country?.powerIndex ?? 0 : country?.powerIndex ?? 0) * 10
           - (country?.labelRank ?? 5),
@@ -895,7 +915,7 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
     ];
     candidates.sort((left, right) => right.priority - left.priority || left.territoryId.localeCompare(right.territoryId));
     for (const {
-      territoryId, visual, required, strategic, persistentTopPower, showDetail,
+      territoryId, visual, required, strategic, persistentTopPower, persistentHuman, showDetail,
     } of candidates) {
       // One compact badge system at every zoom. The overview shows names only;
       // military detail appears for interaction, active wars and closer zoom.
@@ -940,10 +960,10 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
         for (const other of accepted) {
           if (!rectanglesIntersect(bounds, other)) continue;
           collides = true;
-          if (required || persistentTopPower) overlap += rectangleOverlapArea(bounds, other);
+          if (required || persistentTopPower || persistentHuman) overlap += rectangleOverlapArea(bounds, other);
         }
         if (collides) {
-          if (required || persistentTopPower) {
+          if (required || persistentTopPower || persistentHuman) {
             const score = overlap * 1_000 + Math.hypot(offsetX, offsetY);
             if (score < leastOverlapScore) {
               leastOverlapScore = score;
@@ -958,7 +978,7 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       // Selection/hover and each on-screen top-ten badge must remain visible.
       // The expanded search normally finds free space; least-overlap is only a
       // final guarantee for very small windows or unusually dense empires.
-      if (!placement && (required || persistentTopPower)) {
+      if (!placement && (required || persistentTopPower || persistentHuman)) {
         placement = leastOverlap;
       }
       if (!placement && required) {
@@ -993,11 +1013,14 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       const ownerId = this.mapState?.territories[territoryId]?.ownerId;
       const ownerColor = ownerId ? this.ownerColors.get(ownerId) : undefined;
       const own = ownerId === this.mapState?.humanPlayerId;
+      const otherHuman = Boolean(ownerId && !own && this.humanOwnerIds.has(ownerId));
       const atWar = this.warTerritoryIds.has(territoryId);
-      const accent = selected ? 0xffd36b : hovered ? 0xffffff : own ? 0x72efff : atWar ? 0xff746d : ownerColor ?? 0xa8c8d2;
+      const accent = selected ? 0xffd36b : hovered ? 0xffffff : own ? 0x72efff
+        : otherHuman ? 0xd6a7ff : atWar ? 0xff746d : ownerColor ?? 0xa8c8d2;
       visual.panel.setFillStyle(0x04111b, selected || hovered ? 0.98 : 0.93);
       visual.panel.setStrokeStyle(selected || hovered ? 1.4 : 1, accent, selected || hovered ? 1 : 0.74);
-      visual.detail.setColor(selected ? '#ffeaa8' : own ? '#b9f8ff' : atWar ? '#ffd0cc' : '#c6dce2');
+      visual.detail.setColor(selected ? '#ffeaa8' : own ? '#b9f8ff'
+        : otherHuman ? '#ead5ff' : atWar ? '#ffd0cc' : '#c6dce2');
     }
   }
 
@@ -1167,6 +1190,7 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
     const state = engine.state;
     this.mapState = state;
     const humanId = state.humanPlayerId;
+    this.humanOwnerIds = new Set(state.humanPlayerIds.length ? state.humanPlayerIds : [humanId]);
     const human = engine.player(humanId);
     const territoryStates = Object.values(state.territories);
     const playerViews = new Map<string, ReturnType<WorldMapEngineContract['player']>>();
@@ -1199,7 +1223,8 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       return live && live.coreOwnerId !== live.ownerId && live.integration < 0.999999
         ? `${territory.id}:${live.coreOwnerId}>${live.ownerId}` : '';
     }).filter(Boolean).join(',');
-    const topologySignature = `${humanId}:${human?.capitalId ?? ''}|${ownerSignature}|${integrationTopology}|${sortedWars.map((war) => `${war.id}:${war.attackerId}:${war.defenderId}`).join(',')}`;
+    const humanOwnerSignature = [...this.humanOwnerIds].sort().join(',');
+    const topologySignature = `${humanId}:${human?.capitalId ?? ''}|humans:${humanOwnerSignature}|${ownerSignature}|${integrationTopology}|${sortedWars.map((war) => `${war.id}:${war.attackerId}:${war.defenderId}`).join(',')}`;
     const topologyChanged = topologySignature !== this.lastTopologySignature;
     if (topologyChanged) {
       this.lastTopologySignature = topologySignature;
@@ -1350,7 +1375,7 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       const integrationPercent = Math.round(Phaser.Math.Clamp(territoryState.integration, 0, 1) * 100);
       const fillSignature = [
         owner.id,
-        owner.id === humanId ? 1 : 0,
+        owner.id === humanId ? 'local-human' : owner.isHuman ? 'human' : 'ai',
         integrating ? integrationPercent : 'core',
       ].join(':');
       if (this.fillSignatures.get(territory.id) !== fillSignature) {
@@ -1364,7 +1389,7 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
         );
         visual.panel.setStrokeStyle(
           1,
-          integrating ? 0xf2c879 : owner.id === humanId ? 0x77efff : 0xa8c8d2,
+          integrating ? 0xf2c879 : owner.id === humanId ? 0x77efff : owner.isHuman ? 0xd6a7ff : 0xa8c8d2,
           integrating ? 0.82 : 0.74,
         );
       }
@@ -1379,15 +1404,19 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
         ? compactCountryName(originalName).toUpperCase()
         : empireCapital
           ? `${compactCountryName(owner.name).toUpperCase()}${ownerRank ? `  #${ownerRank}` : ''}` : '';
+      const controllerLabel = owner.id === humanId ? 'YOU'
+        : owner.isHuman ? `PLAYER ${compactControllerName(owner.controllerName).toUpperCase()}` : '';
       const armyLabel = integrating ? `INTEGRATING ${integrationPercent}%`
         : absorbed ? ''
-          : `${compactPower(displayedArmy.power)} · A ${displayedArmy.attack.toFixed(1)} · D ${displayedArmy.defense.toFixed(1)}`;
-      const labelSignature = `${owner.id}:${empireSize}:${labelName}:${armyLabel}`;
+          : owner.isHuman && empireCapital
+            ? `${controllerLabel} · ${compactPower(displayedArmy.power)} PWR`
+            : `${compactPower(displayedArmy.power)} · A ${displayedArmy.attack.toFixed(1)} · D ${displayedArmy.defense.toFixed(1)}`;
+      const labelSignature = `${owner.id}:${empireSize}:${owner.controllerName ?? ''}:${labelName}:${armyLabel}`;
       if (this.labelSignatures.get(territory.id) !== labelSignature) {
         this.labelSignatures.set(territory.id, labelSignature);
         visual.name.setText(labelName);
         visual.detail.setText(armyLabel);
-        visual.name.setColor('#f4fbfc');
+        visual.name.setColor(owner.id === humanId ? '#e2fcff' : owner.isHuman ? '#f2e3ff' : '#f4fbfc');
         visual.layoutWidth = undefined;
         visual.layoutHeight = undefined;
       }
@@ -1510,6 +1539,7 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       const humanOwned = this.humanOwnedIds.has(territoryId);
       const territoryState = state?.territories[territoryId];
       const ownerId = territoryState?.ownerId;
+      const otherHumanOwned = Boolean(ownerId && ownerId !== humanId && this.humanOwnerIds.has(ownerId));
       const ownerColor = ownerId ? this.ownerColors.get(ownerId) : undefined;
       const empireSize = ownerId ? this.ownerTerritoryCounts.get(ownerId) ?? 1 : 1;
       const integrating = territoryState
@@ -1527,16 +1557,16 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
           part.setAlpha(legal.size > 0 && !selected && !target && !isLegal ? 0.62 : 1);
           continue;
         }
-        const width = selected || target ? 1.85 : hovered ? 1.35 : humanOwned ? 1.3
+        const width = selected || target ? 1.85 : hovered ? 1.35 : humanOwned ? 1.3 : otherHumanOwned ? 1.15
           : isLegal ? 1.1 : integrating ? 0.9 : 0.7;
         const color = target ? 0xffd36b : selected || isLegal || humanOwned
-          ? 0x8cf3ff : integrating ? 0xf2c879 : 0xa9c5cd;
-        const alpha = selected || target ? 1 : hovered ? 0.98 : humanOwned ? 0.92
+          ? 0x8cf3ff : otherHumanOwned ? 0xd6a7ff : integrating ? 0xf2c879 : 0xa9c5cd;
+        const alpha = selected || target ? 1 : hovered ? 0.98 : humanOwned ? 0.92 : otherHumanOwned ? 0.84
           : isLegal ? 0.72 : integrating ? 0.56 : 0.28;
         part.setStrokeStyle(this.screenWorldSize(width), color, alpha).setDepth(0.8);
         part.setAlpha(legal.size > 0 && !selected && !target && !isLegal ? 0.62 : 1);
       }
-      visual.hud.setDepth(selected || target ? 14 : hovered ? 13 : humanOwned ? 12
+      visual.hud.setDepth(selected || target ? 14 : hovered ? 13 : humanOwned ? 12 : otherHumanOwned ? 11.5
         : isLegal ? 11 : isHinted ? 9 : 8);
     }
     if (hintsChanged) this.drawOwnershipPerimeters();

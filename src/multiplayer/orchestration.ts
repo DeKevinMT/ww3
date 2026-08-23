@@ -25,3 +25,13 @@ export function localCountryFromLobby(lobby: LobbyStateMessage, peerId: string):
   if (!countryId) throw new Error('This player has no active country seat.');
   return countryId;
 }
+
+/** Stable country-to-controller labels retained after the lobby UI closes. */
+export function multiplayerControllerNamesFromLobby(lobby: LobbyStateMessage): Map<PlayerId, string> {
+  const seats = multiplayerSeatsFromLobby(lobby);
+  const countryByPeer = seats;
+  return new Map(lobby.players.flatMap((player) => {
+    const countryId = countryByPeer.get(player.peerId);
+    return countryId ? [[countryId, player.displayName] as const] : [];
+  }));
+}

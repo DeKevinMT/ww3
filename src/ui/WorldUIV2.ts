@@ -160,6 +160,7 @@ export interface WorldEngineV2UIContract {
 export interface WorldUIV2Options {
   introOpen?: boolean;
   multiplayer?: boolean;
+  controllerNames?: ReadonlyMap<PlayerId, string>;
   onMultiplayerRequested?: () => void;
 }
 
@@ -655,6 +656,7 @@ export function createMapSnapshot(engine: WorldEngineV2UIContract): WorldMapEngi
   return {
     tick: source.tick,
     humanPlayerId: engine.viewerPlayerId ?? source.humanPlayerId,
+    humanPlayerIds: [...source.humanPlayerIds],
     territories,
     wars: sortedWars.map((war) => ({
       id: war.id,
@@ -669,9 +671,10 @@ export function createMapSnapshot(engine: WorldEngineV2UIContract): WorldMapEngi
   };
 }
 
-function createMapEngineAdapter(
+export function createMapEngineAdapter(
   engine: WorldEngineV2UIContract,
   ranking: () => RankingEntryV2[],
+  controllerNames: ReadonlyMap<PlayerId, string> = new Map(),
 ): WorldMapEngineContract {
   let snapshot: WorldMapEngineContract['state'] | undefined;
   let snapshotTick = -1;
@@ -687,7 +690,11 @@ function createMapEngineAdapter(
     },
     player: (playerId) => {
       const player = engine.player(playerId);
-      return player ? { ...player, isHuman: playerId === (engine.viewerPlayerId ?? engine.state.humanPlayerId) } : undefined;
+      return player ? {
+        ...player,
+        isHuman: player.isHuman,
+        controllerName: player.isHuman ? controllerNames.get(player.id) : undefined,
+      } : undefined;
     },
     territoriesOf: (playerId) => {
       return Object.values(readSnapshot().territories).filter((territory) => territory.ownerId === playerId);
@@ -790,7 +797,7 @@ export class WorldUIV2 {
     const initialIntroMetrics = this.introMetricsCache.read(engine);
     this.rankingCache = initialIntroMetrics.ranking;
     this.lastRankingCalculationAt = performance.now();
-    mapBridge.engine = createMapEngineAdapter(engine, () => this.ranking());
+    mapBridge.engine = createMapEngineAdapter(engine, () => this.ranking(), options.controllerNames);
     mapBridge.sync();
     mapBridge.onTerritoryClick = (territoryId) => {
       if (performance.now() >= this.suppressMapUntil) this.selectTerritory(territoryId as TerritoryId);
@@ -1068,10 +1075,16 @@ export class WorldUIV2 {
     if (!territory || !definition || !owner) return;
     const integration = territory.coreOwner !== territory.owner && territory.integration < 0.999999
       ? ` · INTEGRATION ${format(territory.integration * 100)}%` : '';
+    const localHuman = owner.id === this.viewerPlayerId();
+    const controllerName = this.options.controllerNames?.get(owner.id);
+    const controller = owner.isHuman
+      ? `<div class="tooltip__controller ${localHuman ? 'is-local' : ''}"><b>${localHuman ? 'YOU' : escapeHtml(controllerName ?? 'HUMAN PLAYER')}</b><span>${localHuman ? 'YOUR COUNTRY' : 'HUMAN CONTROLLED'}</span></div>`
+      : '';
     this.tooltip.innerHTML = `
       <div class="tooltip__eyebrow">${escapeHtml(REGION_BY_ID[definition.regionId]?.name ?? definition.regionId)}</div>
       <strong>${escapeHtml(definition.name)}</strong>
       <span style="color:${owner.cssColor}">${escapeHtml(owner.name)}</span>
+      ${controller}
       <div class="tooltip__stats">MANPOWER ${people(territory.army.manpower)} / ${people(territory.army.capacity)} · ATK ${format(this.engine.effectiveAttack(owner.id, territory.army), 2)} · DEF ${format(this.engine.effectiveDefense(owner.id, territory.army), 2)} · ${armyCondition(territory.army, territory.condition)}${integration}</div>
     `;
     this.tooltip.style.left = `${Math.min(window.innerWidth - 230, x + 16)}px`;
