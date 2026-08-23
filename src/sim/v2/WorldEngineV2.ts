@@ -8,6 +8,13 @@ import {
   validResearchAllocationsV2,
 } from './balance';
 import { planAiCommandsV2 } from './ai';
+import {
+  allianceProposalStatusV2,
+  areAlliedV2,
+  proposeAllianceV2,
+  pruneAllianceStateV2,
+  respondToAllianceV2,
+} from './alliances';
 import { addArmyManpowerWithQualityV2, localArmyBaseQualityV2 } from './armyQuality';
 import { createWorldStateV2, processOpeningConflictsV2 } from './bootstrap';
 import { synchronizeArmyCapacityV2 } from './capacity';
@@ -37,6 +44,7 @@ import {
   selectEffectiveRecoveryV2,
   selectGlobalRankingV2,
   selectNationViewV2,
+  selectNationalAggressivenessV2,
   selectNationalAiPlanV2,
   selectNationalEconomyV2,
   selectNuclearPowerV2,
@@ -76,6 +84,7 @@ import {
   type WarConclusionV2,
 } from './war';
 import type {
+  AllianceProposalStatusV2,
   BattleEventV2,
   BudgetDomainV2,
   BudgetPolicyV2,
@@ -182,6 +191,9 @@ export class WorldEngineV2 {
     this.content = content;
     this.state = initialState ?? createWorldStateV2(seed, content);
     this.state.humanPlayerIds = [...selectHumanPlayerIdsV2(this.state)];
+    this.state.alliances ??= [];
+    this.state.allianceOffers ??= [];
+    pruneAllianceStateV2(this.state);
     this._viewerPlayerId = this.state.humanPlayerId;
     this.trackHumanWars();
   }
@@ -494,6 +506,8 @@ export class WorldEngineV2 {
     // state. Never let different client seats produce different save hashes.
     this.state.humanPlayerId = primaryId;
     this.state.humanPlayerIds = ids;
+    this.state.alliances = [];
+    this.state.allianceOffers = [];
     this._viewerPlayerId = viewerId;
     this.state.speed = 1;
     this.state.aiEscalation = {
@@ -526,6 +540,8 @@ export class WorldEngineV2 {
     }
     this.state.humanPlayerId = id;
     this.state.humanPlayerIds = [id];
+    this.state.alliances = [];
+    this.state.allianceOffers = [];
     this._viewerPlayerId = id;
     this.humanWarBaselines.clear();
     this.trackHumanWars();
@@ -710,6 +726,15 @@ export class WorldEngineV2 {
 
   nationalAiPlan(playerId: string): NationalAiPlanV2 {
     return selectNationalAiPlanV2(this.state, this.content, nationIdV2(playerId));
+  }
+
+  nationalAggressiveness(playerId: string, powerSnapshot?: PowerSnapshotV2): number {
+    return selectNationalAggressivenessV2(
+      this.state,
+      this.content,
+      nationIdV2(playerId),
+      powerSnapshot,
+    );
   }
 
   globalResistance(): GlobalResistanceV2 {
@@ -987,6 +1012,47 @@ export class WorldEngineV2 {
     return result;
   }
 
+  areAllied(leftId: string, rightId: string): boolean {
+    return areAlliedV2(this.state, nationIdV2(leftId), nationIdV2(rightId));
+  }
+
+  allianceProposalStatus(fromId: string, targetId: string): AllianceProposalStatusV2 {
+    return allianceProposalStatusV2(this.state, nationIdV2(fromId), nationIdV2(targetId));
+  }
+
+  proposeAlliance(fromId: string, targetId: string): CommandResultV2 {
+    const from = nationIdV2(fromId);
+    const target = nationIdV2(targetId);
+    if (!this.applyingCommand) {
+      const status = allianceProposalStatusV2(this.state, from, target);
+      if (!status.allowed) return { accepted: false, reason: status.reason };
+      return this.queue({ type: 'propose-alliance', fromId: from, targetId: target });
+    }
+    const result = proposeAllianceV2(this.state, from, target);
+    if (result.accepted) {
+      this.recordAppliedAction();
+      this.emit({ reason: 'alliance-proposed' });
+    }
+    return result;
+  }
+
+  respondToAlliance(fromId: string, toId: string, accept: boolean): CommandResultV2 {
+    const from = nationIdV2(fromId);
+    const to = nationIdV2(toId);
+    if (!this.applyingCommand) {
+      if (!this.state.allianceOffers.some((offer) => (
+        offer.fromId === from && offer.toId === to && offer.expiresTick > this.state.tick
+      ))) return { accepted: false, reason: 'Alliance invitation is unavailable.' };
+      return this.queue({ type: 'respond-to-alliance', fromId: from, toId: to, accept });
+    }
+    const result = respondToAllianceV2(this.state, from, to, accept);
+    if (result.accepted) {
+      this.recordAppliedAction();
+      this.emit({ reason: accept ? 'alliance-accepted' : 'alliance-declined', critical: accept });
+    }
+    return result;
+  }
+
   markAllEventsRead(): void {
     for (const event of this.state.events) event.unread = false;
     this.emit({ reason: 'events-read' });
@@ -1009,6 +1075,12 @@ export class WorldEngineV2 {
       case 'request-ceasefire': return this.requestCeasefire(command.warId, command.requesterId);
       case 'propose-peace': return this.proposePeaceSettlement(command.fromId, command.targetId, command.settlement);
       case 'respond-to-offer': return this.respondToOffer(command.offerId, command.accept);
+      case 'propose-alliance': return this.proposeAlliance(command.fromId, command.targetId);
+      case 'respond-to-alliance': return this.respondToAlliance(
+        command.fromId,
+        command.toId,
+        command.accept,
+      );
     }
   }
 
@@ -1074,11 +1146,13 @@ export class WorldEngineV2 {
       if (this.state.gameOver) return;
       this.flushQueuedActions();
       this.state.tick += 1;
+      pruneAllianceStateV2(this.state);
       processOpeningConflictsV2(this.state, this.content);
       this.trackHumanWars();
       const financePowers = createPowerSnapshotV2(this.state, this.content);
       const finance = createFinancePlansV2(this.state, this.content, financePowers);
       const integrationCompletions = processFinanceMilitaryV2(this.state, this.content, finance);
+      pruneAllianceStateV2(this.state);
       for (const completion of integrationCompletions) this.emit({
         reason: 'integration-complete',
         victorId: completion.ownerId,
@@ -1141,6 +1215,7 @@ export class WorldEngineV2 {
           }
         }
       }
+      pruneAllianceStateV2(this.state);
       if (this.state.gameOver) {
         pruneWorldHistoryV2(this.state);
         this.assertStateIntegrity(true);

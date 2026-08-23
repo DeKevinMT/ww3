@@ -1,6 +1,7 @@
 import { nextRandom, randomInt } from '../../game/random';
 import {
   BATTLE_INTERVAL_TICKS,
+  ATTACKER_MILITARY_LOSS_MULTIPLIER,
   CAPTURE_MIN_CONTRIBUTION_SHARE,
   CEASEFIRE_PAYEE_WEEKLY_REVENUE_CAP_SHARE,
   CEASEFIRE_PAYMENT_WEEKS,
@@ -34,13 +35,16 @@ import {
   TRUCE_TICKS,
   WAR_ACCESS_ASSAULT_MULTIPLIER,
   WAR_ACCESS_CASUALTY_MULTIPLIER,
+  WAR_ACCESS_SUPPLY_MULTIPLIER,
   warAccessSupplyMultiplierV2,
   WAR_MOBILIZATION_TICKS,
+  WAR_REVENGE_WINDOW_TICKS,
   clamp,
   diminishingResearchLevelV2,
   round,
   smoothstep,
 } from './balance';
+import { areAlliedV2 } from './alliances';
 import type { WorldContentV2 } from './content';
 import {
   nationalArmyCapacityTargetV2,
@@ -56,6 +60,14 @@ import { isHumanPlayerV2 } from './humanPlayers';
 import { beginTerritoryIntegrationV2 } from './integration';
 import { resistanceCombatMultiplierV2 } from './resistance';
 import {
+  composeTraitContextV2,
+  traitNationContextV2,
+  traitOperationContextV2,
+  traitTerritoryContextV2,
+  traitWarContextV2,
+} from './traitContext';
+import { countryTraitFactorV2, type TraitEvaluationContextV2 } from './traits';
+import {
   createMilitaryBaseSnapshotV2,
   selectActiveWarBetweenV2,
   selectArmyCombatManpowerV2,
@@ -69,6 +81,7 @@ import {
   selectTerritoriesOfV2,
   selectTerritoryPowerV2,
   selectTerritoryRouteDistanceKmV2,
+  selectTreasurySeizureShareV2,
   selectTerritoryWarAccessV2,
   selectTotalManpowerV2,
   selectWarAccessTypeV2,
@@ -135,6 +148,41 @@ function armyCombatCapacityV2(state: WorldStateV2, playerId: PlayerId, army: Wor
   void state;
   void playerId;
   return Math.max(army.capacity, army.manpower);
+}
+
+function combatSideTraitContextV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  playerId: PlayerId,
+  territoryId: TerritoryId,
+  role: 'attacker' | 'defender',
+  access: 'land' | 'naval',
+): TraitEvaluationContextV2 {
+  return composeTraitContextV2(
+    traitNationContextV2(state, playerId),
+    traitTerritoryContextV2(state, content, playerId, territoryId),
+    { role, access },
+  );
+}
+
+/** Applies only positive additions; recovery remains a separate output channel. */
+function addWarFatigueGainV2(
+  state: WorldStateV2,
+  playerId: PlayerId,
+  amount: number,
+  context?: TraitEvaluationContextV2,
+): void {
+  if (!(amount > 0) || !state.players[playerId]) return;
+  const factor = countryTraitFactorV2(
+    playerId,
+    'war-fatigue-gain',
+    composeTraitContextV2(traitNationContextV2(state, playerId), context),
+  );
+  state.players[playerId]!.warFatigue = round(clamp(
+    state.players[playerId]!.warFatigue + amount * factor,
+    0,
+    100,
+  ));
 }
 
 export interface CombatExchangeProjectionV2 {
@@ -219,6 +267,7 @@ function competingInvaderIdsV2(
     .map((war) => war.attackerId === defenderId ? war.defenderId : war.attackerId)
     .filter((id) => id !== attackerId && id !== alliedId
       && !selectIsEliminatedV2(state, id)
+      && !areAlliedV2(state, attackerId, id)
       && !selectActiveWarBetweenV2(state, attackerId, id)))]
     .sort((left, right) => left.localeCompare(right));
 }
@@ -263,6 +312,7 @@ export function warDeclarationStatusV2(
   if (!attacker || !state.players[defenderId] || attackerId === defenderId) return status(false, 'Invalid nation pair.');
   if (selectIsEliminatedV2(state, attackerId) || selectIsEliminatedV2(state, defenderId)) return status(false, 'An eliminated nation cannot fight.');
   if (selectActiveWarBetweenV2(state, attackerId, defenderId)) return status(false, 'These nations are already at war.');
+  if (areAlliedV2(state, attackerId, defenderId)) return status(false, 'Player allies cannot declare war on each other.');
   const truceWeeks = truceWeeksRemainingV2(state, attackerId, defenderId);
   if (truceWeeks > 0) return status(false, `Peace treaty active for ${truceWeeks} more weeks.`);
   // Defence in depth for legacy/corrupt saves: instalments alone also make a
@@ -288,6 +338,10 @@ export function declareWarV2(
   if (!canDeclareWarV2(state, content, attackerId, defenderId, escalatedFromWarId)) return { accepted: false, reason: 'War is not legal or affordable.' };
   const rivalInvaders = competingInvaderIdsV2(state, attackerId, defenderId, escalatedFromWarId);
   const openWar = (newAttackerId: PlayerId, newDefenderId: PlayerId): void => {
+    state.allianceOffers = state.allianceOffers.filter((offer) => !(
+      (offer.fromId === newAttackerId && offer.toId === newDefenderId)
+      || (offer.fromId === newDefenderId && offer.toId === newAttackerId)
+    ));
     state.wars.push({
       id: `war-${state.nextWarId++}`,
       attackerId: newAttackerId,
@@ -301,6 +355,7 @@ export function declareWarV2(
       attackerCivilianLosses: 0,
       defenderCivilianLosses: 0,
       lastPeaceOfferTick: -1_000_000,
+      revenge: null,
       attackerOperations: [],
       defenderOperations: [],
     });
@@ -352,6 +407,7 @@ export function supplyFactorV2(
   sourceId: TerritoryId,
   access: boolean | 'land' | 'naval',
   targetId?: TerritoryId,
+  contextOverride?: TraitEvaluationContextV2,
 ): number {
   const territory = state.territories[sourceId];
   if (!territory) return 0.25;
@@ -360,10 +416,32 @@ export function supplyFactorV2(
   const mode = typeof access === 'boolean' ? (access ? 'naval' : 'land') : access;
   const routeDistance = mode === 'naval' && targetId
     ? selectTerritoryRouteDistanceKmV2(content, sourceId, targetId) : undefined;
-  const accessLogistics = warAccessSupplyMultiplierV2(mode, routeDistance);
-  return clamp((1 - 0.035 * route.distance) * (0.60 + 0.40 * territory.condition)
+  const traitContext = composeTraitContextV2(
+    traitNationContextV2(state, playerId),
+    traitTerritoryContextV2(state, content, playerId, sourceId),
+    { access: mode },
+    contextOverride,
+  );
+  // These traits reduce only the already-existing pressure term. They never
+  // scale the rest of supply, so global routes and short routes keep the same
+  // baseline and the result retains its canonical clamp.
+  const landHopPressure = 0.035 * route.distance
+    * countryTraitFactorV2(playerId, 'land-hop-pressure', traitContext);
+  const rawAccessLogistics = warAccessSupplyMultiplierV2(mode, routeDistance);
+  const navalDistancePressureFactor = countryTraitFactorV2(
+    playerId,
+    'naval-distance-pressure',
+    traitContext,
+  );
+  const accessLogistics = mode === 'naval'
+    ? WAR_ACCESS_SUPPLY_MULTIPLIER.naval
+      - (WAR_ACCESS_SUPPLY_MULTIPLIER.naval - rawAccessLogistics)
+        * navalDistancePressureFactor
+    : rawAccessLogistics;
+  const frontSupplyFactor = countryTraitFactorV2(playerId, 'front-supply', traitContext);
+  return clamp((1 - landHopPressure) * (0.60 + 0.40 * territory.condition)
     * (route.connected ? 1 : 0.55) * accessLogistics
-    * supplyResearch, 0.25, 1);
+    * supplyResearch * frontSupplyFactor, 0.25, 1);
 }
 
 function supportCountV2(state: WorldStateV2, content: WorldContentV2, sourceId: TerritoryId, owner: PlayerId): number {
@@ -400,24 +478,36 @@ export function projectCombatExchangeV2(
   const terrain = content.territories[targetId]?.terrain;
   if (!source || !target || !terrain || source.owner !== attackerId || target.owner !== defenderId) return undefined;
 
-  const attackerSupply = supplyFactorV2(state, content, attackerId, sourceId, access, targetId);
-  const defenderSupply = supplyFactorV2(state, content, defenderId, targetId, false);
+  const attackerTraitContext = combatSideTraitContextV2(
+    state, content, attackerId, sourceId, 'attacker', access,
+  );
+  const defenderTraitContext = combatSideTraitContextV2(
+    state, content, defenderId, targetId, 'defender', access,
+  );
+  const attackerSupply = supplyFactorV2(
+    state, content, attackerId, sourceId, access, targetId, attackerTraitContext,
+  );
+  // Defenders retain the existing local-land physical supply calculation, but
+  // trait access sees the actual incoming front (land or naval).
+  const defenderSupply = supplyFactorV2(
+    state, content, defenderId, targetId, false, undefined, defenderTraitContext,
+  );
   const supportingForces = supportCountV2(state, content, sourceId, attackerId);
   const supportModifier = 1 + Math.min(0.20, 0.05 * supportingForces);
   const resistance = resistanceCombatMultiplierV2(state, attackerId, defenderId);
   const defensiveCoordination = nationalDefenseCoordinationV2(state, content, defenderId);
   const attackerAttack = selectEffectiveAttackV2(
     state, content, attackerId, source.army, militaryBaseSnapshot,
-  );
+  ) * countryTraitFactorV2(attackerId, 'attack', attackerTraitContext);
   const attackerDefense = selectEffectiveDefenseV2(
     state, content, attackerId, source.army, militaryBaseSnapshot,
-  );
+  ) * countryTraitFactorV2(attackerId, 'defense', attackerTraitContext);
   const defenderAttack = selectEffectiveAttackV2(
     state, content, defenderId, target.army, militaryBaseSnapshot,
-  );
+  ) * countryTraitFactorV2(defenderId, 'attack', defenderTraitContext);
   const defenderDefense = selectEffectiveDefenseV2(
     state, content, defenderId, target.army, militaryBaseSnapshot,
-  );
+  ) * countryTraitFactorV2(defenderId, 'defense', defenderTraitContext);
   const attackerStrength = selectArmyCombatManpowerV2(state, attackerId, source.army);
   const defenderStrength = selectArmyCombatManpowerV2(state, defenderId, target.army);
 
@@ -438,9 +528,11 @@ export function projectCombatExchangeV2(
 
   const attackerCasualtyLevel = state.players[attackerId]!.research.effectLevels['casualty-reduction'];
   const defenderCasualtyLevel = state.players[defenderId]!.research.effectLevels['casualty-reduction'];
-  const attackerCasualtyModifier = 1 - 0.50 * attackerCasualtyLevel / (attackerCasualtyLevel + 30);
+  const attackerCasualtyModifier = (1 - 0.50 * attackerCasualtyLevel / (attackerCasualtyLevel + 30))
+    * countryTraitFactorV2(attackerId, 'military-casualties', attackerTraitContext);
   const defenderCasualtyModifier = (1 - 0.50 * defenderCasualtyLevel / (defenderCasualtyLevel + 30))
-    * defensiveCoordination.casualty;
+    * defensiveCoordination.casualty
+    * countryTraitFactorV2(defenderId, 'military-casualties', defenderTraitContext);
   // Every deployed soldier contributes to effective pressure. Damage is
   // derived directly from that pressure and opposing protection; there is no
   // per-pulse rate or capacity ceiling. Remaining headcount is the only bound.
@@ -451,7 +543,8 @@ export function projectCombatExchangeV2(
   const requestedAttackerDamage = attackerStrength <= 0 || counterPressure <= 0 ? 0
     : attackerStrength * COMBAT_DAMAGE_EFFECTIVENESS * Math.pow(
       Math.max(0, counterRatio), COMBAT_POWER_RATIO_EXPONENT,
-    ) * varianceD * WAR_ACCESS_CASUALTY_MULTIPLIER[access] * attackerCasualtyModifier;
+    ) * varianceD * WAR_ACCESS_CASUALTY_MULTIPLIER[access]
+      * ATTACKER_MILITARY_LOSS_MULTIPLIER * attackerCasualtyModifier;
   const defenderLosses = Math.min(target.army.manpower, Math.max(0, requestedDefenderDamage));
   const attackerLosses = Math.min(source.army.manpower, Math.max(0, requestedAttackerDamage));
   const defenderLossRate = defenderStrength > 0 ? defenderLosses / defenderStrength : 0;
@@ -600,6 +693,10 @@ export function forecastWarV2(
     outlook: winChance >= 82 ? 'dominant' : winChance >= 64 ? 'favored'
       : winChance >= 42 ? 'contested' : winChance >= 22 ? 'risky' : 'desperate',
     attackerStrength: 0, defenderStrength: 0,
+    defenderEmpireStrength: 0,
+    defenderEmpireSupport: 0,
+    defenderTerritoryCount: selectTerritoriesOfV2(state, defenderId).length,
+    retaliationExpected: false,
     attackerAttack: 0, attackerDefense: 0, defenderAttack: 0, defenderDefense: 0,
     attackerSupply: 0, defenderSupply: 0,
     supportingForces: 0,
@@ -630,13 +727,38 @@ export function forecastWarV2(
   ) / strategicReadinessV2(
     state, content, defenderId, attackerId, militaryBaseSnapshot,
   );
-  // Tactical exchange is the forecast's anchor. National reserves, food,
-  // cash and extra fronts move the estimate without overriding the battle.
-  const combinedRatio = Math.max(0.02, attritionEdge) ** 0.78
-    * Math.max(0.02, strategicEdge) ** 0.22;
+  const defenderTerritories = selectTerritoriesOfV2(state, defenderId);
+  const defenderTerritoryCount = defenderTerritories.length;
+  const defenderEmpireStrength = nationalCombatManpowerV2(state, defenderId);
+  const defenderEmpireSupport = defenderTerritories.reduce((sum, territory) => (
+    sum + Math.max(0,
+      stateTerritoryArmySupportCeilingV2(state, content, territory.id, defenderId)
+      - stateTerritoryArmyCapacityTargetV2(state, content, territory.id, defenderId))
+  ), 0);
+  const retaliationExpected = defenderTerritoryCount > 1;
+  // This is a campaign forecast, not merely the first border exchange. The
+  // full national readiness now carries almost half the estimate, while a
+  // multi-territory empire's reinforcement room and guaranteed bounded
+  // retaliation add real campaign depth. A locally empty border can therefore
+  // no longer produce an automatic 95% against an otherwise capable empire.
+  const tacticalEdge = clamp(attritionEdge, 0.08, 8);
+  const campaignDepth = Math.log2(Math.max(1, defenderTerritoryCount));
+  const supportDepth = defenderEmpireSupport / Math.max(
+    0.000001,
+    defenderEmpireStrength + defenderEmpireSupport,
+  );
+  const defenderCampaignMultiplier = 1
+    + 0.10 * campaignDepth
+    + 0.08 * clamp(supportDepth, 0, 1)
+    + (retaliationExpected ? 0.12 : 0);
+  const combinedRatio = tacticalEdge ** 0.54
+    * clamp(strategicEdge, 0.05, 20) ** 0.46
+    / defenderCampaignMultiplier;
   // One decimal preserves real ATK/DEF movement that whole-percent rounding
-  // can hide, while the live tactical exchange remains the forecast anchor.
-  const winChance = round(clamp(50 + Math.log(combinedRatio) * 24, 5, 95), 1);
+  // can hide. Multi-territory campaigns retain extra uncertainty because the
+  // attacker must survive the defender's one-shot retaliation opportunity.
+  const maximumChance = retaliationExpected ? 92 : 95;
+  const winChance = round(clamp(50 + Math.log(combinedRatio) * 24, 5, maximumChance), 1);
   const defeatPulses = pulsesUntilEliminatedV2(
     defenderStrength, projection.defenderLosses,
   );
@@ -653,6 +775,10 @@ export function forecastWarV2(
     outlook: winChance >= 82 ? 'dominant' : winChance >= 64 ? 'favored'
       : winChance >= 42 ? 'contested' : winChance >= 22 ? 'risky' : 'desperate',
     attackerStrength: round(attackerStrength), defenderStrength: round(defenderStrength),
+    defenderEmpireStrength: round(defenderEmpireStrength),
+    defenderEmpireSupport: round(defenderEmpireSupport),
+    defenderTerritoryCount,
+    retaliationExpected,
     attackerAttack: round(projection.attackerAttack), attackerDefense: round(projection.attackerDefense),
     defenderAttack: round(projection.defenderAttack), defenderDefense: round(projection.defenderDefense),
     attackerSupply: round(projection.attackerSupply), defenderSupply: round(projection.defenderSupply),
@@ -820,7 +946,17 @@ function ensureOperationsV2(
 ): FrontOperationV2[] {
   const enemyId = commanderId === war.attackerId ? war.defenderId : war.attackerId;
   const key = commanderId === war.attackerId ? 'attackerOperations' : 'defenderOperations';
-  const candidates = frontCandidatesV2(state, content, commanderId, enemyId);
+  const baseCandidates = frontCandidatesV2(state, content, commanderId, enemyId);
+  const revengeActive = war.revenge?.claimantId === commanderId
+    && war.revenge.expiresTick > state.tick;
+  const candidates = revengeActive
+    ? baseCandidates.map((candidate, index) => ({ candidate, index }))
+      .sort((left, right) => Number(
+        state.territories[right.candidate.targetId]?.coreOwner === enemyId,
+      ) - Number(state.territories[left.candidate.targetId]?.coreOwner === enemyId)
+        || left.index - right.index)
+      .map(({ candidate }) => candidate)
+    : baseCandidates;
   const viable = candidates.filter((candidate) => candidate.viable);
   const pool = viable.length > 0 ? viable : candidates.slice(0, 1);
   const candidateBySource = new Map<TerritoryId, FrontCandidateV2>();
@@ -857,6 +993,14 @@ function chooseInitiativeOperationsV2(
 ): FrontOperationV2[] {
   const attackerOperations = ensureOperationsV2(state, content, war, war.attackerId);
   const defenderOperations = ensureOperationsV2(state, content, war, war.defenderId);
+  if (war.revenge && war.revenge.expiresTick > state.tick) {
+    const claimantOperations = war.revenge.claimantId === war.attackerId
+      ? attackerOperations : defenderOperations;
+    // The victim gets one bounded campaign window with the initiative. A
+    // recapture may open the route to an enemy core, but the opponent cannot
+    // repeatedly flip that same border territory while retaliation is active.
+    if (claimantOperations.length > 0) return claimantOperations;
+  }
   if (attackerOperations.length === 0) return defenderOperations;
   if (defenderOperations.length === 0) return attackerOperations;
   const operationIsViable = (operation: FrontOperationV2): boolean => {
@@ -897,6 +1041,7 @@ function captureTerritoryV2(
   sourceId: TerritoryId,
   targetId: TerritoryId,
   newOwner: PlayerId,
+  access: 'land' | 'naval',
   decisiveVictory: boolean,
 ): CaptureOutcomeV2 {
   const source = state.territories[sourceId]!;
@@ -906,6 +1051,12 @@ function captureTerritoryV2(
     || selectArmyCombatManpowerV2(state, target.owner, target.army) > 0.000000001
     || selectArmyCombatManpowerV2(state, newOwner, source.army) <= 0.000000001) return none;
   const oldOwner = target.owner;
+  const attackerTraitContext = combatSideTraitContextV2(
+    state, content, newOwner, sourceId, 'attacker', access,
+  );
+  const defenderTraitContext = combatSideTraitContextV2(
+    state, content, oldOwner, targetId, 'defender', access,
+  );
   // A decisive conquest transfers ownership immediately. The attacker keeps
   // its field army on the original side of the border; the new territory must
   // subsequently be reinforced through the deliberately slow logistics net.
@@ -914,7 +1065,7 @@ function captureTerritoryV2(
   const sourceBaseDefense = source.army.baseDefense;
   const requestedGuardForce = sourceManpowerBefore
     * CONQUEST_GUARD_MIN_TRANSFER_SHARE;
-  beginTerritoryIntegrationV2(state, content, targetId, newOwner);
+  beginTerritoryIntegrationV2(state, content, targetId, newOwner, access);
   invalidateTerritoryIndexV2(state);
   // Battle damage has already been committed above. Annexation preserves the
   // surviving people, production and infrastructure as latent potential;
@@ -949,11 +1100,15 @@ function captureTerritoryV2(
   }
   resetEmptyArmyBaseQualityV2(source.army, content, sourceId);
   moveCapitalAfterLossV2(state, oldOwner, targetId);
-  state.players[oldOwner]!.warFatigue = round(clamp(state.players[oldOwner]!.warFatigue + 2, 0, 100));
-  state.players[newOwner]!.warFatigue = round(clamp(state.players[newOwner]!.warFatigue + 0.5, 0, 100));
+  addWarFatigueGainV2(state, oldOwner, 2, defenderTraitContext);
+  addWarFatigueGainV2(state, newOwner, 0.5, attackerTraitContext);
   let treasurySeized = 0;
   if (selectIsEliminatedV2(state, oldOwner)) {
-    treasurySeized = round(Math.max(0, state.players[oldOwner]!.treasury) * 0.25);
+    // Forecast and resolution share the same defeated-owner replacement path.
+    const treasurySeizureShare = selectTreasurySeizureShareV2(state, oldOwner);
+    treasurySeized = round(
+      Math.max(0, state.players[oldOwner]!.treasury) * treasurySeizureShare,
+    );
     state.players[newOwner]!.treasury = round(state.players[newOwner]!.treasury + treasurySeized);
     state.players[oldOwner]!.treasury = 0;
     const foodSeized = round(state.players[oldOwner]!.foodStock * 0.20);
@@ -1017,6 +1172,12 @@ export function resolveBattlePulseV2(
   const attackerId = source.owner;
   const defenderId = target.owner;
   if (attackerId === defenderId || operation.commanderId !== attackerId) return undefined;
+  const attackerTraitContext = traitOperationContextV2(
+    state, content, war, operation, attackerId,
+  );
+  const defenderTraitContext = traitOperationContextV2(
+    state, content, war, operation, defenderId,
+  );
   const varianceA = 0.94 + nextRandom(state) * 0.12;
   const varianceD = 0.94 + nextRandom(state) * 0.12;
   const projection = projectCombatExchangeV2(
@@ -1073,8 +1234,24 @@ export function resolveBattlePulseV2(
   const defenderPopulationLoss = round(Math.max(0, targetPopulationBefore - target.population));
   const populationLoss = defenderPopulationLoss;
   target.economy = round(Math.max(0.10, target.economy - economyLoss));
-  source.condition = round(clamp(source.condition - (0.004 + damageToAttacker / Math.max(0.000001, sourceCapacity) * 0.08), 0.15, 1));
-  target.condition = round(clamp(target.condition - (0.005 + damageToDefender / Math.max(0.000001, targetCapacity) * 0.10), 0.15, 1));
+  const sourceConditionLoss = 0.004
+    + damageToAttacker / Math.max(0.000001, sourceCapacity) * 0.08;
+  const targetConditionLoss = 0.005
+    + damageToDefender / Math.max(0.000001, targetCapacity) * 0.10;
+  source.condition = round(clamp(
+    source.condition - sourceConditionLoss * countryTraitFactorV2(
+      attackerId, 'condition-loss', attackerTraitContext,
+    ),
+    0.15,
+    1,
+  ));
+  target.condition = round(clamp(
+    target.condition - targetConditionLoss * countryTraitFactorV2(
+      defenderId, 'condition-loss', defenderTraitContext,
+    ),
+    0.15,
+    1,
+  ));
 
   const defenderLossShare = damageToDefender / Math.max(1e-9, targetStrength);
   const attackerLossShare = damageToAttacker / Math.max(1e-9, sourceStrength);
@@ -1123,6 +1300,7 @@ export function resolveBattlePulseV2(
     operation.sourceId,
     operation.targetId,
     attackerId,
+    operation.access,
     earnedDecisiveClaim || earnedUnopposedClaim || decisiveSurrender,
   );
   const conquered = capture.conquered;
@@ -1141,6 +1319,21 @@ export function resolveBattlePulseV2(
   if (conquered) {
     war.attackerOperations = [];
     war.defenderOperations = [];
+    if (!capture.defeatedId && !war.revenge) {
+      war.revenge = {
+        claimantId: defenderId,
+        triggeredTick: state.tick,
+        expiresTick: state.tick + WAR_REVENGE_WINDOW_TICKS,
+      };
+      addWorldEventV2(
+        state,
+        'war',
+        'action',
+        `${content.nations[defenderId]?.name ?? defenderId} began a one-year retaliation campaign after losing ${content.territories[operation.targetId]?.name ?? operation.targetId}.`,
+        operation.targetId,
+        defenderId,
+      );
+    }
   }
 
   war.battles += 1;
@@ -1170,8 +1363,18 @@ export function resolveBattlePulseV2(
   }
   const attackerCapacity = selectTotalManpowerV2(state, attackerId).capacity;
   const defenderCapacity = selectTotalManpowerV2(state, defenderId).capacity;
-  state.players[attackerId]!.warFatigue = round(clamp(state.players[attackerId]!.warFatigue + 0.08 + 4 * damageToAttacker / Math.max(0.000001, attackerCapacity), 0, 100));
-  state.players[defenderId]!.warFatigue = round(clamp(state.players[defenderId]!.warFatigue + 0.08 + 4 * damageToDefender / Math.max(0.000001, defenderCapacity), 0, 100));
+  addWarFatigueGainV2(
+    state,
+    attackerId,
+    0.08 + 4 * damageToAttacker / Math.max(0.000001, attackerCapacity),
+    attackerTraitContext,
+  );
+  addWarFatigueGainV2(
+    state,
+    defenderId,
+    0.08 + 4 * damageToDefender / Math.max(0.000001, defenderCapacity),
+    defenderTraitContext,
+  );
 
   const event: BattleEventV2 = {
     warId: war.id,
@@ -1261,6 +1464,15 @@ function endWarV2(
     reason,
     ...(settlement ? { settlement: { ...settlement } } : {}),
   });
+  const postWarTraitContexts = new Map<PlayerId, TraitEvaluationContextV2>(
+    [war.attackerId, war.defenderId].map((playerId) => [
+      playerId,
+      composeTraitContextV2(
+        traitNationContextV2(state, playerId),
+        traitWarContextV2(war, playerId),
+      ),
+    ]),
+  );
   state.wars = state.wars.filter((candidate) => candidate.id !== war.id);
   state.offers = state.offers.filter((offer) => offer.warId !== war.id);
   for (const playerId of [war.attackerId, war.defenderId]) {
@@ -1269,11 +1481,12 @@ function endWarV2(
       // Every completed campaign leaves another recovery load. The old floor
       // made the second and later conquest effectively free whenever the
       // first transition had not yet recovered.
-      state.players[playerId]!.warFatigue = round(clamp(
-        state.players[playerId]!.warFatigue + POST_WAR_TRANSITION_FATIGUE,
-        0,
-        100,
-      ));
+      addWarFatigueGainV2(
+        state,
+        playerId,
+        POST_WAR_TRANSITION_FATIGUE,
+        postWarTraitContexts.get(playerId),
+      );
     }
   }
   addTruceV2(state, war.attackerId, war.defenderId, truceTicks);
@@ -1682,6 +1895,16 @@ export function processWarsV2(
       endWarsForEliminatedNationV2(state, war.defenderId, 'War ended after national elimination.', endedWars);
       continue;
     }
+    if (war.revenge && state.tick >= war.revenge.expiresTick) {
+      endWarV2(
+        state,
+        war,
+        'The one-year retaliation window ended; both empires accepted a ceasefire.',
+        TRUCE_TICKS,
+        endedWars,
+      );
+      continue;
+    }
     const attackerArmy = nationalCombatManpowerV2(state, war.attackerId);
     const defenderArmy = nationalCombatManpowerV2(state, war.defenderId);
     if (attackerArmy <= 0.000001 && defenderArmy <= 0.000001) {
@@ -1716,14 +1939,31 @@ export function processWarsV2(
       // same-tick fronts stand down as soon as any one of them captures it.
       if (conquered) break;
     }
-    if (battles.some((battle) => battle.warId === war.id)) {
+    const warBattles = battles.filter((battle) => battle.warId === war.id);
+    if (warBattles.length > 0) {
       const attackerAfter = nationalCombatManpowerV2(state, war.attackerId);
       const defenderAfter = nationalCombatManpowerV2(state, war.defenderId);
+      const conquestBattle = warBattles.find((battle) => battle.conquered);
+      const revengeOpponentId = war.revenge?.claimantId === war.attackerId
+        ? war.defenderId : war.attackerId;
+      const revengeFulfilled = Boolean(war.revenge && conquestBattle
+        && conquestBattle.attackerId === war.revenge.claimantId
+        && state.territories[conquestBattle.targetId]?.coreOwner === revengeOpponentId);
       if (selectIsEliminatedV2(state, war.attackerId)) {
         endWarsForEliminatedNationV2(state, war.attackerId, 'War ended after national elimination.', endedWars);
       } else if (selectIsEliminatedV2(state, war.defenderId)) {
         endWarsForEliminatedNationV2(state, war.defenderId, 'War ended after national elimination.', endedWars);
-      } else if (conquered) {
+      } else if (revengeFulfilled) {
+        endWarV2(
+          state,
+          war,
+          'Retaliation succeeded after one enemy core territory was conquered.',
+          TRUCE_TICKS,
+          endedWars,
+        );
+      } else if (conquered && !war.revenge) {
+        // Defensive fallback for malformed legacy state. Canonical campaigns
+        // always arm a single revenge window on the first non-terminal capture.
         endWarV2(state, war, 'War ended after one territory was conquered.', TRUCE_TICKS, endedWars);
       } else if (attackerAfter <= 0.000001 && defenderAfter <= 0.000001) {
         endWarV2(state, war, 'Mutual army exhaustion ended the war without absorption.', TRUCE_TICKS, endedWars);
@@ -1849,7 +2089,15 @@ export function respondToOfferV2(
       expiresTick: state.tick + paymentWeeks,
     });
     state.players[offer.fromId]!.ceasefiresRequested += 1;
-    state.players[offer.fromId]!.warFatigue = round(clamp(state.players[offer.fromId]!.warFatigue + 2, 0, 100));
+    addWarFatigueGainV2(
+      state,
+      offer.fromId,
+      2,
+      composeTraitContextV2(
+        traitNationContextV2(state, offer.fromId),
+        traitWarContextV2(war, offer.fromId),
+      ),
+    );
     treatyTruceTicks = paymentWeeks + CEASEFIRE_POST_PAYMENT_TRUCE_TICKS;
     peaceReason = `Peace treaty accepted: ${paymentWeeks} weekly instalments and ${CEASEFIRE_POST_PAYMENT_TRUCE_TICKS} additional weeks of mutual peace.`;
     settlement = {

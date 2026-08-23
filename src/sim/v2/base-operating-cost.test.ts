@@ -6,32 +6,49 @@ import {
   selectOpeningCandidateFinancePlansV2,
   selectWeeklyFinanceBreakdownV2,
 } from './selectors';
+import { traitNationContextV2 } from './traitContext';
+import { countryTraitFactorV2 } from './traits';
 import { nationIdV2, territoryIdV2 } from './types';
 
 describe('universal base operating cost', () => {
-  it('charges every country exactly 20% of ordinary weekly tax revenue', () => {
+  it('starts every country at 20% of ordinary weekly tax revenue before its trait', () => {
     const state = createWorldStateV2(72_001);
     const plans = selectOpeningCandidateFinancePlansV2(state, WORLD_CONTENT_V2);
     expect(plans.size).toBe(WORLD_CONTENT_V2.nationIds.length);
-    for (const finance of plans.values()) {
+    for (const [playerId, finance] of plans) {
+      // Twenty percent remains the canonical rule. A country's own active
+      // trait is a final multiplier, never a replacement hidden in content.
+      const traitFactor = countryTraitFactorV2(
+        playerId,
+        'base-operating-cost',
+        traitNationContextV2(state, playerId),
+      );
       expect(finance.baseOperatingCost).toBeCloseTo(
-        finance.revenue * BASE_OPERATING_COST_TAX_REVENUE_SHARE,
+        finance.revenue * BASE_OPERATING_COST_TAX_REVENUE_SHARE * traitFactor,
         6,
       );
     }
   });
 
-  it('is selection-independent and leaves the other 80% as the tax basis for ordinary programs', () => {
+  it('is selection-independent and leaves revenue after Belgium\'s lower-overhead trait', () => {
     const state = createWorldStateV2(72_002);
     const belgium = nationIdV2('bel');
     const before = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, belgium);
     state.humanPlayerId = belgium;
     const after = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, belgium);
+    const effectiveShare = BASE_OPERATING_COST_TAX_REVENUE_SHARE
+      * countryTraitFactorV2(
+        belgium,
+        'base-operating-cost',
+        traitNationContextV2(state, belgium),
+      );
 
     expect(after.baseOperatingCost).toBe(before.baseOperatingCost);
     expect(after.net).toBe(before.net);
-    expect(after.baseOperatingCost).toBeCloseTo(after.revenue * 0.20, 6);
-    expect(after.revenue - after.baseOperatingCost).toBeCloseTo(after.revenue * 0.80, 6);
+    expect(effectiveShare).toBeCloseTo(0.20 * 0.92, 8);
+    expect(after.baseOperatingCost).toBeCloseTo(after.revenue * effectiveShare, 6);
+    expect(after.revenue - after.baseOperatingCost)
+      .toBeCloseTo(after.revenue * (1 - effectiveShare), 6);
   });
 
   it('counts the operating cost exactly once in expenses, net cash and debt', () => {
@@ -58,17 +75,22 @@ describe('universal base operating cost', () => {
     expect(Number.isFinite(finance.closingTreasury)).toBe(true);
   });
 
-  it('remains exactly 20% when population damage lowers the blended tax base', () => {
+  it('keeps the same canonical share and trait factor after population damage', () => {
     const state = createWorldStateV2(72_004);
     const belgium = nationIdV2('bel');
     const before = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, belgium);
     state.territories[territoryIdV2('bel')]!.population *= 0.50;
     const after = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, belgium);
+    const traitFactor = countryTraitFactorV2(
+      belgium,
+      'base-operating-cost',
+      traitNationContextV2(state, belgium),
+    );
 
     expect(after.revenue).toBeLessThan(before.revenue);
     expect(after.baseOperatingCost).toBeLessThan(before.baseOperatingCost);
     expect(after.baseOperatingCost).toBeCloseTo(
-      after.revenue * BASE_OPERATING_COST_TAX_REVENUE_SHARE,
+      after.revenue * BASE_OPERATING_COST_TAX_REVENUE_SHARE * traitFactor,
       6,
     );
   });

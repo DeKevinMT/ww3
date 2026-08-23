@@ -13,6 +13,8 @@ import {
   selectNationalEconomyV2,
   selectWeeklyFinanceBreakdownV2,
 } from './selectors';
+import { traitNationContextV2 } from './traitContext';
+import { countryTraitFactorV2 } from './traits';
 import { nationIdV2, territoryIdV2, type WorldContentV2 } from './types';
 
 const bel = nationIdV2('bel');
@@ -73,8 +75,15 @@ describe('V2 fiscal identity and population-linked income', () => {
     const state = createWorldStateV2(4_201, WORLD_CONTENT_V2);
     state.wars = [];
     const economy = selectNationalEconomyV2(state, WORLD_CONTENT_V2, bel);
+    // The fiscal formula stays canonical; Belgium's trait multiplies its tax
+    // collection after that formula has produced ordinary weekly revenue.
+    const taxTraitFactor = countryTraitFactorV2(
+      bel,
+      'tax-efficiency',
+      traitNationContextV2(state, bel),
+    );
     expect(economy.weeklyRevenue).toBeCloseTo(
-      economy.taxableOutput * economy.taxRate / 52,
+      economy.taxableOutput * economy.taxRate / 52 * taxTraitFactor,
       5,
     );
     expect(economy.effectivePopulation).toBe(economy.population);
@@ -201,7 +210,12 @@ describe('V2 fiscal identity and population-linked income', () => {
       const wealthTier = Math.min(4, Math.max(0, Math.log2(Math.max(10_000, gdpPerCapita) / 10_000)));
       const sizeDamping = 1 / Math.sqrt(Math.max(1, real.gdp / 500));
       const startingCashWeeks = Math.min(9, Math.max(2, 2 + 2.25 * wealthTier * sizeDamping));
-      const expected = Math.round(Math.max(0.10, weeklyRevenue * startingCashWeeks) * 1_000) / 1_000;
+      // The minimum/cash-weeks calculation is shared by every country. Its
+      // unique starting-treasury trait is deliberately applied exactly once.
+      const traitFactor = countryTraitFactorV2(id, 'starting-treasury');
+      const expected = Math.round(
+        Math.max(0.10, weeklyRevenue * startingCashWeeks) * traitFactor * 1_000,
+      ) / 1_000;
       expect(state.players[id]!.treasury, String(id)).toBe(expected);
     }
     const qatarWeeks = state.players[qat]!.treasury

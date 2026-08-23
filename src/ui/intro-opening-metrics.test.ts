@@ -54,7 +54,7 @@ describe('intro opening metrics cache', () => {
 
   it('keeps global rank and military power as distinct, clearly ordered choices', () => {
     expect(INTRO_SORT_OPTIONS.map((option) => option.value)).toEqual([
-      'power', 'military', 'attack', 'defense', 'iq', 'manpower',
+      'power', 'military', 'aggressiveness', 'attack', 'defense', 'iq', 'manpower',
       'economy', 'economic-growth', 'tax', 'population', 'growth',
     ]);
     expect(INTRO_SORT_OPTIONS.find((option) => option.value === 'military')?.label).toBe('Military power');

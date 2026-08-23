@@ -7,7 +7,7 @@ import type {
   TerrainType,
 } from './types';
 
-export const V2_RULES_VERSION = 'frontier-command-v2.57-performance-multiplayer';
+export const V2_RULES_VERSION = 'frontier-command-v2.59-country-traits';
 export const V2_CONTENT_VERSION = 'natural-earth-countries-2026-v7-greenland';
 export const V2_MAP_ID = 'natural-earth-countries-2026';
 export const V2_TICK_DURATION_MS = 1_000;
@@ -46,13 +46,18 @@ export const EXTREME_CRISIS_FOOD_RESERVE_WEEKS = 0.25;
 export const EXTREME_CRISIS_MAX_UPKEEP_FUNDING = 0.50;
 export const EXTREME_CRISIS_DEMOBILIZATION_RATE = 0.0005;
 /** Normal training is slow and predictable; Training research improves the pipeline. */
-export const PASSIVE_RECRUITMENT_CAPACITY_RATE = 0.001;
+export const PASSIVE_RECRUITMENT_CAPACITY_RATE = 0.00085;
+/** Smaller maximum armies complete the same readiness rebuild somewhat sooner. */
+export const RECRUITMENT_SIZE_REFERENCE_CAPACITY = 0.10;
+export const RECRUITMENT_SIZE_SCALING_EXPONENT = 0.10;
+export const RECRUITMENT_SIZE_SPEED_MIN = 0.85;
+export const RECRUITMENT_SIZE_SPEED_MAX = 1.10;
 export const PASSIVE_RECRUITMENT_TRAINING_BONUS = 0.02;
 /** A finite trained pool: at most one full active army, built only after the peacetime army is ready. */
 export const TRAINED_RESERVE_CAPACITY_MULTIPLIER = 1;
 export const TRAINED_RESERVE_ACTIVE_READY_RATIO = 0.999999;
 /** Existing trained soldiers mobilise faster than the pipeline can train fresh replacements. */
-export const TRAINED_RESERVE_DEPLOYMENT_THROUGHPUT_MULTIPLIER = 3;
+export const TRAINED_RESERVE_DEPLOYMENT_THROUGHPUT_MULTIPLIER = 3.44;
 /** War keeps only a paid 5% training trickle while normal replacement draw remains much faster. */
 export const TRAINED_RESERVE_WARTIME_TRAINING_FACTOR = 0.05;
 export const TRAINED_RESERVE_TRAINING_COST_MULTIPLIER = 1.25;
@@ -94,6 +99,8 @@ export const COMBAT_POWER_RATIO_EXPONENT = 1;
  * deliberately gone. At 0.8% this is half of the previous baseline.
  */
 export const COMBAT_DAMAGE_EFFECTIVENESS = 0.008;
+/** Offensive formations take a modest extra exposure penalty in every exchange. */
+export const ATTACKER_MILITARY_LOSS_MULTIPLIER = 1.08;
 /** Front-planning threshold for viability and initiative reassessment; it never adds casualties. */
 export const COMBAT_ROUTE_STRENGTH_RATIO = 0.05;
 /** Defensive research saturates at +20%; level 20 reaches +10%. */
@@ -137,6 +144,10 @@ export const PEACE_REQUEST_MIN_WAR_AGE_TICKS = 52;
 export const PEACE_REQUEST_COOLDOWN_TICKS = 26;
 /** Peace decisions remain available for half a year instead of disappearing between AI reviews. */
 export const PEACE_OFFER_DURATION_TICKS = 26;
+/** Human-player alliance invitations remain actionable for half a year. */
+export const ALLIANCE_OFFER_DURATION_TICKS = 26;
+/** A revenge claim is useful for at most one year after it is triggered. */
+export const WAR_REVENGE_WINDOW_TICKS = 52;
 /** Ending a war unilaterally creates a material 52-week treaty burden. */
 export const CEASEFIRE_PAYMENT_WEEKS = 52;
 /** Neither signatory may restart the war until a full year after the last instalment. */
@@ -180,7 +191,9 @@ export const FOOD_EXPORT_MARKET_PRICE_LEVEL = 1.20;
 /** Local price levels keep food meaningful in rich economies without crushing low-income ones. */
 export const FOOD_PRICE_LEVEL_FLOOR = 0.75;
 export const FOOD_PRICE_LEVEL_PER_WEALTH_THOUSAND = 0.03;
-export const FOOD_PRICE_LEVEL_WEALTH_CAP = 75;
+/** Above $100k GDP/capita, prices keep rising at one quarter of the normal slope. */
+export const FOOD_PRICE_LEVEL_SOFTENING_THRESHOLD = 100;
+export const FOOD_PRICE_LEVEL_POST_THRESHOLD_SLOPE_SHARE = 0.25;
 export const FOOD_SHORTAGE_POPULATION_LOSS = 0.0008;
 /** Empty reserves can add up to six percentage points of annual mortality in a live shortage. */
 export const FOOD_EMPTY_RESERVE_ANNUAL_MORTALITY_MAX = 0.06;
@@ -205,8 +218,8 @@ export const NATIONAL_IQ_INSTITUTIONAL_CAPACITY_CEILING = 18;
 export const NATIONAL_IQ_PROXY_GDP_WEIGHT = 0.75;
 export const NATIONAL_IQ_PROXY_INSTITUTION_WEIGHT = 0.25;
 /** GDP per capita remains the primary opening-force quality input; IQ refines it. */
-export const NATIONAL_QUALITY_GDP_WEIGHT = 0.60;
-export const NATIONAL_QUALITY_IQ_WEIGHT = 0.40;
+export const NATIONAL_QUALITY_GDP_WEIGHT = 0.70;
+export const NATIONAL_QUALITY_IQ_WEIGHT = 0.30;
 /** Total opening combat-quality spread around the neutral readiness baseline. */
 export const NATIONAL_QUALITY_COMBAT_SPAN = 0.06;
 /**
@@ -281,13 +294,16 @@ export const WAR_ACCESS_OPERATION_MULTIPLIER = {
 } as const;
 export const WAR_ACCESS_SUPPLY_MULTIPLIER = {
   land: 1,
-  naval: 0.92,
+  // Sea campaigns pay primarily through mobilisation and weekly operations;
+  // ordinary naval supply only trims combat effectiveness slightly.
+  naval: 0.98,
 } as const;
 /** Naval routes remain usable at global range, but distance increasingly taxes fleets and supply. */
 export const NAVAL_ROUTE_BASE_DISTANCE_KM = 1_500;
 export const NAVAL_ROUTE_MAX_DISTANCE_KM = 9_000;
 export const NAVAL_ROUTE_OPERATION_MULTIPLIER_MAX = 2.15;
-export const NAVAL_ROUTE_SUPPLY_MULTIPLIER_MIN = 0.62;
+/** Even the longest route keeps 90% combat supply; its main penalty is financial. */
+export const NAVAL_ROUTE_SUPPLY_MULTIPLIER_MIN = 0.90;
 
 export function navalRouteDistancePressureV2(distanceKm?: number): number {
   if (!Number.isFinite(distanceKm) || distanceKm === undefined) return 0;

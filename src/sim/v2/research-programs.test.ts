@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  PASSIVE_RECRUITMENT_CAPACITY_RATE,
   RESEARCH_BRANCHES,
   RESEARCH_BRANCH_EFFECTS,
 } from './balance';
@@ -12,6 +13,7 @@ import {
   selectArmyCapacityTargetV2,
   selectArmyStrengthV2,
   selectRecruitmentThroughputV2,
+  selectRecruitmentTrainingPipelineV2,
   selectRecruitmentUnitCostV2,
   selectResearchBranchCostV2,
   selectResearchEffectImpactV2,
@@ -113,6 +115,24 @@ describe('V2 integrated research programs and army economy', () => {
     state.players[bel].research.effectLevels.recovery = 25;
     expect(trained).toBeGreaterThan(base);
     expect(selectRecruitmentThroughputV2(state, WORLD_CONTENT_V2, bel)).toBe(trained);
+  });
+
+  it('recruits every baseline more slowly while smaller maximum armies fill sooner', () => {
+    const state = createWorldStateV2(4_040_4);
+    for (const id of [bel, ind]) {
+      state.players[id].foodSecurity = 1;
+      state.players[id].research.effectLevels.training = 0;
+    }
+    const small = selectArmyStrengthV2(state, WORLD_CONTENT_V2, bel);
+    const large = selectArmyStrengthV2(state, WORLD_CONTENT_V2, ind);
+    const smallPipeline = selectRecruitmentTrainingPipelineV2(state, WORLD_CONTENT_V2, bel);
+    const largePipeline = selectRecruitmentTrainingPipelineV2(state, WORLD_CONTENT_V2, ind);
+
+    expect(PASSIVE_RECRUITMENT_CAPACITY_RATE).toBe(0.00085);
+    expect(small.capacity).toBeLessThan(large.capacity);
+    expect(smallPipeline).toBeLessThan(small.capacity * 0.001);
+    expect(largePipeline).toBeLessThan(large.capacity * 0.001);
+    expect(small.capacity / smallPipeline).toBeLessThan(large.capacity / largePipeline);
   });
 
   it('keeps high-quality ATK/DEF recruitment more expensive on a bounded curve', () => {

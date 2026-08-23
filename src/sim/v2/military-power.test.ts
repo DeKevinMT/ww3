@@ -137,7 +137,7 @@ describe('V2 real-world military power calibration', () => {
         + selectTerritoryPowerV2(state, WORLD_CONTENT_V2, dutchTerritory),
       8,
     );
-    expect(state.schemaVersion).toBe(21);
+    expect(state.schemaVersion).toBe(22);
     expect('militaryBaseRatings' in state.players[belgium]).toBe(false);
   });
 

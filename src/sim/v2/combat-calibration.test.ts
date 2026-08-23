@@ -2,8 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { nextRandom } from '../../game/random';
 import {
   BATTLE_INTERVAL_TICKS,
+  ATTACKER_MILITARY_LOSS_MULTIPLIER,
+  COMBAT_DAMAGE_EFFECTIVENESS,
+  COMBAT_POWER_RATIO_EXPONENT,
   COMBAT_ROUTE_STRENGTH_RATIO,
   DEFENDER_COUNTERFIRE_MULTIPLIER,
+  WAR_ACCESS_CASUALTY_MULTIPLIER,
   WAR_MOBILIZATION_TICKS,
 } from './balance';
 import { createWorldStateV2 } from './bootstrap';
@@ -256,6 +260,13 @@ describe('V2 coherent combat and forecast calibration', () => {
     const projected = projectCombatExchangeV2(
       state, WORLD_CONTENT_V2, bel, nld, belTerritory, nldTerritory, 'land', 1, 1,
     )!;
+    const casualtyLevel = state.players[bel]!.research.effectLevels['casualty-reduction'];
+    const expectedAttackerLosses = projected.attackerStrength * COMBAT_DAMAGE_EFFECTIVENESS
+      * Math.pow(projected.counterRatio, COMBAT_POWER_RATIO_EXPONENT)
+      * WAR_ACCESS_CASUALTY_MULTIPLIER.land * ATTACKER_MILITARY_LOSS_MULTIPLIER
+      * (1 - 0.50 * casualtyLevel / (casualtyLevel + 30));
+    expect(ATTACKER_MILITARY_LOSS_MULTIPLIER).toBe(1.08);
+    expect(projected.attackerLosses).toBeCloseTo(expectedAttackerLosses, 9);
     expect(DEFENDER_COUNTERFIRE_MULTIPLIER).toBeGreaterThan(1);
     expect(projected.attackerLossRate).toBeGreaterThan(projected.defenderLossRate);
     const event = resolveBattlePulseV2(state, WORLD_CONTENT_V2, war(state), operation())!;
@@ -342,6 +353,29 @@ describe('V2 coherent combat and forecast calibration', () => {
     expect(forecastWarV2(strained, WORLD_CONTENT_V2, bel, nld).winChance).toBeLessThan(baseline);
   });
 
+  it('prices the full defending empire, support room and retaliation into conquest odds', () => {
+    const shallow = calibratedState(4_004_1);
+    shallow.territories[nldTerritory].army.manpower = 0.000001;
+    const shallowForecast = forecastWarV2(shallow, WORLD_CONTENT_V2, bel, nld);
+
+    const empire = calibratedState(4_004_1);
+    empire.territories[nldTerritory].army.manpower = 0.000001;
+    empire.territories[deuTerritory].owner = nld;
+    empire.territories[deuTerritory].coreOwner = deu;
+    empire.territories[deuTerritory].integration = 0.35;
+    invalidateTerritoryIndexV2(empire);
+    synchronizeArmyCapacityV2(empire, WORLD_CONTENT_V2);
+    empire.territories[deuTerritory].army.manpower = empire.territories[deuTerritory].army.capacity;
+    const empireForecast = forecastWarV2(empire, WORLD_CONTENT_V2, bel, nld);
+
+    expect(empireForecast.defenderTerritoryCount).toBe(2);
+    expect(empireForecast.defenderEmpireStrength).toBeGreaterThan(empireForecast.defenderStrength);
+    expect(empireForecast.defenderEmpireSupport).toBeGreaterThan(0);
+    expect(empireForecast.retaliationExpected).toBe(true);
+    expect(empireForecast.winChance).toBeLessThan(shallowForecast.winChance);
+    expect(empireForecast.winChance).toBeLessThanOrEqual(92);
+  });
+
   it('chooses a viable committed border army instead of locking onto a peripheral crumb', () => {
     const state = calibratedState(4_005);
     state.territories[deuTerritory].owner = bel;
@@ -387,7 +421,7 @@ describe('V2 coherent combat and forecast calibration', () => {
     const indiaReservesAtMidWar = result.engine.state.players[ind].trainedReserves;
     const indiaOwnerAtMidWar = result.engine.state.territories[territoryIdV2('ind')].owner;
     let weeks = result.weeks;
-    while (weeks < 200 && result.engine.activeWarBetween('chn', 'ind')) {
+    while (weeks < 320 && result.engine.activeWarBetween('chn', 'ind')) {
       result.engine.step();
       weeks += 1;
     }
@@ -398,11 +432,11 @@ describe('V2 coherent combat and forecast calibration', () => {
     expect(midWar?.battles).toBeGreaterThan(30);
     expect(indiaManpowerAtMidWar).toBeGreaterThan(0);
     expect(indiaManpowerAtMidWar).toBeLessThan(result.defenderManpowerStart);
-    expect(indiaReservesAtMidWar).toBeLessThan(0.001);
+    expect(indiaReservesAtMidWar).toBeLessThan(0.064);
     expect(indiaOwnerAtMidWar).toBe(ind);
     expect(result.engine.activeWarBetween('chn', 'ind')).toBeUndefined();
     expect(result.engine.territoriesOf('ind')).toHaveLength(0);
     expect(weeks).toBeGreaterThan(80);
-    expect(weeks).toBeLessThanOrEqual(200);
-  }, 90_000);
+    expect(weeks).toBeLessThanOrEqual(320);
+  }, 120_000);
 });

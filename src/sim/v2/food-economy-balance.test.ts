@@ -7,6 +7,7 @@ import {
   FOOD_EXPORT_MARKET_PRICE_LEVEL,
   FOOD_EXPORT_PRICE_MULTIPLIER,
   FOOD_IMPORT_COST_PER_MILLION,
+  FOOD_PRICE_LEVEL_POST_THRESHOLD_SLOPE_SHARE,
 } from './balance';
 import { createWorldStateV2 } from './bootstrap';
 import { WORLD_CONTENT_V2 } from './content';
@@ -18,6 +19,7 @@ import {
 import { redirectDevelopmentFundingToFoodV2 } from './nationalAi';
 import {
   createPowerSnapshotV2,
+  foodPriceLevelForOutputPerPersonV2,
   selectFoodDomesticCapacityTargetV2,
   selectWeeklyFinanceBreakdownV2,
 } from './selectors';
@@ -32,6 +34,17 @@ describe('V2 funded food transition and trade', () => {
     expect(FOOD_COST_GLOBAL_MULTIPLIER).toBe(1.20);
     expect(FOOD_IMPORT_COST_PER_MILLION * FOOD_COST_GLOBAL_MULTIPLIER)
       .toBeCloseTo(3 * FOOD_DOMESTIC_COST_PER_MILLION * FOOD_COST_GLOBAL_MULTIPLIER, 10);
+  });
+
+  it('keeps GDP-per-capita food prices uncapped but softens their slope above $100k', () => {
+    expect(FOOD_PRICE_LEVEL_POST_THRESHOLD_SLOPE_SHARE).toBe(0.25);
+    expect(foodPriceLevelForOutputPerPersonV2(5)).toBeCloseTo(0.9, 10);
+    expect(foodPriceLevelForOutputPerPersonV2(50)).toBeCloseTo(2.25, 10);
+    expect(foodPriceLevelForOutputPerPersonV2(100)).toBeCloseTo(3.75, 10);
+    expect(foodPriceLevelForOutputPerPersonV2(150)).toBeCloseTo(4.125, 10);
+    expect(foodPriceLevelForOutputPerPersonV2(300)).toBeCloseTo(5.25, 10);
+    expect(foodPriceLevelForOutputPerPersonV2(300))
+      .toBeGreaterThan(foodPriceLevelForOutputPerPersonV2(150));
   });
 
   it('redirects Development, never Research, into food for a human or rival shortage', () => {

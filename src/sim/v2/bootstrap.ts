@@ -20,6 +20,7 @@ import {
 } from './capacity';
 import { calculateBlendedFiscalCapacityV2 } from './fiscal';
 import { initialTrainedReserveManpowerV2 } from './reserveForces';
+import { countryTraitFactorV2 } from './traits';
 import {
   invalidateTerritoryIndexV2,
   selectFoodDomesticCapacityTargetV2,
@@ -63,9 +64,11 @@ function createNationState(id: PlayerId, content: WorldContentV2): NationStateV2
   const initialFoodBufferWeeks = FOOD_TARGET_WEEKS
     * clamp(1 - 4 * definition.real.foodInsecurityRate, 0.08, 1);
   const initialArmyCapacity = initialNationArmyCapacityBenchmarkV2(content, id);
+  const startingTreasury = Math.max(0.10, weeklyRevenue * startingCashWeeks)
+    * countryTraitFactorV2(id, 'starting-treasury');
   return {
     empireName: '',
-    treasury: round(Math.max(0.10, weeklyRevenue * startingCashWeeks), 3),
+    treasury: round(startingTreasury, 3),
     foodStock: round(definition.real.population * initialFoodBufferWeeks),
     domesticFoodCapacity: 0,
     // Food security is a live result of funded supply plus stored reserves,
@@ -102,7 +105,9 @@ function createTerritoryState(id: TerritoryId, content: WorldContentV2): Territo
     0.62,
     0.96,
   );
-  const capacity = initialTerritoryArmyCapacityV2(content, id);
+  const unmodifiedCapacity = initialTerritoryArmyCapacityV2(content, id);
+  const capacity = round(unmodifiedCapacity
+    * countryTraitFactorV2(definition.initialOwnerId, 'army-capacity'));
   const openingFill = initialArmyCapacityRatioV2(content, definition.initialOwnerId);
   return {
     owner: definition.initialOwnerId,
@@ -112,7 +117,8 @@ function createTerritoryState(id: TerritoryId, content: WorldContentV2): Territo
     condition: round(condition, 6),
     integration: 1,
     army: {
-      manpower: round(capacity * openingFill),
+      // Capacity traits create future room, not a free opening army.
+      manpower: round(unmodifiedCapacity * openingFill),
       capacity,
       baseAttack: origin.militaryAttackRating ?? origin.militaryQuality ?? 1,
       baseDefense: origin.militaryDefenseRating ?? origin.militaryQuality ?? 1,
@@ -267,7 +273,7 @@ export function createWorldStateV2(
     content.territoryIds.map((id) => [id, createTerritoryState(id, content)]),
   );
   const state: WorldStateV2 = {
-    schemaVersion: 21,
+    schemaVersion: 22,
     rulesVersion: V2_RULES_VERSION,
     contentVersion: V2_CONTENT_VERSION,
     mapId: V2_MAP_ID,
@@ -284,6 +290,8 @@ export function createWorldStateV2(
     truces: [],
     ceasefireObligations: [],
     offers: [],
+    alliances: [],
+    allianceOffers: [],
     events: [],
     aiEscalation: {
       lastWarStartTick: -1_000_000,

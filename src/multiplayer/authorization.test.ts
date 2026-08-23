@@ -54,4 +54,32 @@ describe('multiplayer command authorization', () => {
       type: 'respond-to-offer', offerId: 'offer-test', accept: true,
     }, false).accepted).toBe(false);
   });
+
+  it('binds alliance invitations to the sender seat and replies to the addressed seat', () => {
+    const state = createWorldStateV2(54, WORLD_CONTENT_V2);
+    state.humanPlayerIds = [belgium, canada].sort((left, right) => left.localeCompare(right));
+
+    expect(authorizeMultiplayerCommandV2(state, belgium, {
+      type: 'propose-alliance', fromId: belgium, targetId: canada,
+    }, false).accepted).toBe(true);
+    expect(authorizeMultiplayerCommandV2(state, canada, {
+      type: 'propose-alliance', fromId: belgium, targetId: canada,
+    }, false).accepted).toBe(false);
+
+    state.allianceOffers.push({
+      fromId: belgium,
+      toId: canada,
+      createdTick: 0,
+      expiresTick: 26,
+    });
+    expect(authorizeMultiplayerCommandV2(state, canada, {
+      type: 'respond-to-alliance', fromId: belgium, toId: canada, accept: true,
+    }, false).accepted).toBe(true);
+    expect(authorizeMultiplayerCommandV2(state, belgium, {
+      type: 'respond-to-alliance', fromId: belgium, toId: canada, accept: true,
+    }, true).accepted).toBe(false);
+    expect(authorizeMultiplayerCommandV2(state, canada, {
+      type: 'respond-to-alliance', fromId: nationIdV2('fra'), toId: canada, accept: true,
+    }, false).accepted).toBe(false);
+  });
 });

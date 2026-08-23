@@ -15,7 +15,7 @@ import {
   type MultiplayerHostLaunch,
 } from './ui/MultiplayerLobby';
 import { MultiplayerSessionStatus } from './ui/MultiplayerSessionStatus';
-import { WorldUIV2 } from './ui/WorldUIV2';
+import { IntroOpeningMetricsCacheV2, WorldUIV2 } from './ui/WorldUIV2';
 
 const mapErrors = validateMap();
 if (mapErrors.length > 0) throw new Error(`Invalid map:\n${mapErrors.join('\n')}`);
@@ -130,6 +130,7 @@ async function launchGuestGame(launch: MultiplayerGuestLaunch): Promise<void> {
     transport: launch.transport,
     countryId,
     seatCount: seats.size,
+    humanPlayerIds: [...seats.values()],
   });
   const accepted = session.acceptSnapshot(launch.snapshot);
   if (!accepted.accepted || !session.engine) {
@@ -147,9 +148,10 @@ async function launchGuestGame(launch: MultiplayerGuestLaunch): Promise<void> {
   attachGuestStatus(session);
 }
 
-function openMultiplayerLobby(): void {
+function openMultiplayerLobby(preferredCountryId?: PlayerId): void {
   if (activeLobby || activeSession) return;
   const pausedEngine = activeEngine;
+  if (!pausedEngine) return;
   const previousSpeed = pausedEngine?.state.speed;
   pausedEngine?.setSpeed(0);
   const lobby = new MultiplayerLobby({
@@ -162,6 +164,8 @@ function openMultiplayerLobby(): void {
     },
     onHostLaunch: launchHostGame,
     onGuestLaunch: launchGuestGame,
+    openingMetrics: new IntroOpeningMetricsCacheV2().read(pausedEngine),
+    preferredCountryId,
   });
   activeLobby = lobby;
 }

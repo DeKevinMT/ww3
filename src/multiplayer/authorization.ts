@@ -14,7 +14,7 @@ function rejected(reason: string): CommandResultV2 {
  * country it does not own even when the payload itself is otherwise valid.
  */
 export function authorizeMultiplayerCommandV2(
-  state: Pick<WorldStateV2, 'offers' | 'players'>,
+  state: Pick<WorldStateV2, 'allianceOffers' | 'offers' | 'players'>,
   seatCountryId: PlayerId,
   command: WorldCommandV2,
   isRoomHost: boolean,
@@ -51,6 +51,19 @@ export function authorizeMultiplayerCommandV2(
       const offer = state.offers.find((candidate) => candidate.id === command.offerId);
       return offer?.toId === seatCountryId
         ? allowed() : rejected('That peace offer is not addressed to your country.');
+    }
+    case 'propose-alliance':
+      return command.fromId === seatCountryId
+        ? allowed() : rejected('You can only invite another player from your own country.');
+    case 'respond-to-alliance': {
+      if (command.toId !== seatCountryId) {
+        return rejected('That alliance invitation is not addressed to your country.');
+      }
+      const offer = state.allianceOffers.find((candidate) => (
+        candidate.fromId === command.fromId && candidate.toId === command.toId
+      ));
+      return offer
+        ? allowed() : rejected('That alliance invitation is no longer available.');
     }
   }
 }

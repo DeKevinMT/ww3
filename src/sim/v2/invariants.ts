@@ -1,4 +1,10 @@
-import { CEASEFIRE_PAYMENT_WEEKS, PROPAGANDA_DURATION_TICKS, RESEARCH_BRANCHES } from './balance';
+import {
+  ALLIANCE_OFFER_DURATION_TICKS,
+  CEASEFIRE_PAYMENT_WEEKS,
+  PROPAGANDA_DURATION_TICKS,
+  RESEARCH_BRANCHES,
+  WAR_REVENGE_WINDOW_TICKS,
+} from './balance';
 import type { WorldContentV2 } from './content';
 import { stateTerritoryArmyCapacityTargetV2 } from './capacity';
 import { isHumanPlayerV2 } from './humanPlayers';
@@ -6,6 +12,7 @@ import {
   finiteStateNumbersV2,
   relationKeyV2,
   selectArmyCombatManpowerV2,
+  selectIsEliminatedV2,
   selectTerritoriesOfV2,
   selectTerritoryWarAccessV2,
 } from './selectors';
@@ -52,11 +59,14 @@ const BREAKTHROUGH_KEYS = [
 const ARMY_KEYS = ['baseAttack', 'baseDefense', 'capacity', 'manpower'];
 const PROPAGANDA_PROGRAM_KEYS = ['endsTick', 'startedTick', 'totalSuspicionReduction', 'weeklySuspicionReduction'];
 const INTEGRATION_PROGRAM_KEYS = ['annualCost', 'completesTick', 'fromCoreOwnerId', 'fromOwnerId', 'startedTick', 'toOwnerId'];
-const WAR_KEYS = ['attackerCivilianLosses', 'attackerId', 'attackerLosses', 'attackerOperations', 'battles', 'defenderCivilianLosses', 'defenderId', 'defenderLosses', 'defenderOperations', 'id', 'lastBattleTick', 'lastPeaceOfferTick', 'startedTick', 'warScore'];
+const WAR_KEYS = ['attackerCivilianLosses', 'attackerId', 'attackerLosses', 'attackerOperations', 'battles', 'defenderCivilianLosses', 'defenderId', 'defenderLosses', 'defenderOperations', 'id', 'lastBattleTick', 'lastPeaceOfferTick', 'revenge', 'startedTick', 'warScore'];
+const WAR_REVENGE_KEYS = ['claimantId', 'expiresTick', 'triggeredTick'];
 const OPERATION_KEYS = ['access', 'commanderId', 'doctrine', 'holdUntilTick', 'lastBattleTick', 'momentum', 'sourceId', 'startedTick', 'targetId'];
 const TRUCE_KEYS = ['expiresTick', 'leftId', 'rightId'];
 const CEASEFIRE_OBLIGATION_KEYS = ['expiresTick', 'payeeId', 'payerId', 'startsTick', 'warId', 'weeklyCost'];
 const OFFER_KEYS = ['cashAmount', 'createdTick', 'expiresTick', 'fromId', 'id', 'paymentWeeks', 'settlement', 'status', 'toId', 'warId', 'weeklyCost'];
+const ALLIANCE_KEYS = ['formedTick', 'leftId', 'rightId'];
+const ALLIANCE_OFFER_KEYS = ['createdTick', 'expiresTick', 'fromId', 'toId'];
 const AI_ESCALATION_KEYS = ['coalitionMembers', 'globalThreat', 'lastFederationTick', 'lastHumanPower', 'lastHumanTerritoryCount', 'lastWarStartTick', 'resistanceLevel'];
 const OPTIONAL_CANONICAL_KEYS = ['integrationProgram'] as const;
 const allowedKeySetCache = new WeakMap<readonly string[], ReadonlySet<string>>();
@@ -87,7 +97,7 @@ function hasOnlyKeys(value: object, allowed: readonly string[]): boolean {
 
 export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2): string[] {
   const errors: string[] = [];
-  if (state.schemaVersion !== 21) errors.push('Canonical state must use schema version 21.');
+  if (state.schemaVersion !== 22) errors.push('Canonical state must use schema version 22.');
   if (!finiteStateNumbersV2(state)) errors.push('Canonical state contains a non-finite number.');
   const playerIds = Object.keys(state.players) as PlayerId[];
   const territoryIds = Object.keys(state.territories) as TerritoryId[];
@@ -231,6 +241,14 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
     referencedNations.add(offer.fromId);
     referencedNations.add(offer.toId);
   }
+  for (const alliance of state.alliances) {
+    referencedNations.add(alliance.leftId);
+    referencedNations.add(alliance.rightId);
+  }
+  for (const offer of state.allianceOffers) {
+    referencedNations.add(offer.fromId);
+    referencedNations.add(offer.toId);
+  }
   for (const obligation of state.ceasefireObligations) {
     referencedNations.add(obligation.payerId);
     referencedNations.add(obligation.payeeId);
@@ -259,10 +277,29 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
       || (war.defenderCivilianLosses ?? 0) < 0) {
       errors.push(`War ${war.id} has invalid numeric state.`);
     }
+    const revenge = war.revenge as unknown;
+    if (revenge !== undefined && revenge !== null) {
+      if (typeof revenge !== 'object' || Array.isArray(revenge)) {
+        errors.push(`War ${war.id} has invalid revenge state.`);
+      } else {
+        const claim = revenge as NonNullable<typeof war.revenge>;
+        if (!exactKeys(claim, WAR_REVENGE_KEYS)
+          || (claim.claimantId !== war.attackerId && claim.claimantId !== war.defenderId)
+          || !Number.isInteger(claim.triggeredTick) || !Number.isInteger(claim.expiresTick)
+          || claim.triggeredTick < war.startedTick || claim.triggeredTick > state.tick
+          || claim.expiresTick - claim.triggeredTick !== WAR_REVENGE_WINDOW_TICKS
+          || claim.expiresTick <= state.tick) {
+          errors.push(`War ${war.id} has invalid revenge state.`);
+        }
+      }
+    }
     const key = relationKeyV2(war.attackerId, war.defenderId);
     if (warPairs.has(key)) errors.push(`Duplicate active war: ${key}.`);
     warPairs.add(key);
     if (state.truces.some((truce) => relationKeyV2(truce.leftId, truce.rightId) === key)) errors.push(`War and truce overlap: ${key}.`);
+    if (state.alliances.some((alliance) => relationKeyV2(alliance.leftId, alliance.rightId) === key)) {
+      errors.push(`War and alliance overlap: ${key}.`);
+    }
     if (!Array.isArray(war.attackerOperations) || !Array.isArray(war.defenderOperations)) {
       errors.push(`War ${war.id} has invalid operation lists.`);
       continue;
@@ -313,6 +350,49 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
       || (offer.settlement === 'ceasefire' && (!(offer.weeklyCost! > 0) || offer.paymentWeeks !== CEASEFIRE_PAYMENT_WEEKS))) {
       errors.push(`Offer ${offer.id} has invalid numeric state.`);
     }
+  }
+  const alliancePairs = new Set<string>();
+  const allianceSignature = state.alliances.map((alliance) => `${alliance.leftId}:${alliance.rightId}`).join('|');
+  const sortedAllianceSignature = [...state.alliances]
+    .sort((left, right) => left.leftId.localeCompare(right.leftId) || left.rightId.localeCompare(right.rightId))
+    .map((alliance) => `${alliance.leftId}:${alliance.rightId}`).join('|');
+  if (allianceSignature !== sortedAllianceSignature) errors.push('Alliances are not stably sorted.');
+  for (const alliance of state.alliances) {
+    const key = relationKeyV2(alliance.leftId, alliance.rightId);
+    if (!exactKeys(alliance, ALLIANCE_KEYS)
+      || alliance.leftId.localeCompare(alliance.rightId) >= 0
+      || !isHumanPlayerV2(state, alliance.leftId) || !isHumanPlayerV2(state, alliance.rightId)
+      || !state.players[alliance.leftId] || !state.players[alliance.rightId]
+      || selectIsEliminatedV2(state, alliance.leftId) || selectIsEliminatedV2(state, alliance.rightId)
+      || !Number.isInteger(alliance.formedTick) || alliance.formedTick < 0 || alliance.formedTick > state.tick
+      || warPairs.has(key)) {
+      errors.push(`Alliance ${key} is invalid.`);
+    }
+    if (alliancePairs.has(key)) errors.push(`Duplicate alliance: ${key}.`);
+    alliancePairs.add(key);
+  }
+  const offerPairs = new Set<string>();
+  const offerSignature = state.allianceOffers.map((offer) => `${offer.fromId}:${offer.toId}`).join('|');
+  const sortedOfferSignature = [...state.allianceOffers]
+    .sort((left, right) => left.fromId.localeCompare(right.fromId) || left.toId.localeCompare(right.toId))
+    .map((offer) => `${offer.fromId}:${offer.toId}`).join('|');
+  if (offerSignature !== sortedOfferSignature) errors.push('Alliance invitations are not stably sorted.');
+  for (const offer of state.allianceOffers) {
+    const key = relationKeyV2(offer.fromId, offer.toId);
+    if (!exactKeys(offer, ALLIANCE_OFFER_KEYS)
+      || offer.fromId === offer.toId
+      || !isHumanPlayerV2(state, offer.fromId) || !isHumanPlayerV2(state, offer.toId)
+      || !state.players[offer.fromId] || !state.players[offer.toId]
+      || selectIsEliminatedV2(state, offer.fromId) || selectIsEliminatedV2(state, offer.toId)
+      || !Number.isInteger(offer.createdTick) || !Number.isInteger(offer.expiresTick)
+      || offer.createdTick < 0 || offer.createdTick > state.tick
+      || offer.expiresTick - offer.createdTick !== ALLIANCE_OFFER_DURATION_TICKS
+      || offer.expiresTick <= state.tick
+      || alliancePairs.has(key) || warPairs.has(key)) {
+      errors.push(`Alliance invitation ${offer.fromId}->${offer.toId} is invalid.`);
+    }
+    if (offerPairs.has(key)) errors.push(`Duplicate alliance invitation: ${key}.`);
+    offerPairs.add(key);
   }
   return errors;
 }

@@ -5,14 +5,44 @@ import {
 } from './balance';
 import { resetEmptyArmyBaseQualityV2 } from './armyQuality';
 import type { WorldContentV2 } from './content';
+import { traitNationContextV2 } from './traitContext';
+import { countryTraitFactorV2 } from './traits';
 import type { PlayerId, TerritoryId, WorldStateV2 } from './types';
 
 const initialNationCapacityCache = new WeakMap<WorldContentV2, Map<PlayerId, number>>();
 
+const armyCapacityTraitFactorV2 = (
+  state: WorldStateV2,
+  ownerId: PlayerId,
+): number => countryTraitFactorV2(
+  ownerId,
+  'army-capacity',
+  traitNationContextV2(state, ownerId),
+);
+
+const liveTerritoryArmyCapacityTargetV2 = (
+  state: WorldStateV2,
+  content: WorldContentV2,
+  territoryId: TerritoryId,
+  ownerId: PlayerId,
+  factor: number,
+): number => {
+  const territory = state.territories[territoryId];
+  if (!territory || territory.owner !== ownerId) return 0;
+  return round(territoryArmyCapacityTargetV2(
+    content,
+    territoryId,
+    ownerId,
+    territory.population,
+    state.players[ownerId]?.research.effectLevels['force-capacity'] ?? 0,
+    territory.integration,
+  ) * factor);
+};
+
 /** A newly conquered foreign territory can host this extra share of empire forces. */
-export const CONQUERED_TERRITORY_EMPIRE_COMBAT_CAP_SHARE_V2 = 0.01;
+export const CONQUERED_TERRITORY_EMPIRE_COMBAT_CAP_SHARE_V2 = 0.0125;
 /** Full integration expands that scalable foreign-territory deployment allowance. */
-export const INTEGRATED_CORE_EMPIRE_COMBAT_CAP_SHARE_V2 = 0.025;
+export const INTEGRATED_CORE_EMPIRE_COMBAT_CAP_SHARE_V2 = 0.03;
 
 /**
  * The one canonical army-cap rule. Captured territory unlocks its structural
@@ -82,19 +112,15 @@ export function nationalArmyCapacityTargetV2(
   playerId: PlayerId,
   ownedTerritoryIds: readonly TerritoryId[] = content.territoryIds,
 ): number {
-  const level = state.players[playerId]?.research.effectLevels['force-capacity'] ?? 0;
+  const factor = armyCapacityTraitFactorV2(state, playerId);
   return round(ownedTerritoryIds.reduce((sum, territoryId) => {
-    const territory = state.territories[territoryId];
-    return territory?.owner === playerId
-      ? sum + territoryArmyCapacityTargetV2(
-        content,
-        territoryId,
-        playerId,
-        territory.population,
-        level,
-        territory.integration,
-      )
-      : sum;
+    return sum + liveTerritoryArmyCapacityTargetV2(
+      state,
+      content,
+      territoryId,
+      playerId,
+      factor,
+    );
   }, 0));
 }
 
@@ -105,16 +131,15 @@ export function stateArmyCapacityTargetsV2(
   ownerId: PlayerId,
   ownedTerritoryIds: readonly TerritoryId[] = content.territoryIds,
 ): ReadonlyMap<TerritoryId, number> {
-  const level = state.players[ownerId]?.research.effectLevels['force-capacity'] ?? 0;
+  const factor = armyCapacityTraitFactorV2(state, ownerId);
   return new Map(ownedTerritoryIds.flatMap((id) => {
     const territory = state.territories[id];
-    return territory?.owner === ownerId ? [[id, territoryArmyCapacityTargetV2(
+    return territory?.owner === ownerId ? [[id, liveTerritoryArmyCapacityTargetV2(
+      state,
       content,
       id,
       ownerId,
-      territory.population,
-      level,
-      territory.integration,
+      factor,
     )] as const] : [];
   }));
 }
@@ -127,17 +152,20 @@ export function stateTerritoryArmyCapacityTargetV2(
 ): number {
   const territory = state.territories[territoryId];
   if (!territory || territory.owner !== ownerId) return 0;
-  return territoryArmyCapacityTargetV2(
+  return liveTerritoryArmyCapacityTargetV2(
+    state,
     content,
     territoryId,
     ownerId,
-    territory.population,
-    state.players[ownerId]?.research.effectLevels['force-capacity'] ?? 0,
-    territory.integration,
+    armyCapacityTraitFactorV2(state, ownerId),
   );
 }
 
-/** Hard ceiling for new recruitment or logistics entering one territory. */
+/**
+ * Hard ceiling for new recruitment or logistics entering one territory.
+ * Every owned core receives the mature empire allowance; a newly conquered
+ * foreign territory receives the smaller allowance until integration ends.
+ */
 export function stateTerritoryArmySupportCeilingV2(
   state: WorldStateV2,
   content: WorldContentV2,
@@ -152,13 +180,11 @@ export function stateTerritoryArmySupportCeilingV2(
     ownerId,
   );
   const territory = state.territories[territoryId];
-  const isForeignTerritory = Boolean(
-    territory
-      && territory.owner === ownerId
-      && content.territories[territoryId]?.initialOwnerId !== ownerId,
-  );
-  const empireSupportShare = !isForeignTerritory ? 0
-    : territory!.integration >= 1
+  const isOwned = territory?.owner === ownerId;
+  const isOriginalHomeland = isOwned
+    && content.territories[territoryId]?.initialOwnerId === ownerId;
+  const empireSupportShare = !isOwned ? 0
+    : isOriginalHomeland || territory.integration >= 1
       ? INTEGRATED_CORE_EMPIRE_COMBAT_CAP_SHARE_V2
       : CONQUERED_TERRITORY_EMPIRE_COMBAT_CAP_SHARE_V2;
   const empireSupport = empireSupportShare <= 0 ? 0

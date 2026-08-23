@@ -1,8 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import { planAiCommandsV2, selectAiResearchAllocationsV2 } from './ai';
+import {
+  aiPeaceOfferAcceptanceChanceV2,
+  aiPeaceRequestChanceV2,
+  planAiCommandsV2,
+  selectAiResearchAllocationsV2,
+} from './ai';
 import { DEFAULT_BUDGET_V2, DEFAULT_RESEARCH_ALLOCATIONS_V2, aiActiveWarCapV2 } from './balance';
 import { createWorldStateV2 } from './bootstrap';
-import { stateTerritoryArmyCapacityTargetV2 } from './capacity';
+import {
+  CONQUERED_TERRITORY_EMPIRE_COMBAT_CAP_SHARE_V2,
+  INTEGRATED_CORE_EMPIRE_COMBAT_CAP_SHARE_V2,
+  nationalArmyCapacityTargetV2,
+  stateTerritoryArmyCapacityTargetV2,
+  stateTerritoryArmySupportCeilingV2,
+} from './capacity';
 import { WORLD_CONTENT_V2 } from './content';
 import {
   advanceTerritoryIntegrationProgramsV2,
@@ -26,6 +37,7 @@ import {
 import {
   invalidateTerritoryIndexV2,
   createPowerSnapshotV2,
+  selectNationalAggressivenessV2,
   selectNationalAiPlanV2,
   selectResearchFundingSharesV2,
   selectRecruitmentUnitCostV2,
@@ -65,7 +77,67 @@ describe('V2 shared national AI', () => {
     expect(Object.values(allocation).reduce((sum, value) => sum + value, 0)).toBe(100);
   });
 
-  it('usually accepts a ceasefire offer but retains a real chance to refuse', () => {
+  it('makes peace exceptional and values an imminent conquest above a small payment', () => {
+    const winningForSmallPayment = aiPeaceOfferAcceptanceChanceV2({
+      aggressiveness: 0.78,
+      warFatigue: 0.20,
+      armyFillRatio: 0.90,
+      activeWarCount: 1,
+      powerRatio: 1.8,
+      warScore: 30,
+      opponentTerritoryCount: 1,
+      settlementGenerosity: 0.08,
+      revengePending: false,
+    });
+    const collapsingForMeaningfulPayment = aiPeaceOfferAcceptanceChanceV2({
+      aggressiveness: 0.15,
+      warFatigue: 0.95,
+      armyFillRatio: 0.08,
+      activeWarCount: 3,
+      powerRatio: 0.45,
+      warScore: -40,
+      opponentTerritoryCount: 4,
+      settlementGenerosity: 1.2,
+      revengePending: false,
+    });
+    expect(winningForSmallPayment).toBeLessThanOrEqual(0.005);
+    expect(collapsingForMeaningfulPayment).toBeGreaterThan(winningForSmallPayment * 10);
+    expect(collapsingForMeaningfulPayment).toBeLessThanOrEqual(0.16);
+    expect(aiPeaceOfferAcceptanceChanceV2({
+      aggressiveness: 0,
+      warFatigue: 1,
+      armyFillRatio: 0,
+      activeWarCount: 4,
+      powerRatio: 0.2,
+      warScore: -80,
+      opponentTerritoryCount: 5,
+      settlementGenerosity: 1.5,
+      revengePending: true,
+    })).toBe(0);
+
+    expect(aiPeaceRequestChanceV2({
+      aggressiveness: 0.5,
+      warAge: 156,
+      warFatigue: 0.20,
+      armyFillRatio: 0.85,
+      activeWarCount: 1,
+      strengthGap: 5,
+      revengePending: false,
+    })).toBe(0);
+    const collapseRequest = aiPeaceRequestChanceV2({
+      aggressiveness: 0.15,
+      warAge: 156,
+      warFatigue: 0.95,
+      armyFillRatio: 0.08,
+      activeWarCount: 3,
+      strengthGap: 55,
+      revengePending: false,
+    });
+    expect(collapseRequest).toBeGreaterThan(0);
+    expect(collapseRequest).toBeLessThanOrEqual(0.14);
+  });
+
+  it('rarely accepts an ordinary ceasefire offer in seeded campaign planning', () => {
     let accepted = 0;
     const samples = 40;
     for (let seed = 1_900; seed < 1_900 + samples; seed += 1) {
@@ -91,9 +163,25 @@ describe('V2 shared national AI', () => {
       expect(response?.type).toBe('respond-to-offer');
       if (response?.type === 'respond-to-offer' && response.accept) accepted += 1;
     }
-    expect(accepted).toBeGreaterThan(samples * 0.5);
-    expect(accepted).toBeLessThan(samples * 0.95);
+    expect(accepted).toBeLessThan(samples * 0.25);
   }, 10_000);
+
+  it('derives aggressiveness from live national readiness instead of a fixed country value', () => {
+    const state = createWorldStateV2(8_230_002);
+    const country = nationIdV2('usa');
+    const ready = selectNationalAggressivenessV2(state, WORLD_CONTENT_V2, country);
+    const player = state.players[country]!;
+    player.treasury = -1_000;
+    player.foodSecurity = 0.15;
+    player.warFatigue = 95;
+    for (const territory of selectTerritoriesOfV2(state, country)) {
+      territory.condition = 0.20;
+      territory.army.manpower = territory.army.capacity * 0.05;
+    }
+    const strained = selectNationalAggressivenessV2(state, WORLD_CONTENT_V2, country);
+    expect(ready).toBeGreaterThan(strained);
+    expect(ready - strained).toBeGreaterThan(20);
+  });
 
   it('does not give the chosen country a hidden defensive combat advantage', () => {
     const ordinary = new WorldEngineV2(699);
@@ -131,7 +219,7 @@ describe('V2 shared national AI', () => {
     updateGlobalResistanceV2(engine.state, WORLD_CONTENT_V2);
     expect(selectGlobalResistanceV2(engine.state).threat).toBe(0);
     expect(selectGlobalResistanceV2(engine.state).members).toBe(0);
-  });
+  }, 20_000);
 
   it('turns a national intent into an exact adaptive target plan', () => {
     const intent = { military: 35, research: 15, development: 50 } as const;
@@ -575,7 +663,7 @@ describe('V2 dynamic containment coalition', () => {
     }
     expect(attackers.size).toBeGreaterThanOrEqual(3);
     expect([...attackers].some((id) => WORLD_CONTENT_V2.nations[nationIdV2(id)].real.powerIndex >= 60)).toBe(true);
-  });
+  }, 10_000);
 
   it('makes AI great powers avoid direct peer wars throughout the opening fifty years', () => {
     const directPeerWars: string[] = [];
@@ -593,7 +681,7 @@ describe('V2 dynamic containment coalition', () => {
       }
     }
     expect(directPeerWars).toEqual([]);
-  });
+  }, 10_000);
 
   it('uses present-day real-world alignments only as soft affinity tags', () => {
     expect(WORLD_CONTENT_V2.nations[nationIdV2('bel')].influenceTags).toEqual(expect.arrayContaining(['bloc:nato', 'bloc:eu']));
@@ -697,13 +785,32 @@ describe('V2 dynamic containment coalition', () => {
     const rivalTreasuryAfter = Object.entries(state.players)
       .filter(([id]) => id !== human)
       .reduce((sum, [, nation]) => sum + nation.treasury, 0);
+    const federationNationalCap = nationalArmyCapacityTargetV2(
+      state,
+      WORLD_CONTENT_V2,
+      federation!,
+    );
     for (const territory of selectTerritoriesOfV2(state, federation!)) {
-      expect(territory.army.capacity).toBeCloseTo(stateTerritoryArmyCapacityTargetV2(
+      const localCapacity = stateTerritoryArmyCapacityTargetV2(
         state,
         WORLD_CONTENT_V2,
         territory.id,
         federation!,
-      ), 8);
+      );
+      expect(territory.army.capacity).toBeCloseTo(localCapacity, 8);
+      const isFederationHomeland = WORLD_CONTENT_V2.territories[territory.id]?.initialOwnerId
+        === federation!;
+      expect(stateTerritoryArmySupportCeilingV2(
+        state,
+        WORLD_CONTENT_V2,
+        territory.id,
+        federation!,
+      )).toBeCloseTo(
+        localCapacity + federationNationalCap * (isFederationHomeland
+          ? INTEGRATED_CORE_EMPIRE_COMBAT_CAP_SHARE_V2
+          : CONQUERED_TERRITORY_EMPIRE_COMBAT_CAP_SHARE_V2),
+        8,
+      );
     }
     expect(rivalTreasuryAfter).toBeCloseTo(rivalTreasuryBefore, 8);
     expect(state.events.some((event) => /accelerated integration/i.test(event.message))).toBe(true);

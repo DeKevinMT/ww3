@@ -7,6 +7,7 @@ import {
   WAR_ACCESS_COST_MULTIPLIER,
   WAR_MOBILIZATION_TICKS,
   WAR_MOBILIZATION_COST_FACTOR,
+  WAR_REVENGE_WINDOW_TICKS,
 } from './balance';
 import { createWorldStateV2 } from './bootstrap';
 import { WORLD_CONTENT_V2 } from './content';
@@ -80,7 +81,7 @@ function equalPulse(
 describe('V2 one-source manpower combat', () => {
   it('stores army manpower only on territories and derives national totals/views', () => {
     const state = createWorldStateV2(301);
-    expect(state.schemaVersion).toBe(21);
+    expect(state.schemaVersion).toBe(22);
     expect(state.players[bel]).not.toHaveProperty('manpower');
     expect(Object.keys(state.territories[belTerritory].army).sort()).toEqual([
       'baseAttack', 'baseDefense', 'capacity', 'manpower',
@@ -186,7 +187,7 @@ describe('V2 one-source manpower combat', () => {
     expect(war.attackerOperations).toHaveLength(0);
   });
 
-  it('ends a war after exactly one connected territory is conquered', () => {
+  it('keeps a living empire at war for one bounded retaliation window after a conquest', () => {
     const state = createWorldStateV2(306);
     state.territories[luxTerritory].owner = nld;
     state.territories[luxTerritory].coreOwner = nld;
@@ -201,7 +202,12 @@ describe('V2 one-source manpower combat', () => {
     processWarsV2(state, WORLD_CONTENT_V2);
     expect([nldTerritory, luxTerritory].filter((id) => state.territories[id].owner === bel)).toHaveLength(1);
     expect([nldTerritory, luxTerritory].filter((id) => state.territories[id].owner === nld)).toHaveLength(1);
-    expect(state.wars).toHaveLength(0);
+    expect(state.wars).toHaveLength(1);
+    expect(state.wars[0]!.revenge).toEqual({
+      claimantId: nld,
+      triggeredTick: WAR_MOBILIZATION_TICKS,
+      expiresTick: WAR_MOBILIZATION_TICKS + WAR_REVENGE_WINDOW_TICKS,
+    });
     expect(state.players[bel].treasury).toBeCloseTo(victorTreasury, 6);
     expect(selectTotalManpowerV2(state, bel).deployed).toBe(beforeVictor.deployed);
     expect(state.players[nld].treasury).toBe(beforeTreasury);

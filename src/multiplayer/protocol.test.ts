@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SaveGameV2 } from '../sim/v2/persistence';
+import { V2_RULES_VERSION } from '../sim/v2/balance';
 import { nationIdV2, type ResearchAllocationsV2 } from '../sim/v2/types';
 import {
   MULTIPLAYER_PROTOCOL_VERSION,
@@ -18,7 +19,7 @@ import {
   type SnapshotMessage,
 } from './protocol';
 
-const RULES_VERSION = 'frontier-command-v2.57-performance-multiplayer';
+const RULES_VERSION = V2_RULES_VERSION;
 
 const allocations: ResearchAllocationsV2 = {
   'population-recruitment': 10,
@@ -35,7 +36,7 @@ const allocations: ResearchAllocationsV2 = {
 
 function snapshotWithExtraPayload(payload: string): SnapshotMessage {
   const save = {
-    schemaVersion: 21,
+    schemaVersion: 22,
     rulesVersion: RULES_VERSION,
     tick: 42,
     canonicalStateHash: '0123abcd',
@@ -96,6 +97,39 @@ describe('multiplayer protocol', () => {
       ...message,
       command: { ...message.command, allocations: { 'military-industry': 100 } },
     })).toThrow(/every supported research branch/i);
+  });
+
+  it('round-trips directed alliance invitations and addressed responses', () => {
+    const invitation: MultiplayerProtocolMessage = {
+      type: 'command',
+      requestId: 'alliance_invite_1',
+      clientSequence: 4,
+      baseTick: 18,
+      command: {
+        type: 'propose-alliance',
+        fromId: nationIdV2('bel'),
+        targetId: nationIdV2('can'),
+      },
+    };
+    const response: MultiplayerProtocolMessage = {
+      type: 'command',
+      requestId: 'alliance_response_1',
+      clientSequence: 5,
+      baseTick: 19,
+      command: {
+        type: 'respond-to-alliance',
+        fromId: nationIdV2('bel'),
+        toId: nationIdV2('can'),
+        accept: true,
+      },
+    };
+
+    expect(decodeProtocolMessage(encodeProtocolMessage(invitation))).toEqual(invitation);
+    expect(decodeProtocolMessage(encodeProtocolMessage(response))).toEqual(response);
+    expect(() => validateProtocolMessage({
+      ...response,
+      command: { ...response.command, accept: 'yes' },
+    })).toThrow(/accept must be a boolean/i);
   });
 
   it('carries explicit accepted and rejected command results', () => {

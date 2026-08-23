@@ -3,6 +3,8 @@ import {
   NATIONAL_IQ_EFFECTIVE_SCORE_MAX,
   NATIONAL_IQ_SCORE_MAX,
   NATIONAL_IQ_SCORE_MIN,
+  NATIONAL_QUALITY_GDP_WEIGHT,
+  NATIONAL_QUALITY_IQ_WEIGHT,
 } from './balance';
 import { selectDefensiveAidAssessmentV2 } from './ai';
 import { createWorldStateV2 } from './bootstrap';
@@ -39,6 +41,12 @@ function contentWithIq(playerId: PlayerId, iqScore: number): WorldContentV2 {
 }
 
 describe('national IQ gameplay proxy', () => {
+  it('makes GDP per capita the clear primary input for army ATK and DEF quality', () => {
+    expect(NATIONAL_QUALITY_GDP_WEIGHT).toBe(0.70);
+    expect(NATIONAL_QUALITY_IQ_WEIGHT).toBe(0.30);
+    expect(NATIONAL_QUALITY_GDP_WEIGHT + NATIONAL_QUALITY_IQ_WEIGHT).toBe(1);
+  });
+
   it('assigns every country one bounded, deterministic gameplay score', () => {
     for (const playerId of WORLD_CONTENT_V2.nationIds) {
       const view = selectNationalIqViewV2(WORLD_CONTENT_V2, playerId);

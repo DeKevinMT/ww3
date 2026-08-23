@@ -7,6 +7,8 @@ import {
   selectFoodLandCapacityV2,
   selectWeeklyFinanceBreakdownV2,
 } from './selectors';
+import { traitNationContextV2 } from './traitContext';
+import { countryTraitFactorV2 } from './traits';
 import { nationIdV2, territoryIdV2 } from './types';
 
 const expectedRanges: Readonly<Record<string, readonly [number, number]>> = {
@@ -45,17 +47,25 @@ describe('V2 FAOSTAT food self-sufficiency calibration', () => {
     }
   });
 
-  it('uses the reference ratio as opening domestic capacity without an artificial floor', () => {
+  it('uses the reference ratio as opening domestic capacity before country traits', () => {
     const state = createWorldStateV2(9_301);
     for (const countryId of ['usa', 'chn', 'ind', 'deu', 'bel', 'nld', 'sgp', 'jpn', 'ukr', 'can', 'bra', 'aus']) {
       const playerId = nationIdV2(countryId);
       const reference = WORLD_CONTENT_V2.nations[playerId]!.real.foodSelfSufficiencyRatio;
       const demand = selectFoodDemandV2(state, playerId);
       const capacity = selectFoodLandCapacityV2(state, WORLD_CONTENT_V2, playerId);
-      expect(capacity / demand, countryId).toBeCloseTo(reference, 5);
+      // FAOSTAT remains the immutable calibration anchor; the active country's
+      // own food-production trait is a visible multiplier on live capacity.
+      const traitFactor = countryTraitFactorV2(
+        playerId,
+        'food-production',
+        traitNationContextV2(state, playerId),
+      );
+      expect(capacity / demand, countryId).toBeCloseTo(reference * traitFactor, 5);
       expect(state.players[playerId]!.domesticFoodCapacity / demand, countryId)
-        .toBeCloseTo(reference, 5);
+        .toBeCloseTo(reference * traitFactor, 5);
     }
+    expect(countryTraitFactorV2(nationIdV2('ind'), 'food-production')).toBe(1.03);
     expect(state.players[nationIdV2('sgp')]!.domesticFoodCapacity
       / selectFoodDemandV2(state, nationIdV2('sgp'))).toBeLessThan(0.12);
   });

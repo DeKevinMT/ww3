@@ -11,10 +11,12 @@ import type { WorldContentV2 } from './content';
 import { addWorldEventV2 } from './events';
 import { isHumanPlayerV2, selectHumanPlayerIdsV2 } from './humanPlayers';
 import { invalidateNationIndexV2 } from './selectors';
+import { countryTraitFactorV2, type TraitEvaluationContextV2 } from './traits';
 import {
   territoryIdV2,
   type PlayerId,
   type TerritoryId,
+  type WarAccessV2,
   type WorldStateV2,
 } from './types';
 
@@ -158,36 +160,161 @@ export interface IntegrationCompletionV2 {
   ownerId: PlayerId;
 }
 
+export type TerritoryIntegrationCauseV2 = 'conquest' | 'federation';
+export type TerritoryIntegrationAccessV2 = Exclude<WarAccessV2, 'none'>;
+
+export interface TerritoryIntegrationQuoteOptionsV2 {
+  readonly cause: TerritoryIntegrationCauseV2;
+  readonly access?: TerritoryIntegrationAccessV2;
+}
+
+export interface TerritoryIntegrationQuoteV2 {
+  readonly territoryId: TerritoryId;
+  readonly newOwnerId: PlayerId;
+  readonly cause: TerritoryIntegrationCauseV2;
+  readonly access?: TerritoryIntegrationAccessV2;
+  /** Derived before ownership changes, without adding any persisted schema. */
+  readonly firstConquest: boolean;
+  readonly durationWeeks: number;
+  readonly annualCost: number;
+}
+
+type TerritoryIntegrationStartOptionsV2 =
+  | TerritoryIntegrationAccessV2
+  | { readonly access?: TerritoryIntegrationAccessV2 };
+
+function ownedForeignOpeningHomelandV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  playerId: PlayerId,
+): boolean {
+  return content.territoryIds.some((ownedTerritoryId) => {
+    const openingOwnerId = content.territories[ownedTerritoryId]?.initialOwnerId;
+    return state.territories[ownedTerritoryId]?.owner === playerId
+      && openingOwnerId !== undefined
+      && openingOwnerId !== playerId;
+  });
+}
+
+function integrationAccessV2(
+  accessOrOptions?: TerritoryIntegrationStartOptionsV2,
+): TerritoryIntegrationAccessV2 | undefined {
+  return typeof accessOrOptions === 'string' ? accessOrOptions : accessOrOptions?.access;
+}
+
 /**
- * Starts one immutable integration calendar. A sovereign-core recapture is the
- * only case that restores full access immediately.
+ * Quotes the immutable calendar and administration bill while the target still
+ * has its old owner. Only the active leader (`newOwnerId`) contributes a trait;
+ * a conquered or federating member can therefore never donate or stack traits.
  */
-function beginTerritoryIntegrationWithFactorV2(
+export function quoteTerritoryIntegrationV2(
   state: WorldStateV2,
   content: WorldContentV2,
   territoryId: TerritoryId,
   newOwnerId: PlayerId,
-  durationFactor: number,
+  options: TerritoryIntegrationQuoteOptionsV2 = { cause: 'conquest' },
+): TerritoryIntegrationQuoteV2 {
+  const territory = state.territories[territoryId];
+  const definition = content.territories[territoryId];
+  const sovereignRecapture = territory?.coreOwner === newOwnerId;
+  const firstConquest = !sovereignRecapture && options.cause === 'conquest'
+    && !ownedForeignOpeningHomelandV2(state, content, newOwnerId);
+  // Runtime restores a country's own sovereign core immediately. Exposing the
+  // same zero quote keeps War Command from promising a calendar or bill that
+  // beginTerritoryIntegrationWithCauseV2 will never create.
+  if (sovereignRecapture) {
+    return {
+      territoryId,
+      newOwnerId,
+      cause: options.cause,
+      access: options.access,
+      firstConquest: false,
+      durationWeeks: 0,
+      annualCost: 0,
+    };
+  }
+  const atWar = state.wars.some((war) => (
+    war.attackerId === newOwnerId || war.defenderId === newOwnerId
+  ));
+  const leader = state.players[newOwnerId];
+  const context: TraitEvaluationContextV2 = {
+    access: options.access,
+    terrain: definition?.terrain,
+    homeland: definition?.initialOwnerId === newOwnerId,
+    firstConquest,
+    atWar,
+    treasury: leader?.treasury,
+    foodSecurity: leader?.foodSecurity,
+    condition: territory?.condition,
+  };
+  const federationFactor = options.cause === 'federation'
+    ? FEDERATION_INTEGRATION_DURATION_FACTOR_V2
+    : 1;
+  const durationFactor = countryTraitFactorV2(
+    newOwnerId,
+    'integration-duration',
+    context,
+  );
+  const costFactor = countryTraitFactorV2(
+    newOwnerId,
+    'integration-cost',
+    context,
+  );
+  return {
+    territoryId,
+    newOwnerId,
+    cause: options.cause,
+    access: options.access,
+    firstConquest,
+    durationWeeks: Math.max(1, Math.round(
+      territoryIntegrationDurationWeeksV2(content, territoryId)
+        * federationFactor
+        * durationFactor,
+    )),
+    annualCost: round(
+      territoryIntegrationAnnualCostV2(territory?.economy ?? 0) * costFactor,
+      9,
+    ),
+  };
+}
+
+/**
+ * Starts one immutable integration calendar. A sovereign-core recapture is the
+ * only case that restores full access immediately.
+ */
+function beginTerritoryIntegrationWithCauseV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  territoryId: TerritoryId,
+  newOwnerId: PlayerId,
+  cause: TerritoryIntegrationCauseV2,
+  access?: TerritoryIntegrationAccessV2,
 ): void {
   const territory = state.territories[territoryId];
   if (!territory) return;
   const formerOwnerId = territory.owner;
-  territory.owner = newOwnerId;
   if (territory.coreOwner === newOwnerId) {
+    territory.owner = newOwnerId;
     territory.integration = 1;
     delete territory.integrationProgram;
     return;
   }
+  const quote = quoteTerritoryIntegrationV2(
+    state,
+    content,
+    territoryId,
+    newOwnerId,
+    { cause, access },
+  );
+  territory.owner = newOwnerId;
   territory.integration = CONQUEST_INITIAL_INTEGRATION_SHARE;
   territory.integrationProgram = {
     fromOwnerId: formerOwnerId,
     fromCoreOwnerId: territory.coreOwner,
     toOwnerId: newOwnerId,
     startedTick: state.tick,
-    completesTick: state.tick + Math.max(1, Math.round(
-      territoryIntegrationDurationWeeksV2(content, territoryId) * durationFactor,
-    )),
-    annualCost: territoryIntegrationAnnualCostV2(territory.economy),
+    completesTick: state.tick + quote.durationWeeks,
+    annualCost: quote.annualCost,
   };
 }
 
@@ -196,8 +323,16 @@ export function beginTerritoryIntegrationV2(
   content: WorldContentV2,
   territoryId: TerritoryId,
   newOwnerId: PlayerId,
+  accessOrOptions?: TerritoryIntegrationStartOptionsV2,
 ): void {
-  beginTerritoryIntegrationWithFactorV2(state, content, territoryId, newOwnerId, 1);
+  beginTerritoryIntegrationWithCauseV2(
+    state,
+    content,
+    territoryId,
+    newOwnerId,
+    'conquest',
+    integrationAccessV2(accessOrOptions),
+  );
 }
 
 /**
@@ -209,13 +344,15 @@ export function beginFederationTerritoryIntegrationV2(
   content: WorldContentV2,
   territoryId: TerritoryId,
   newOwnerId: PlayerId,
+  accessOrOptions?: TerritoryIntegrationStartOptionsV2,
 ): void {
-  beginTerritoryIntegrationWithFactorV2(
+  beginTerritoryIntegrationWithCauseV2(
     state,
     content,
     territoryId,
     newOwnerId,
-    FEDERATION_INTEGRATION_DURATION_FACTOR_V2,
+    'federation',
+    integrationAccessV2(accessOrOptions),
   );
 }
 

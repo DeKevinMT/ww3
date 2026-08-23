@@ -224,6 +224,13 @@ export interface FrontOperationV2 {
   momentum: number;
 }
 
+/** One bounded post-settlement retaliation claim attached to its originating war. */
+export interface WarRevengeStateV2 {
+  claimantId: PlayerId;
+  triggeredTick: number;
+  expiresTick: number;
+}
+
 export interface WarStateV2 {
   id: string;
   attackerId: PlayerId;
@@ -242,6 +249,8 @@ export interface WarStateV2 {
   /** Stable, source-unique active fronts for each belligerent. */
   attackerOperations: FrontOperationV2[];
   defenderOperations: FrontOperationV2[];
+  /** Canonical bounded retaliation window; absent legacy inputs normalize to null in saves. */
+  revenge?: WarRevengeStateV2 | null;
 }
 
 export interface TruceStateV2 {
@@ -271,6 +280,28 @@ export interface PeaceOfferV2 {
   cashAmount?: number;
   weeklyCost?: number;
   paymentWeeks?: number;
+}
+
+/** A permanent bilateral non-aggression pact between two human multiplayer countries. */
+export interface AllianceV2 {
+  /** Canonical lexicographically smaller country id. */
+  leftId: PlayerId;
+  /** Canonical lexicographically larger country id. */
+  rightId: PlayerId;
+  formedTick: number;
+}
+
+/** One directed, pending human-to-human alliance invitation. */
+export interface AllianceOfferV2 {
+  fromId: PlayerId;
+  toId: PlayerId;
+  createdTick: number;
+  expiresTick: number;
+}
+
+export interface AllianceProposalStatusV2 {
+  allowed: boolean;
+  reason?: string;
 }
 
 export type WorldEventKindV2 = 'system' | 'economy' | 'research' | 'war' | 'battle' | 'conquest' | 'peace' | 'critical';
@@ -344,7 +375,7 @@ export interface AiEscalationStateV2 {
 
 /** Live facade state. speed/winner/gameOver are transient projections and omitted from saves/hashes. */
 export interface WorldStateV2 {
-  schemaVersion: 21;
+  schemaVersion: 22;
   rulesVersion: string;
   contentVersion: string;
   mapId: string;
@@ -363,6 +394,8 @@ export interface WorldStateV2 {
   truces: TruceStateV2[];
   ceasefireObligations: CeasefireObligationV2[];
   offers: PeaceOfferV2[];
+  alliances: AllianceV2[];
+  allianceOffers: AllianceOfferV2[];
   events: WorldEventV2[];
   aiEscalation: AiEscalationStateV2;
   nextEventId: number;
@@ -659,6 +692,13 @@ export interface WarForecastV2 {
   outlook: 'dominant' | 'favored' | 'contested' | 'risky' | 'desperate';
   attackerStrength: number;
   defenderStrength: number;
+  /** Total currently deployed combat manpower across the defending empire. */
+  defenderEmpireStrength: number;
+  /** Extra local deployment room supplied by the defending empire. */
+  defenderEmpireSupport: number;
+  defenderTerritoryCount: number;
+  /** A surviving multi-territory defender receives one bounded retaliation phase. */
+  retaliationExpected: boolean;
   attackerAttack: number;
   attackerDefense: number;
   defenderAttack: number;
@@ -812,7 +852,9 @@ export type WorldCommandV2 =
   | { type: 'declare-war'; attackerId: PlayerId; defenderId: PlayerId; escalatedFromWarId?: string }
   | { type: 'request-ceasefire'; warId: string; requesterId: PlayerId }
   | { type: 'propose-peace'; fromId: PlayerId; targetId: PlayerId; settlement: PeaceSettlementV2 }
-  | { type: 'respond-to-offer'; offerId: string; accept: boolean };
+  | { type: 'respond-to-offer'; offerId: string; accept: boolean }
+  | { type: 'propose-alliance'; fromId: PlayerId; targetId: PlayerId }
+  | { type: 'respond-to-alliance'; fromId: PlayerId; toId: PlayerId; accept: boolean };
 
 export interface CommandResultV2 {
   accepted: boolean;

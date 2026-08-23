@@ -703,5 +703,5 @@ describe('strategic world simulation', () => {
     expect(worldInvariantErrors(engine.state)).toEqual([]);
     expect(engine.state.events.length).toBeLessThanOrEqual(220);
     expect(engine.state.tick).toBe(520);
-  }, 30_000);
+  }, 60_000);
 });

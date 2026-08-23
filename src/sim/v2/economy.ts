@@ -21,6 +21,13 @@ import {
   sortedNationIdsV2,
   type PowerSnapshotV2,
 } from './selectors';
+import {
+  composeTraitContextV2,
+  traitContextForTerritoryOwnerV2,
+  traitNationContextV2,
+  traitTerritoryFrontAccessV2,
+} from './traitContext';
+import { countryTraitFactorV2 } from './traits';
 import type { PlayerId, WeeklyFinanceBreakdownV2, WorldStateV2 } from './types';
 
 export type FinancePlansV2 = ReadonlyMap<PlayerId, WeeklyFinanceBreakdownV2>;
@@ -74,8 +81,18 @@ function processMilitaryAndCondition(
     const reconstructionReadiness = isConquered
       ? 0.18 + 0.82 * clamp(territory.integration, 0, 1)
       : 1;
+    const traitOwner = traitContextForTerritoryOwnerV2(state, content, view.id);
+    const conditionRecoveryFactor = traitOwner?.playerId === playerId
+      ? countryTraitFactorV2(
+        playerId,
+        'condition-recovery',
+        composeTraitContextV2(traitOwner.context, {
+          access: traitTerritoryFrontAccessV2(state, playerId, view.id),
+        }),
+      )
+      : 1;
     const conditionGain = 0.006 * finance.conditionFundingRatio * finance.aiEfficiency
-      * (atWar ? 0.35 : 1) * reconstructionReadiness;
+      * (atWar ? 0.35 : 1) * reconstructionReadiness * conditionRecoveryFactor;
     territory.condition = round(clamp(territory.condition + conditionGain, 0.15, 1));
   }
 }
@@ -143,10 +160,15 @@ export function processFinanceMilitaryV2(
     // inside processMilitaryAndCondition. This keeps the
     // visible weekly manpower delta identical to the canonical peace update.
     processMilitaryAndCondition(state, content, playerId, finance);
-    if (selectWarsOfV2(state, playerId).length === 0) nation.warFatigue = round(Math.max(
-      0,
-      nation.warFatigue - PEACE_FATIGUE_RECOVERY_PER_WEEK,
-    ));
+    if (selectWarsOfV2(state, playerId).length === 0) {
+      const fatigueRecovery = PEACE_FATIGUE_RECOVERY_PER_WEEK
+        * countryTraitFactorV2(
+          playerId,
+          'war-fatigue-recovery',
+          traitNationContextV2(state, playerId),
+        );
+      nation.warFatigue = round(Math.max(0, nation.warFatigue - fatigueRecovery));
+    }
   }
   for (const [playerId, target] of domesticCapacityTargets) {
     const nation = state.players[playerId];

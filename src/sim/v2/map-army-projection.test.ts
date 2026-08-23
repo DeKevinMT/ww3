@@ -63,4 +63,30 @@ describe('map military projection', () => {
     expect(adapter.player(belgium)).toMatchObject({ isHuman: true, controllerName: 'Bob' });
     expect(adapter.player(nationIdV2('can'))).toMatchObject({ isHuman: false, controllerName: undefined });
   });
+
+  it('refreshes both human map markers when the tick-zero lobby roster changes', () => {
+    const engine = new WorldEngineV2(8_804);
+    const usa = nationIdV2('usa');
+    const belgium = nationIdV2('bel');
+    expect(engine.chooseCountry(usa).accepted).toBe(true);
+    const adapter = createMapEngineAdapter(
+      engine,
+      () => engine.globalRanking(),
+      new Map([[usa, 'Alice'], [belgium, 'Bob']]),
+    );
+
+    adapter.refreshSnapshot?.();
+    expect(adapter.state.humanPlayerIds).toEqual([usa]);
+    const tick = engine.state.tick;
+    const actionSequence = engine.state.actionSequence;
+
+    expect(engine.configureHumanPlayers([usa, belgium], usa).accepted).toBe(true);
+    expect(engine.state.tick).toBe(tick);
+    expect(engine.state.actionSequence).toBe(actionSequence);
+    adapter.refreshSnapshot?.();
+
+    expect(adapter.state.humanPlayerIds).toEqual([belgium, usa].sort());
+    expect(adapter.player(usa)).toMatchObject({ isHuman: true, controllerName: 'Alice' });
+    expect(adapter.player(belgium)).toMatchObject({ isHuman: true, controllerName: 'Bob' });
+  });
 });

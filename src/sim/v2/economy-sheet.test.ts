@@ -7,6 +7,8 @@ import {
   selectNationalEconomyV2,
   selectWeeklyFinanceBreakdownV2,
 } from './selectors';
+import { traitNationContextV2 } from './traitContext';
+import { countryTraitFactorV2 } from './traits';
 import { nationIdV2, territoryIdV2 } from './types';
 
 describe('V2 economic truth sheet', () => {
@@ -15,9 +17,16 @@ describe('V2 economic truth sheet', () => {
     const belgium = nationIdV2('bel');
     const ledger = selectEconomicOutputLedgerV2(state, WORLD_CONTENT_V2, belgium);
     const economy = selectNationalEconomyV2(state, WORLD_CONTENT_V2, belgium);
+    // Preserve the economic identity: the blended base and rate are canonical,
+    // while Belgium's active trait is the final tax-efficiency multiplier.
+    const taxTraitFactor = countryTraitFactorV2(
+      belgium,
+      'tax-efficiency',
+      traitNationContextV2(state, belgium),
+    );
 
     expect(ledger.weeklyTaxRevenue).toBeCloseTo(
-      ledger.taxableOutput * ledger.taxRate / 52,
+      ledger.taxableOutput * ledger.taxRate / 52 * taxTraitFactor,
       5,
     );
     expect(ledger.baselineProductivePopulation).toBeCloseTo(ledger.productivePopulation, 6);

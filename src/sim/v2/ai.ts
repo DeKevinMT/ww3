@@ -37,6 +37,7 @@ import {
   selectControlledPopulationV2,
   selectFoodDemandV2,
   selectIsEliminatedV2,
+  selectNationalAggressivenessV2,
   selectNationalEconomyV2,
   selectNationalIqViewV2,
   selectNuclearPowerV2,
@@ -93,6 +94,74 @@ interface RegionalEscalationCandidateV2 {
  * aid is exceptional and does not consume this roll.
  */
 export const AI_EXPANSION_ROLLS_PER_DECISION = 1;
+
+export interface AiPeaceOfferDecisionV2 {
+  aggressiveness: number;
+  warFatigue: number;
+  armyFillRatio: number;
+  activeWarCount: number;
+  powerRatio: number;
+  warScore: number;
+  opponentTerritoryCount: number;
+  settlementGenerosity: number;
+  revengePending: boolean;
+}
+
+/**
+ * AI peace is an exceptional escape hatch, not the default end of a campaign.
+ * A confident country close to conquest values the territory above a small
+ * payment; serious military collapse, exhaustion and multiple fronts are the
+ * circumstances that make a treaty credible.
+ */
+export function aiPeaceOfferAcceptanceChanceV2(input: AiPeaceOfferDecisionV2): number {
+  if (input.revengePending) return 0;
+  const fatigue = clamp(input.warFatigue, 0, 1);
+  const collapse = clamp((0.42 - input.armyFillRatio) / 0.36, 0, 1);
+  const strengthRisk = clamp((0.95 - input.powerRatio) / 0.70, 0, 1);
+  const losing = clamp((-input.warScore - 4) / 42, 0, 1);
+  const multiFront = clamp((input.activeWarCount - 1) / 2, 0, 1);
+  const emergency = clamp(
+    0.31 * fatigue + 0.29 * collapse + 0.24 * losing
+      + 0.10 * strengthRisk + 0.06 * multiFront,
+    0,
+    1,
+  );
+  const generosity = clamp(input.settlementGenerosity, 0, 1.5) / 1.5;
+  const aggressionBrake = 1 - 0.55 * clamp(input.aggressiveness, 0, 1);
+  let chance = (0.004 + 0.12 * emergency ** 2
+    + 0.035 * generosity * (0.25 + 0.75 * emergency)) * aggressionBrake;
+  const nearConquest = input.warScore >= 15
+    || (input.opponentTerritoryCount <= 1 && input.warScore >= 0)
+    || input.powerRatio >= 1.65;
+  if (nearConquest && input.settlementGenerosity < 0.50) chance = Math.min(chance, 0.005);
+  return clamp(chance, 0, 0.16);
+}
+
+export interface AiPeaceRequestDecisionV2 {
+  aggressiveness: number;
+  warAge: number;
+  warFatigue: number;
+  armyFillRatio: number;
+  activeWarCount: number;
+  strengthGap: number;
+  revengePending: boolean;
+}
+
+/** A country asks to withdraw only after a long campaign and a real crisis. */
+export function aiPeaceRequestChanceV2(input: AiPeaceRequestDecisionV2): number {
+  if (input.revengePending || input.warAge < 104) return 0;
+  const fatigue = clamp((input.warFatigue - 45) / 55, 0, 1);
+  const collapse = clamp((0.32 - input.armyFillRatio) / 0.27, 0, 1);
+  const losing = clamp((input.strengthGap - 12) / 55, 0, 1);
+  const multiFront = clamp((input.activeWarCount - 1) / 2, 0, 1);
+  const crisis = clamp(0.34 * fatigue + 0.32 * collapse + 0.25 * losing + 0.09 * multiFront, 0, 1);
+  const prolongedStalemate = input.warAge >= 208
+    && Math.abs(input.strengthGap) <= 12 && input.warFatigue >= 0.35;
+  if (crisis < 0.42 && !prolongedStalemate) return 0;
+  const aggressionBrake = 1 - 0.45 * clamp(input.aggressiveness, 0, 1);
+  return clamp((0.006 + 0.11 * crisis ** 2
+    + 0.018 * multiFront + (prolongedStalemate ? 0.018 : 0)) * aggressionBrake, 0, 0.14);
+}
 
 export interface AiWarDisciplineV2 {
   forecastWeight: number;
@@ -683,21 +752,38 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
     // cash windfall into a sudden army or research spike.
     const army = planningView.army;
     const wars = planningView.activeWars;
+    const dynamicAggressiveness = selectNationalAggressivenessV2(
+      state,
+      content,
+      playerId,
+      powerSnapshot,
+    ) / 100;
     if (!humanPlayerIds.has(playerId)) {
       const incomingOffer = state.offers.filter((offer) => (
         offer.toId === playerId && offer.status === 'pending' && offer.expiresTick > state.tick
       )).sort((left, right) => left.createdTick - right.createdTick || left.id.localeCompare(right.id))[0];
       if (incomingOffer) {
+        const offerWar = state.wars.find((war) => war.id === incomingOffer.warId);
         const requesterPower = powerSnapshot.byNation.get(incomingOffer.fromId) ?? 0;
         const ownPower = powerSnapshot.byNation.get(playerId) ?? 0;
-        const confidence = clamp(ownPower / Math.max(1, requesterPower) - 1, 0, 1);
-        const ambition = clamp(content.nations[playerId]?.ambition ?? 0, 0, 1);
-        const multiFrontPressure = clamp((wars.length - 1) / 2, 0, 1);
-        const acceptChance = clamp(0.82
-          - 0.18 * ambition
-          - 0.18 * confidence
-          + 0.16 * (player.warFatigue / 100)
-          + 0.08 * multiFrontPressure, 0.48, 0.92);
+        const ownWarScore = offerWar
+          ? (offerWar.attackerId === playerId ? offerWar.warScore : -offerWar.warScore) : 0;
+        const settlementValue = incomingOffer.cashAmount
+          ?? (incomingOffer.weeklyCost ?? 0) * (incomingOffer.paymentWeeks ?? 0);
+        const settlementGenerosity = settlementValue
+          / Math.max(0.01, planningView.economy.weeklyRevenue * 52);
+        const acceptChance = aiPeaceOfferAcceptanceChanceV2({
+          aggressiveness: dynamicAggressiveness,
+          warFatigue: player.warFatigue / 100,
+          armyFillRatio: army.fillRatio,
+          activeWarCount: wars.length,
+          powerRatio: ownPower / Math.max(1, requesterPower),
+          warScore: ownWarScore,
+          opponentTerritoryCount: selectTerritoriesOfV2(state, incomingOffer.fromId).length,
+          settlementGenerosity,
+          revengePending: offerWar?.revenge?.claimantId === playerId
+            && offerWar.revenge.expiresTick > state.tick,
+        });
         commands.push({
           type: 'respond-to-offer',
           offerId: incomingOffer.id,
@@ -716,13 +802,17 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
         .sort((left, right) => right.terms.strengthGap - left.terms.strengthGap
           || left.war.id.localeCompare(right.war.id))[0];
       if (peaceCandidate) {
-        const pressure = clamp(
-          0.08 + peaceCandidate.terms.strengthGap / 120
-            + player.warFatigue / 220 + Math.max(0, 0.35 - army.fillRatio),
-          0.10,
-          0.62,
-        );
-        if (nextRandom(state) < pressure) {
+        const pressure = aiPeaceRequestChanceV2({
+          aggressiveness: dynamicAggressiveness,
+          warAge: state.tick - peaceCandidate.war.startedTick,
+          warFatigue: player.warFatigue / 100,
+          armyFillRatio: army.fillRatio,
+          activeWarCount: wars.length,
+          strengthGap: peaceCandidate.terms.strengthGap,
+          revengePending: peaceCandidate.war.revenge?.claimantId === playerId
+            && peaceCandidate.war.revenge.expiresTick > state.tick,
+        });
+        if (pressure > 0 && nextRandom(state) < pressure) {
           commands.push({ type: 'request-ceasefire', warId: peaceCandidate.war.id, requesterId: playerId });
           continue;
         }
@@ -737,7 +827,7 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
     const federation = isDefensiveFederationV2(state, playerId);
     const nation = content.nations[playerId]!;
     const warDiscipline = aiWarDisciplineV2(effectiveIq);
-    const expansionAmbition = clamp(nation.ambition, 0, 1);
+    const expansionAmbition = dynamicAggressiveness;
     const majorPowerDrive = clamp((nation.real.powerIndex - 35) / 65, 0, 1);
     const ownWars = selectWarsOfV2(state, playerId);
     const ownWarLimit = aiConcurrentWarLimitV2(majorPowerDrive, state.tick);

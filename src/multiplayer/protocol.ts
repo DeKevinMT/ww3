@@ -348,6 +348,15 @@ function validateWorldCommand(value: unknown): WorldCommandV2 {
       requireString(command.offerId, 'command.offerId');
       requireBoolean(command.accept, 'command.accept');
       break;
+    case 'propose-alliance':
+      requirePlayerId(command.fromId, 'command.fromId');
+      requirePlayerId(command.targetId, 'command.targetId');
+      break;
+    case 'respond-to-alliance':
+      requirePlayerId(command.fromId, 'command.fromId');
+      requirePlayerId(command.toId, 'command.toId');
+      requireBoolean(command.accept, 'command.accept');
+      break;
     default:
       fail(`Unknown command type: ${type}.`);
   }

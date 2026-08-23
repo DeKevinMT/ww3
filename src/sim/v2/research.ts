@@ -19,6 +19,7 @@ import {
   sortedNationIdsV2,
   type PowerSnapshotV2,
 } from './selectors';
+import { applyResearchProgressTraitV2 } from './traitResearch';
 import type { ResearchBranchV2, ResearchEffectV2, WorldStateV2 } from './types';
 
 export function branchIsMaxedV2(
@@ -71,7 +72,10 @@ export function processResearchV2(
         : round(poolOutput * fundingShares[branch], 9);
       assignedOutput = round(assignedOutput + outputShare, 9);
       if (maxed) continue;
-      nation.research.progress[branch] = round(nation.research.progress[branch] + outputShare);
+      const weeklyProgress = applyResearchProgressTraitV2(playerId, branch, outputShare);
+      nation.research.progress[branch] = round(
+        nation.research.progress[branch] + weeklyProgress,
+      );
       while (true) {
         const cost = selectResearchBranchCostV2(state, content, playerId, branch, powerSnapshot);
         if (cost <= 0 || nation.research.progress[branch] + 1e-9 < cost) break;

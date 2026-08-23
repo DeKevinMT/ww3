@@ -133,7 +133,7 @@ describe('population and research army cap', () => {
     const supportedAfter = projection.territories.find((army) => army.id === territoryIdV2('bel'))!;
 
     expect(projection.recruited).toBeGreaterThan(0);
-    expect(supportedAfter.manpower).toBe(supportedBefore);
+    expect(supportedAfter.manpower).toBeCloseTo(supportedBefore, 6);
     for (const projected of projection.territories) {
       expect(projected.manpower).toBeLessThanOrEqual(
         stateTerritoryArmySupportCeilingV2(state, WORLD_CONTENT_V2, projected.id, bel) + 1e-9,
@@ -141,7 +141,9 @@ describe('population and research army cap', () => {
     }
   });
 
-  it('uses one percent empire support after conquest and 2.5 percent after full integration', () => {
+  it('uses 1.25 percent support after conquest and 3 percent for integrated and homeland territory', () => {
+    expect(CONQUERED_TERRITORY_EMPIRE_COMBAT_CAP_SHARE_V2).toBe(0.0125);
+    expect(INTEGRATED_CORE_EMPIRE_COMBAT_CAP_SHARE_V2).toBe(0.03);
     const state = createWorldStateV2(8_107);
     const capturedId = territoryIdV2('nld');
     const captured = state.territories[capturedId]!;
@@ -181,7 +183,8 @@ describe('population and research army cap', () => {
     const homeId = territoryIdV2('bel');
     expect(stateTerritoryArmySupportCeilingV2(state, WORLD_CONTENT_V2, homeId, bel))
       .toBeCloseTo(
-        stateTerritoryArmyCapacityTargetV2(state, WORLD_CONTENT_V2, homeId, bel),
+        stateTerritoryArmyCapacityTargetV2(state, WORLD_CONTENT_V2, homeId, bel)
+          + integratedNationalCap * INTEGRATED_CORE_EMPIRE_COMBAT_CAP_SHARE_V2,
         8,
       );
     expect(selectTotalManpowerV2(state, bel).capacity).toBeCloseTo(integratedNationalCap, 8);

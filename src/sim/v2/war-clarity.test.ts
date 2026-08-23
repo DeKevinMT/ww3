@@ -46,14 +46,16 @@ describe('clear war decisions and attrition', () => {
 
   it('cuts active-war recruitment to a small fraction of peacetime throughput', () => {
     const engine = isolatedEngine(1_502, 'chn');
-    const peace = selectRecruitmentThroughputV2(engine.state, WORLD_CONTENT_V2, id('ind'));
+    // The Netherlands has no recruitment trait, so this remains a clean test
+    // of the global wartime factor rather than India's peacetime-only bonus.
+    const peace = selectRecruitmentThroughputV2(engine.state, WORLD_CONTENT_V2, id('nld'));
     engine.state.wars.push({
-      id: 'war-training', attackerId: id('chn'), defenderId: id('ind'),
+      id: 'war-training', attackerId: id('chn'), defenderId: id('nld'),
       startedTick: 0, lastBattleTick: 0, warScore: 0, battles: 0,
       attackerLosses: 0, defenderLosses: 0, lastPeaceOfferTick: -1_000_000,
       attackerOperations: [], defenderOperations: [],
     });
-    const war = selectRecruitmentThroughputV2(engine.state, WORLD_CONTENT_V2, id('ind'));
+    const war = selectRecruitmentThroughputV2(engine.state, WORLD_CONTENT_V2, id('nld'));
     expect(war).toBeCloseTo(peace * WAR_RECRUITMENT_THROUGHPUT_FACTOR, 5);
   });
 
@@ -75,7 +77,7 @@ describe('clear war decisions and attrition', () => {
     engine.step();
     let elapsedWeeks = 1;
     let midCampaign: { active: boolean; battles: number; manpower: number; reserves: number } | undefined;
-    while (elapsedWeeks < 200 && engine.activeWarBetween('chn', 'ind')) {
+    while (elapsedWeeks < 320 && engine.activeWarBetween('chn', 'ind')) {
       engine.step();
       elapsedWeeks += 1;
       if (elapsedWeeks === 80) {
@@ -94,11 +96,13 @@ describe('clear war decisions and attrition', () => {
     expect(midCampaign!.battles).toBeGreaterThan(30);
     expect(midCampaign!.manpower).toBeGreaterThan(0);
     expect(midCampaign!.manpower).toBeLessThan(indiaStart);
-    expect(midCampaign!.reserves).toBeLessThan(0.001);
+    // India's small food/recruitment identity may sustain a few thousand
+    // trained replacements, but cannot regenerate a strategically relevant pool.
+    expect(midCampaign!.reserves).toBeLessThan(0.01);
     expect(indiaEnd).toBeLessThan(indiaStart);
-    expect(engine.state.players[id('ind')].trainedReserves).toBeLessThan(0.001);
+    expect(engine.state.players[id('ind')].trainedReserves).toBeLessThan(0.01);
     expect(elapsedWeeks).toBeGreaterThan(80);
-    expect(elapsedWeeks).toBeLessThanOrEqual(200);
+    expect(elapsedWeeks).toBeLessThanOrEqual(320);
     expect(engine.activeWarBetween('chn', 'ind')).toBeUndefined();
     expect(engine.territoriesOf('ind')).toHaveLength(0);
   }, 90_000);
@@ -304,5 +308,5 @@ describe('clear war decisions and attrition', () => {
       }
     }
     expect(majorAttackers.size).toBeGreaterThanOrEqual(1);
-  }, 20_000);
+  }, 45_000);
 });

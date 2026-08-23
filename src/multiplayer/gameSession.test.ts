@@ -188,6 +188,7 @@ function createRealLoopback(seed = 919): {
     transport: guestTransport,
     countryId: guestCountryId,
     seatCount: 2,
+    humanPlayerIds: [hostCountryId, guestCountryId],
   });
   expect(hostSession.start()).toEqual({ accepted: true });
   return {
@@ -267,6 +268,38 @@ describe('authoritative multiplayer game sessions', () => {
     expect(fixture.hostTransport.guestToHost).toHaveLength(commandsBeforeGuestSpeed);
     expect(fixture.hostSession.submitHostCommand({ type: 'set-speed', speed: 0 })).toEqual({ accepted: true });
     expect(fixture.guestSession.engine!.state.speed).toBe(0);
+
+    fixture.guestSession.close(false);
+    fixture.hostSession.close(false);
+  });
+
+  it('keeps host and guest human markers symmetric after snapshot resync and replica remount', () => {
+    const fixture = createRealLoopback(919_1);
+    const expectedRoster = [fixture.hostCountryId, fixture.guestCountryId]
+      .sort((left, right) => left.localeCompare(right));
+    const assertSymmetricRoster = (engine: GameSessionEngineV2): void => {
+      expect(engine).toBeInstanceOf(WorldEngineV2);
+      const worldEngine = engine as WorldEngineV2;
+      expect(engine.state.humanPlayerIds).toEqual(expectedRoster);
+      expect(engine.state.humanPlayerIds).toContain(fixture.hostCountryId);
+      expect(engine.state.humanPlayerIds).toContain(fixture.guestCountryId);
+      expect(worldEngine.player(fixture.hostCountryId)?.isHuman).toBe(true);
+      expect(worldEngine.player(fixture.guestCountryId)?.isHuman).toBe(true);
+    };
+
+    assertSymmetricRoster(fixture.engine);
+    const firstGuestReplica = fixture.guestSession.engine!;
+    assertSymmetricRoster(firstGuestReplica);
+    expect(firstGuestReplica.viewerPlayerId).toBe(fixture.guestCountryId);
+
+    fixture.guestSession.requestResync('Verify the complete human-country roster.');
+    fixture.engine.step(RESYNC_REQUEST_COOLDOWN_TICKS);
+
+    const remountedGuestReplica = fixture.guestSession.engine!;
+    expect(remountedGuestReplica).not.toBe(firstGuestReplica);
+    expect(remountedGuestReplica.viewerPlayerId).toBe(fixture.guestCountryId);
+    assertSymmetricRoster(remountedGuestReplica);
+    expect(remountedGuestReplica.canonicalHash()).toBe(fixture.engine.canonicalHash());
 
     fixture.guestSession.close(false);
     fixture.hostSession.close(false);
@@ -527,7 +560,7 @@ class FakeReplicaEngine implements GameSessionEngineV2 {
 
 function fakeSnapshot(countryId: PlayerId, hash = 'snapshot-good'): SnapshotMessage {
   const save = {
-    schemaVersion: 21,
+    schemaVersion: 22,
     rulesVersion: 'test-rules',
     tick: 0,
     canonicalStateHash: hash,
@@ -612,6 +645,32 @@ describe('guest ordering and desync recovery', () => {
 
     transport.deliver({ ...fakeSnapshot(countryId), reason: 'resync' });
     expect(guest.status.phase).toBe('running');
+    guest.close(false);
+  });
+
+  it('rejects a snapshot whose human-country roster does not match the started lobby', () => {
+    const countryId = 'guest-country' as PlayerId;
+    const hostCountryId = 'host-country' as PlayerId;
+    const transport = new MemoryGuestTransport();
+    const guest = new GuestGameSession({
+      transport,
+      countryId,
+      seatCount: 2,
+      humanPlayerIds: [hostCountryId, countryId],
+      replicaFactory: (save) => new FakeReplicaEngine(countryId, save.tick, save.canonicalStateHash),
+    });
+
+    transport.deliver(fakeSnapshot(countryId));
+
+    expect(guest.engine).toBeUndefined();
+    expect(guest.status.phase).toBe('resyncing');
+    expect(guest.status.lastError).toMatch(/human-country roster does not match/i);
+    expect(transport.sent.at(-1)).toMatchObject({
+      type: 'resync-request',
+      expectedTick: 1,
+      actualTick: 0,
+      reason: 'Snapshot validation failed.',
+    });
     guest.close(false);
   });
 });

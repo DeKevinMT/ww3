@@ -130,6 +130,8 @@ export interface GuestGameSessionOptions extends GuestGameSessionHandlers {
   transport: GuestSessionTransport;
   countryId: PlayerId;
   seatCount: number;
+  /** Canonical human-country roster captured from the started lobby. */
+  humanPlayerIds?: readonly PlayerId[];
   engine?: GameSessionEngineV2;
   content?: WorldContentV2;
   replicaFactory?: (save: SaveGameV2, content: WorldContentV2) => GameSessionEngineV2;
@@ -701,6 +703,7 @@ export class GuestGameSession {
   private readonly content: WorldContentV2;
   private readonly replicaFactory: (save: SaveGameV2, content: WorldContentV2) => GameSessionEngineV2;
   private readonly requestIdFactory: () => string;
+  private readonly expectedHumanPlayerIds?: readonly PlayerId[];
   private readonly statusListeners = new Set<(status: GameSessionStatus) => void>();
   private readonly commandResultListeners = new Set<(event: GuestCommandResultEvent) => void>();
   private readonly snapshotListeners = new Set<(event: GuestSnapshotEvent) => void>();
@@ -724,6 +727,17 @@ export class GuestGameSession {
     this.transport = options.transport;
     this.countryId = options.countryId;
     this.seatCount = options.seatCount;
+    if (options.humanPlayerIds) {
+      const expectedHumanPlayerIds = [...new Set(options.humanPlayerIds)]
+        .sort((left, right) => left.localeCompare(right));
+      if (expectedHumanPlayerIds.length !== options.seatCount) {
+        throw new GameSessionError('The expected human-country roster must match the multiplayer seat count.');
+      }
+      if (!expectedHumanPlayerIds.includes(options.countryId)) {
+        throw new GameSessionError('The guest country must be present in the expected human-country roster.');
+      }
+      this.expectedHumanPlayerIds = expectedHumanPlayerIds;
+    }
     this.content = options.content ?? options.engine?.content ?? WORLD_CONTENT_V2;
     this.replicaFactory = options.replicaFactory ?? defaultReplicaFactory;
     this.requestIdFactory = options.requestIdFactory ?? randomRequestId;
@@ -874,6 +888,10 @@ export class GuestGameSession {
       if (replica.state.tick !== message.tick) throw new GameSessionError('Snapshot tick does not match its save.');
       const actualHash = replica.canonicalHash();
       if (actualHash !== message.hash) throw new GameSessionError('Snapshot canonical hash does not match its save.');
+      if (this.expectedHumanPlayerIds
+        && !samePlayerRoster(replica.state.humanPlayerIds, this.expectedHumanPlayerIds)) {
+        throw new GameSessionError('Snapshot human-country roster does not match the started lobby.');
+      }
       this.attachReplica(replica);
     } catch (error) {
       this.setError('The host snapshot could not be loaded.', error);

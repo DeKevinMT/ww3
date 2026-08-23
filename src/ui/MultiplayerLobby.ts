@@ -15,6 +15,12 @@ import type {
   SessionMessage,
   SnapshotMessage,
 } from '../multiplayer/protocol';
+import {
+  compareIntroNationMetricsV2,
+  renderNationPickerV2,
+  type IntroOpeningMetricsSnapshotV2,
+  type IntroSort,
+} from './WorldUIV2';
 
 export interface MultiplayerHostLaunch {
   transport: DirectConnectHost;
@@ -31,6 +37,8 @@ export interface MultiplayerLobbyOptions {
   onClose: () => void;
   onHostLaunch: (launch: MultiplayerHostLaunch) => void | Promise<void>;
   onGuestLaunch: (launch: MultiplayerGuestLaunch) => void | Promise<void>;
+  openingMetrics: IntroOpeningMetricsSnapshotV2;
+  preferredCountryId?: PlayerId;
 }
 
 type LobbyMode = 'menu' | 'host' | 'guest';
@@ -82,8 +90,18 @@ export class MultiplayerLobby {
   private answerCode = '';
   private pastedInvite = '';
   private pastedAnswer = '';
+  private pickerPreviewCountryId: PlayerId;
+  private pickerSearchQuery = '';
+  private pickerContinent = 'ALL';
+  private pickerSort: IntroSort = 'power';
+  private pickerGridScrollTop = 0;
+  private pickerSearchTimer?: number;
+  private preferredCountryAttempted = false;
 
   constructor(private readonly options: MultiplayerLobbyOptions) {
+    this.pickerPreviewCountryId = options.preferredCountryId
+      ?? WORLD_CONTENT_V2.nationIds.find((id) => id === 'usa')
+      ?? WORLD_CONTENT_V2.nationIds[0]!;
     this.root.className = 'multiplayer-lobby-layer';
     this.root.setAttribute('role', 'dialog');
     this.root.setAttribute('aria-modal', 'true');
@@ -96,6 +114,7 @@ export class MultiplayerLobby {
   }
 
   destroy(closeConnection = true): void {
+    if (this.pickerSearchTimer !== undefined) window.clearTimeout(this.pickerSearchTimer);
     this.transportUnsubscribe?.();
     this.transportUnsubscribe = undefined;
     if (closeConnection) {
@@ -119,15 +138,40 @@ export class MultiplayerLobby {
     if (input.id === 'mp-player-name') this.displayName = input.value;
     if (input.id === 'mp-invite-input') this.pastedInvite = input.value;
     if (input.id === 'mp-answer-input') this.pastedAnswer = input.value;
+    if (input.id === 'mp-country-search') {
+      const query = input.value.trim().toLocaleLowerCase('en');
+      this.pickerSearchQuery = input.value;
+      const visible: HTMLElement[] = [];
+      for (const option of this.root.querySelectorAll<HTMLElement>('.country-grid [data-name]')) {
+        const continentMatches = this.pickerContinent === 'ALL'
+          || option.dataset.continent === this.pickerContinent;
+        option.hidden = !continentMatches || (query.length > 0 && !(option.dataset.name ?? '').includes(query));
+        if (!option.hidden && !option.matches(':disabled')) visible.push(option);
+      }
+      if (query) {
+        const match = visible.find((option) => option.dataset.countryName === query) ?? visible[0];
+        if (match?.dataset.country) this.pickerPreviewCountryId = match.dataset.country as PlayerId;
+      }
+      if (this.pickerSearchTimer !== undefined) window.clearTimeout(this.pickerSearchTimer);
+      this.pickerSearchTimer = window.setTimeout(() => {
+        this.pickerSearchTimer = undefined;
+        this.pickerGridScrollTop = 0;
+        const currentGrid = this.root.querySelector<HTMLElement>('.country-select--lobby .country-grid');
+        if (currentGrid) currentGrid.scrollTop = 0;
+        this.render();
+        const nextSearch = this.root.querySelector<HTMLInputElement>('#mp-country-search');
+        nextSearch?.focus();
+        nextSearch?.setSelectionRange(nextSearch.value.length, nextSearch.value.length);
+      }, 90);
+    }
   };
 
   private readonly onChange = (event: Event): void => {
     const select = event.target as HTMLSelectElement;
-    if (select.id !== 'mp-country-select') return;
-    const action: LobbyAction = select.value
-      ? { type: 'select-country', countryId: select.value as PlayerId }
-      : { type: 'clear-country' };
-    this.applyLocalAction(action);
+    if (select.id !== 'mp-country-sort') return;
+    this.pickerSort = select.value as IntroSort;
+    this.pickerGridScrollTop = 0;
+    window.setTimeout(() => this.render(), 0);
   };
 
   private readonly onClick = (event: MouseEvent): void => {
@@ -150,6 +194,7 @@ export class MultiplayerLobby {
         this.host?.close(); this.guest?.close();
         this.host = undefined; this.guest = undefined; this.hostModel = undefined; this.lobby = undefined;
         this.transportUnsubscribe?.(); this.transportUnsubscribe = undefined;
+        this.preferredCountryAttempted = false;
         this.mode = 'menu'; this.error = ''; this.status = 'Choose whether to host or join.'; this.render();
         break;
       case 'create-room': void this.createRoom(); break;
@@ -164,6 +209,26 @@ export class MultiplayerLobby {
         break;
       }
       case 'start': this.applyLocalAction({ type: 'start' }); break;
+      case 'continent-filter': {
+        this.capturePickerScroll();
+        this.pickerContinent = target.dataset.continent ?? 'ALL';
+        this.pickerGridScrollTop = 0;
+        const first = this.availablePickerNationIds()[0];
+        if (first) this.pickerPreviewCountryId = first;
+        this.render();
+        break;
+      }
+      case 'preview-country':
+        this.capturePickerScroll();
+        if (target.dataset.country) this.pickerPreviewCountryId = target.dataset.country as PlayerId;
+        this.render();
+        break;
+      case 'select-country':
+        if (target.dataset.country) {
+          this.pickerPreviewCountryId = target.dataset.country as PlayerId;
+          this.applyLocalAction({ type: 'select-country', countryId: this.pickerPreviewCountryId });
+        }
+        break;
     }
   };
 
@@ -179,6 +244,7 @@ export class MultiplayerLobby {
       this.host = new DirectConnectHost({ rulesVersion: V2_RULES_VERSION, displayName: name, maxPlayers: 8 });
       this.hostModel = new HostLobbyModel(this.host.hostPeerId, name);
       this.lobby = this.hostModel.snapshot();
+      this.selectPreferredCountryIfAvailable();
       this.transportUnsubscribe = this.host.subscribe({
         onStateChange: (change) => this.onHostState(change),
         onMessage: (message) => this.onHostMessage(message),
@@ -284,12 +350,14 @@ export class MultiplayerLobby {
     const result = this.hostModel.apply(event.peerId, event.message.action);
     if (!result.accepted) this.error = result.reason ?? 'Lobby action rejected.';
     this.publishLobby();
+    this.render();
     if (result.accepted && event.message.action.type === 'start') void this.launchHost();
   }
 
   private onGuestMessage(message: SessionMessage): void {
     if (message.type === 'lobby-state') {
       if (!this.lobby || message.revision >= this.lobby.revision) this.lobby = message;
+      this.selectPreferredCountryIfAvailable();
       this.render();
       return;
     }
@@ -358,6 +426,97 @@ export class MultiplayerLobby {
     return this.lobby?.players.find((player) => player.peerId === peerId);
   }
 
+  private localPeerId(): string | undefined {
+    return this.host?.hostPeerId ?? this.guest?.peerId;
+  }
+
+  private claimedCountryIds(): Set<PlayerId> {
+    const localId = this.localPeerId();
+    return new Set(this.lobby?.players.flatMap((player) => (
+      player.peerId === localId || !player.countryId ? [] : [player.countryId]
+    )) ?? []);
+  }
+
+  private claimantNames(): Map<PlayerId, string> {
+    const localId = this.localPeerId();
+    return new Map(this.lobby?.players.flatMap((player) => (
+      player.peerId === localId || !player.countryId ? [] : [[player.countryId, player.displayName] as const]
+    )) ?? []);
+  }
+
+  private availablePickerNationIds(): PlayerId[] {
+    const query = this.pickerSearchQuery.trim().toLocaleLowerCase('en');
+    const claimed = this.claimedCountryIds();
+    return [...WORLD_CONTENT_V2.nationIds]
+      .map((id) => WORLD_CONTENT_V2.nations[id])
+      .filter((nation): nation is NonNullable<typeof nation> => Boolean(nation)
+        && this.options.openingMetrics.byNation.has(nation!.id)
+        && !claimed.has(nation!.id)
+        && (this.pickerContinent === 'ALL' || nation!.continent === this.pickerContinent)
+        && (!query || `${nation!.name} ${nation!.sigil}`.toLowerCase().includes(query)))
+      .sort((left, right) => compareIntroNationMetricsV2(
+        left, right, this.pickerSort, this.options.openingMetrics,
+      ))
+      .map((nation) => nation.id);
+  }
+
+  private capturePickerScroll(): void {
+    this.pickerGridScrollTop = this.root.querySelector<HTMLElement>('.country-select--lobby .country-grid')
+      ?.scrollTop ?? this.pickerGridScrollTop;
+  }
+
+  private selectPreferredCountryIfAvailable(): void {
+    if (this.preferredCountryAttempted || !this.lobby) return;
+    const local = this.localPlayer();
+    if (!local) return;
+    if (local.countryId) {
+      this.preferredCountryAttempted = true;
+      this.pickerPreviewCountryId = local.countryId;
+      return;
+    }
+    const preferred = this.options.preferredCountryId;
+    if (!preferred) {
+      this.preferredCountryAttempted = true;
+      return;
+    }
+    this.preferredCountryAttempted = true;
+    this.pickerPreviewCountryId = preferred;
+    if (this.claimedCountryIds().has(preferred)) {
+      this.status = `${WORLD_CONTENT_V2.nations[preferred]?.name ?? 'That country'} is already claimed. Choose another nation.`;
+      return;
+    }
+    if (this.hostModel && this.host) {
+      const result = this.hostModel.apply(this.host.hostPeerId, { type: 'select-country', countryId: preferred });
+      if (result.accepted) this.lobby = this.hostModel.snapshot();
+      else this.error = result.reason ?? 'Your preferred country could not be selected.';
+      return;
+    }
+    try {
+      this.guest?.send({
+        type: 'lobby-action',
+        revision: this.lobby.revision,
+        action: { type: 'select-country', countryId: preferred },
+      });
+    } catch (error) {
+      this.error = error instanceof Error ? error.message : 'Your preferred country could not be selected.';
+    }
+  }
+
+  private renderNationPicker(): string {
+    const picker = renderNationPickerV2(this.options.openingMetrics, {
+      previewCountryId: this.pickerPreviewCountryId,
+      searchQuery: this.pickerSearchQuery,
+      continent: this.pickerContinent,
+      sort: this.pickerSort,
+      context: 'lobby',
+      claimedCountryIds: this.claimedCountryIds(),
+      claimantNames: this.claimantNames(),
+      selectedCountryId: this.localPlayer()?.countryId ?? undefined,
+    });
+    this.pickerPreviewCountryId = picker.previewCountryId;
+    return picker.html;
+  }
+
   private async copyCode(code: string, success: string): Promise<void> {
     if (!code) return;
     try {
@@ -370,25 +529,13 @@ export class MultiplayerLobby {
     this.render();
   }
 
-  private countryOptions(player: LobbyPlayer): string {
-    const claimed = new Set(this.lobby?.players.flatMap((candidate) => (
-      candidate.peerId === player.peerId || !candidate.countryId ? [] : [candidate.countryId]
-    )) ?? []);
-    return `<option value="">Choose a country…</option>${WORLD_CONTENT_V2.nationIds
-      .map((id) => WORLD_CONTENT_V2.nations[id])
-      .filter((nation): nation is NonNullable<typeof nation> => Boolean(nation))
-      .sort((left, right) => left.name.localeCompare(right.name, 'en'))
-      .map((nation) => `<option value="${nation.id}" ${player.countryId === nation.id ? 'selected' : ''} ${claimed.has(nation.id) ? 'disabled' : ''}>${escapeHtml(nation.sigil)} ${escapeHtml(nation.name)}${claimed.has(nation.id) ? ' · claimed' : ''}</option>`)
-      .join('')}`;
-  }
-
   private renderPlayers(): string {
     if (!this.lobby) return '<div class="mp-empty">Waiting for the host lobby…</div>';
     const localId = this.host?.hostPeerId ?? this.guest?.peerId;
     return `<div class="mp-player-list">${this.lobby.players.map((player) => {
       const local = player.peerId === localId;
       const country = player.countryId ? WORLD_CONTENT_V2.nations[player.countryId] : undefined;
-      return `<article class="mp-player ${local ? 'is-local' : ''} ${player.connected ? '' : 'is-offline'}"><div class="mp-player__identity"><span>${country?.sigil ?? '◇'}</span><div><strong>${escapeHtml(player.displayName)}${player.peerId === this.lobby!.hostPeerId ? ' · HOST' : ''}</strong><small>${player.connected ? player.ready ? 'READY' : 'CHOOSING' : 'DISCONNECTED'}</small></div></div>${local && !this.lobby!.started ? `<select id="mp-country-select" aria-label="Your country">${this.countryOptions(player)}</select>` : `<b>${escapeHtml(country?.name ?? 'No country')}</b>`}</article>`;
+      return `<article class="mp-player ${local ? 'is-local' : ''} ${player.connected ? '' : 'is-offline'}"><div class="mp-player__identity"><span>${country?.sigil ?? '◇'}</span><div><strong>${escapeHtml(player.displayName)}${player.peerId === this.lobby!.hostPeerId ? ' · HOST' : ''}</strong><small>${player.connected ? player.ready ? 'READY' : 'CHOOSING' : 'DISCONNECTED'}</small></div></div><b>${escapeHtml(country?.name ?? (local ? 'Choose below' : 'No country'))}</b></article>`;
     }).join('')}</div>`;
   }
 
@@ -400,17 +547,24 @@ export class MultiplayerLobby {
     if (!this.host) return `<div class="mp-setup"><div class="panel-kicker">HOST A DIRECT GAME</div><h2>Create your room</h2><label class="mp-field"><span>YOUR NAME</span><input id="mp-player-name" maxlength="40" value="${escapeHtml(this.displayName)}" autocomplete="nickname"></label><button class="primary-button" data-mp-action="create-room">CREATE ROOM</button></div>`;
     const local = this.localPlayer();
     const block = this.hostModel?.startBlockReason();
-    return `<div class="mp-room"><div class="mp-room__head"><div><div class="panel-kicker">HOST ROOM · ${escapeHtml(this.host.roomId.slice(-8).toUpperCase())}</div><h2>Commanders</h2></div><span>${this.lobby?.players.filter((player) => player.connected).length ?? 1}/8 CONNECTED</span></div>${this.renderPlayers()}<div class="mp-connect-grid"><section><h3>1 · Invite one friend</h3><p>Create a private code and send it to that friend.</p>${this.inviteCode ? `<textarea readonly aria-label="Host invite code">${escapeHtml(this.inviteCode)}</textarea><button class="secondary-button" data-mp-action="copy-invite">COPY INVITE</button>` : `<button class="secondary-button" data-mp-action="create-invite">CREATE FRIEND INVITE</button>`}</section><section><h3>2 · Accept their answer</h3><p>Paste the answer they send back.</p><textarea id="mp-answer-input" placeholder="Paste friend answer…">${escapeHtml(this.pastedAnswer)}</textarea><button class="secondary-button" data-mp-action="accept-answer">CONNECT FRIEND</button></section></div><div class="mp-room__actions"><button class="secondary-button ${local?.ready ? 'is-ready' : ''}" data-mp-action="toggle-ready" ${local?.countryId ? '' : 'disabled'}>${local?.ready ? '✓ READY' : 'MARK READY'}</button><button class="primary-button" data-mp-action="start" ${block ? 'disabled' : ''}>START CAMPAIGN</button></div>${block ? `<small class="mp-start-note">${escapeHtml(block)}</small>` : ''}</div>`;
+    const rail = `<div class="mp-room__rail"><div class="mp-room__head"><div><div class="panel-kicker">HOST ROOM · ${escapeHtml(this.host.roomId.slice(-8).toUpperCase())}</div><h2>Commanders</h2></div><span>${this.lobby?.players.filter((player) => player.connected).length ?? 1}/8 CONNECTED</span></div>${this.renderPlayers()}<div class="mp-connect-grid"><section><h3>1 · Invite one friend</h3><p>Create a private code and send it to that friend.</p>${this.inviteCode ? `<textarea readonly aria-label="Host invite code">${escapeHtml(this.inviteCode)}</textarea><button class="secondary-button" data-mp-action="copy-invite">COPY INVITE</button>` : '<button class="secondary-button" data-mp-action="create-invite">CREATE FRIEND INVITE</button>'}</section><section><h3>2 · Accept their answer</h3><p>Paste the answer they send back.</p><textarea id="mp-answer-input" placeholder="Paste friend answer…">${escapeHtml(this.pastedAnswer)}</textarea><button class="secondary-button" data-mp-action="accept-answer">CONNECT FRIEND</button></section></div><div class="mp-room__actions"><button class="secondary-button ${local?.ready ? 'is-ready' : ''}" data-mp-action="toggle-ready" ${local?.countryId ? '' : 'disabled'}>${local?.ready ? '✓ READY' : 'MARK READY'}</button><button class="primary-button" data-mp-action="start" ${block ? 'disabled' : ''}>START CAMPAIGN</button></div>${block ? `<small class="mp-start-note">${escapeHtml(block)}</small>` : ''}</div>`;
+    return `<div class="mp-room mp-room--with-picker">${rail}${this.renderNationPicker()}</div>`;
   }
 
   private renderGuest(): string {
     if (!this.guest) return `<div class="mp-setup"><div class="panel-kicker">JOIN A DIRECT GAME</div><h2>Paste your friend’s invite</h2><label class="mp-field"><span>YOUR NAME</span><input id="mp-player-name" maxlength="40" value="${escapeHtml(this.displayName)}" autocomplete="nickname"></label><label class="mp-field"><span>HOST INVITE</span><textarea id="mp-invite-input" placeholder="Paste the long Frontier Command invite code…">${escapeHtml(this.pastedInvite)}</textarea></label><button class="primary-button" data-mp-action="join-room">CREATE ANSWER</button></div>`;
     const local = this.localPlayer();
-    return `<div class="mp-room"><div class="mp-room__head"><div><div class="panel-kicker">GUEST · ${escapeHtml(this.guest.hostName.toUpperCase())}</div><h2>Multiplayer lobby</h2></div><span>${escapeHtml(connectionLabel(this.guest.state).toUpperCase())}</span></div>${this.answerCode ? `<div class="mp-answer-callout"><h3>Send this answer back to the host</h3><p>The connection completes only after the host pastes it.</p><textarea readonly aria-label="Friend answer code">${escapeHtml(this.answerCode)}</textarea><button class="secondary-button" data-mp-action="copy-answer">COPY ANSWER</button></div>` : ''}${this.renderPlayers()}${this.lobby ? `<div class="mp-room__actions"><button class="secondary-button ${local?.ready ? 'is-ready' : ''}" data-mp-action="toggle-ready" ${local?.countryId ? '' : 'disabled'}>${local?.ready ? '✓ READY' : 'MARK READY'}</button><span>Only the host starts the shared campaign.</span></div>` : ''}</div>`;
+    const rail = `<div class="mp-room__rail"><div class="mp-room__head"><div><div class="panel-kicker">GUEST · ${escapeHtml(this.guest.hostName.toUpperCase())}</div><h2>Multiplayer lobby</h2></div><span>${escapeHtml(connectionLabel(this.guest.state).toUpperCase())}</span></div>${this.answerCode ? `<div class="mp-answer-callout"><h3>Send this answer back to the host</h3><p>The connection completes only after the host pastes it.</p><textarea readonly aria-label="Friend answer code">${escapeHtml(this.answerCode)}</textarea><button class="secondary-button" data-mp-action="copy-answer">COPY ANSWER</button></div>` : ''}${this.renderPlayers()}${this.lobby ? `<div class="mp-room__actions"><button class="secondary-button ${local?.ready ? 'is-ready' : ''}" data-mp-action="toggle-ready" ${local?.countryId ? '' : 'disabled'}>${local?.ready ? '✓ READY' : 'MARK READY'}</button><span>Only the host starts the shared campaign.</span></div>` : ''}</div>`;
+    return this.lobby
+      ? `<div class="mp-room mp-room--with-picker">${rail}${this.renderNationPicker()}</div>`
+      : `<div class="mp-room">${rail}</div>`;
   }
-
   private render(): void {
+    this.capturePickerScroll();
     const content = this.mode === 'menu' ? this.renderMenu() : this.mode === 'host' ? this.renderHost() : this.renderGuest();
-    this.root.innerHTML = `<section class="multiplayer-lobby-card"><button class="modal-close" data-mp-action="${this.mode === 'menu' ? 'close' : 'back'}" aria-label="${this.mode === 'menu' ? 'Close multiplayer' : 'Back'}">×</button>${content}<footer class="mp-status ${this.error ? 'has-error' : ''}"><i></i><span>${escapeHtml(this.error || this.status)}</span>${this.busy ? '<b>WORKING…</b>' : ''}</footer></section>`;
+    const hasPicker = Boolean(this.lobby && ((this.mode === 'host' && this.host) || (this.mode === 'guest' && this.guest)));
+    this.root.innerHTML = `<section class="multiplayer-lobby-card ${hasPicker ? 'has-country-picker' : ''}"><button class="modal-close" data-mp-action="${this.mode === 'menu' ? 'close' : 'back'}" aria-label="${this.mode === 'menu' ? 'Close multiplayer' : 'Back'}">×</button>${content}<footer class="mp-status ${this.error ? 'has-error' : ''}"><i></i><span>${escapeHtml(this.error || this.status)}</span>${this.busy ? '<b>WORKING…</b>' : ''}</footer></section>`;
+    const pickerGrid = this.root.querySelector<HTMLElement>('.country-select--lobby .country-grid');
+    if (pickerGrid) pickerGrid.scrollTop = this.pickerGridScrollTop;
   }
 }
