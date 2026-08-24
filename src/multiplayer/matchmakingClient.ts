@@ -26,12 +26,19 @@ function randomId(): string {
   return `player_${[...bytes].map((value) => value.toString(16).padStart(2, '0')).join('')}`;
 }
 
-export function matchmakingServiceUrl(): string | undefined {
-  const configured = (import.meta as ImportMeta & { env?: Record<string, string | undefined> })
-    .env?.VITE_MATCHMAKING_URL?.trim();
-  if (!configured) return undefined;
+export const PUBLIC_MATCHMAKING_SERVICE_URL =
+  'wss://frontier-command-matchmaking.dekevinmt.workers.dev/matchmaking';
+
+export function matchmakingServiceUrl(configuredUrl?: string): string | undefined {
+  const configured = configuredUrl?.trim()
+    || (import.meta as ImportMeta & { env?: Record<string, string | undefined> })
+      .env?.VITE_MATCHMAKING_URL?.trim()
+    || PUBLIC_MATCHMAKING_SERVICE_URL;
   try {
-    const url = new URL(configured, window.location.href);
+    const baseUrl = typeof window === 'undefined'
+      ? 'https://dekevinmt.github.io/ww3/'
+      : window.location.href;
+    const url = new URL(configured, baseUrl);
     if (url.protocol !== 'wss:' && !(url.protocol === 'ws:' && ['localhost', '127.0.0.1'].includes(url.hostname))) {
       return undefined;
     }

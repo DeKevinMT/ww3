@@ -136,6 +136,8 @@ Expansion-driven suspicion can still create permanent defensive federations, but
 
 Public matchmaking lets a player enter one live queue without choosing a lobby size or exchanging codes. Compatible players are placed in an open lobby, and more commanders may join until the elected host starts. Every connected player chooses a unique country and marks ready. Private Direct Connect rooms remain available for friends who prefer manual invites.
 
+The production queue runs at `wss://frontier-command-matchmaking.dekevinmt.workers.dev/matchmaking`. The client ships with that endpoint as its secure default; `VITE_MATCHMAKING_URL` remains available for explicit local or staging overrides.
+
 The host is authoritative: its tab owns the shared clock, validates that every command belongs to the sender's country, assigns the global action order and broadcasts deterministic ticks. Guests run synchronized replicas, compare a canonical checkpoint every eight eligible ticks and request an authoritative snapshot if they diverge. Only the host changes shared speed. Each local interface uses its own assigned-country viewer, locally read inbox state and war-report queue; those presentation choices never change the shared save or hash.
 
 Campaign connections use browser WebRTC data channels with a public **STUN-only** configuration. Public matchmaking automates discovery and signaling, while private rooms expose the manual invite/answer exchange. The host tab must remain open for the entire game. There is no TURN relay fallback, so restrictive school, office, carrier-grade or mobile networks may block a direct peer route.
