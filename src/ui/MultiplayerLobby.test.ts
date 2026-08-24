@@ -140,6 +140,7 @@ describe('multiplayer lobby launch recovery', () => {
     expect(rendered.html).toContain('id="mp-country-search"');
     expect(rendered.html).toContain('id="mp-country-sort"');
     expect(rendered.html).toContain('Military ranking');
+    expect(rendered.html).toContain('GDP / capita');
     expect(rendered.html).toContain('MILITARY POWER');
     expect(rendered.html).toContain('Aggressiveness');
     expect(rendered.html).toContain('data-mp-action="continent-filter"');
@@ -152,9 +153,12 @@ describe('multiplayer lobby launch recovery', () => {
     expect(rendered.previewCountryId).toBe(nationIdV2('bel'));
   });
 
-  it('uses the live derived aggressiveness value in picker metrics', () => {
+  it('uses the ordinary AI baseline aggressiveness value in picker metrics', () => {
     const belgium = openingMetrics.byNation.get(nationIdV2('bel'))!;
-    expect(belgium.aggressiveness).toBe(pickerEngine.nationalAggressiveness(nationIdV2('bel')));
+    const preview = pickerEngine.openingCandidatePreviewSnapshot();
+    expect(belgium.aggressiveness).toBe(
+      preview.aggressivenessByNation.get(nationIdV2('bel')),
+    );
     expect(belgium.aggressiveness).toBeGreaterThanOrEqual(0);
     expect(belgium.aggressiveness).toBeLessThanOrEqual(100);
   });

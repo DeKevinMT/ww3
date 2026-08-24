@@ -6,12 +6,18 @@ import {
   territoryIntegrationAnnualCostV2,
   territoryIntegrationDurationWeeksV2,
 } from '../sim/v2/integration';
-import { countryTraitV2 } from '../sim/v2/traits';
+import {
+  countryTraitFactorV2,
+  countryTraitV2,
+  describeCountryTraitModifiersV2,
+  humanCountryTraitMultiplierV2,
+} from '../sim/v2/traits';
 import { nationIdV2, territoryIdV2 } from '../sim/v2/types';
 import { WorldEngineV2 } from '../sim/v2/WorldEngineV2';
 import {
   IntroOpeningMetricsCacheV2,
   quoteConquestIntegrationPreviewV2,
+  renderCountryTraitIntelV2,
   renderCountryTraitPresentationV2,
   renderNationPickerV2,
 } from './WorldUIV2';
@@ -29,14 +35,19 @@ describe('country trait presentation', () => {
       sort: 'power',
       context: 'lobby',
     });
+    const appliedEffect = describeCountryTraitModifiersV2(
+      trait.modifiers,
+      humanCountryTraitMultiplierV2(belgium),
+    );
 
     expect(rendered.html).toContain(`data-country-trait="${belgium}"`);
     expect(rendered.html).toContain(trait.name);
-    expect(rendered.html).toContain(trait.effect);
+    expect(rendered.html).toContain(appliedEffect);
     expect(rendered.html).toContain(trait.description);
-    expect(rendered.html).toContain('UNIQUE COUNTRY TRAIT');
-    expect(rendered.html).toContain('PLAYER CONTROL ×');
-    expect(rendered.html).toContain('This amplifies the same trait; it never adds a second trait.');
+    expect(rendered.html).toContain('PLAYER TRAIT');
+    expect(rendered.html).toContain(`×${humanCountryTraitMultiplierV2(belgium).toFixed(2)}`);
+    expect(rendered.html).toContain('STARTING TREASURY');
+    expect(rendered.html).not.toContain('This amplifies the same trait');
   });
 
   it('previews the selected human multiplier before country choice', () => {
@@ -51,25 +62,81 @@ describe('country trait presentation', () => {
       context: 'campaign',
     });
 
-    expect(rendered.html).toContain('PLAYER CONTROL ×1.80');
-    expect(rendered.html).toContain('opening military rank #166');
-    expect(rendered.html).toContain('+1200% army capacity');
+    const trait = countryTraitV2(greenland)!;
+    expect(rendered.html).toContain('PLAYER TRAIT');
+    expect(rendered.html).toContain('×20.00');
+    expect(rendered.html).toContain(describeCountryTraitModifiersV2(
+      trait.modifiers,
+      humanCountryTraitMultiplierV2(greenland),
+    ));
   });
 
-  it('renders one active nation trait and explicitly rejects fusion stacking', () => {
+  it('renders one compact player-applied nation trait without fusion bloat', () => {
     const france = nationIdV2('fra');
     const congo = nationIdV2('cod');
     const activeTrait = countryTraitV2(france)!;
     const absorbedTrait = countryTraitV2(congo)!;
     const nationPanelTrait = renderCountryTraitPresentationV2(france, 'nation');
+    const appliedEffect = describeCountryTraitModifiersV2(
+      activeTrait.modifiers,
+      humanCountryTraitMultiplierV2(france),
+    );
 
-    expect(nationPanelTrait).toContain('ACTIVE NATIONAL TRAIT · SOLE IDENTITY');
+    expect(nationPanelTrait).toContain('NATIONAL TRAIT');
     expect(nationPanelTrait).toContain(activeTrait.name);
-    expect(nationPanelTrait).toContain(activeTrait.effect);
-    expect(nationPanelTrait).toContain('Fused or conquered countries never add or stack their traits.');
-    expect(nationPanelTrait).toContain('This amplifies the same trait; it never adds a second trait.');
+    expect(nationPanelTrait).toContain(appliedEffect);
+    expect(nationPanelTrait).not.toContain('Fused or conquered');
+    expect(nationPanelTrait).not.toContain('This amplifies');
+    expect(nationPanelTrait).not.toContain(activeTrait.description);
     expect(nationPanelTrait).not.toContain(absorbedTrait.name);
     expect(nationPanelTrait).not.toContain(absorbedTrait.effect);
+  });
+
+  it('shows compact base trait intel for AI map targets and scaled intel for human owners', () => {
+    const greenland = nationIdV2('grl');
+    const trait = countryTraitV2(greenland)!;
+    const aiIntel = renderCountryTraitIntelV2(greenland, false);
+    const humanIntel = renderCountryTraitIntelV2(greenland, true);
+
+    expect(aiIntel).toContain('COUNTRY TRAIT');
+    expect(aiIntel).toContain(trait.effect);
+    expect(aiIntel).not.toContain(trait.description);
+    expect(humanIntel).toContain('PLAYER TRAIT');
+    expect(humanIntel).toContain(describeCountryTraitModifiersV2(
+      trait.modifiers,
+      humanCountryTraitMultiplierV2(greenland),
+    ));
+  });
+
+  it('caps Palestine player casualty prevention below immunity in mechanics and text', () => {
+    const palestine = nationIdV2('psx');
+    const context = {
+      role: 'defender', terrain: 'desert', homeland: true, humanControlled: true,
+    } as const;
+    const factor = countryTraitFactorV2(palestine, 'military-casualties', context);
+    const rendered = renderCountryTraitPresentationV2(palestine, 'picker');
+
+    expect(factor).toBe(0.35);
+    expect(rendered).toContain('−65% military casualties');
+    expect(rendered).not.toMatch(/−(?:[1-9]\d{2,}|100)% military casualties/);
+  });
+
+  it('caps player route and integration reductions at real positive mechanics', () => {
+    const madagascar = nationIdV2('mdg');
+    const albania = nationIdV2('alb');
+    const madagascarCard = renderCountryTraitPresentationV2(madagascar, 'picker');
+    const albaniaCard = renderCountryTraitPresentationV2(albania, 'picker');
+
+    expect(countryTraitFactorV2(madagascar, 'naval-distance-pressure', {
+      access: 'naval', humanControlled: true,
+    })).toBeGreaterThanOrEqual(0.20);
+    expect(countryTraitFactorV2(albania, 'integration-duration', {
+      access: 'naval', humanControlled: true,
+    })).toBeGreaterThanOrEqual(0.25);
+    expect(madagascarCard).toContain('−80% naval distance penalty');
+    expect(albaniaCard).not.toMatch(
+      /−(?:7[6-9]|[89]\d|\d{3,})(?:\.\d+)?% integration duration/,
+    );
   });
 });
 
@@ -136,8 +203,11 @@ describe('war confirmation integration preview', () => {
     const preview = quoteConquestIntegrationPreviewV2(state, belize, targets, 'land');
 
     expect(preview.quotes.map((quote) => quote.firstConquest)).toEqual([true, false]);
+    const firstFactor = countryTraitFactorV2(belize, 'integration-duration', {
+      firstConquest: true,
+    });
     expect(preview.quotes[0]!.durationWeeks).toBe(Math.round(
-      territoryIntegrationDurationWeeksV2(WORLD_CONTENT_V2, targets[0]!) * 0.70,
+      territoryIntegrationDurationWeeksV2(WORLD_CONTENT_V2, targets[0]!) * firstFactor,
     ));
     expect(preview.quotes[1]!.durationWeeks).toBe(
       territoryIntegrationDurationWeeksV2(WORLD_CONTENT_V2, targets[1]!),
@@ -157,8 +227,15 @@ describe('war confirmation integration preview', () => {
     const rawCost = territoryIntegrationAnnualCostV2(state.territories[nextTarget]!.economy);
     const preview = quoteConquestIntegrationPreviewV2(state, france, [nextTarget], 'land');
 
-    expect(preview.annualCost).toBeCloseTo(rawCost * 0.96, 8);
-    expect(preview.annualCost).not.toBeCloseTo(rawCost * 0.96 * 0.88, 8);
-    expect(preview.annualCost).not.toBeCloseTo(rawCost * 0.96 * 0.90, 8);
+    const franceFactor = countryTraitFactorV2(france, 'integration-cost');
+    expect(preview.annualCost).toBeCloseTo(rawCost * franceFactor, 8);
+    expect(preview.annualCost).not.toBeCloseTo(
+      rawCost * franceFactor * countryTraitFactorV2(absorbedCongo, 'integration-cost'),
+      8,
+    );
+    expect(preview.annualCost).not.toBeCloseTo(
+      rawCost * franceFactor * countryTraitFactorV2(nextTarget, 'integration-cost'),
+      8,
+    );
   });
 });

@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { NAVAL_BATTLE_FATIGUE_MULTIPLIER } from './balance';
 import { createWorldStateV2 } from './bootstrap';
 import { WORLD_CONTENT_V2 } from './content';
+import {
+  beginFederationTerritoryIntegrationV2,
+  beginTerritoryIntegrationV2,
+} from './integration';
 import { selectTotalManpowerV2 } from './selectors';
 import {
   nationIdV2,
@@ -10,10 +14,10 @@ import {
   type WarStateV2,
 } from './types';
 import { resolveBattlePulseV2 } from './war';
-import { summarizeWarStrainV2 } from './warStrain';
+import { selectWarStrainSummaryV2, summarizeWarStrainV2 } from './warStrain';
 
 describe('naval War Strain relief', () => {
-  it('makes one fresh naval front clearly lighter while one land front remains 14', () => {
+  it('makes one fresh naval front clearly lighter than one land front', () => {
     const score = (navalFronts: number) => summarizeWarStrainV2({
       activeWars: 1,
       activeFronts: 1,
@@ -23,12 +27,26 @@ describe('naval War Strain relief', () => {
       reserveFillRatio: 1,
     }).score;
 
-    expect(score(0)).toBe(14);
-    expect(score(1)).toBe(10);
+    expect(score(0)).toBe(5);
+    expect(score(1)).toBeGreaterThan(0);
     expect(score(1)).toBeLessThan(score(0));
   });
 
-  it('applies the exact 0.65 multiplier to fatigue earned by a naval battle pulse', () => {
+  it('keeps conquest aftershock after peace but excludes voluntary federation land', () => {
+    const belgium = nationIdV2('bel');
+    const luxembourg = territoryIdV2('lux');
+    const conquest = createWorldStateV2(72_066);
+    const federation = createWorldStateV2(72_067);
+
+    beginTerritoryIntegrationV2(conquest, WORLD_CONTENT_V2, luxembourg, belgium);
+    beginFederationTerritoryIntegrationV2(federation, WORLD_CONTENT_V2, luxembourg, belgium);
+
+    expect(selectWarStrainSummaryV2(conquest, WORLD_CONTENT_V2, belgium))
+      .toMatchObject({ score: 8, level: 'recovering' });
+    expect(selectWarStrainSummaryV2(federation, WORLD_CONTENT_V2, belgium).score).toBe(0);
+  });
+
+  it('applies the reduced naval multiplier to fatigue earned by a battle pulse', () => {
     const belgium = nationIdV2('bel');
     const netherlands = nationIdV2('nld');
     const belgiumTerritory = territoryIdV2('bel');
@@ -77,7 +95,7 @@ describe('naval War Strain relief', () => {
     const attackerCapacity = selectTotalManpowerV2(state, belgium).capacity;
 
     expect(battle.conquered).toBe(false);
-    expect(NAVAL_BATTLE_FATIGUE_MULTIPLIER).toBe(0.65);
+    expect(NAVAL_BATTLE_FATIGUE_MULTIPLIER).toBe(0.45);
     expect(state.players[belgium]!.warFatigue).toBeCloseTo(
       (0.08 + 4 * exactLoss / attackerCapacity) * NAVAL_BATTLE_FATIGUE_MULTIPLIER,
       6,

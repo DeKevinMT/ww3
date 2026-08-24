@@ -12,7 +12,10 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1 --configLoader runner",
     "build": "tsc --noEmit && vite build --configLoader runner",
-    "test": "vitest run --configLoader runner --maxWorkers 1 --minWorkers 1",
+    "matchmaker:check": "tsc -p matchmaker/tsconfig.json --noEmit && wrangler deploy --dry-run --outdir .wrangler-dist",
+    "matchmaker:dev": "wrangler dev",
+    "matchmaker:deploy": "wrangler deploy",
+    "test": "vitest run --configLoader runner --pool threads --reporter dot --maxWorkers 1 --minWorkers 1",
     "test:watch": "vitest --configLoader runner"
   },
   "dependencies": {
@@ -20,8 +23,10 @@
     "phaser": "^3.90.0"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "5.20260823.1",
     "typescript": "^5.9.2",
     "vite": "^7.1.2",
-    "vitest": "^3.2.4"
+    "vitest": "^3.2.4",
+    "wrangler": "4.125.0"
   }
 }

@@ -3,6 +3,7 @@ import {
   V2_CONTENT_VERSION,
   V2_MAP_ID,
   V2_RULES_VERSION,
+  aiHumanAttackSafetyActiveV2,
   clamp,
   round,
 } from './balance';
@@ -175,6 +176,9 @@ export function processOpeningConflictsV2(state: WorldStateV2, content: WorldCon
   const scenario = openingConflictScheduleV2(state.seed, content).find((entry) => entry.tick === state.tick);
   if (!scenario) return;
   if (!state.players[scenario.attackerId] || !state.players[scenario.defenderId]) return;
+  if (aiHumanAttackSafetyActiveV2(state.tick)
+    && (state.humanPlayerIds.includes(scenario.attackerId)
+      || state.humanPlayerIds.includes(scenario.defenderId))) return;
   if (state.players[scenario.attackerId]!.treasury < 0) return;
   const attackerAlive = Object.values(state.territories).some((territory) => territory.owner === scenario.attackerId);
   const defenderAlive = Object.values(state.territories).some((territory) => territory.owner === scenario.defenderId);

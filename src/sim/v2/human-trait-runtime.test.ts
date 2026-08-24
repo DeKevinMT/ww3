@@ -128,7 +128,18 @@ describe('human country-trait runtime propagation', () => {
       },
     );
 
-    expect(aiQuote.durationWeeks).toBe(Math.round(rawDuration * 0.70));
+    expect(aiQuote.durationWeeks).toBe(Math.round(
+      rawDuration * countryTraitFactorV2(belize, 'integration-duration', {
+        access: 'land',
+        terrain: WORLD_CONTENT_V2.territories[targetId]!.terrain,
+        homeland: false,
+        firstConquest: true,
+        atWar: false,
+        treasury: state.players[belize]!.treasury,
+        foodSecurity: state.players[belize]!.foodSecurity,
+        condition: state.territories[targetId]!.condition,
+      }),
+    ));
     expect(humanQuote.durationWeeks).toBe(Math.max(1, Math.round(rawDuration * expectedFactor)));
     expect(humanQuote.durationWeeks).toBeLessThan(aiQuote.durationWeeks);
   });

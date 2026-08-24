@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { forcePresentationSignature } from './forcePresentation';
+import {
+  forcePresentationSignature,
+  mapCombatPowerLabel,
+} from './forcePresentation';
 
 describe('force presentation signature', () => {
   it('is stable across insertion order', () => {
@@ -33,4 +36,10 @@ describe('force presentation signature', () => {
       expect(forcePresentationSignature(changed)).not.toBe(forcePresentationSignature(baseline));
     },
   );
+
+  it('emphasises one combat-power value on map tags without stat-label clutter', () => {
+    expect(mapCombatPowerLabel(12_345.678)).toBe('⚔ 12.35K');
+    expect(mapCombatPowerLabel(987.6, 'YOU')).toBe('YOU · ⚔ 987.60');
+    expect(mapCombatPowerLabel(12_345.678)).not.toMatch(/ATK|DEF|COMBAT POWER/);
+  });
 });

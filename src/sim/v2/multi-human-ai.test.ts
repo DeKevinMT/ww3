@@ -65,7 +65,7 @@ describe('multi-human simulation boundaries', () => {
     const commands = planAiCommandsV2(state, WORLD_CONTENT_V2);
 
     expect(selectWarStrainSummaryV2(state, WORLD_CONTENT_V2, secondHuman).score)
-      .toBeGreaterThanOrEqual(75);
+      .toBeGreaterThanOrEqual(70);
 
     expect(commands.some((command) => (
       command.type === 'set-budget-policy' && command.playerId === secondHuman

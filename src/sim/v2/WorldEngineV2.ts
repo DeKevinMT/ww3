@@ -142,9 +142,9 @@ export interface QueuedWorldActionV2 {
 }
 
 /**
- * Bounded, derived opening view used by the country picker. Every country's
- * own values include the human version of its trait without mutating the
- * authoritative campaign or pretending that all countries share one player.
+ * Bounded, derived opening view used by the country picker. Every country is
+ * evaluated under ordinary AI control so player-only trait amplification can
+ * never alter the displayed opening strength or military ranking.
  */
 export interface OpeningCandidatePreviewSnapshotV2 {
   readonly state: WorldStateV2;
@@ -178,62 +178,35 @@ export function createOpeningCandidatePreviewSnapshotV2(
 
   const ordinaryMilitary = createMilitaryBaseSnapshotV2(ordinaryState, content);
   const ordinaryPower = createPowerSnapshotV2(ordinaryState, content, ordinaryMilitary);
-
-  const previewState = structuredClone(ordinaryState);
-  previewState.humanPlayerId = candidateIds[0] ?? state.humanPlayerId;
-  previewState.humanPlayerIds = [...candidateIds];
-  synchronizeOpeningTreasuryHumanRosterV2(
-    previewState,
-    content,
-    [],
-    candidateIds,
-  );
-  synchronizeArmyCapacityV2(previewState, content);
-
-  const militaryBaseSnapshot = createMilitaryBaseSnapshotV2(previewState, content);
-  const powerSnapshot = createPowerSnapshotV2(previewState, content, militaryBaseSnapshot);
   const openingFinance = new Map<PlayerId, WeeklyFinanceBreakdownV2>();
   const aggressivenessByNation = new Map<PlayerId, number>();
 
   for (const candidateId of candidateIds) {
-    const byNation = new Map(ordinaryPower.byNation);
-    byNation.set(candidateId, powerSnapshot.byNation.get(candidateId) ?? 0);
-    let leaderPower = 1;
-    for (const [playerId, power] of byNation) {
-      if (!selectIsEliminatedV2(previewState, playerId)) {
-        leaderPower = Math.max(leaderPower, power);
-      }
-    }
-    const candidatePowerSnapshot: PowerSnapshotV2 = {
-      byNation,
-      leaderPower,
-      leaderBreakthroughs: ordinaryPower.leaderBreakthroughs,
-    };
     openingFinance.set(candidateId, selectWeeklyFinanceBreakdownV2(
-      previewState,
+      ordinaryState,
       content,
       candidateId,
-      candidatePowerSnapshot,
+      ordinaryPower,
     ));
     aggressivenessByNation.set(candidateId, selectNationalAggressivenessV2(
-      previewState,
+      ordinaryState,
       content,
       candidateId,
-      candidatePowerSnapshot,
+      ordinaryPower,
     ));
   }
 
   // Ranking entries retain authoritative controller metadata for map/HUD
-  // consumers, while score, combat power and economy are the picker preview.
-  const ranking = selectGlobalRankingV2(previewState, content, powerSnapshot)
+  // consumers, while every score is the neutral opening baseline.
+  const ranking = selectGlobalRankingV2(ordinaryState, content, ordinaryPower)
     .map((entry) => ({
       ...entry,
       player: selectNationViewV2(state, content, entry.player.id) ?? entry.player,
     }));
   return {
-    state: previewState,
-    militaryBaseSnapshot,
-    powerSnapshot,
+    state: ordinaryState,
+    militaryBaseSnapshot: ordinaryMilitary,
+    powerSnapshot: ordinaryPower,
     openingFinance,
     aggressivenessByNation,
     ranking,
@@ -828,11 +801,7 @@ export class WorldEngineV2 {
     return selectOpeningCandidateFinancePlansV2(this.state, this.content, powerSnapshot);
   }
 
-  /**
-   * Evaluates every opening country as the human choice in one bounded batch.
-   * Candidate-specific power contexts keep catch-up finance and aggressiveness
-   * identical to the state immediately after choosing that country.
-   */
+  /** Evaluates every opening country under ordinary AI control in one bounded batch. */
   openingCandidatePreviewSnapshot(): OpeningCandidatePreviewSnapshotV2 {
     return createOpeningCandidatePreviewSnapshotV2(this.state, this.content);
   }

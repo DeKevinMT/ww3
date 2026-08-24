@@ -251,11 +251,22 @@ describe('V2 finance and research', () => {
     const engine = new WorldEngineV2(112);
     const bel = nationIdV2('bel');
     const lux = nationIdV2('lux');
+    const belgianArmy = engine.state.territories[territoryIdV2('bel')]!.army;
+    belgianArmy.manpower = belgianArmy.capacity;
+    belgianArmy.baseAttack = 20;
+    belgianArmy.baseDefense = 20;
+    const luxembourgArmy = engine.state.territories[territoryIdV2('lux')]!.army;
+    luxembourgArmy.manpower = 0;
+    luxembourgArmy.baseAttack = 0.1;
+    luxembourgArmy.baseDefense = 0.1;
     const declaration = engine.declareWar(bel, lux);
     expect(declaration.accepted).toBe(true);
     let minimumTreasury = Number.POSITIVE_INFINITY;
     let minimumMandatoryFunding = 1;
     for (let week = 0; week < 120 && engine.state.territories[territoryIdV2('lux')]!.owner !== bel; week += 1) {
+      // Keep this finance regression focused on the attacker's payroll. A
+      // replenishing defender is covered by the dedicated reserve tests.
+      engine.state.players[lux]!.trainedReserves = 0;
       engine.step();
       const plan = engine.weeklyFinanceBreakdown(bel);
       minimumTreasury = Math.min(minimumTreasury, engine.state.players[bel]!.treasury);

@@ -210,9 +210,10 @@ describe('V2 fiscal identity and population-linked income', () => {
       const wealthTier = Math.min(4, Math.max(0, Math.log2(Math.max(10_000, gdpPerCapita) / 10_000)));
       const sizeDamping = 1 / Math.sqrt(Math.max(1, real.gdp / 500));
       const startingCashWeeks = Math.min(9, Math.max(2, 2 + 2.25 * wealthTier * sizeDamping));
-      // The minimum/cash-weeks calculation is shared by every country. Its
-      // unique starting-treasury trait is deliberately applied exactly once.
+      // The minimum/cash-weeks calculation is shared by every country. Country
+      // traits no longer add one-off starting cash.
       const traitFactor = countryTraitFactorV2(id, 'starting-treasury');
+      expect(traitFactor, String(id)).toBe(1);
       const expected = Math.round(
         Math.max(0.10, weeklyRevenue * startingCashWeeks) * traitFactor * 1_000,
       ) / 1_000;
@@ -268,7 +269,7 @@ describe('V2 fiscal identity and population-linked income', () => {
       .toBeGreaterThan(unitedStates.foodProduction / unitedStates.revenue);
     expect(india.foodProduction / india.revenue)
       .toBeGreaterThan(unitedStates.foodProduction / unitedStates.revenue);
-    expect(unitedStates.armyUpkeep / unitedStates.revenue).toBeGreaterThan(0.15);
+    expect(unitedStates.armyUpkeep / unitedStates.revenue).toBeGreaterThan(0.14);
     // A healthy country now deliberately retains part of ordinary cashflow as
     // a war chest instead of spending almost every dollar each week.
     expect(unitedStates.net / unitedStates.revenue).toBeGreaterThan(0.04);

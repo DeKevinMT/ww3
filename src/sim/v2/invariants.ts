@@ -58,7 +58,7 @@ const BREAKTHROUGH_KEYS = [
 ];
 const ARMY_KEYS = ['baseAttack', 'baseDefense', 'capacity', 'manpower'];
 const PROPAGANDA_PROGRAM_KEYS = ['endsTick', 'startedTick', 'totalSuspicionReduction', 'weeklySuspicionReduction'];
-const INTEGRATION_PROGRAM_KEYS = ['annualCost', 'completesTick', 'fromCoreOwnerId', 'fromOwnerId', 'startedTick', 'toOwnerId'];
+const INTEGRATION_PROGRAM_KEYS = ['annualCost', 'cause', 'completesTick', 'fromCoreOwnerId', 'fromOwnerId', 'startedTick', 'toOwnerId'];
 const WAR_KEYS = ['attackerCivilianLosses', 'attackerId', 'attackerLosses', 'attackerOperations', 'battles', 'defenderCivilianLosses', 'defenderId', 'defenderLosses', 'defenderOperations', 'id', 'lastBattleTick', 'lastPeaceOfferTick', 'revenge', 'startedTick', 'warScore'];
 const WAR_REVENGE_KEYS = ['claimantId', 'expiresTick', 'triggeredTick'];
 const OPERATION_KEYS = ['access', 'commanderId', 'doctrine', 'holdUntilTick', 'lastBattleTick', 'momentum', 'sourceId', 'startedTick', 'targetId'];
@@ -68,7 +68,7 @@ const OFFER_KEYS = ['cashAmount', 'createdTick', 'expiresTick', 'fromId', 'id', 
 const ALLIANCE_KEYS = ['formedTick', 'leftId', 'rightId'];
 const ALLIANCE_OFFER_KEYS = ['createdTick', 'expiresTick', 'fromId', 'toId'];
 const AI_ESCALATION_KEYS = ['coalitionMembers', 'globalThreat', 'lastFederationTick', 'lastHumanPower', 'lastHumanTerritoryCount', 'lastWarStartTick', 'resistanceLevel'];
-const OPTIONAL_CANONICAL_KEYS = ['integrationProgram'] as const;
+const OPTIONAL_CANONICAL_KEYS = ['cause', 'integrationProgram'] as const;
 const allowedKeySetCache = new WeakMap<readonly string[], ReadonlySet<string>>();
 
 function allowedKeySet(allowed: readonly string[]): ReadonlySet<string> {
@@ -202,6 +202,8 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
     const program = territory.integrationProgram;
     if (program) {
       if (!exactKeys(program, INTEGRATION_PROGRAM_KEYS)
+        || (program.cause !== undefined
+          && program.cause !== 'conquest' && program.cause !== 'federation')
         || !state.players[program.fromOwnerId]
         || !state.players[program.fromCoreOwnerId] || !state.players[program.toOwnerId]
         || program.fromOwnerId === program.toOwnerId

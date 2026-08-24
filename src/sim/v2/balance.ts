@@ -130,22 +130,16 @@ export const COMBAT_ROUTE_STRENGTH_RATIO = 0.05;
 /** Defensive research saturates at +20%; level 20 reaches +10%. */
 export const DEFENSE_RESEARCH_MAX_BONUS = 0.20;
 export const DEFENSE_RESEARCH_HALF_SATURATION = 20;
-/**
- * DEF remains valuable, but points above the neutral 1.0 rating no longer
- * scale linearly forever. This curve leaves weak forces untouched while
- * compressing increasingly fortified armies into a bounded effective score.
- */
-export const DEFENSE_STAT_EXCESS_SCALE = 0.85;
-export const DEFENSE_STAT_EXCESS_DIMINISHING_RATE = 0.14;
 export function effectiveDefenseStatV2(rawDefense: number): number {
-  const defense = Math.max(0, rawDefense);
-  if (defense <= 1) return defense;
-  const excess = defense - 1;
-  return 1 + DEFENSE_STAT_EXCESS_SCALE * excess
-    / (1 + DEFENSE_STAT_EXCESS_DIMINISHING_RATE * excess);
+  // DEF is fully linear. Research, GDP/IQ and the country's one trait may
+  // improve it, but there is no hidden global compression above neutral.
+  return Math.max(0, rawDefense);
 }
 /** A fresh entrant cannot claim a force another war already destroyed. */
 export const CAPTURE_MIN_CONTRIBUTION_SHARE = 0.10;
+/** A lightning conquest still consumes a small, visible assault/occupation force. */
+export const QUICK_CONQUEST_MAX_WAR_AGE_TICKS = 6;
+export const QUICK_CONQUEST_MIN_ATTACKER_LOSS_SHARE = 0.01;
 /**
  * A front that has been decisively dominated for half a year can force the
  * last under-strength formation to surrender. This replaces gradual territorial
@@ -218,7 +212,7 @@ export const FOOD_PRICE_LEVEL_PER_WEALTH_THOUSAND = 0.03;
 /** Above $100k GDP/capita, prices keep rising at one quarter of the normal slope. */
 export const FOOD_PRICE_LEVEL_SOFTENING_THRESHOLD = 100;
 export const FOOD_PRICE_LEVEL_POST_THRESHOLD_SLOPE_SHARE = 0.25;
-export const FOOD_SHORTAGE_POPULATION_LOSS = 0.0008;
+export const FOOD_SHORTAGE_POPULATION_LOSS = 0.00085;
 /** Empty reserves can add up to six percentage points of annual mortality in a live shortage. */
 export const FOOD_EMPTY_RESERVE_ANNUAL_MORTALITY_MAX = 0.06;
 /** Extra starvation mortality begins once reserves fall below 10% of their safe target. */
@@ -314,7 +308,7 @@ export const WAR_OPERATION_COST_PER_MILLION = 0.08;
 export const WAR_FATIGUE_OPERATION_COST_PER_POINT = 0.015;
 export const WAR_FATIGUE_OPERATION_COST_MAX_BONUS = 0.30;
 /** Sea battles create less sustained national fatigue than equivalent ground contact. */
-export const NAVAL_BATTLE_FATIGUE_MULTIPLIER = 0.65;
+export const NAVAL_BATTLE_FATIGUE_MULTIPLIER = 0.45;
 export const WAR_ACCESS_OPERATION_MULTIPLIER = {
   land: 1,
   naval: 1.35,
@@ -383,24 +377,29 @@ export function nuclearPowerTierCostV2(tier: number): number {
 
 export const AI_DECISION_INTERVAL = 8;
 /** Existing crises get time to develop before the wider 2026 order starts fracturing. */
-export const AI_FIRST_WAR_TICK = 52;
+export const AI_FIRST_WAR_TICK = 78;
+/** 17 Aug 2026 + 176 weeks reaches January 2030 in the campaign calendar. */
+export const AI_HUMAN_ATTACK_SAFETY_END_TICK = 176;
+export function aiHumanAttackSafetyActiveV2(tick: number): boolean {
+  return Math.max(0, Math.floor(tick)) < AI_HUMAN_ATTACK_SAFETY_END_TICK;
+}
 /** New expansion wars are meaningful events, not something the world opens every few weeks. */
-export const AI_GLOBAL_WAR_COOLDOWN = 52;
+export const AI_GLOBAL_WAR_COOLDOWN = 78;
 /** Established great powers strongly prefer proxy/regional expansion over a
  * direct peer war during the first fifty campaign years. It is an aversion,
  * not a hard diplomatic lock. */
 export const AI_MAJOR_POWER_AVOIDANCE_TICKS = 52 * 50;
 /** A sustained AI-vs-AI war can still attract a bounded regional intervention. */
-export const AI_REGIONAL_ESCALATION_COOLDOWN = 52;
-export const AI_REGIONAL_ESCALATION_MIN_AGE = 26;
-export const AI_REGIONAL_ESCALATION_MIN_BATTLES = 5;
-export const AI_REGIONAL_ESCALATION_EXTRA_WAR_CAP = 1;
+export const AI_REGIONAL_ESCALATION_COOLDOWN = 104;
+export const AI_REGIONAL_ESCALATION_MIN_AGE = 52;
+export const AI_REGIONAL_ESCALATION_MIN_BATTLES = 8;
+export const AI_REGIONAL_ESCALATION_EXTRA_WAR_CAP = 0;
 /** A threatened player must fight alone long enough for neighbours to assess the invasion. */
-export const AI_DEFENSIVE_AID_MIN_AGE = 12;
-export const AI_DEFENSIVE_AID_MIN_BATTLES = 3;
+export const AI_DEFENSIVE_AID_MIN_AGE = 26;
+export const AI_DEFENSIVE_AID_MIN_BATTLES = 5;
 export const AI_DEFENSIVE_AID_AGGRESSOR_RATIO = 1.60;
 /** Defensive intervention stays more responsive than optional expansion. */
-export const AI_DEFENSIVE_AID_COOLDOWN = 26;
+export const AI_DEFENSIVE_AID_COOLDOWN = 52;
 
 /**
  * The world is a self-running conflict sandbox. Capacity rises as the campaign
@@ -408,8 +407,9 @@ export const AI_DEFENSIVE_AID_COOLDOWN = 26;
  * world war without bypassing any country's money, fatigue or route checks.
  */
 export function aiActiveWarCapV2(livingNations: number, tick: number): number {
-  const eraBonus = tick >= 520 ? 1 : 0;
-  return Math.min(4, Math.max(2, Math.ceil(Math.max(1, livingNations) / 70)) + eraBonus);
+  const worldScale = Math.max(1, Math.ceil(Math.max(1, livingNations) / 100));
+  const eraBonus = tick >= 1_560 ? 2 : tick >= 520 ? 1 : 0;
+  return Math.min(4, Math.max(2, worldScale + eraBonus));
 }
 
 /** Every country reviews the same stored budget and research mix every eight weeks. */
@@ -615,12 +615,12 @@ export function researchFundingShareV2(allocations: ResearchAllocationsV2, branc
 
 export const TERRAIN_DEFENSE_MODIFIER: Readonly<Record<TerrainType, number>> = {
   plains: 1,
-  desert: 1.03,
-  coastal: 1.07,
-  arctic: 1.10,
-  jungle: 1.14,
-  urban: 1.18,
-  mountain: 1.24,
+  desert: 1,
+  coastal: 1,
+  arctic: 1,
+  jungle: 1,
+  urban: 1,
+  mountain: 1,
 };
 
 export function clamp(value: number, minimum: number, maximum: number): number {

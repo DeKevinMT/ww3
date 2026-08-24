@@ -12,14 +12,14 @@ function strainedHumanTargetState(seed: number, fatigue: number): WorldStateV2 {
   const opportunist = nationIdV2('fra');
   state.humanPlayerId = human;
   state.humanPlayerIds = [human];
-  state.tick = 104;
+  state.tick = 184;
   state.aiEscalation.lastWarStartTick = -1_000_000;
   state.wars = [{
     id: 'war-human-existing',
     attackerId: human,
     defenderId: existingOpponent,
-    startedTick: 52,
-    lastBattleTick: 104,
+    startedTick: 132,
+    lastBattleTick: 184,
     warScore: 0,
     battles: 8,
     attackerLosses: 0,

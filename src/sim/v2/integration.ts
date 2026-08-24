@@ -357,6 +357,8 @@ function beginTerritoryIntegrationWithCauseV2(
     territory.owner = newOwnerId;
     territory.integration = 1;
     delete territory.integrationProgram;
+    invalidateTerritoryIndexV2(state);
+    synchronizeArmyCapacityV2(state, content);
     return;
   }
   const quote = quoteTerritoryIntegrationV2(
@@ -369,6 +371,7 @@ function beginTerritoryIntegrationWithCauseV2(
   territory.owner = newOwnerId;
   territory.integration = CONQUEST_INITIAL_INTEGRATION_SHARE;
   territory.integrationProgram = {
+    cause,
     fromOwnerId: formerOwnerId,
     fromCoreOwnerId: territory.coreOwner,
     toOwnerId: newOwnerId,
@@ -376,6 +379,8 @@ function beginTerritoryIntegrationWithCauseV2(
     completesTick: state.tick + quote.durationWeeks,
     annualCost: quote.annualCost,
   };
+  invalidateTerritoryIndexV2(state);
+  synchronizeArmyCapacityV2(state, content);
 }
 
 export function beginTerritoryIntegrationV2(
@@ -736,5 +741,9 @@ export function advanceTerritoryIntegrationProgramsV2(
     );
     completions.push({ territoryId, formerCoreOwnerId, ownerId });
   }
+  // The capacity model is owner-specific. Final core fusion can retire a
+  // sovereign and change the live leader context, so persist the resulting
+  // local caps before invariants, saves or multiplayer snapshots observe it.
+  if (completions.length > 0) synchronizeArmyCapacityV2(state, content);
   return completions;
 }

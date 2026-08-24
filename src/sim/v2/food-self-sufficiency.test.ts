@@ -49,7 +49,7 @@ describe('V2 FAOSTAT food self-sufficiency calibration', () => {
 
   it('uses the reference ratio as opening domestic capacity before country traits', () => {
     const state = createWorldStateV2(9_301);
-    for (const countryId of ['usa', 'chn', 'ind', 'deu', 'bel', 'nld', 'sgp', 'jpn', 'ukr', 'can', 'bra', 'aus']) {
+    for (const countryId of ['usa', 'chn', 'ind', 'deu', 'bel', 'nld', 'sgp', 'jpn', 'ukr', 'can', 'bra', 'aus', 'arg']) {
       const playerId = nationIdV2(countryId);
       const reference = WORLD_CONTENT_V2.nations[playerId]!.real.foodSelfSufficiencyRatio;
       const demand = selectFoodDemandV2(state, playerId);
@@ -65,7 +65,7 @@ describe('V2 FAOSTAT food self-sufficiency calibration', () => {
       expect(state.players[playerId]!.domesticFoodCapacity / demand, countryId)
         .toBeCloseTo(reference * traitFactor, 5);
     }
-    expect(countryTraitFactorV2(nationIdV2('ind'), 'food-production')).toBe(1.03);
+    expect(countryTraitFactorV2(nationIdV2('arg'), 'food-production')).toBeGreaterThan(1);
     expect(state.players[nationIdV2('sgp')]!.domesticFoodCapacity
       / selectFoodDemandV2(state, nationIdV2('sgp'))).toBeLessThan(0.12);
   });

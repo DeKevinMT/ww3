@@ -506,9 +506,18 @@ describe('V2 legacy save migration', () => {
     legacy.territories[luxTerritory].owner = bel;
     legacy.territories[nldTerritory].owner = bel;
     legacy.territories[luxTerritory].army.manpower = Math.min(
-      legacy.territories[luxTerritory].army.capacity,
+      Math.max(0.000001, legacy.territories[luxTerritory].army.capacity),
       Math.max(0.000001, legacy.territories[luxTerritory].army.manpower),
     );
+    legacy.territories[luxTerritory].army.capacity = Math.max(
+      legacy.territories[luxTerritory].army.manpower,
+      legacy.territories[luxTerritory].army.capacity,
+    );
+    legacy.territories[luxTerritory].army.veteranManpower
+      = legacy.territories[luxTerritory].army.manpower * 0.25;
+    legacy.territories[luxTerritory].army.veteranExperience
+      = legacy.territories[luxTerritory].army.veteranManpower > 0
+        ? 1.5 : 0;
     legacy.territories[nldTerritory].army.manpower = 0;
     legacy.territories[nldTerritory].army.veteranManpower = 0;
     legacy.territories[nldTerritory].army.veteranExperience = 0;

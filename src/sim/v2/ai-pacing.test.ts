@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   AI_DEFENSIVE_AID_COOLDOWN,
   AI_GLOBAL_WAR_COOLDOWN,
+  AI_HUMAN_ATTACK_SAFETY_END_TICK,
   AI_REGIONAL_ESCALATION_COOLDOWN,
   aiActiveWarCapV2,
+  aiHumanAttackSafetyActiveV2,
 } from './balance';
 import {
   AI_EXPANSION_ROLLS_PER_DECISION,
@@ -16,11 +18,11 @@ import {
 } from './ai';
 
 describe('quiet but active AI war pacing', () => {
-  it('uses one ordinary expansion roll and a yearly global cooldown', () => {
+  it('uses one ordinary expansion roll and long global cooldowns', () => {
     expect(AI_EXPANSION_ROLLS_PER_DECISION).toBe(1);
-    expect(AI_GLOBAL_WAR_COOLDOWN).toBe(52);
-    expect(AI_REGIONAL_ESCALATION_COOLDOWN).toBe(52);
-    expect(AI_DEFENSIVE_AID_COOLDOWN).toBe(26);
+    expect(AI_GLOBAL_WAR_COOLDOWN).toBe(78);
+    expect(AI_REGIONAL_ESCALATION_COOLDOWN).toBe(104);
+    expect(AI_DEFENSIVE_AID_COOLDOWN).toBe(52);
   });
 
   it('keeps the commitment roll modest and sharply discourages opportunistic dogpiles', () => {
@@ -43,9 +45,44 @@ describe('quiet but active AI war pacing', () => {
       rivalInvaderCount: 1,
     });
 
-    expect(ordinary).toBeCloseTo(0.212, 6);
-    expect(regional).toBeCloseTo(0.262, 6);
-    expect(dogpile).toBeLessThanOrEqual(0.08);
+    expect(ordinary).toBeCloseTo(0.172, 6);
+    expect(regional).toBeCloseTo(0.212, 6);
+    expect(dogpile).toBeLessThanOrEqual(0.05);
+  });
+
+  it('protects human countries from AI declarations until the 2030 calendar boundary', () => {
+    expect(AI_HUMAN_ATTACK_SAFETY_END_TICK).toBe(176);
+    expect(aiHumanAttackSafetyActiveV2(0)).toBe(true);
+    expect(aiHumanAttackSafetyActiveV2(175)).toBe(true);
+    expect(aiHumanAttackSafetyActiveV2(176)).toBe(false);
+  });
+
+  it('brakes optional AI wars as the world fills while retaining the human-strain opening', () => {
+    const quietWorld = aiExpansionDeclarationChanceV2({
+      ratio: 1.2,
+      expansionChance: 0.08,
+      regionalEscalation: false,
+      rivalInvaderCount: 0,
+      globalWarLoad: 0,
+    });
+    const busyWorld = aiExpansionDeclarationChanceV2({
+      ratio: 1.2,
+      expansionChance: 0.08,
+      regionalEscalation: false,
+      rivalInvaderCount: 0,
+      globalWarLoad: 1,
+    });
+    const strainedHuman = aiExpansionDeclarationChanceV2({
+      ratio: 1.2,
+      expansionChance: 0.08,
+      regionalEscalation: false,
+      rivalInvaderCount: 0,
+      humanWarStrainPressure: 1,
+      globalWarLoad: 1,
+    });
+
+    expect(busyWorld).toBeLessThan(quietWorld * 0.6);
+    expect(strainedHuman).toBeGreaterThan(quietWorld * 1.8);
   });
 
   it('opens a bounded opportunistic window only for very high human war strain', () => {
@@ -100,7 +137,7 @@ describe('quiet but active AI war pacing', () => {
     expect(aiTargetWarLimitV2(false, false)).toBe(1);
     expect(aiTargetWarLimitV2(true, false)).toBe(2);
     expect(aiTargetWarLimitV2(true, true)).toBe(4);
-    expect(aiActiveWarCapV2(235, 0)).toBe(4);
+    expect(aiActiveWarCapV2(235, 0)).toBe(3);
     expect(aiActiveWarCapV2(235, 520)).toBe(4);
     expect(aiActiveWarCapV2(70, 0)).toBe(2);
   });

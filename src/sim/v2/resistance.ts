@@ -16,6 +16,7 @@ import {
 import {
   createPowerSnapshotV2,
   invalidateTerritoryIndexV2,
+  selectNationalAggressivenessV2,
   selectTerritoriesOfV2,
   type PowerSnapshotV2,
 } from './selectors';
@@ -28,6 +29,10 @@ const COALITION_RECRUITMENT_MIN_TICK = 156;
 const COALITION_RECRUITMENT_INTERVAL = 52;
 const FEDERATION_FORMATION_INTERVAL = 104;
 const AI_FEDERATION_FORMATION_MIN_TICK = 832;
+
+export function coalitionWillingnessV2(aggressivenessPercent: number): number {
+  return round((1 - clamp(aggressivenessPercent / 100, 0, 1)) ** 1.8);
+}
 
 interface OwnerTopologyV2 {
   signature: string;
@@ -133,6 +138,7 @@ function recruitCoalitionMembersV2(
   state: WorldStateV2,
   content: WorldContentV2,
   topology: OwnerTopologyV2,
+  powers: PowerSnapshotV2,
 ): PlayerId[] {
   const humanPlayerIds = new Set(selectHumanPlayerIdsV2(state));
   const living = new Set(topology.living);
@@ -161,13 +167,22 @@ function recruitCoalitionMembersV2(
       const adjacentMember = [...members].some((memberId) => adjacency.get(candidateId)?.has(memberId));
       const sameSubregion = definition?.subregion === humanNation?.subregion;
       const sameContinent = definition?.continent === humanNation?.continent;
-      const score = state.aiEscalation.globalThreat
-        + (adjacent ? 16 : 0)
+      const aggressiveness = selectNationalAggressivenessV2(
+        state, content, candidateId, powers,
+      );
+      const willingness = coalitionWillingnessV2(aggressiveness);
+      const situationalPressure = (adjacent ? 16 : 0)
         + (adjacentMember ? 8 : 0)
         + (sameSubregion ? 8 : sameContinent ? 2 : 0)
         + sharedAffinityV2(content, candidateId, members)
         + (atWarWithHuman.has(candidateId) ? 12 : 0);
-      return { candidateId, score };
+      // Defensive cooperation is a low-aggression strategy. Even overwhelming
+      // global pressure rarely persuades a highly aggressive country, while a
+      // cautious neighbour can cross the threshold materially earlier.
+      const score = state.aiEscalation.globalThreat * (0.55 + 0.45 * willingness)
+        + situationalPressure * (0.35 + 0.65 * willingness)
+        + 18 * willingness - 25 * (aggressiveness / 100);
+      return { candidateId, score, aggressiveness };
     })
     .filter((entry) => entry.score >= COALITION_JOIN_THRESHOLD)
     .sort((left, right) => right.score - left.score || left.candidateId.localeCompare(right.candidateId))[0];
@@ -330,6 +345,8 @@ function maybeFormDefensiveFederationV2(
     && !humanPlayerIds.has(id)
     && selectTerritoriesOfV2(state, id).length <= (isDefensiveFederationV2(state, id) ? policy.maxFederationTerritories : 3)
     && !state.wars.some((war) => war.attackerId === id || war.defenderId === id)
+    && (isDefensiveFederationV2(state, id)
+      || selectNationalAggressivenessV2(state, content, id, powers) < 75)
     && (powers.byNation.get(id) ?? 0) <= humanPower
       * (isDefensiveFederationV2(state, id) ? policy.federationPowerCeiling : policy.memberPowerCeiling)
   ));
@@ -434,6 +451,8 @@ function maybeFormAiDefensiveFederationV2(
     !humanPlayerIds.has(id) && id !== aggressor.id && living.has(id)
     && selectTerritoriesOfV2(state, id).length <= (isDefensiveFederationV2(state, id) ? 8 : 3)
     && !state.wars.some((war) => war.attackerId === id || war.defenderId === id)
+    && (isDefensiveFederationV2(state, id)
+      || selectNationalAggressivenessV2(state, content, id, powers) < 75)
     && (powers.byNation.get(id) ?? 0) <= aggressorPower * (isDefensiveFederationV2(state, id) ? 0.65 : 0.38)
   ));
   const eligibleSet = new Set(eligible);
@@ -502,7 +521,7 @@ export function updateGlobalResistanceV2(
   updateThreatV2(state, content, powers);
   const previousLevel = state.aiEscalation.resistanceLevel;
   const topology = ownerTopologyV2(state, content);
-  const added = recruitCoalitionMembersV2(state, content, topology);
+  const added = recruitCoalitionMembersV2(state, content, topology, powers);
   const humanPlayerIds = new Set(selectHumanPlayerIdsV2(state));
   const livingOpponents = Math.max(1, topology.living.filter((id) => !humanPlayerIds.has(id)).length);
   const unitedMembers = Math.max(8, Math.ceil(livingOpponents * 0.20));

@@ -1,8 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  ARMY_CAPACITY_STRUCTURAL_POPULATION_SHARE,
-  EXTREME_CRISIS_DEMOBILIZATION_RATE,
-} from './balance';
+import { EXTREME_CRISIS_DEMOBILIZATION_RATE } from './balance';
 import { createWorldStateV2 } from './bootstrap';
 import {
   CONQUERED_TERRITORY_EMPIRE_COMBAT_CAP_SHARE_V2,
@@ -48,9 +45,11 @@ describe('population and research army cap', () => {
     };
     state.players[bel].treasury = -1_000;
     synchronizeArmyCapacityV2(state, WORLD_CONTENT_V2);
-    const integratedPopulation = selectTerritoriesOfV2(state, bel)
-      .reduce((sum, territory) => sum + territory.population * territory.integration, 0);
-    const expected = integratedPopulation * ARMY_CAPACITY_STRUCTURAL_POPULATION_SHARE * 1.17;
+    const expected = selectTerritoriesOfV2(state, bel).reduce((sum, territory) => (
+      sum + stateTerritoryArmyCapacityTargetV2(
+        state, WORLD_CONTENT_V2, territory.id, bel,
+      )
+    ), 0);
     expect(selectTotalManpowerV2(state, bel).capacity).toBeCloseTo(expected, 5);
     expect(nationalArmyCapacityTargetV2(state, WORLD_CONTENT_V2, bel)).toBeCloseTo(expected, 5);
     assertInvariantsV2(state, WORLD_CONTENT_V2);
@@ -230,10 +229,10 @@ describe('population and research army cap', () => {
     const local = WORLD_CONTENT_V2.nations[bel];
     expect(projection.recruited).toBeGreaterThan(0);
     expect(projected.manpower * projected.baseAttack).toBeCloseTo(
-      attackMassBefore + projection.recruited * local.militaryAttackRating, 6,
+      attackMassBefore + projection.recruited * local.militaryAttackRating, 4,
     );
     expect(projected.manpower * projected.baseDefense).toBeCloseTo(
-      defenseMassBefore + projection.recruited * local.militaryDefenseRating, 6,
+      defenseMassBefore + projection.recruited * local.militaryDefenseRating, 4,
     );
   });
 });

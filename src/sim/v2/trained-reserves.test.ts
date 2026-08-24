@@ -85,10 +85,10 @@ describe('finite trained reserves', () => {
     const albania = nationIdV2('alb');
 
     expect(state.players[finland]!.trainedReserves).toBe(
-      selectTrainedReserveCapacityV2(state, finland),
+      initialTrainedReserveManpowerV2('fin', selectTrainedReserveCapacityV2(state, finland)),
     );
     expect(state.players[israel]!.trainedReserves).toBe(
-      selectTrainedReserveCapacityV2(state, israel),
+      initialTrainedReserveManpowerV2('isr', selectTrainedReserveCapacityV2(state, israel)),
     );
     expect(state.players[india]!.trainedReserves).toBeCloseTo(
       1.155 * INITIAL_REPORTED_RESERVE_READY_SHARE_V2,

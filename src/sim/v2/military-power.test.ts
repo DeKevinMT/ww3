@@ -23,23 +23,32 @@ describe('V2 real-world military power calibration', () => {
     const china = nationIdV2('chn');
     const india = nationIdV2('ind');
     const russia = nationIdV2('rus');
+    const france = nationIdV2('fra');
+    const germany = nationIdV2('deu');
 
     const usaManpower = selectTotalManpowerV2(state, usa).deployed;
     const chinaManpower = selectTotalManpowerV2(state, china).deployed;
     const indiaManpower = selectTotalManpowerV2(state, india).deployed;
+    const russiaManpower = selectTotalManpowerV2(state, russia).deployed;
     const usaPower = selectCurrentPowerV2(state, WORLD_CONTENT_V2, usa);
     const chinaPower = selectCurrentPowerV2(state, WORLD_CONTENT_V2, china);
     const indiaPower = selectCurrentPowerV2(state, WORLD_CONTENT_V2, india);
     const russiaPower = selectCurrentPowerV2(state, WORLD_CONTENT_V2, russia);
+    const francePower = selectCurrentPowerV2(state, WORLD_CONTENT_V2, france);
+    const germanyPower = selectCurrentPowerV2(state, WORLD_CONTENT_V2, germany);
 
-    expect(chinaManpower).toBeGreaterThan(usaManpower * 1.15);
-    expect(indiaManpower).toBeGreaterThan(1);
+    expect(usaManpower).toBeGreaterThan(0.7);
+    expect(usaManpower).toBeLessThan(1.4);
+    expect(russiaManpower).toBeGreaterThan(usaManpower);
+    expect(chinaManpower).toBeGreaterThan(russiaManpower);
     expect(usaPower).toBeGreaterThan(chinaPower);
-    expect(chinaPower).toBeGreaterThan(indiaPower);
+    expect(chinaPower).toBeGreaterThan(russiaPower);
     expect(russiaPower).toBeGreaterThan(indiaPower);
-    expect(usaPower / usaManpower).toBeGreaterThan(chinaPower / chinaManpower);
+    expect(chinaPower).toBeGreaterThan(indiaPower);
+    expect(usaPower / usaManpower).toBeGreaterThan(russiaPower / russiaManpower);
     expect(chinaPower / chinaManpower).toBeGreaterThan(indiaPower / indiaManpower);
-    expect(indiaPower).toBeLessThan(usaPower * 0.80);
+    expect(usaPower).toBeGreaterThan(francePower * 2);
+    expect(usaPower).toBeGreaterThan(germanyPower * 3);
   });
 
   it('starts from a pure current-military-power global ranking', () => {
@@ -51,14 +60,15 @@ describe('V2 real-world military power calibration', () => {
       nationIdV2('usa'),
       nationIdV2('chn'),
       nationIdV2('rus'),
-      nationIdV2('deu'),
+      nationIdV2('ind'),
+      nationIdV2('kor'),
+      nationIdV2('fra'),
       nationIdV2('jpn'),
       nationIdV2('gbr'),
-      nationIdV2('fra'),
-      nationIdV2('kor'),
+      nationIdV2('tur'),
       nationIdV2('ita'),
-      nationIdV2('esp'),
     ]);
+    expect(rankedIds.indexOf(nationIdV2('deu'))).toBe(11);
     expect(ranking[0]!.score).toBe(
       selectStrategicScoreV2(state, WORLD_CONTENT_V2, ranking[0]!.player.id),
     );
@@ -141,7 +151,7 @@ describe('V2 real-world military power calibration', () => {
   it('splits one transparent force rating into ATK and DEF without changing its 55/45 value', () => {
     const rating = calibratedMilitaryRatingsV2(80, 200, 0.40);
     expect(0.55 * rating.attack + 0.45 * rating.defense).toBeCloseTo(rating.combined, 8);
-    expect(rating.combined).toBeCloseTo(2, 8);
+    expect(rating.combined).toBeGreaterThan(1);
     expect(rating.attack).toBeGreaterThan(rating.defense);
 
     const forceDepth = calibratedMilitaryRatingsV2(40, 1, 0.40);

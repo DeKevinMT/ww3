@@ -8,6 +8,8 @@ import {
   type DirectHostMessageEvent,
 } from '../multiplayer/directConnect';
 import { HostLobbyModel } from '../multiplayer/lobbyModel';
+import { MatchmakingClient, matchmakingServiceUrl } from '../multiplayer/matchmakingClient';
+import type { MatchmakingParticipant, MatchmakingServerMessage } from '../multiplayer/matchmakingProtocol';
 import type {
   LobbyAction,
   LobbyPlayer,
@@ -41,7 +43,7 @@ export interface MultiplayerLobbyOptions {
   preferredCountryId?: PlayerId;
 }
 
-type LobbyMode = 'menu' | 'host' | 'guest';
+type LobbyMode = 'menu' | 'matchmaking' | 'host' | 'guest';
 
 function escapeHtml(value: string): string {
   return value.replace(/[&<>'"]/g, (character) => ({
@@ -83,6 +85,12 @@ export class MultiplayerLobby {
   private launched = false;
   private host?: DirectConnectHost;
   private guest?: DirectConnectGuest;
+  private matchmaker?: MatchmakingClient;
+  private matchmakingMatchId?: string;
+  private matchmakingParticipants: readonly MatchmakingParticipant[] = [];
+  private readonly matchmakingInvitedClientIds = new Set<string>();
+  private queuedPlayers = 1;
+  private queuePosition = 1;
   private hostModel?: HostLobbyModel;
   private lobby?: LobbyStateMessage;
   private transportUnsubscribe?: () => void;
@@ -118,6 +126,7 @@ export class MultiplayerLobby {
     this.transportUnsubscribe?.();
     this.transportUnsubscribe = undefined;
     if (closeConnection) {
+      this.matchmaker?.close();
       this.host?.close();
       this.guest?.close();
     }
@@ -187,10 +196,18 @@ export class MultiplayerLobby {
       case 'show-host':
         this.mode = 'host'; this.error = ''; this.render();
         break;
+      case 'find-match': void this.startMatchmaking(); break;
+      case 'cancel-matchmaking':
+        this.stopMatchmaking();
+        this.mode = 'menu';
+        this.status = 'Matchmaking cancelled.';
+        this.render();
+        break;
       case 'show-guest':
         this.mode = 'guest'; this.error = ''; this.render();
         break;
       case 'back':
+        this.stopMatchmaking();
         this.host?.close(); this.guest?.close();
         this.host = undefined; this.guest = undefined; this.hostModel = undefined; this.lobby = undefined;
         this.transportUnsubscribe?.(); this.transportUnsubscribe = undefined;
@@ -231,6 +248,171 @@ export class MultiplayerLobby {
         break;
     }
   };
+
+  private async startMatchmaking(): Promise<void> {
+    const name = this.displayName.trim();
+    if (!name) return this.setError(undefined, 'Enter your name first.');
+    const url = matchmakingServiceUrl();
+    if (!url) {
+      return this.setError(undefined, 'Public matchmaking is not configured yet. You can still use a private room below.');
+    }
+    this.stopMatchmaking();
+    rememberCommanderName(name);
+    this.mode = 'matchmaking';
+    this.busy = true;
+    this.error = '';
+    this.queuedPlayers = 1;
+    this.queuePosition = 1;
+    this.status = 'Connecting to the live matchmaking queue…';
+    this.render();
+    try {
+      this.matchmaker = new MatchmakingClient({
+        url,
+        rulesVersion: V2_RULES_VERSION,
+        displayName: name,
+        onOpen: () => {
+          this.busy = false;
+          this.status = 'You are in the queue. Looking for compatible commanders now.';
+          this.render();
+        },
+        onMessage: (message) => void this.onMatchmakingMessage(message),
+        onError: (error) => this.setError(error, 'Public matchmaking failed.'),
+        onClose: () => {
+          if (this.mode === 'matchmaking' && !this.lobby) {
+            this.setError(undefined, 'The matchmaking connection closed. Try the queue again.');
+          }
+        },
+      });
+    } catch (error) {
+      this.setError(error, 'Public matchmaking could not start.');
+    }
+  }
+
+  private async onMatchmakingMessage(message: MatchmakingServerMessage): Promise<void> {
+    if (message.type === 'pong') return;
+    if (message.type === 'error') {
+      this.setError(new Error(message.message), 'Public matchmaking rejected the request.');
+      return;
+    }
+    if (message.type === 'queue-status') {
+      this.queuedPlayers = message.queuedPlayers;
+      this.queuePosition = message.position;
+      this.busy = false;
+      this.status = message.queuedPlayers > 1
+        ? 'Compatible commanders found. Opening a lobby…'
+        : 'Waiting for another compatible commander to open a lobby…';
+      this.render();
+      return;
+    }
+    if (message.type === 'match-cancelled') {
+      this.host?.close();
+      this.guest?.close();
+      this.host = undefined;
+      this.guest = undefined;
+      this.hostModel = undefined;
+      this.lobby = undefined;
+      this.matchmakingMatchId = undefined;
+      this.matchmakingParticipants = [];
+      this.matchmakingInvitedClientIds.clear();
+      this.busy = false;
+      this.status = `${message.reason} You are back in the queue.`;
+      this.render();
+      return;
+    }
+    if (message.type === 'match-found') {
+      await this.prepareMatchedLobby(message);
+      return;
+    }
+    if (message.type === 'signal') {
+      await this.acceptMatchmakingSignal(message);
+    }
+  }
+
+  private async prepareMatchedLobby(message: Extract<MatchmakingServerMessage, { type: 'match-found' }>): Promise<void> {
+    if (!this.matchmaker
+      || (this.matchmakingMatchId && this.matchmakingMatchId !== message.matchId)) return;
+    this.matchmakingMatchId = message.matchId;
+    this.matchmakingParticipants = message.participants;
+    this.busy = true;
+    this.status = `Open lobby found. Connecting ${message.participants.length} commanders…`;
+    this.render();
+    if (message.hostClientId !== this.matchmaker.clientId) return;
+    try {
+      if (!this.host) {
+        const name = this.displayName.trim();
+        this.host = new DirectConnectHost({
+          rulesVersion: V2_RULES_VERSION,
+          displayName: name,
+          maxPlayers: 8,
+        });
+        this.hostModel = new HostLobbyModel(this.host.hostPeerId, name);
+        this.lobby = this.hostModel.snapshot();
+        this.selectPreferredCountryIfAvailable();
+        this.transportUnsubscribe = this.host.subscribe({
+          onStateChange: (change) => this.onHostState(change),
+          onMessage: (hostMessage) => this.onHostMessage(hostMessage),
+        });
+      }
+      for (const participant of message.participants) {
+        if (participant.clientId === message.hostClientId
+          || this.matchmakingInvitedClientIds.has(participant.clientId)) continue;
+        this.matchmakingInvitedClientIds.add(participant.clientId);
+        const invite = await this.host.createInvite();
+        this.matchmaker.sendSignal(message.matchId, participant.clientId, 'offer', invite.inviteCode);
+      }
+      this.status = 'Lobby open. More commanders may join until the host starts.';
+      this.busy = false;
+      this.render();
+    } catch (error) {
+      this.setError(error, 'The matched lobby could not be opened.');
+    }
+  }
+
+  private async acceptMatchmakingSignal(message: Extract<MatchmakingServerMessage, { type: 'signal' }>): Promise<void> {
+    if (!this.matchmaker || message.matchId !== this.matchmakingMatchId) return;
+    try {
+      if (message.kind === 'offer') {
+        if (this.guest || this.host) return;
+        const joined = await DirectConnectGuest.acceptInvite(message.payload, {
+          rulesVersion: V2_RULES_VERSION,
+          displayName: this.displayName.trim(),
+        });
+        this.guest = joined.connection;
+        this.transportUnsubscribe = this.guest.subscribe({
+          onStateChange: (change) => this.onGuestState(change),
+          onMessage: (guestMessage) => this.onGuestMessage(guestMessage),
+        });
+        this.matchmaker.sendSignal(message.matchId, message.fromClientId, 'answer', joined.answerCode);
+        this.status = 'Secure answer sent automatically. Joining the shared lobby…';
+        this.render();
+        return;
+      }
+      if (!this.host) return;
+      await this.host.acceptAnswer(message.payload);
+      this.status = 'Secure route accepted. Waiting for the commander handshake…';
+      this.render();
+    } catch (error) {
+      this.setError(error, 'A matched peer-to-peer route could not be completed.');
+    }
+  }
+
+  private finishMatchmakingConnection(closeRoom: boolean): void {
+    if (!this.matchmaker || !this.matchmakingMatchId) return;
+    if (closeRoom) this.matchmaker.complete(this.matchmakingMatchId);
+    this.matchmaker.close();
+    this.matchmaker = undefined;
+    this.busy = false;
+  }
+
+  private stopMatchmaking(): void {
+    this.matchmaker?.close();
+    this.matchmaker = undefined;
+    this.matchmakingMatchId = undefined;
+    this.matchmakingParticipants = [];
+    this.matchmakingInvitedClientIds.clear();
+    this.queuedPlayers = 1;
+    this.queuePosition = 1;
+  }
 
   private async createRoom(): Promise<void> {
     const name = this.displayName.trim();
@@ -331,6 +513,10 @@ export class MultiplayerLobby {
         this.host?.disconnect(peer.peerId);
       }
       this.publishLobby();
+      this.busy = false;
+      if (this.matchmakingParticipants.length > 0) {
+        this.status = 'Lobby open. The host can start when everyone is ready.';
+      }
     } else if (peer.peerId && ['disconnected', 'failed', 'closed'].includes(peer.state)) {
       this.hostModel?.disconnect(peer.peerId);
       this.publishLobby();
@@ -342,6 +528,7 @@ export class MultiplayerLobby {
   private onGuestState(change: DirectConnectStateEvent): void {
     this.status = `${change.peer.displayName ?? 'Host'} · ${connectionLabel(change.peer.state)}`;
     if (change.error) this.error = change.error.message;
+    if (change.peer.state === 'connected') this.busy = false;
     this.render();
   }
 
@@ -362,6 +549,7 @@ export class MultiplayerLobby {
       return;
     }
     if (message.type === 'snapshot' && this.lobby?.started && !this.launched && this.guest) {
+      this.finishMatchmakingConnection(false);
       this.launched = true;
       void Promise.resolve(this.options.onGuestLaunch({
         transport: this.guest,
@@ -407,6 +595,7 @@ export class MultiplayerLobby {
   private async launchHost(): Promise<void> {
     if (this.launched || !this.host || !this.lobby?.started) return;
     const launchLobby = this.lobby;
+    this.finishMatchmakingConnection(true);
     this.launched = true;
     try {
       await this.options.onHostLaunch({ transport: this.host, lobby: launchLobby });
@@ -540,7 +729,15 @@ export class MultiplayerLobby {
   }
 
   private renderMenu(): string {
-    return `<div class="mp-lobby__intro"><div class="panel-kicker">DIRECT MULTIPLAYER · 2–8 PLAYERS</div><h1>Play Frontier Command with friends</h1><p>One player hosts the same deterministic world. Every friend controls a different country while APEX continues to manage each national economy and research program.</p><label class="mp-field"><span>YOUR NAME</span><input id="mp-player-name" maxlength="40" value="${escapeHtml(this.displayName)}" autocomplete="nickname"></label><div class="mp-choice"><button class="primary-button" data-mp-action="show-host"><b>HOST GAME</b><small>Create invites for your friends</small></button><button class="secondary-button" data-mp-action="show-guest"><b>JOIN FRIEND</b><small>Paste a host invite</small></button></div><small class="mp-caveat">Direct Connect needs no account or game server. The host tab must stay open; restrictive school, office or mobile networks can block peer-to-peer traffic.</small></div>`;
+    return `<div class="mp-lobby__intro mp-lobby__intro--matchmaking"><div class="panel-kicker">LIVE MATCHMAKING · NO CODES</div><h1>Find commanders who want to play now</h1><p>Enter the public queue and join an open compatible lobby. More commanders can keep joining until its host starts the campaign.</p><div class="mp-matchmaking-form"><label class="mp-field"><span>YOUR NAME</span><input id="mp-player-name" maxlength="40" value="${escapeHtml(this.displayName)}" autocomplete="nickname"></label><button class="primary-button mp-find-match" data-mp-action="find-match"><b>FIND A LOBBY</b><small>Wait with everyone playing now</small></button></div><div class="mp-private-divider"><span>PRIVATE GAME WITH FRIENDS</span></div><div class="mp-choice mp-choice--private"><button class="secondary-button" data-mp-action="show-host"><b>HOST PRIVATE ROOM</b><small>Create direct invites</small></button><button class="secondary-button" data-mp-action="show-guest"><b>JOIN PRIVATE ROOM</b><small>Use a friend’s invite</small></button></div><small class="mp-caveat">Public matchmaking automates discovery and signaling. Campaign traffic remains peer-to-peer and the elected host tab must stay open.</small></div>`;
+  }
+
+  private renderMatchmaking(): string {
+    const matched = this.matchmakingParticipants.length > 0;
+    const players = matched
+      ? `<div class="mp-matchmaking__players">${this.matchmakingParticipants.map((player) => `<span>${escapeHtml(player.displayName)}</span>`).join('')}</div>`
+      : `<div class="mp-matchmaking__count"><b>${this.queuedPlayers}</b><span>compatible commander${this.queuedPlayers === 1 ? '' : 's'} waiting</span></div>`;
+    return `<div class="mp-matchmaking"><div class="mp-matchmaking__radar ${matched ? 'is-matched' : ''}" aria-hidden="true"><i></i><i></i><b>${matched ? '✓' : '⌁'}</b></div><div class="panel-kicker">${matched ? 'OPEN LOBBY FOUND' : `QUEUE POSITION ${this.queuePosition}`}</div><h2>${matched ? 'Joining the shared lobby' : 'Searching for commanders'}</h2><p>${matched ? 'No codes are needed. The room stays open to new players until the host starts.' : 'Keep this tab open. Everyone on the same game version can meet in one open lobby.'}</p>${players}<button class="secondary-button" data-mp-action="cancel-matchmaking">${matched ? 'LEAVE LOBBY' : 'CANCEL SEARCH'}</button></div>`;
   }
 
   private renderHost(): string {
@@ -561,7 +758,9 @@ export class MultiplayerLobby {
   }
   private render(): void {
     this.capturePickerScroll();
-    const content = this.mode === 'menu' ? this.renderMenu() : this.mode === 'host' ? this.renderHost() : this.renderGuest();
+    const content = this.mode === 'menu' ? this.renderMenu()
+      : this.mode === 'matchmaking' && !this.lobby ? this.renderMatchmaking()
+        : this.mode === 'host' || this.host ? this.renderHost() : this.renderGuest();
     const hasPicker = Boolean(this.lobby && ((this.mode === 'host' && this.host) || (this.mode === 'guest' && this.guest)));
     this.root.innerHTML = `<section class="multiplayer-lobby-card ${hasPicker ? 'has-country-picker' : ''}"><button class="modal-close" data-mp-action="${this.mode === 'menu' ? 'close' : 'back'}" aria-label="${this.mode === 'menu' ? 'Close multiplayer' : 'Back'}">×</button>${content}<footer class="mp-status ${this.error ? 'has-error' : ''}"><i></i><span>${escapeHtml(this.error || this.status)}</span>${this.busy ? '<b>WORKING…</b>' : ''}</footer></section>`;
     const pickerGrid = this.root.querySelector<HTMLElement>('.country-select--lobby .country-grid');

@@ -40,6 +40,7 @@ import {
   type TerritoryIntegrationAccessV2,
   type TerritoryIntegrationQuoteV2,
 } from '../sim/v2/integration';
+import { openingStartingTreasuryV2 } from '../sim/v2/nationState';
 import {
   selectArmyStrengthV2,
   selectEffectiveAttackV2,
@@ -55,8 +56,8 @@ import {
 import type { OpeningCandidatePreviewSnapshotV2 } from '../sim/v2/WorldEngineV2';
 import {
   countryTraitV2,
+  describeCountryTraitModifiersV2,
   humanCountryTraitMultiplierV2,
-  openingMilitaryRankV2,
 } from '../sim/v2/traits';
 import { countryFlagHtml } from './countryFlags';
 import { summarizeFoodTradeV2 } from './foodTrade';
@@ -191,7 +192,7 @@ export interface WorldUIV2Options {
 }
 
 type PanelMode = 'war' | 'nation' | 'progress' | 'economy' | 'ranking';
-export type IntroSort = 'power' | 'military' | 'aggressiveness' | 'attack' | 'defense' | 'iq' | 'manpower' | 'economy' | 'economic-growth' | 'tax' | 'population' | 'growth';
+export type IntroSort = 'power' | 'military' | 'aggressiveness' | 'attack' | 'defense' | 'iq' | 'manpower' | 'economy' | 'gdp-per-capita' | 'economic-growth' | 'tax' | 'population' | 'growth';
 
 export const INTRO_SORT_OPTIONS: readonly { value: IntroSort; label: string }[] = [
   { value: 'power', label: 'Military ranking' },
@@ -201,6 +202,7 @@ export const INTRO_SORT_OPTIONS: readonly { value: IntroSort; label: string }[] 
   { value: 'iq', label: 'IQ' },
   { value: 'manpower', label: 'Army manpower' },
   { value: 'economy', label: 'Economy' },
+  { value: 'gdp-per-capita', label: 'GDP / capita' },
   { value: 'economic-growth', label: 'Economic growth' },
   { value: 'tax', label: 'Tax rate' },
   { value: 'population', label: 'Population' },
@@ -695,6 +697,7 @@ export class IntroOpeningMetricsCacheV2 {
         iq: iqView.score,
         manpower: army.deployed,
         economy: economyView.output,
+        'gdp-per-capita': economyView.wealthPerPerson / 1e6,
         'economic-growth': finance.annualEconomyGrowthRate * 100,
         tax: economyView.dynamicTaxRate * 100,
         population: economyView.population,
@@ -752,12 +755,26 @@ export function renderCountryTraitPresentationV2(
   const trait = countryTraitV2(playerId);
   if (!trait) return '';
   const playerMultiplier = humanCountryTraitMultiplierV2(playerId);
-  const openingRank = openingMilitaryRankV2(playerId);
-  const playerBonusNote = `<em class="country-trait-card__player-bonus"><b>PLAYER CONTROL ×${format(playerMultiplier, 2)}</b> Signed percentages above scale farther from neutral${openingRank ? ` for opening military rank #${openingRank}` : ''}. This amplifies the same trait; it never adds a second trait.</em>`;
-  const soleTraitNote = surface === 'nation'
-    ? '<em>ONE TRAIT ONLY · Fused or conquered countries never add or stack their traits.</em>'
+  const appliedEffect = describeCountryTraitModifiersV2(trait.modifiers, playerMultiplier);
+  const identity = surface === 'picker'
+    ? `<small>${escapeHtml(trait.description)}</small>`
     : '';
-  return `<section class="country-trait-card country-trait-card--${surface}" data-country-trait="${escapeHtml(trait.playerId)}"><div><span>${surface === 'nation' ? 'ACTIVE NATIONAL TRAIT · SOLE IDENTITY' : 'UNIQUE COUNTRY TRAIT'}</span><strong>${escapeHtml(trait.name)}</strong></div><p>${escapeHtml(trait.effect)}</p><small><b>IDENTITY</b>${escapeHtml(trait.description)}</small>${playerBonusNote}${soleTraitNote}</section>`;
+  const label = surface === 'nation'
+    ? 'NATIONAL TRAIT'
+    : `PLAYER TRAIT <b class="country-trait-card__multiplier">×${format(playerMultiplier, 2)}</b>`;
+  return `<section class="country-trait-card country-trait-card--${surface}" data-country-trait="${escapeHtml(trait.playerId)}"><div><span>${label}</span><strong>${escapeHtml(trait.name)}</strong></div><p>${escapeHtml(appliedEffect)}</p>${identity}</section>`;
+}
+
+/** Compact map intel: AI owners show their base trait, human owners their live player-scaled trait. */
+export function renderCountryTraitIntelV2(
+  playerId: PlayerId,
+  humanControlled: boolean,
+): string {
+  const trait = countryTraitV2(playerId);
+  if (!trait) return '';
+  const multiplier = humanControlled ? humanCountryTraitMultiplierV2(playerId) : 1;
+  const effect = describeCountryTraitModifiersV2(trait.modifiers, multiplier);
+  return `<section class="country-trait-card country-trait-card--intel" data-country-trait="${escapeHtml(trait.playerId)}"><div><span>${humanControlled ? 'PLAYER TRAIT' : 'COUNTRY TRAIT'}</span><strong>${escapeHtml(trait.name)}</strong></div><p>${escapeHtml(effect)}</p></section>`;
 }
 
 export interface ConquestIntegrationPreviewV2 {
@@ -830,9 +847,13 @@ export function renderNationPickerV2(
   const previewState = previewMetrics.player;
   const army = previewMetrics.army;
   const finance = previewMetrics.finance;
-  const domesticFoodPercent = preview.real.foodSelfSufficiencyRatio * 100;
   const economy = previewMetrics.economyView;
   const populationDynamics = previewMetrics.populationDynamics;
+  const startingTreasury = openingStartingTreasuryV2(
+    preview.id,
+    WORLD_CONTENT_V2,
+    false,
+  );
   const traitPresentation = renderCountryTraitPresentationV2(preview.id, 'picker');
   const query = options.searchQuery.trim().toLocaleLowerCase('en');
   const continents = [...new Set(nations.map((nation) => nation.continent))]
@@ -843,12 +864,13 @@ export function renderNationPickerV2(
   const sortLabels: Record<IntroSort, string> = {
     power: 'MILITARY RANKING', military: 'MILITARY POWER', aggressiveness: 'AGGRESSIVENESS',
     attack: 'ATK', defense: 'DEF', iq: 'IQ', manpower: 'ARMY', economy: 'ECONOMY',
-    'economic-growth': 'ECON GROWTH', tax: 'TAX', population: 'PEOPLE', growth: 'POP GROWTH',
+    'gdp-per-capita': 'GDP / CAPITA', 'economic-growth': 'ECON GROWTH', tax: 'TAX',
+    population: 'PEOPLE', growth: 'POP GROWTH',
   };
   const displayMetric = (nationId: PlayerId): string => {
     const value = metrics.get(nationId)?.[options.sort] ?? 0;
     if (options.sort === 'manpower') return people(value);
-    if (options.sort === 'economy') return cash(value);
+    if (options.sort === 'economy' || options.sort === 'gdp-per-capita') return cash(value);
     if (options.sort === 'tax' || options.sort === 'aggressiveness') return `${format(value, 1)}%`;
     if (options.sort === 'population') return population(value);
     if (options.sort === 'growth' || options.sort === 'economic-growth') return `${value >= 0 ? '+' : ''}${format(value, 2)}%`;
@@ -884,7 +906,7 @@ export function renderNationPickerV2(
       : `<span><b>${displayMetric(nation.id)}</b><em>${sortLabels[options.sort]}</em></span>`;
     return `<button class="${nation.id === preview.id ? 'is-selected ' : ''}${isCurrent ? 'is-current ' : ''}${isClaimed ? 'is-claimed' : ''}" ${actionAttribute}="preview-country" data-country="${nation.id}" data-continent="${escapeHtml(nation.continent)}" data-country-name="${escapeHtml(nation.name.toLocaleLowerCase('en'))}" data-name="${escapeHtml(searchable)}" aria-pressed="${nation.id === preview.id}" ${isClaimed ? 'disabled aria-disabled="true"' : ''} ${hidden ? 'hidden' : ''} style="--country:${nation.cssColor}"><i class="country-flag">${countryFlagHtml(nation.id, nation.sigil)}</i><div><strong>${escapeHtml(nation.name)}${isCurrent ? ' · YOUR CHOICE' : ''}</strong><small>${escapeHtml(nation.subregion)} · ${population(nation.real.population)} people</small><em>${cash(nation.real.gdp)} GDP · ${signed(nationEconomicGrowth, 2)}%/yr</em></div>${metric}</button>`;
   }).join('');
-  const html = `<section class="${pickerClass}" data-nation-picker="${options.context}"><div class="country-select__head"><div><div class="panel-kicker">${isLobby ? 'MULTIPLAYER LOBBY · COUNTRY SEAT' : 'NEW CAMPAIGN · 2026'}</div><h1>Choose your nation</h1><p>${isLobby ? 'Your choice is reserved for you and cannot be selected by another commander.' : 'APEX runs the country. You choose who to attack.'}</p></div><div class="country-select__facts"><span><b>${nations.length}</b> countries</span><span><b>${isLobby ? '2–8' : 'ONE AI'}</b> ${isLobby ? 'players' : 'every country'}</span><span><b>2026</b> start date</span><span><b>LIVE</b> aggression</span></div></div><div class="country-select__tools"><label class="country-search"><span>⌕</span><input id="${searchId}" type="search" value="${escapeHtml(options.searchQuery)}" placeholder="Search countries…" autocomplete="off"></label><label class="country-sort"><span>SORT</span><select id="${sortId}" aria-label="Sort countries">${sortOptions}</select></label><div class="country-filters" role="group" aria-label="Filter countries by continent"><button class="${options.continent === 'ALL' ? 'is-active' : ''}" ${actionAttribute}="continent-filter" data-continent="ALL">ALL</button>${continents.map((continent) => `<button class="${options.continent === continent ? 'is-active' : ''}" ${actionAttribute}="continent-filter" data-continent="${escapeHtml(continent)}">${escapeHtml(continent.toUpperCase())}</button>`).join('')}<span>${visibleCount} shown</span></div></div><div class="country-select__body"><div class="country-grid">${cards}</div><aside class="country-preview" style="--country:${preview.cssColor}"><div class="country-preview__identity"><i class="country-flag country-flag--large">${countryFlagHtml(preview.id, preview.sigil, true)}</i><div><span>MILITARY RANK #${previewMetrics.rank}</span><h2 title="${escapeHtml(preview.name)}">${escapeHtml(previewState.shortName)}</h2><p>${escapeHtml(preview.subregion)}</p></div><b>${compactNumber(previewMetrics.combatPower)}<small>MILITARY POWER</small></b></div>${traitPresentation}<div class="country-preview__stats"><div class="stat-atk"><span>ATK</span><strong>${format(previewMetrics.attack, 2)}</strong></div><div class="stat-def"><span>DEF</span><strong>${format(previewMetrics.defense, 2)}</strong></div><div class="stat-aggression"><span>AGGRESSIVENESS</span><strong>${format(previewMetrics.aggressiveness, 1)}%</strong></div><div class="stat-iq" title="Calibrated from international learning outcomes, with a regional fallback"><span>IQ</span><strong>${format(previewMetrics.iqView.score, 1)}</strong></div><div><span>ARMY</span><strong>${armyCapacityLabel(army.deployed, army.capacityTarget)}</strong></div><div><span>TRAINED RESERVE</span><strong>${people(previewState.trainedReserves)} / ${people(army.capacity)}</strong></div><div><span>POPULATION</span><strong>${population(economy.population)}</strong></div><div class="stat-economy"><span>ECONOMY</span><strong>${cash(economy.output)}</strong></div><div><span>ECONOMIC GROWTH</span><strong class="${finance.annualEconomyGrowthRate >= 0 ? 'is-positive' : 'danger-text'}">${signed(finance.annualEconomyGrowthRate * 100, 2)}%</strong></div><div title="Automatic 10–20% rate from integrated GDP per baseline productive person"><span>TAX</span><strong>${format(economy.dynamicTaxRate * 100, 1)}%</strong></div><div><span>POPULATION GROWTH</span><strong class="${populationDynamics.annualNetRate >= 0 ? 'is-positive' : 'danger-text'}">${populationDynamics.annualNetRate >= 0 ? '+' : ''}${format(populationDynamics.annualNetRate * 100, 2)}%</strong></div><div title="FAOSTAT calorie-based self-sufficiency reference, median 2021–2023"><span>DOMESTIC FOOD</span><strong class="${domesticFoodPercent >= 100 ? 'is-positive' : domesticFoodPercent < 75 ? 'danger-text' : ''}">${format(domesticFoodPercent)}%</strong></div></div><div class="country-preview__actions"><button class="primary-button country-preview__start" ${actionAttribute}="${isLobby ? 'select-country' : 'choose-country'}" data-country="${preview.id}">${escapeHtml(primaryLabel)}</button>${multiplayerButton}</div></aside></div><footer><span>Domestic Food: FAOSTAT 2021–2023 · IQ: learning outcomes · Natural Earth · SIPRI 2025</span><strong>Sorted by ${escapeHtml(sortLabels[options.sort].toLowerCase())}</strong></footer></section>`;
+  const html = `<section class="${pickerClass}" data-nation-picker="${options.context}"><div class="country-select__head"><div><div class="panel-kicker">${isLobby ? 'MULTIPLAYER LOBBY · COUNTRY SEAT' : 'NEW CAMPAIGN · 2026'}</div><h1>Choose your nation</h1><p>${isLobby ? 'Your choice is reserved for you and cannot be selected by another commander.' : 'APEX runs the country. You choose who to attack.'}</p></div><div class="country-select__facts"><span><b>${nations.length}</b> countries</span><span><b>${isLobby ? '2–8' : 'ONE AI'}</b> ${isLobby ? 'players' : 'every country'}</span><span><b>2026</b> start date</span><span><b>LIVE</b> aggression</span></div></div><div class="country-select__tools"><label class="country-search"><span>⌕</span><input id="${searchId}" type="search" value="${escapeHtml(options.searchQuery)}" placeholder="Search countries…" autocomplete="off"></label><label class="country-sort"><span>SORT</span><select id="${sortId}" aria-label="Sort countries">${sortOptions}</select></label><div class="country-filters" role="group" aria-label="Filter countries by continent"><button class="${options.continent === 'ALL' ? 'is-active' : ''}" ${actionAttribute}="continent-filter" data-continent="ALL">ALL</button>${continents.map((continent) => `<button class="${options.continent === continent ? 'is-active' : ''}" ${actionAttribute}="continent-filter" data-continent="${escapeHtml(continent)}">${escapeHtml(continent.toUpperCase())}</button>`).join('')}<span>${visibleCount} shown</span></div></div><div class="country-select__body"><div class="country-grid">${cards}</div><aside class="country-preview" style="--country:${preview.cssColor}"><div class="country-preview__identity"><i class="country-flag country-flag--large">${countryFlagHtml(preview.id, preview.sigil, true)}</i><div><span>MILITARY RANK #${previewMetrics.rank}</span><h2 title="${escapeHtml(preview.name)}">${escapeHtml(previewState.shortName)}</h2><p>${escapeHtml(preview.subregion)}</p></div><b>${compactNumber(previewMetrics.combatPower)}<small>MILITARY POWER</small></b></div>${traitPresentation}<div class="country-preview__stats"><div class="stat-atk"><span>ATK</span><strong>${format(previewMetrics.attack, 2)}</strong></div><div class="stat-def"><span>DEF</span><strong>${format(previewMetrics.defense, 2)}</strong></div><div class="stat-aggression"><span>AGGRESSIVENESS</span><strong>${format(previewMetrics.aggressiveness, 1)}%</strong></div><div class="stat-iq" title="Calibrated from international learning outcomes, with a regional fallback"><span>IQ</span><strong>${format(previewMetrics.iqView.score, 1)}</strong></div><div><span>ARMY</span><strong>${people(army.deployed)}</strong></div><div><span>TRAINED RESERVE</span><strong>${people(previewState.trainedReserves)}</strong></div><div><span>POPULATION</span><strong>${population(economy.population)}</strong></div><div class="stat-economy"><span>ECONOMY</span><strong>${cash(economy.output)}</strong></div><div class="stat-treasury"><span>STARTING TREASURY</span><strong class="is-positive">${cash(startingTreasury)}</strong></div><div><span>ECONOMIC GROWTH</span><strong class="${finance.annualEconomyGrowthRate >= 0 ? 'is-positive' : 'danger-text'}">${signed(finance.annualEconomyGrowthRate * 100, 2)}%</strong></div><div title="Automatic 10–20% rate from integrated GDP per baseline productive person"><span>TAX</span><strong>${format(economy.dynamicTaxRate * 100, 1)}%</strong></div><div><span>POPULATION GROWTH</span><strong class="${populationDynamics.annualNetRate >= 0 ? 'is-positive' : 'danger-text'}">${populationDynamics.annualNetRate >= 0 ? '+' : ''}${format(populationDynamics.annualNetRate * 100, 2)}%</strong></div><div title="Live GDP divided by the currently controlled population"><span>GDP / CAPITA</span><strong>${cash(economy.wealthPerPerson / 1e6)}</strong></div></div><div class="country-preview__actions"><button class="primary-button country-preview__start" ${actionAttribute}="${isLobby ? 'select-country' : 'choose-country'}" data-country="${preview.id}">${escapeHtml(primaryLabel)}</button>${multiplayerButton}</div></aside></div><footer><span>IQ: learning outcomes · Natural Earth · SIPRI 2025</span><strong>Sorted by ${escapeHtml(sortLabels[options.sort].toLowerCase())}</strong></footer></section>`;
   return { html, previewCountryId: preview.id, visibleCount };
 }
 
@@ -1670,37 +1692,36 @@ export class WorldUIV2 {
     return `
       <aside class="world-panel command-drawer glass-panel nation-command command-drawer--clean" data-scroll-session="${drawerScrollSessionId('nation')}">
         <button class="panel-close" data-action="close-panel" aria-label="Close nation overview">×</button>
-        <div class="panel-kicker">NATION · COMPLETE OVERVIEW</div>
-        <div class="drawer-heading drawer-heading--compact"><div><h2>${escapeHtml(human.name)}</h2><span>LIVE EMPIRE STATISTICS</span></div><strong class="${displayedNet >= 0 ? 'is-positive' : 'is-negative'}">${escapeHtml(cashStatus)}</strong></div>
+        <div class="panel-kicker">NATION</div>
+        <div class="drawer-heading drawer-heading--compact"><div><h2>${escapeHtml(human.name)}</h2></div><strong class="${displayedNet >= 0 ? 'is-positive' : 'is-negative'}">${escapeHtml(cashStatus)}</strong></div>
         ${traitPresentation}
         <section class="national-strength-summary">
           <div class="national-strength-head"><span>NATIONAL STRENGTH</span><strong>${compactNumber(currentPower)} POWER</strong></div>
           <div class="national-strength-grid">
-            <article class="is-army" title="Active trained troops. Deployed manpower contributes directly to conventional power." aria-label="Active army ${people(army.deployed)}, ${format(army.fillRatio * 100)} percent of capacity"><span>ARMY</span><strong>${people(army.deployed)}</strong><small>${format(army.fillRatio * 100)}% of ${people(army.capacity)} cap</small></article>
+            <article class="is-army" title="Active trained troops. Deployed manpower contributes directly to conventional power." aria-label="Active army ${people(army.deployed)}, ${format(army.fillRatio * 100)} percent of capacity"><span>ARMY</span><strong>${people(army.deployed)}</strong><small>${format(army.fillRatio * 100)}% · cap ${people(army.capacity)}</small></article>
             <article class="is-army" title="Trained reserve troops replace wartime losses after mobilisation; they add no power while inactive." aria-label="Trained reserve ${people(human.trainedReserves)} of ${people(finance.trainedReserveCapacity)} capacity"><span>TRAINED RESERVE</span><strong>${people(human.trainedReserves)} / ${people(finance.trainedReserveCapacity)}</strong><small class="${reserveNet >= 0 ? 'is-positive' : 'is-negative'}">${reserveNet >= 0 ? '+' : '−'}${people(Math.abs(reserveNet))} this week · ${cash(annual(finance.reserveTrainingCost))}/yr training</small></article>
-            <article class="is-atk" title="Effective attack: inherited force quality, live GDP and IQ, Economy R&D, weapons research and nuclear deterrence." aria-label="Effective attack ${format(attack, 2)}"><span>ATK</span><strong>${format(attack, 2)}</strong><small>${format(attackShare, 1)}% combat mix</small></article>
-            <article class="is-def" title="Effective defence: inherited force quality, live GDP and IQ, Economy R&D and defensive research, followed by diminishing returns above 1.0." aria-label="Effective defense ${format(defense, 2)}"><span>DEF</span><strong>${format(defense, 2)}</strong><small>${format(defenseShare, 1)}% combat mix · diminishing</small></article>
-            <article class="is-iq" title="Live gameplay IQ. Education research adds to the opening baseline and improves research conversion, logistics and national systems." aria-label="Live IQ ${format(iq.score, 1)}, baseline ${format(iq.baselineScore, 1)}, research bonus ${signed(iq.researchBonus, 1)}"><span>IQ</span><strong>${format(iq.score, 1)}</strong><small>Base ${format(iq.baselineScore, 1)} · R&D ${signed(iq.researchBonus, 1)} · ×${format(nationalQuality?.researchConversion ?? 1, 2)} conversion</small></article>
+            <article class="is-atk" title="Effective attack: inherited force quality, live GDP and IQ, Economy R&D, weapons research and nuclear deterrence." aria-label="Effective attack ${format(attack, 2)}"><span>ATK</span><strong>${format(attack, 2)}</strong></article>
+            <article class="is-def" title="Effective defence: inherited force quality, live GDP and IQ, Economy R&D and defensive research, followed by diminishing returns above 1.0." aria-label="Effective defense ${format(defense, 2)}"><span>DEF</span><strong>${format(defense, 2)}</strong></article>
+            <article class="is-iq" title="Live gameplay IQ. Education research adds to the opening baseline and improves research conversion, logistics and national systems." aria-label="Live IQ ${format(iq.score, 1)}, baseline ${format(iq.baselineScore, 1)}, research bonus ${signed(iq.researchBonus, 1)}"><span>IQ</span><strong>${format(iq.score, 1)}</strong><small>R&D ${signed(iq.researchBonus, 1)} · ×${format(nationalQuality?.researchConversion ?? 1, 2)}</small></article>
             <article class="is-gdp" title="Live integrated GDP per capita. It modifies national combat systems independently of army size." aria-label="GDP per capita ${cash(economy.wealthPerPerson / 1e6)}"><span>GDP / CAPITA</span><strong>${cash(economy.wealthPerPerson / 1e6)}</strong><small>${signed((nationalQuality?.gdpSystemContribution ?? 0) * 100, 1)}% system quality</small></article>
-            <article class="is-economy" title="Total economic output currently unlocked by territorial integration." aria-label="Controlled economy ${cash(economy.controlledOutput)}"><span>ECONOMY</span><strong>${cash(economy.controlledOutput)}</strong><small>Total controlled output</small></article>
+            <article class="is-economy" title="Total economic output currently unlocked by territorial integration." aria-label="Controlled economy ${cash(economy.controlledOutput)}"><span>ECONOMY</span><strong>${cash(economy.controlledOutput)}</strong></article>
           </div>
           <div class="power-contribution">
-            <div class="power-contribution__head"><span>POWER CONTRIBUTION</span><small>ATK / DEF COMBAT MIX</small></div>
+            <div class="power-contribution__head"><span>COMBAT MIX</span></div>
             <i class="power-contribution__bar"><b class="is-atk" style="width:${attackShare}%"></b><b class="is-def" style="width:${defenseShare}%"></b></i>
             <div class="power-contribution__shares"><b class="is-atk">ATK ${format(attackShare, 1)}% SHARE</b><b class="is-def">DEF ${format(defenseShare, 1)}% SHARE</b></div>
-            <div class="power-modifier-label">POWER MODIFIERS</div>
             <div class="power-modifier-chips"><span title="GDP's separate contribution to the national combat-system multiplier">GDP ${signed((nationalQuality?.gdpSystemContribution ?? 0) * 100, 1)}%</span><span title="Live IQ's separate contribution to the national combat-system multiplier, including Education research">IQ ${signed((nationalQuality?.iqSystemContribution ?? 0) * 100, 1)}%</span><span title="Economy & Science research modernises both attack and defence">ECON R&D ${signed(((nationalQuality?.economyResearchMultiplier ?? 1) - 1) * 100, 1)}%</span><span title="Weapons research and nuclear deterrence after shared GDP, IQ and Economy R&D">ATK SYSTEMS ×${format(attackUpgradeMultiplier, 2)}</span><span title="Defensive research after shared GDP, IQ and Economy R&D, including the visible diminishing-returns curve">DEF RESULT ×${format(defenseResultMultiplier, 2)}</span></div>
           </div>
         </section>
-        <span class="section-label">NATIONAL STATS</span>
+        <span class="section-label">STATE</span>
         <section class="national-stats-grid">
           <article title="All residents in controlled territory; the smaller line is the population currently unlocked by integration." aria-label="Population ${population(economy.population)}, integrated ${population(integratedPopulation)}"><span>POPULATION</span><strong>${population(economy.population)}</strong><small>${population(integratedPopulation)} integrated</small></article>
-          <article title="Final annual economic growth after investment, research, food conditions and war pressure." aria-label="Annual economy growth ${signed(finance.annualEconomyGrowthRate * 100, 2)} percent"><span>ECON GROWTH</span><strong class="${finance.annualEconomyGrowthRate >= 0 ? 'is-positive' : 'is-negative'}">${signed(finance.annualEconomyGrowthRate * 100, 2)}%/yr</strong><small>Live net growth</small></article>
+          <article title="Final annual economic growth after investment, research, food conditions and war pressure." aria-label="Annual economy growth ${signed(finance.annualEconomyGrowthRate * 100, 2)} percent"><span>ECON GROWTH</span><strong class="${finance.annualEconomyGrowthRate >= 0 ? 'is-positive' : 'is-negative'}">${signed(finance.annualEconomyGrowthRate * 100, 2)}%/yr</strong></article>
           <article title="Estimated births minus deaths and wartime demographic pressure." aria-label="Annual population growth ${signed(populationDynamics.annualNetRate * 100, 2)} percent"><span>POP GROWTH</span><strong class="${populationDynamics.annualNetRate >= 0 ? 'is-positive' : 'is-negative'}">${signed(populationDynamics.annualNetRate * 100, 2)}%/yr</strong><small>Births · deaths · war pressure</small></article>
           <article title="Automatic tax rate and annual tax income. Revenue uses equal economic and live productive-population bases, plus administration efficiency." aria-label="Tax rate ${format(economy.taxRate * 100, 1)} percent, annual revenue ${cash(annual(finance.revenue))}"><span>TAX</span><strong>${format(economy.taxRate * 100, 1)}%</strong><small>${cash(annual(finance.revenue))}/yr income</small></article>
           <article title="Share of weekly food demand supplied, followed by food reserves and their storage limit." aria-label="Food coverage ${format(finance.foodCoverage * 100, 1)} percent, stock ${people(human.foodStock)} of ${people(finance.foodStorageCapacity)}"><span>FOOD SUPPLY</span><strong class="${finance.foodCoverage >= 0.98 ? 'is-positive' : 'is-negative'}">${format(finance.foodCoverage * 100, 1)}%</strong><small>${people(human.foodStock)} / ${people(finance.foodStorageCapacity)} stored</small></article>
           <article title="Cash available now and projected cash after the current week, including any borrowing." aria-label="Treasury ${cash(human.treasury)}, projected ${cash(finance.closingTreasury)}"><span>TREASURY</span><strong class="${human.treasury >= 0 ? 'is-positive' : 'is-negative'}">${cash(human.treasury)}</strong><small>${cash(finance.closingTreasury)} next week</small></article>
-          <article title="Current annualised net cashflow after every income, operating cost, war cost and investment." aria-label="Annual balance ${signedCash(annual(finance.net))}"><span>ANNUAL BALANCE</span><strong class="${finance.net >= 0 ? 'is-positive' : 'is-negative'}">${signedCash(annual(finance.net))}</strong><small>All income and costs</small></article>
+          <article title="Current annualised net cashflow after every income, operating cost, war cost and investment." aria-label="Annual balance ${signedCash(annual(finance.net))}"><span>ANNUAL BALANCE</span><strong class="${finance.net >= 0 ? 'is-positive' : 'is-negative'}">${signedCash(annual(finance.net))}</strong></article>
           <article title="Completed upgrades across all research programs and the current annual research budget." aria-label="Research ${completedUpgrades} completed upgrades, annual funding ${cash(annual(finance.research))}"><span>RESEARCH</span><strong>${completedUpgrades} UPGRADES</strong><small>${cash(annual(finance.research))}/yr funding</small></article>
         </section>
         <section class="nation-reaction-block">
@@ -2005,6 +2026,8 @@ export class WorldUIV2 {
     const owner = this.engine.player(territory.owner)!;
     const humanId = this.viewerPlayerId();
     const isOwnTerritory = owner.id === humanId;
+    const ownerHumanControlled = this.engine.state.humanPlayerIds.includes(owner.id);
+    const ownerTraitIntel = renderCountryTraitIntelV2(owner.id, ownerHumanControlled);
     const empireTerritories = this.engine.territoriesOf(owner.id);
     const economy = this.engine.nationalEconomy(owner.id);
     const finance = this.engine.weeklyFinanceBreakdown(owner.id);
@@ -2060,8 +2083,7 @@ export class WorldUIV2 {
     const blockedWarNote = !activeWar && declaration && !declaration.allowed
       ? `<div class="war-rule-note is-blocked"><b>WAR UNAVAILABLE</b><span>${escapeHtml(declaration.reason ?? 'Requirements are not met.')}</span></div>`
       : '';
-    const otherHumanPlayer = owner.id !== humanId
-      && this.engine.state.humanPlayerIds.includes(owner.id);
+    const otherHumanPlayer = owner.id !== humanId && ownerHumanControlled;
     const allied = otherHumanPlayer && this.engine.areAllied(humanId, owner.id);
     const allianceOffer = otherHumanPlayer ? this.engine.state.allianceOffers.find((offer) => (
       (offer.fromId === humanId && offer.toId === owner.id)
@@ -2083,6 +2105,7 @@ export class WorldUIV2 {
         <button class="panel-close" data-action="clear-territory" aria-label="Close ${escapeHtml(definition.name)} details">×</button>
         <div class="panel-kicker territory-status-kicker">${escapeHtml(panelStatus)}</div>
         <div class="territory-heading territory-heading--clear"><div><h2>${escapeHtml(definition.name)}</h2><span style="color:${owner.cssColor}">Owned by ${escapeHtml(owner.name)} · ${empireTerritories.length} territor${empireTerritories.length === 1 ? 'y' : 'ies'}</span></div><i class="country-flag" style="--owner:${owner.cssColor}">${countryFlagHtml(owner.id, owner.sigil)}</i></div>
+        ${ownerTraitIntel}
         <section class="national-strength-summary territory-owner-summary"><div class="national-strength-head"><span>${escapeHtml(ownerSectionLabel)} STRENGTH</span><strong>${compactNumber(power)} POWER</strong></div><div class="national-strength-grid"><article class="is-army"><span>ARMY</span><strong>${armyCapacityLabel(army.deployed, army.capacity)}</strong><small>${format(manpowerRatio * 100)}% ready · RES ${people(owner.trainedReserves)}</small></article><article class="is-atk"><span>ATK</span><strong>${format(attack, 2)}</strong><small>Effective attack</small></article><article class="is-def"><span>DEF</span><strong>${format(defense, 2)}</strong><small>Effective defence</small></article><article class="is-iq"><span>IQ</span><strong>${format(iq.score, 1)}</strong><small>National score</small></article><article class="is-gdp"><span>GDP / CAPITA</span><strong>${cash(economy.wealthPerPerson / 1e6)}</strong><small>Current wealth</small></article><article class="is-economy"><span>ECONOMY</span><strong>${cash(economy.controlledOutput)}</strong><small>${population(integratedPopulation)} integrated people</small></article></div></section>
         <section class="territory-food-status ${foodTone}"><div class="territory-food-status__head"><span>FOOD · OWNER TOTAL</span><strong>${people(owner.foodStock)} / ${people(finance.foodStorageCapacity)}</strong></div><div class="territory-food-status__grid"><span><b>${format(finance.foodCoverage * 100, 1)}%</b><small>FED</small></span><span><b>${format(domesticFoodRatio * 100, 1)}%</b><small>DOMESTIC</small></span><span><b>${format(importedFoodRatio * 100, 1)}%</b><small>IMPORTS</small></span></div><p class="${finance.foodStockChange >= 0 ? 'is-positive' : 'is-negative'}">${signedPeople(annual(finance.foodStockChange))} reserves / year${annualFoodExport > 0 ? ` · ${people(annualFoodExport)} exported / year` : ''}</p></section>
         <span class="section-label territory-section-label">SELECTED LAND</span>

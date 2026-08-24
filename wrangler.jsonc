@@ -1,0 +1,26 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "frontier-command-matchmaking",
+  "main": "matchmaker/src/index.ts",
+  "compatibility_date": "2026-08-24",
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "MATCHMAKER",
+        "class_name": "MatchmakingQueue"
+      }
+    ]
+  },
+  "exports": {
+    "MatchmakingQueue": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    }
+  },
+  "vars": {
+    "ALLOWED_ORIGINS": "https://dekevinmt.github.io,http://localhost:4173,http://127.0.0.1:4173"
+  },
+  "observability": {
+    "enabled": true
+  }
+}

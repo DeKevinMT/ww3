@@ -683,6 +683,17 @@ function migrateLegacyStateV14(
     territories,
   };
   synchronizeArmyCapacityV2(state as unknown as WorldStateV2, content);
+  // Modern live capacity may be below a legacy deployed cohort. Schema 17
+  // still required capacity >= manpower, so preserve those authenticated
+  // soldiers as temporary legacy deployment room until migration completes.
+  for (const territory of Object.values(state.territories)) {
+    territory.army.capacity = Math.max(territory.army.capacity, territory.army.manpower);
+    territory.army.veteranManpower = Math.min(
+      territory.army.veteranManpower,
+      territory.army.manpower,
+    );
+    if (territory.army.veteranManpower === 0) territory.army.veteranExperience = 0;
+  }
   return state;
 }
 

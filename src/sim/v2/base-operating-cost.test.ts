@@ -7,7 +7,7 @@ import {
   selectWeeklyFinanceBreakdownV2,
 } from './selectors';
 import { traitNationContextV2 } from './traitContext';
-import { countryTraitFactorV2, humanCountryTraitMultiplierV2 } from './traits';
+import { countryTraitFactorV2 } from './traits';
 import { nationIdV2, territoryIdV2 } from './types';
 
 describe('universal base operating cost', () => {
@@ -46,7 +46,9 @@ describe('universal base operating cost', () => {
     expect(after.baseOperatingCost).toBe(before.baseOperatingCost);
     expect(after.net).toBe(before.net);
     expect(effectiveShare).toBeCloseTo(
-      0.20 * (1 - 0.08 * humanCountryTraitMultiplierV2(belgium)),
+      BASE_OPERATING_COST_TAX_REVENUE_SHARE * countryTraitFactorV2(
+        belgium, 'base-operating-cost', { humanControlled: true },
+      ),
       8,
     );
     expect(after.baseOperatingCost).toBeCloseTo(after.revenue * effectiveShare, 6);

@@ -181,6 +181,8 @@ export interface ArmyStateV2 {
 }
 
 export interface IntegrationProgramStateV2 {
+  /** Distinguishes hostile occupation from a voluntary federation calendar. */
+  cause?: 'conquest' | 'federation';
   /** The sovereign owner displaced when this specific capture began. */
   fromOwnerId: PlayerId;
   /** The sovereign core whose identity is being absorbed. */
@@ -414,7 +416,7 @@ export interface WeeklyFinanceBreakdownV2 {
   foodDemand: number;
   foodLandCapacity: number;
   foodStorageCapacity: number;
-  /** Structural food-system efficiency used for capacity, reserve targets and cost; never a coverage cap. */
+  /** Structural last-mile food access; prosperity, condition and research can improve it. */
   foodAccessCeiling: number;
   foodProduced: number;
   foodDomesticProduced: number;

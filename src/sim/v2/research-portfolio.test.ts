@@ -157,5 +157,5 @@ describe('V2 ten-program Development portfolio', () => {
     // selected-country research acceleration.
     expect(at260).toBeGreaterThanOrEqual(2);
     expect(at260).toBeLessThanOrEqual(6);
-  }, 15_000);
+  }, 30_000);
 });

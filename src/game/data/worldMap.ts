@@ -155,13 +155,17 @@ for (const country of dataset.countries) {
 }
 
 // Caspian-only and genuinely landlocked states do not receive artificial access to
-// the global naval network. All other countries get a small set of nearby sea lanes;
-// isolated islands get a few more so they remain viable conquest starts.
-const LANDLOCKED_COUNTRY_IDS = new Set<TerritoryId>([
+// the global naval network. Every other country receives a dependable route floor;
+// isolated islands get extra lanes so losing one corridor never traps the campaign.
+export const LANDLOCKED_COUNTRY_IDS = new Set<TerritoryId>([
   'afg', 'arm', 'aut', 'aze', 'blr', 'btn', 'bol', 'bwa', 'bfa', 'bdi', 'caf', 'tcd', 'cze', 'swz',
   'eth', 'hun', 'kaz', 'kos', 'kgz', 'lao', 'lso', 'lux', 'mwi', 'mli', 'mda', 'mng', 'npl', 'ner',
   'mkd', 'pry', 'rwa', 'srb', 'svk', 'sds', 'che', 'tjk', 'tkm', 'uga', 'uzb', 'zmb', 'zwe',
 ]);
+
+export const MINIMUM_NAVAL_ROUTES = 8;
+export const MINIMUM_ISLAND_NAVAL_ROUTES = 10;
+const PRIORITY_ARCTIC_NAVAL_ROUTES = 12;
 
 // These long-haul corridors complement the generated regional network and represent
 // established military sea lanes rather than literal ferry services.
@@ -247,7 +251,9 @@ function buildStrategicSeaRoutes(): readonly (readonly [TerritoryId, TerritoryId
     if (LANDLOCKED_COUNTRY_IDS.has(country.id)) continue;
     const landNeighbours = new Set(activeNeighbours(country.id));
     const isolated = landNeighbours.size === 0;
-    const desiredRoutes = isolated ? 8 : 6;
+    const desiredRoutes = country.id === 'grl' || country.id === 'isl'
+      ? PRIORITY_ARCTIC_NAVAL_ROUTES
+      : isolated ? MINIMUM_ISLAND_NAVAL_ROUTES : MINIMUM_NAVAL_ROUTES;
     const maximumDistance = isolated ? 9_000 : 6_000;
     const candidates = COUNTRIES
       .filter((candidate) => candidate.id !== country.id
@@ -259,6 +265,22 @@ function buildStrategicSeaRoutes(): readonly (readonly [TerritoryId, TerritoryId
     for (const candidate of candidates) {
       if ((degree.get(country.id) ?? 0) >= desiredRoutes) break;
       addRoute(country.id, candidate.id);
+    }
+    // Sparse oceans and polar geography can leave fewer local candidates than the
+    // guaranteed floor. Fill only the missing lanes with the next-nearest global
+    // ports; this keeps every naval country playable without turning every pair
+    // into a direct connection.
+    if ((degree.get(country.id) ?? 0) < desiredRoutes) {
+      const globalFallbacks = COUNTRIES
+        .filter((candidate) => candidate.id !== country.id
+          && !LANDLOCKED_COUNTRY_IDS.has(candidate.id)
+          && !landNeighbours.has(candidate.id))
+        .map((candidate) => ({ id: candidate.id, distance: countryDistanceKm(country.id, candidate.id) }))
+        .sort((left, right) => left.distance - right.distance || left.id.localeCompare(right.id));
+      for (const candidate of globalFallbacks) {
+        if ((degree.get(country.id) ?? 0) >= desiredRoutes) break;
+        addRoute(country.id, candidate.id);
+      }
     }
   }
   return [...routes.values()].sort((left, right) => left[0].localeCompare(right[0]) || left[1].localeCompare(right[1]));

@@ -115,9 +115,8 @@ describe('V2 deterministic ticks, queues and saves', () => {
       // Seed-varied opening conflicts unfold during year one, but no ordinary
       // autonomous AI war may bypass the configured opening gate.
       expect(engine.state.wars.every((war) => war.startedTick < AI_FIRST_WAR_TICK)).toBe(true);
-      engine.step(60 - (AI_FIRST_WAR_TICK - 1));
       assertInvariantsV2(engine.state, WORLD_CONTENT_V2);
-      expect(engine.state.tick).toBe(60);
+      expect(engine.state.tick).toBe(AI_FIRST_WAR_TICK - 1);
       for (const nationId of WORLD_CONTENT_V2.nationIds) {
         const finance = selectWeeklyFinanceBreakdownV2(
           engine.state, WORLD_CONTENT_V2, nationId,

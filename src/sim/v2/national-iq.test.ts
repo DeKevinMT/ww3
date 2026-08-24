@@ -30,6 +30,7 @@ import {
 } from './selectors';
 import { nationIdV2, territoryIdV2, type PlayerId } from './types';
 import { logisticsThroughputShareV2, projectCombatExchangeV2 } from './war';
+import { countryTraitFactorV2 } from './traits';
 
 function contentWithIq(playerId: PlayerId, iqScore: number): WorldContentV2 {
   return {
@@ -68,7 +69,14 @@ describe('national IQ gameplay proxy', () => {
     for (const playerId of WORLD_CONTENT_V2.nationIds) {
       const view = selectNationalIqViewV2(WORLD_CONTENT_V2, playerId);
       expect(view.source).toBe('country-learning-gameplay-baseline');
-      expect(view.score).toBe(WORLD_CONTENT_V2.nations[playerId].iqScore);
+      expect(view.score).toBeCloseTo(
+        Math.min(
+          NATIONAL_IQ_SCORE_MAX,
+          WORLD_CONTENT_V2.nations[playerId].iqScore
+            * countryTraitFactorV2(playerId, 'national-iq'),
+        ),
+        2,
+      );
       expect(view.score).toBeGreaterThanOrEqual(NATIONAL_IQ_SCORE_MIN);
       expect(view.score).toBeLessThanOrEqual(NATIONAL_IQ_SCORE_MAX);
     }
@@ -114,21 +122,26 @@ describe('national IQ gameplay proxy', () => {
       nationIdV2('usa'),
       nationIdV2('chn'),
       nationIdV2('rus'),
-      nationIdV2('deu'),
+      nationIdV2('ind'),
+      nationIdV2('kor'),
+      nationIdV2('fra'),
       nationIdV2('jpn'),
       nationIdV2('gbr'),
-      nationIdV2('fra'),
-      nationIdV2('kor'),
+      nationIdV2('tur'),
       nationIdV2('ita'),
-      nationIdV2('esp'),
     ]);
   });
 
-  it('raises both opening ATK and DEF independently through GDP per capita and IQ', () => {
+  it('lets GDP per capita and IQ directly form opening ATK and DEF', () => {
     const low = calibratedMilitaryRatingsV2(80, 200, 0.40, 500, 80);
     const richer = calibratedMilitaryRatingsV2(80, 200, 0.40, 100_000, 80);
     const higherIq = calibratedMilitaryRatingsV2(80, 200, 0.40, 500, 108);
+    const lowSystem = nationalCombatSystemQualityMultiplierV2(500, 80);
+    const richSystem = nationalCombatSystemQualityMultiplierV2(100_000, 80);
+    const highIqSystem = nationalCombatSystemQualityMultiplierV2(500, 108);
 
+    expect(richSystem).toBeGreaterThan(lowSystem);
+    expect(highIqSystem).toBeGreaterThan(lowSystem);
     expect(richer.attack).toBeGreaterThan(low.attack);
     expect(richer.defense).toBeGreaterThan(low.defense);
     expect(higherIq.attack).toBeGreaterThan(low.attack);
@@ -214,6 +227,24 @@ describe('national IQ gameplay proxy', () => {
     expect(high.defenderLosses).toBeLessThan(low.defenderLosses);
     expect(high.attackerLosses).toBeGreaterThan(low.attackerLosses);
 
+  });
+
+  it('keeps national-IQ traits modest for AI control and bounded for players', () => {
+    const germany = nationIdV2('deu');
+    const state = createWorldStateV2(8_207);
+    state.humanPlayerId = nationIdV2('bel');
+    state.humanPlayerIds = [nationIdV2('bel')];
+    const ordinary = selectNationalIqViewV2(state, WORLD_CONTENT_V2, germany);
+
+    expect(countryTraitFactorV2(germany, 'national-iq')).toBeGreaterThan(1);
+    expect(countryTraitFactorV2(germany, 'national-iq')).toBeLessThanOrEqual(1.02);
+    state.humanPlayerId = germany;
+    state.humanPlayerIds = [germany];
+    const human = selectNationalIqViewV2(state, WORLD_CONTENT_V2, germany);
+
+    expect(human.score).toBeGreaterThan(ordinary.score);
+    expect(countryTraitFactorV2(germany, 'national-iq', { humanControlled: true }))
+      .toBeLessThanOrEqual(1.15);
   });
 
   it('offers the same weak-defender aid regardless of selection or IQ appetite', () => {

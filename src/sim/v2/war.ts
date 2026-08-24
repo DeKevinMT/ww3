@@ -3,6 +3,8 @@ import {
   BATTLE_INTERVAL_TICKS,
   ATTACKER_MILITARY_LOSS_MULTIPLIER,
   CAPTURE_MIN_CONTRIBUTION_SHARE,
+  QUICK_CONQUEST_MAX_WAR_AGE_TICKS,
+  QUICK_CONQUEST_MIN_ATTACKER_LOSS_SHARE,
   CEASEFIRE_PAYEE_WEEKLY_REVENUE_CAP_SHARE,
   CEASEFIRE_PAYMENT_WEEKS,
   CEASEFIRE_POST_PAYMENT_TRUCE_TICKS,
@@ -1156,6 +1158,9 @@ function captureTerritoryV2(
   addWarFatigueGainV2(state, newOwner, 0.5, attackerTraitContext);
   let treasurySeized = 0;
   if (selectIsEliminatedV2(state, oldOwner)) {
+    // A nation with no territory cannot keep training or retain a detached
+    // reserve pool. A later 2026-sovereignty revolution rebuilds from zero.
+    state.players[oldOwner]!.trainedReserves = 0;
     // Forecast and resolution share the same defeated-owner replacement path.
     const treasurySeizureShare = selectTreasurySeizureShareV2(state, oldOwner);
     treasurySeized = round(
@@ -1251,12 +1256,11 @@ export function resolveBattlePulseV2(
   const targetCapacity = Math.max(target.army.capacity, target.army.manpower);
   const damageToDefender = applyCombatCasualtiesV2(state, defenderId, target.army,
     projection.defenderLosses);
-  const damageToAttacker = applyCombatCasualtiesV2(state, attackerId, source.army,
+  let damageToAttacker = applyCombatCasualtiesV2(state, attackerId, source.army,
     projection.attackerLosses);
   const terrain = content.territories[operation.targetId]!.terrain;
-  const civilianRisk = terrain === 'urban' ? 1.35 : terrain === 'jungle' ? 1.12 : 1;
-  const sourceTerrain = content.territories[operation.sourceId]!.terrain;
-  const sourceCivilianRisk = sourceTerrain === 'urban' ? 1.20 : sourceTerrain === 'jungle' ? 1.08 : 1;
+  const civilianRisk = 1;
+  const sourceCivilianRisk = 1;
   const protectionLevel = state.players[defenderId]!.research.effectLevels['casualty-reduction'];
   const attackerProtectionLevel = state.players[attackerId]!.research.effectLevels['casualty-reduction'];
   const civilianProtection = 1 - 0.25 * protectionLevel / (protectionLevel + 30);
@@ -1356,6 +1360,18 @@ export function resolveBattlePulseV2(
     earnedDecisiveClaim || earnedUnopposedClaim || decisiveSurrender,
   );
   const conquered = capture.conquered;
+  if (conquered && state.tick - war.startedTick <= QUICK_CONQUEST_MAX_WAR_AGE_TICKS) {
+    // Empty or instantly collapsing territory previously allowed a victorious
+    // force to annex land at literally zero military cost. Charge only the
+    // missing part of a bounded 1% floor, after ordinary combat casualties.
+    const quickAssaultFloor = sourceStrength * QUICK_CONQUEST_MIN_ATTACKER_LOSS_SHARE;
+    damageToAttacker = round(damageToAttacker + applyCombatCasualtiesV2(
+      state,
+      attackerId,
+      source.army,
+      Math.max(0, quickAssaultFloor - damageToAttacker),
+    ), 9);
+  }
   for (const territoryId of [operation.sourceId, operation.targetId]) {
     const battleTerritory = state.territories[territoryId]!;
     const army = battleTerritory.army;

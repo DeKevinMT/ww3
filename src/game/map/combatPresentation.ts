@@ -120,12 +120,9 @@ export function sampleCombatRoute(
   ));
 }
 
-/** Moving-route progress stays away from labels at either endpoint. */
-export function combatMarkerProgress(access: CombatAccessPresentation, phase: number): number {
-  const normalized = ((phase % 1) + 1) % 1;
-  return access === 'naval'
-    ? 0.20 + normalized * 0.60
-    : 0.42 + normalized * 0.34;
+/** Keep persistent routes and event-driven battle markers on the same arc. */
+export function combatRouteBendDirection(sourceId: string, targetId: string): -1 | 1 {
+  return sourceId < targetId ? 1 : -1;
 }
 
 /** Convert a desired CSS-pixel combat stroke into map world units. */

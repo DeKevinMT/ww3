@@ -12,6 +12,7 @@ import {
 import { createWorldStateV2 } from './bootstrap';
 import { WORLD_CONTENT_V2 } from './content';
 import { quoteTerritoryIntegrationV2 } from './integration';
+import { countryTraitFactorV2 } from './traits';
 import {
   createMilitaryBaseSnapshotV2,
   invalidateTerritoryIndexV2,
@@ -133,7 +134,9 @@ describe('V2 country traits in the canonical war runtime', () => {
       1,
       snapshot,
     )!;
-    expect(land.attackerAttack).toBeCloseTo(rawAttack * 1.15, 9);
+    expect(land.attackerAttack).toBeCloseTo(rawAttack * countryTraitFactorV2(
+      colombia, 'attack', { access: 'land', role: 'attacker' },
+    ), 9);
     expect(naval.attackerAttack).toBeCloseTo(rawAttack, 9);
 
     const forecast = forecastWarV2(state, WORLD_CONTENT_V2, colombia, ecuador, snapshot);
@@ -163,7 +166,7 @@ describe('V2 country traits in the canonical war runtime', () => {
     expect(battle.defenderLosses).toBeCloseTo(randomized.defenderLosses, 6);
   });
 
-  it('activates food-security defense and defender casualty reduction only below its threshold', () => {
+  it('keeps DEF neutral while activating defender casualty reduction only below its threshold', () => {
     const cuba = nationIdV2('cub');
     const haiti = nationIdV2('hti');
     const cubaTerritory = territoryIdV2('cub');
@@ -193,11 +196,14 @@ describe('V2 country traits in the canonical war runtime', () => {
     )!;
 
     expect(stable.defenderDefense).toBeCloseTo(rawDefense, 9);
-    expect(crisis.defenderDefense).toBeCloseTo(rawDefense * 1.30, 9);
+    expect(crisis.defenderDefense).toBeCloseTo(rawDefense, 9);
+    expect(countryTraitFactorV2(
+      haiti, 'defense', { foodSecurity: 0.79, role: 'defender' },
+    )).toBe(1);
     expect(crisis.defenderLosses).toBeLessThan(stable.defenderLosses);
   });
 
-  it('requires matching terrain, homeland and defender role and never stacks an absorbed trait', () => {
+  it('keeps flat DEF neutral through expansion and never stacks an absorbed trait', () => {
     const india = nationIdV2('ind');
     const nepal = nationIdV2('npl');
     const netherlands = nationIdV2('nld');
@@ -222,7 +228,14 @@ describe('V2 country traits in the canonical war runtime', () => {
       state, WORLD_CONTENT_V2, nepal, india,
       nepalTerritory, indiaTerritory, 'land', 1, 1, snapshot,
     )!;
-    expect(defending.defenderDefense).toBeCloseTo(rawNepalDefense * 1.22, 9);
+    const nepalDefenseFactor = countryTraitFactorV2(nepal, 'defense', {
+      role: 'defender', terrain: 'mountain', homeland: true,
+    });
+    expect(nepalDefenseFactor).toBe(1);
+    expect(countryTraitFactorV2(nepal, 'military-casualties', {
+      role: 'defender', terrain: 'mountain', homeland: true,
+    })).toBeLessThan(1);
+    expect(defending.defenderDefense).toBeCloseTo(rawNepalDefense, 9);
     expect(attacking.attackerDefense).toBeCloseTo(rawNepalDefense, 9);
 
     // The formation and sovereign core still originate in Nepal, but the live
@@ -246,7 +259,9 @@ describe('V2 country traits in the canonical war runtime', () => {
       indiaTerritory, nepalTerritory, 'land', 1, 1, absorbedSnapshot,
     )!;
     expect(afterFusion.defenderDefense).toBeCloseTo(currentOwnerDefense, 9);
-    expect(afterFusion.defenderDefense).not.toBeCloseTo(currentOwnerDefense * 1.22, 6);
+    expect(countryTraitFactorV2(netherlands, 'military-casualties', {
+      role: 'defender', terrain: 'mountain', homeland: false,
+    })).toBe(1);
   });
 
   it('applies attacker-side naval casualty reduction after the existing casualty formula', () => {
@@ -271,7 +286,9 @@ describe('V2 country traits in the canonical war runtime', () => {
         * WAR_ACCESS_CASUALTY_MULTIPLIER.naval
         * ATTACKER_MILITARY_LOSS_MULTIPLIER
         * researchModifier
-        * 0.82,
+        * countryTraitFactorV2(cyprus, 'military-casualties', {
+          role: 'attacker', access: 'naval',
+        }),
     );
     expect(expected).toBeLessThan(projection.attackerStrength);
     expect(projection.attackerLosses).toBeCloseTo(expected, 9);
@@ -296,7 +313,9 @@ describe('V2 country traits in the canonical war runtime', () => {
     const saudiResearch = 1 + 0.01 * state.players[saudiArabia]!.research.effectLevels.supply;
     expect(supplyFactorV2(
       state, WORLD_CONTENT_V2, saudiArabia, saudiTerritory, 'land',
-    )).toBeCloseTo(0.8 * saudiResearch * 1.04, 9);
+    )).toBeCloseTo(0.8 * saudiResearch * countryTraitFactorV2(
+      saudiArabia, 'front-supply', { access: 'land', terrain: 'desert' },
+    ), 9);
 
     state.territories[ukraineTerritory]!.owner = russia;
     state.territories[ukraineTerritory]!.condition = 0.5;
@@ -305,7 +324,9 @@ describe('V2 country traits in the canonical war runtime', () => {
     const russianResearch = 1 + 0.01 * state.players[russia]!.research.effectLevels.supply;
     expect(supplyFactorV2(
       state, WORLD_CONTENT_V2, russia, ukraineTerritory, 'land',
-    )).toBeCloseTo((1 - 0.035 * 0.90) * 0.8 * russianResearch, 9);
+    )).toBeCloseTo((1 - 0.035 * countryTraitFactorV2(
+      russia, 'land-hop-pressure', { access: 'land' },
+    )) * 0.8 * russianResearch, 9);
 
     state.territories[southAfricaTerritory]!.condition = 0.5;
     const routeDistance = selectTerritoryRouteDistanceKmV2(
@@ -314,7 +335,8 @@ describe('V2 country traits in the canonical war runtime', () => {
     expect(routeDistance).toBeGreaterThan(1_500);
     const rawNavalSupply = warAccessSupplyMultiplierV2('naval', routeDistance);
     const adjustedNavalSupply = WAR_ACCESS_SUPPLY_MULTIPLIER.naval
-      - (WAR_ACCESS_SUPPLY_MULTIPLIER.naval - rawNavalSupply) * 0.90;
+      - (WAR_ACCESS_SUPPLY_MULTIPLIER.naval - rawNavalSupply)
+        * countryTraitFactorV2(southAfrica, 'naval-distance-pressure', { access: 'naval' });
     const southAfricaResearch = 1 + 0.01 * state.players[southAfrica]!.research.effectLevels.supply;
     expect(supplyFactorV2(
       state,
@@ -332,7 +354,7 @@ describe('V2 country traits in the canonical war runtime', () => {
     )).toBeCloseTo(0.8 * dutchResearch, 9);
   });
 
-  it('reduces only positive combat condition loss in the matching defensive homeland', () => {
+  it('reduces only positive combat condition loss in the matching defensive role', () => {
     const serbia = nationIdV2('srb');
     const bosnia = nationIdV2('bih');
     const serbiaTerritory = territoryIdV2('srb');
@@ -350,7 +372,13 @@ describe('V2 country traits in the canonical war runtime', () => {
     expect(battle.conquered).toBe(false);
     const rawLoss = 0.005 + battle.defenderLosses / targetCapacity * 0.10;
     expect(state.territories[bosniaTerritory]!.condition)
-      .toBeCloseTo(1 - rawLoss * 0.70, 5);
+      .toBeCloseTo(1 - rawLoss * countryTraitFactorV2(
+        bosnia, 'condition-loss', {
+          role: 'defender',
+          terrain: WORLD_CONTENT_V2.territories[bosniaTerritory]?.terrain,
+          homeland: true,
+        },
+      ), 5);
   });
 
   it('uses the defeated owner treasury factor and forwards capture access into integration', () => {
@@ -412,7 +440,9 @@ describe('V2 country traits in the canonical war runtime', () => {
     const exactAttackerLoss = attackerManpowerBefore
       - battleState.territories[saudiTerritory]!.army.manpower;
     expect(battleState.players[saudiArabia]!.warFatigue).toBeCloseTo(
-      (0.08 + 4 * exactAttackerLoss / attackerCapacity) * 0.96,
+      (0.08 + 4 * exactAttackerLoss / attackerCapacity) * countryTraitFactorV2(
+        saudiArabia, 'war-fatigue-gain', { atWar: true },
+      ),
       6,
     );
 
@@ -437,9 +467,12 @@ describe('V2 country traits in the canonical war runtime', () => {
       captureState, WORLD_CONTENT_V2, activeCaptureWar, captureOperation,
     )!;
     expect(capture.conquered).toBe(true);
-    expect(capture.attackerLosses).toBe(0);
+    expect(capture.attackerLosses).toBeGreaterThan(0);
+    const captureAttackerCapacity = selectTotalManpowerV2(captureState, russia).capacity;
     expect(captureState.players[russia]!.warFatigue).toBeCloseTo(
-      (0.5 + 0.08) * 0.96,
+      (0.5 + 0.08 + 4 * capture.attackerLosses / captureAttackerCapacity) * countryTraitFactorV2(
+        russia, 'war-fatigue-gain', { atWar: true },
+      ),
       6,
     );
 
@@ -466,7 +499,9 @@ describe('V2 country traits in the canonical war runtime', () => {
       peaceState, WORLD_CONTENT_V2, 'offer-trait-peace', true,
     ).accepted).toBe(true);
     expect(peaceState.players[saudiArabia]!.warFatigue).toBeCloseTo(
-      (2 + POST_WAR_TRANSITION_FATIGUE) * 0.96,
+      (2 + POST_WAR_TRANSITION_FATIGUE) * countryTraitFactorV2(
+        saudiArabia, 'war-fatigue-gain', { atWar: true },
+      ),
       6,
     );
     expect(peaceState.players[yemen]!.warFatigue).toBeCloseTo(

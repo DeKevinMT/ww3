@@ -334,25 +334,25 @@ function nationalCombatQualityFromWealthV2(
     : NATIONAL_COMBAT_ECONOMY_RESEARCH_MAX_BONUS * economyLevel
       / (economyLevel + NATIONAL_COMBAT_ECONOMY_RESEARCH_HALF_SATURATION);
   const gdpPerCapita = Math.max(0, wealthPerPersonThousands) * 1_000;
-  const systemMultiplier = nationalCombatSystemQualityMultiplierV2(gdpPerCapita, iqScore);
-  const safeGdpFloor = Math.max(0.000001, NATIONAL_COMBAT_GDP_PER_CAPITA_FLOOR);
-  const incomeProgress = clamp(
-    Math.log(Math.max(safeGdpFloor, gdpPerCapita) / safeGdpFloor)
-      / Math.log(NATIONAL_COMBAT_GDP_PER_CAPITA_CEILING / safeGdpFloor),
-    0,
-    1,
+  const openingGdpPerCapita = definition
+    ? definition.real.gdp / Math.max(0.000001, definition.real.population) * 1_000
+    : gdpPerCapita;
+  const openingIqScore = definition?.iqScore ?? iqScore;
+  const openingSystemQuality = nationalCombatSystemQualityMultiplierV2(
+    openingGdpPerCapita, openingIqScore,
   );
-  const iqProgressForSystems = clamp(
-    (iqScore - NATIONAL_IQ_SCORE_MIN)
-      / Math.max(0.000001, NATIONAL_IQ_SCORE_MAX - NATIONAL_IQ_SCORE_MIN),
-    0,
-    (NATIONAL_IQ_EFFECTIVE_SCORE_MAX - NATIONAL_IQ_SCORE_MIN)
-      / Math.max(0.000001, NATIONAL_IQ_SCORE_MAX - NATIONAL_IQ_SCORE_MIN),
+  const gdpOnlySystemQuality = nationalCombatSystemQualityMultiplierV2(
+    gdpPerCapita, openingIqScore,
   );
-  const gdpSystemContribution = NATIONAL_COMBAT_SYSTEM_QUALITY_SPAN
-    * NATIONAL_QUALITY_GDP_WEIGHT * (incomeProgress - 0.5);
-  const iqSystemContribution = NATIONAL_COMBAT_SYSTEM_QUALITY_SPAN
-    * NATIONAL_QUALITY_IQ_WEIGHT * (iqProgressForSystems - 0.5);
+  const liveSystemQuality = nationalCombatSystemQualityMultiplierV2(gdpPerCapita, iqScore);
+  // Opening GDP, GDP/capita and IQ already form the army's stored ATK/DEF.
+  // The live multiplier is therefore relative to that opening quality and only
+  // represents subsequent economic or educational change.
+  const systemMultiplier = liveSystemQuality / Math.max(0.000001, openingSystemQuality);
+  const gdpSystemContribution = gdpOnlySystemQuality
+    / Math.max(0.000001, openingSystemQuality) - 1;
+  const iqSystemContribution = (liveSystemQuality - gdpOnlySystemQuality)
+    / Math.max(0.000001, openingSystemQuality);
   const economyResearchMultiplier = 1 + economyResearchBonus;
   return {
     gdpPerCapita: round(gdpPerCapita, 6),
@@ -491,8 +491,13 @@ export function selectNationalIqViewV2(
     ? stateOrContent as WorldContentV2 : contentOrPlayerId as WorldContentV2;
   const playerId = effectivePlayerId ?? contentOrPlayerId as PlayerId;
   const definition = content.nations[playerId];
+  const iqTraitFactor = countryTraitFactorV2(
+    playerId,
+    'national-iq',
+    state ? traitNationContextV2(state, playerId) : {},
+  );
   const baselineScore = clamp(
-    definition?.iqScore ?? NATIONAL_IQ_SCORE_NEUTRAL,
+    (definition?.iqScore ?? NATIONAL_IQ_SCORE_NEUTRAL) * iqTraitFactor,
     NATIONAL_IQ_SCORE_MIN,
     NATIONAL_IQ_SCORE_MAX,
   );
@@ -1034,13 +1039,38 @@ export function selectRecruitmentUnitCostV2(
   // Quality remains a real cost, but the square-root curve and hard ceiling
   // prevent elite countries from becoming economically unplayable.
   const qualityPremium = clamp(0.75 + 0.25 * Math.sqrt(combinedQuality), 0.85, 1.75);
+  const costOfLiving = selectArmyCostOfLivingFactorV2(state, content, playerId);
   const baseCost = 2 * qualityPremium * (1 - 0.01 * efficiency)
+    * costOfLiving
     / nationalAiEfficiencyV2(selectNationalIqViewV2(state, content, playerId).score);
   return round(baseCost * countryTraitFactorV2(
     playerId,
     'recruitment-cost',
     traitNationContextV2(state, playerId),
   ));
+}
+
+/**
+ * Local military labour and supply prices track live GDP per capita. The
+ * square-root curve makes low-income mass armies materially cheaper without
+ * allowing poverty to erase upkeep, while rich elite forces pay more per
+ * soldier on top of their existing quality premium.
+ */
+export function armyCostOfLivingFactorFromWealthV2(
+  wealthPerPersonThousands: number,
+): number {
+  const localWealth = Math.max(0, wealthPerPersonThousands);
+  return round(clamp(0.55 + 0.45 * Math.sqrt(localWealth / 40), 0.58, 1.45));
+}
+
+export function selectArmyCostOfLivingFactorV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  playerId: PlayerId,
+): number {
+  return armyCostOfLivingFactorFromWealthV2(
+    selectNationalEconomyV2(state, content, playerId).wealthPerPerson,
+  );
 }
 
 /** Immediate reserves and mercenary cadres restore at most 5% of the live cap. */
@@ -1298,10 +1328,10 @@ export function selectFoodAccessCeilingV2(
       traitNationContextV2(state, playerId),
     ));
   const rawAccess = clamp(1 - remainingVulnerability, 0.20, 0.995);
-  // Essential food networks soften real-world vulnerability without erasing
-  // its financial and productive burden. This value is deliberately not a
-  // hard cap on food coverage.
-  return round(clamp(0.65 + 0.35 * rawAccess, 0.70, 0.995));
+  // Food access is a real last-mile limit. Money can buy imports, but fragile
+  // distribution and institutions still leave part of the population without
+  // reliable nutrition until condition, prosperity or research improves.
+  return round(rawAccess);
 }
 
 /**
@@ -1614,6 +1644,9 @@ function fundFoodPlanV2(
     * FOOD_EXPORT_PRICE_MULTIPLIER;
   const foodExportIncome = foodExported * exportUnitPrice * exportIncomeFactor;
   const foodAvailable = nation.foodStock + foodProduced - foodExported;
+  // Access vulnerability raises the real cost of producing and importing
+  // enough food. Existing national stores can still bridge a temporary crisis;
+  // famine begins only when funded supply plus those reserves fall short.
   const foodConsumed = Math.min(plan.demand, foodAvailable);
   const foodCoverage = clamp(foodConsumed / Math.max(0.01, plan.demand), 0, 1);
   const foodStockChange = clamp(
@@ -1647,10 +1680,9 @@ export function selectResearchBranchMaxedV2(
 }
 
 /**
- * Live expansion appetite derived from the same national state players can
- * inspect. It is deliberately not a fixed country personality: relative
- * military power and readiness raise confidence, while weak reserves, damaged
- * territory, active fronts and war fatigue pull it back down.
+ * Live expansion appetite combines a neutral 2026 military-posture prior with
+ * campaign history. Actual declarations, occupations and attacking wars raise
+ * the value; weak reserves, damage and exhaustion still pull it back down.
  */
 export function selectNationalAggressivenessV2(
   state: WorldStateV2,
@@ -1676,19 +1708,46 @@ export function selectNationalAggressivenessV2(
     ? territories.reduce((sum, territory) => sum + territory.condition, 0) / territories.length
     : 0;
   const fatigue = clamp(player.warFatigue / 100, 0, 1);
-  const frontLoad = clamp(selectWarsOfV2(state, playerId).length / 2, 0, 1);
+  const activeWars = selectWarsOfV2(state, playerId);
+  const frontLoad = clamp(activeWars.length / 2, 0, 1);
+  const activeAttacks = activeWars.filter((war) => war.attackerId === playerId).length;
+  const historyStartTick = Math.max(0, state.tick - 260);
+  const recentDeclarations = state.events.filter((event) => (
+    event.tick >= historyStartTick
+      && event.kind === 'war'
+      && event.playerId === playerId
+      && /declared war|joined the war/i.test(event.message)
+  )).length;
+  const recentConquests = state.events.filter((event) => (
+    event.tick >= historyStartTick
+      && event.kind === 'conquest'
+      && event.playerId === playerId
+  )).length;
+  const occupiedOpeningHomelands = territories.filter((territory) => (
+    content.territories[territory.id]?.initialOwnerId !== playerId
+  )).length;
+  const recentMilitaryActivity = clamp(
+    0.35 * activeAttacks
+      + 0.16 * recentDeclarations
+      + 0.08 * recentConquests
+      + 0.03 * occupiedOpeningHomelands,
+    0,
+    1,
+  );
   const foodSecurity = clamp(player.foodSecurity, 0, 1);
   return round(clamp(
-    8
-      + 32 * powerConfidence
-      + 18 * armyReadiness
-      + 10 * cashReadiness
-      + 8 * condition
-      + 7 * foodSecurity
-      - 24 * fatigue
-      - 12 * frontLoad,
+    4
+      + 55 * clamp(content.nations[playerId]?.ambition ?? 0.30, 0, 1)
+      + 8 * powerConfidence
+      + 9 * armyReadiness
+      + 5 * cashReadiness
+      + 4 * condition
+      + 3 * foodSecurity
+      + 18 * recentMilitaryActivity
+      - 20 * fatigue
+      - 8 * frontLoad,
     2,
-    95,
+    98,
   ), 1);
 }
 
@@ -2127,7 +2186,11 @@ export function selectWeeklyFinanceBreakdownV2(
   const integrationCost = territories.reduce((sum, territory) => sum
       + (territory.integrationProgram?.annualCost ?? 0) / 52, 0);
   const baseOperatingCost = economy.weeklyRevenue * selectBaseOperatingCostShareV2(state, playerId);
-  const availableTaxRevenue = Math.max(0, economy.weeklyRevenue - baseOperatingCost);
+  const recurringRevenueAfterMandatory = Math.max(
+    0,
+    economy.weeklyRevenue + ceasefireIncome
+      - baseOperatingCost - ceasefirePayment - integrationCost,
+  );
   // A negative treasury is debt, not the disappearance of the country's new
   // weekly revenue. Positive reserves can fund a surge; debt cannot.
   const cashAfterRevenue = Math.max(0, nation.treasury) + economy.weeklyRevenue + ceasefireIncome;
@@ -2154,7 +2217,7 @@ export function selectWeeklyFinanceBreakdownV2(
     0.12,
     0.78,
   );
-  const ordinaryFoodAllowance = availableTaxRevenue * foodBudgetShare;
+  const ordinaryFoodAllowance = recurringRevenueAfterMandatory * foodBudgetShare;
   const reserveWeeks = nation.foodStock / Math.max(0.01, foodPlan.demand);
   const foodEmergency = reserveWeeks < 1 || nation.foodSecurity < 0.65;
   const preventiveReserveDrawShare = foodEmergency ? 1
@@ -2182,7 +2245,7 @@ export function selectWeeklyFinanceBreakdownV2(
   // not create a circular promise here; shortages cannot export in practice.
   const discretionaryRevenue = Math.max(
     0,
-    availableTaxRevenue + ordinaryFood.foodExportIncome - ordinaryFoodProduction,
+    recurringRevenueAfterMandatory + ordinaryFood.foodExportIncome - ordinaryFoodProduction,
   );
   const treasuryWeeks = nation.treasury / Math.max(0.001, economy.weeklyRevenue);
   const debtPressure = debtPressureV2(treasuryWeeks);
@@ -2205,8 +2268,6 @@ export function selectWeeklyFinanceBreakdownV2(
     0,
     1,
   );
-  const mandatoryPaymentShare = (ceasefirePayment + integrationCost)
-    / Math.max(0.001, economy.weeklyRevenue);
   const disciplinedSpendingRate = 1 - treasuryPolicy.freeCashflowShare;
   const fundedWarSpendingRate = disciplinedSpendingRate
     + (1.02 - disciplinedSpendingRate) * smoothstep(
@@ -2225,7 +2286,7 @@ export function selectWeeklyFinanceBreakdownV2(
     // debt then contracts every existing programme smoothly while treaty and
     // integration obligations continue to consume real national revenue.
     ? clamp(
-      disciplinedSpendingRate - debtProgramPenalty - mandatoryPaymentShare,
+      disciplinedSpendingRate - debtProgramPenalty,
       atWar ? DEBT_PROGRAM_ENVELOPE_FLOOR_WAR : DEBT_PROGRAM_ENVELOPE_FLOOR_PEACE,
       disciplinedSpendingRate,
     )
@@ -2242,6 +2303,7 @@ export function selectWeeklyFinanceBreakdownV2(
   // negative and expensive peace contracts merely switched the country off.
   const envelope = discretionaryRevenue * envelopeRate;
   const frontLoad = selectWarOperationsCostLoadV2(state, content, playerId);
+  const armyCostOfLiving = armyCostOfLivingFactorFromWealthV2(economy.wealthPerPerson);
   const warFatigueSurcharge = clamp(
     nation.warFatigue * WAR_FATIGUE_OPERATION_COST_PER_POINT,
     0,
@@ -2255,7 +2317,7 @@ export function selectWeeklyFinanceBreakdownV2(
     );
   const warOperations = atWar ? frontLoad * (
     economy.weeklyRevenue * WAR_OPERATION_REVENUE_SHARE
-    + army.deployed * WAR_OPERATION_COST_PER_MILLION
+    + army.deployed * WAR_OPERATION_COST_PER_MILLION * armyCostOfLiving
   ) * warFatigueCostMultiplier : 0;
   const weeklyRealDefence = Math.max(0.001, (content.nations[playerId]?.real.defenceSpending ?? 0.052) / 52);
   const initialArmy = Math.max(0.000001, initialNationArmyCapacityBenchmarkV2(content, playerId));
@@ -2265,7 +2327,7 @@ export function selectWeeklyFinanceBreakdownV2(
     + 0.65 * army.capacity / initialArmy
   );
   const weaponsPremium = weeklyRealDefence * 0.65 * army.capacity / initialArmy * (weaponsUpkeep - 1);
-  const armyUpkeep = (baselineUpkeep + weaponsPremium)
+  const armyUpkeep = (baselineUpkeep + weaponsPremium) * armyCostOfLiving
     * countryTraitFactorV2(
       playerId,
       'army-upkeep',
@@ -2528,7 +2590,12 @@ export function selectWeeklyFinanceBreakdownV2(
     foodExported,
     foodExportIncome,
     foodConsumed,
-    foodBalance: foodProduced - foodConsumed - foodExported,
+    // Negative means either supply is structurally below demand or the food
+    // network cannot reach everyone. Positive is reserved for a real increase
+    // in stored reserves, so an empty warehouse can never hide famine as zero.
+    foodBalance: foodCoverage < 0.999999
+      ? foodConsumed - foodPlan.demand
+      : foodStockChange,
     foodStockChange,
     foodProduction,
     foodDevelopmentTransfer,
@@ -2587,10 +2654,10 @@ export function selectWeeklyFinanceBreakdownV2(
 
 /**
  * Batch finance under the controller roster already encoded in `state`.
- * This deliberately does not rewrite controller identity; the country picker
- * uses `createOpeningCandidatePreviewSnapshotV2` to evaluate each candidate as
- * human-controlled. One supplied power snapshot keeps this generic batch
- * deterministic.
+ * This deliberately does not rewrite controller identity. The country picker
+ * supplies an all-AI opening state so player-only trait amplification cannot
+ * leak into baseline stats or ranking. One supplied power snapshot keeps this
+ * generic batch deterministic.
  */
 export function selectOpeningCandidateFinancePlansV2(
   state: WorldStateV2,
@@ -2814,8 +2881,10 @@ export function selectPopulationDynamicsV2(
   };
   const owned = selectTerritoriesOfV2(state, playerId);
   const population = owned.reduce((sum, territory) => sum + territory.population, 0);
-  const funds = populationGrowthFunding
-    ?? selectWeeklyFinanceBreakdownV2(state, content, playerId).populationGrowth;
+  const projectedFinance = populationGrowthFunding === undefined
+    ? selectWeeklyFinanceBreakdownV2(state, content, playerId)
+    : undefined;
+  const funds = populationGrowthFunding ?? projectedFinance!.populationGrowth;
   const baselineNetRate = owned.reduce((sum, territory) => sum
     + (content.territories[territory.id]?.baseline.populationGrowthRate ?? 0) / 100 * territory.population, 0)
     / Math.max(0.01, population);
@@ -2827,7 +2896,9 @@ export function selectPopulationDynamicsV2(
   const level = nation.research.effectLevels['population-growth'];
   const impact = selectResearchEffectImpactV2(state, content, playerId, 'population-growth');
   const warPressure = selectWarPressureV2(state, playerId);
-  const foodSecurity = clamp(nation.foodSecurity, 0, 1);
+  // Views use this week's projected access immediately; the canonical economy
+  // phase stores the same value before applying population change.
+  const foodSecurity = clamp(projectedFinance?.foodCoverage ?? nation.foodSecurity, 0, 1);
   const researchedNet = baselineNetRate >= 0
     ? baselineNetRate * (1 + 0.005 * level * impact)
     : baselineNetRate * (1 - 0.004 * level * impact);

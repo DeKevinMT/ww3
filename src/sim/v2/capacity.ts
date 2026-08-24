@@ -1,4 +1,5 @@
 import {
+  ARMY_CAPACITY_INITIAL_FORCE_FLOOR,
   ARMY_CAPACITY_STRUCTURAL_POPULATION_SHARE,
   CONQUEST_INITIAL_INTEGRATION_SHARE,
   clamp,
@@ -83,8 +84,16 @@ export function territoryArmyCapacityTargetV2(
   integration = 1,
 ): number {
   if (!content.territories[territoryId] || !content.nations[ownerId]) return 0;
+  const owner = content.nations[ownerId]!;
+  const nationalProfessionalForceShare = owner.balance.initialManpower
+    * ARMY_CAPACITY_INITIAL_FORCE_FLOOR
+    / Math.max(0.0001, owner.real.population);
+  const structuralPopulationShare = Math.max(
+    ARMY_CAPACITY_STRUCTURAL_POPULATION_SHARE,
+    nationalProfessionalForceShare,
+  );
   return round(Math.max(0.0001, Math.max(0, population)
-    * ARMY_CAPACITY_STRUCTURAL_POPULATION_SHARE
+    * structuralPopulationShare
     * clamp(integration, 0, 1)
     * (1 + 0.01 * Math.max(0, forceCapacityLevel))));
 }

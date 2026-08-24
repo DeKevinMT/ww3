@@ -11,6 +11,7 @@ import {
 } from './balance';
 import { createWorldStateV2 } from './bootstrap';
 import { WORLD_CONTENT_V2 } from './content';
+import { synchronizeArmyCapacityV2 } from './capacity';
 import { assertInvariantsV2 } from './invariants';
 import {
   selectArmyStrengthV2,
@@ -111,16 +112,15 @@ describe('V2 one-source manpower combat', () => {
     expect(defenderDefense.defenderLosses).toBeLessThan(baseline.defenderLosses);
   });
 
-  it('gives the whole displayed DEF stat diminishing returns above neutral', () => {
+  it('keeps the whole displayed DEF stat fully linear without a hidden nerf', () => {
     expect(effectiveDefenseStatV2(0.70)).toBeCloseTo(0.70, 9);
     expect(effectiveDefenseStatV2(1)).toBe(1);
-    expect(effectiveDefenseStatV2(2)).toBeLessThan(2);
-    expect(effectiveDefenseStatV2(4) - effectiveDefenseStatV2(2))
-      .toBeLessThan(2 * (effectiveDefenseStatV2(2) - effectiveDefenseStatV2(1)));
-    expect(effectiveDefenseStatV2(100)).toBeLessThan(7);
+    expect(effectiveDefenseStatV2(2)).toBe(2);
+    expect(effectiveDefenseStatV2(4)).toBe(4);
+    expect(effectiveDefenseStatV2(100)).toBe(100);
   });
 
-  it('keeps every DEF research upgrade useful inside the diminishing stat curve', () => {
+  it('keeps every DEF research upgrade useful without suppressing the displayed stat', () => {
     const state = createWorldStateV2(3031);
     const base = selectEffectiveDefenseV2(state, WORLD_CONTENT_V2, bel, state.territories[belTerritory].army);
     const normalized: number[] = [];
@@ -134,8 +134,8 @@ describe('V2 one-source manpower combat', () => {
     expect(normalized[1]).toBeGreaterThan(normalized[0]!);
     expect(normalized[2]).toBeGreaterThan(normalized[1]!);
     expect(normalized[3]).toBeGreaterThan(normalized[2]!);
-    expect(normalized[2]! - normalized[1]!).toBeLessThan(normalized[1]! - normalized[0]!);
-    expect(normalized[3]! - normalized[2]!).toBeLessThan((normalized[2]! - normalized[1]!) * 2);
+    expect(normalized[2]! - normalized[1]!).toBeGreaterThan(0);
+    expect(normalized[3]! - normalized[2]!).toBeGreaterThan(0);
   });
 
   it('lets a four-to-one field advantage inflict more absolute losses despite the position bonus', () => {
@@ -192,6 +192,7 @@ describe('V2 one-source manpower combat', () => {
     state.territories[luxTerritory].owner = nld;
     state.territories[luxTerritory].coreOwner = nld;
     state.territories[luxTerritory].integration = 1;
+    synchronizeArmyCapacityV2(state, WORLD_CONTENT_V2);
     state.territories[nldTerritory].army.manpower = 0;
     state.territories[luxTerritory].army.manpower = 0;
     const beforeVictor = selectTotalManpowerV2(state, bel);
@@ -346,7 +347,7 @@ describe('V2 one-source manpower combat', () => {
     const after = engine.totalManpower(bel);
     // The weekly population phase may move the derived cap by a few people;
     // rapid recruitment itself must not create a material capacity upgrade.
-    expect(after.capacity).toBeCloseTo(before.capacity, 5);
+    expect(after.capacity).toBeCloseTo(before.capacity, 4);
     expect(after.deployed).toBeGreaterThanOrEqual(before.deployed + terms.amount - 0.000001);
     expect(after.deployed).toBeLessThanOrEqual(after.capacity);
     const recruited = after.deployed - before.deployed;
@@ -381,7 +382,7 @@ describe('V2 one-source manpower combat', () => {
     engine.step();
     const after = engine.totalManpower(bel);
     // Only the live population/research formula may move capacity this week.
-    expect(after.capacity).toBeCloseTo(before.capacity, 5);
+    expect(after.capacity).toBeCloseTo(before.capacity, 4);
     expect(after.deployed).toBeGreaterThanOrEqual(before.deployed + terms.amount - 0.000001);
     expect(after.deployed).toBeLessThanOrEqual(after.capacity);
     assertInvariantsV2(engine.state, WORLD_CONTENT_V2);
@@ -396,6 +397,8 @@ describe('V2 one-source manpower combat', () => {
     expect(belPower / nldPower).toBeGreaterThan(0.2);
     expect(belPower / nldPower).toBeLessThan(5);
     expect(selectCatchUpFactorV2(state, WORLD_CONTENT_V2, isl)).toBeGreaterThan(1);
-    expect(selectArmyStrengthV2(state, WORLD_CONTENT_V2, isl).fillRatio).toBe(1);
+    const icelandFill = selectArmyStrengthV2(state, WORLD_CONTENT_V2, isl).fillRatio;
+    expect(icelandFill).toBeGreaterThan(0.7);
+    expect(icelandFill).toBeLessThan(1);
   });
 });

@@ -9,7 +9,10 @@ import {
   createFinancePlansV2,
   processFinanceMilitaryV2,
 } from './economy';
-import { invalidateTerritoryIndexV2 } from './selectors';
+import {
+  invalidateTerritoryIndexV2,
+  selectWeeklyFinanceBreakdownV2,
+} from './selectors';
 import { traitNationContextV2, traitTerritoryFrontAccessV2 } from './traitContext';
 import { countryTraitFactorV2 } from './traits';
 import {
@@ -108,17 +111,33 @@ describe('V2 country-trait recovery hooks', () => {
 
     const damaged = createWorldStateV2(82_001, content);
     damaged.territories[sudanTerritory]!.condition = 0.799;
+    const damagedOpening = selectWeeklyFinanceBreakdownV2(damaged, content, sudan);
+    damaged.players[sudan]!.foodStock = damagedOpening.foodStorageCapacity;
+    damaged.players[sudan]!.treasury = Math.max(
+      damaged.players[sudan]!.treasury,
+      damagedOpening.reserveTarget * 2,
+    );
     const damagedPlans = createFinancePlansV2(damaged, content);
     const damagedFinance = damagedPlans.get(sudan)!;
     expect(damagedFinance.conditionFundingRatio).toBeGreaterThan(0);
     const damagedExpected = expectedConditionAfterWeek(
-      damaged, sudanTerritory, damagedFinance, false, 1.30,
+      damaged, sudanTerritory, damagedFinance, false,
+      countryTraitFactorV2(sudan, 'condition-recovery', {
+        ...traitNationContextV2(damaged, sudan),
+        condition: 0.799,
+      }),
     );
     processFinanceMilitaryV2(damaged, content, damagedPlans);
     expect(damaged.territories[sudanTerritory]!.condition).toBe(damagedExpected);
 
     const threshold = createWorldStateV2(82_002, content);
     threshold.territories[sudanTerritory]!.condition = 0.8;
+    const thresholdOpening = selectWeeklyFinanceBreakdownV2(threshold, content, sudan);
+    threshold.players[sudan]!.foodStock = thresholdOpening.foodStorageCapacity;
+    threshold.players[sudan]!.treasury = Math.max(
+      threshold.players[sudan]!.treasury,
+      thresholdOpening.reserveTarget * 2,
+    );
     const thresholdPlans = createFinancePlansV2(threshold, content);
     const thresholdFinance = thresholdPlans.get(sudan)!;
     const thresholdExpected = expectedConditionAfterWeek(
@@ -198,7 +217,9 @@ describe('V2 country-trait recovery hooks', () => {
     processFinanceMilitaryV2(peaceful, content, peacefulPlans);
 
     expect(peaceful.players[spain]!.warFatigue).toBe(round(
-      10 - PEACE_FATIGUE_RECOVERY_PER_WEEK * 1.08,
+      10 - PEACE_FATIGUE_RECOVERY_PER_WEEK * countryTraitFactorV2(
+        spain, 'war-fatigue-recovery', traitNationContextV2(peaceful, spain),
+      ),
     ));
     expect(peaceful.players[belgium]!.warFatigue).toBe(round(
       10 - PEACE_FATIGUE_RECOVERY_PER_WEEK,
@@ -256,7 +277,11 @@ describe('V2 country-trait recovery hooks', () => {
     const sudanesePlans = createFinancePlansV2(sudaneseOwner, content);
     const sudaneseFinance = sudanesePlans.get(sudan)!;
     const sudaneseExpected = expectedConditionAfterWeek(
-      sudaneseOwner, belgiumTerritory, sudaneseFinance, false, 1.30,
+      sudaneseOwner, belgiumTerritory, sudaneseFinance, false,
+      countryTraitFactorV2(sudan, 'condition-recovery', {
+        ...traitNationContextV2(sudaneseOwner, sudan),
+        condition: 0.5,
+      }),
     );
     processFinanceMilitaryV2(sudaneseOwner, content, sudanesePlans);
     expect(sudaneseOwner.territories[belgiumTerritory]!.condition).toBe(sudaneseExpected);

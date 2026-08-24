@@ -10,6 +10,7 @@ import {
   territoryIntegrationAnnualCostV2,
   territoryIntegrationDurationWeeksV2,
 } from './integration';
+import { countryTraitFactorV2 } from './traits';
 import {
   nationIdV2,
   territoryIdV2,
@@ -75,20 +76,32 @@ describe('V2 country traits in immutable integration quotes', () => {
       accessTarget,
     );
 
+    const coastalFactor = countryTraitFactorV2(albania, 'integration-duration', {
+      access: 'naval',
+      terrain: 'coastal',
+      firstConquest: true,
+      atWar: false,
+    });
     expect(quoteTerritoryIntegrationV2(
       state,
       WORLD_CONTENT_V2,
       coastalTarget,
       albania,
       { cause: 'conquest', access: 'naval' },
-    ).durationWeeks).toBe(Math.round(coastalRaw * 0.75));
+    ).durationWeeks).toBe(Math.round(coastalRaw * coastalFactor));
+    const landFactor = countryTraitFactorV2(hungary, 'integration-duration', {
+      access: 'land',
+      terrain: WORLD_CONTENT_V2.territories[accessTarget]?.terrain,
+      firstConquest: true,
+      atWar: false,
+    });
     expect(quoteTerritoryIntegrationV2(
       state,
       WORLD_CONTENT_V2,
       accessTarget,
       hungary,
       { cause: 'conquest', access: 'land' },
-    ).durationWeeks).toBe(Math.round(accessRaw * 0.90));
+    ).durationWeeks).toBe(Math.round(accessRaw * landFactor));
     expect(quoteTerritoryIntegrationV2(
       state,
       WORLD_CONTENT_V2,
@@ -118,7 +131,13 @@ describe('V2 country traits in immutable integration quotes', () => {
     );
 
     expect(firstQuote.firstConquest).toBe(true);
-    expect(firstQuote.durationWeeks).toBe(Math.round(rawDuration * 0.70));
+    expect(firstQuote.durationWeeks).toBe(Math.round(rawDuration
+      * countryTraitFactorV2(belize, 'integration-duration', {
+        access: 'land',
+        terrain: WORLD_CONTENT_V2.territories[firstTarget]?.terrain,
+        firstConquest: true,
+        atWar: false,
+      })));
     beginTerritoryIntegrationV2(
       state,
       WORLD_CONTENT_V2,
@@ -157,11 +176,16 @@ describe('V2 country traits in immutable integration quotes', () => {
     );
 
     expect(durationQuote.firstConquest).toBe(false);
+    const beninFactor = countryTraitFactorV2(benin, 'integration-duration', {
+      terrain: WORLD_CONTENT_V2.territories[rwandaTerritory]?.terrain,
+      firstConquest: false,
+      atWar: false,
+    });
     expect(durationQuote.durationWeeks).toBe(Math.round(
-      rawDuration * FEDERATION_INTEGRATION_DURATION_FACTOR_V2 * 0.82,
+      rawDuration * FEDERATION_INTEGRATION_DURATION_FACTOR_V2 * beninFactor,
     ));
     expect(durationQuote.durationWeeks).not.toBe(Math.round(
-      rawDuration * FEDERATION_INTEGRATION_DURATION_FACTOR_V2 * 0.82 * 0.75,
+      rawDuration * FEDERATION_INTEGRATION_DURATION_FACTOR_V2 * beninFactor * 0.75,
     ));
     beginFederationTerritoryIntegrationV2(
       durationState,
@@ -185,8 +209,13 @@ describe('V2 country traits in immutable integration quotes', () => {
       france,
       { cause: 'federation' },
     );
-    expect(costQuote.annualCost).toBeCloseTo(rawAnnualCost * 0.96, 8);
-    expect(costQuote.annualCost).not.toBeCloseTo(rawAnnualCost * 0.96 * 0.88, 8);
+    const franceFactor = countryTraitFactorV2(france, 'integration-cost', {
+      terrain: WORLD_CONTENT_V2.territories[congoTerritory]?.terrain,
+      firstConquest: false,
+      atWar: false,
+    });
+    expect(costQuote.annualCost).toBeCloseTo(rawAnnualCost * franceFactor, 8);
+    expect(costQuote.annualCost).not.toBeCloseTo(rawAnnualCost * franceFactor * 0.88, 8);
   });
 
   it('freezes the quote into the program instead of recalculating it weekly', () => {

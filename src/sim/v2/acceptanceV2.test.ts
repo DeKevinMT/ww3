@@ -313,7 +313,8 @@ describe('V2 combat and absorption acceptance', () => {
       stateTerritoryArmyCapacityTargetV2(state, FIXTURE_CONTENT, B_FRONT, A),
       8,
     );
-    expect(target.army.manpower).toBeCloseTo(before.sourceManpower - source.army.manpower, 9);
+    expect(source.army.manpower + target.army.manpower)
+      .toBeCloseTo(before.sourceManpower - event.attackerLosses, 6);
     expect(target.army.manpower).toBeCloseTo(Math.min(
       before.sourceManpower * CONQUEST_CAPTURE_GUARD_MAX_TRANSFER_SHARE,
       stateTerritoryArmySupportCeilingV2(state, FIXTURE_CONTENT, B_FRONT, A),

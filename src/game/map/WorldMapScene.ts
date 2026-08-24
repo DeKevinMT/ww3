@@ -24,10 +24,14 @@ import {
   MAP_FLAG_TEXTURE_HEIGHT,
   MAP_FLAG_TEXTURE_WIDTH,
 } from '../../ui/countryFlags';
-import { forcePresentationSignature } from './forcePresentation';
 import {
-  combatMarkerProgress,
+  compactMapCombatPower,
+  forcePresentationSignature,
+  mapCombatPowerLabel,
+} from './forcePresentation';
+import {
   combatPresentationDescriptor,
+  combatRouteBendDirection,
   combatRouteSample,
   combatWorldUnits,
   resolveCombatPresentationAccess,
@@ -104,15 +108,6 @@ function compactManpower(millions: number): string {
   return value.toFixed(2);
 }
 
-function compactPower(power: number): string {
-  const value = Math.max(0, power);
-  if (value >= 1e12) return `${(value / 1e12).toFixed(2)}T`;
-  if (value >= 1e9) return `${(value / 1e9).toFixed(2)}B`;
-  if (value >= 1e6) return `${(value / 1e6).toFixed(2)}M`;
-  if (value >= 1e3) return `${(value / 1e3).toFixed(2)}K`;
-  return value.toFixed(2);
-}
-
 function compactCountryName(name: string): string {
   const commonNames: Record<string, string> = {
     'United States of America': 'United States',
@@ -135,7 +130,7 @@ function compactControllerName(name: string | undefined): string {
 // Map labels are intentionally closer to cartographic tags than HUD cards:
 // country first, one terse military line only when it is contextually useful.
 const LABEL_NAME_SIZE = 10;
-const LABEL_DETAIL_SIZE = 8;
+const LABEL_DETAIL_SIZE = 10;
 const LABEL_TEXT_RESOLUTION = 2;
 const LABEL_MAX_SCREEN_SCALE = 1.20;
 const LABEL_PADDING_X = 6;
@@ -628,7 +623,7 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
         fontSize: `${LABEL_NAME_SIZE}px`, fontStyle: '700', color: '#ffffff', letterSpacing: 0.3, align: 'center',
       }).setOrigin(0.5).setStroke('#01070b', 3).setResolution(LABEL_TEXT_RESOLUTION);
       const detail = this.add.text(0, 8, country.code, {
-        fontFamily: 'Inter, system-ui, sans-serif', fontSize: `${LABEL_DETAIL_SIZE}px`, fontStyle: '600', color: '#c6dce2', letterSpacing: 0.25,
+        fontFamily: 'Inter, system-ui, sans-serif', fontSize: `${LABEL_DETAIL_SIZE}px`, fontStyle: '700', color: '#d9f5fa', letterSpacing: 0.25,
       }).setOrigin(0.5).setStroke('#01070b', 2.5).setResolution(LABEL_TEXT_RESOLUTION).setVisible(false);
       const localForce = this.add.text(territory.x, territory.y, '', {
         fontFamily: 'Inter, system-ui, sans-serif', fontSize: '10px', fontStyle: '700', color: '#b9f8ff',
@@ -1435,9 +1430,8 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
         : owner.isHuman ? `PLAYER ${compactControllerName(owner.controllerName).toUpperCase()}` : '';
       const armyLabel = integrating ? `INTEGRATING ${integrationPercent}%`
         : absorbed ? ''
-          : owner.isHuman && empireCapital
-            ? `${controllerLabel} · ${compactPower(displayedArmy.power)} PWR`
-            : `${compactPower(displayedArmy.power)} · A ${displayedArmy.attack.toFixed(1)} · D ${displayedArmy.defense.toFixed(1)}`;
+          : mapCombatPowerLabel(displayedArmy.power, owner.isHuman && empireCapital
+            ? controllerLabel : '');
       const labelSignature = `${owner.id}:${empireSize}:${owner.controllerName ?? ''}:${labelName}:${armyLabel}`;
       if (this.labelSignatures.get(territory.id) !== labelSignature) {
         this.labelSignatures.set(territory.id, labelSignature);
@@ -1447,7 +1441,7 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
         visual.layoutWidth = undefined;
         visual.layoutHeight = undefined;
       }
-      const localForceText = compactPower(territoryState.army.power);
+      const localForceText = compactMapCombatPower(territoryState.army.power);
       if (visual.localForceText !== localForceText) {
         visual.localForceText = localForceText;
         visual.localForce.setText(localForceText);
@@ -1517,7 +1511,7 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       }
       const routeKey = `${operation.sourceId}:${operation.targetId}`;
       const routeOffset = stableTextFraction(routeKey);
-      const bendDirection = routeOffset < 0.5 ? -1 : 1;
+      const bendDirection = combatRouteBendDirection(operation.sourceId, operation.targetId);
       const samples = sampleCombatRoute(
         operation.source,
         { x: targetX, y: operation.target.y },
@@ -1547,15 +1541,6 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
         descriptor.routePattern,
         animatedPhase,
       );
-      const marker = combatRouteSample(
-        operation.source,
-        { x: targetX, y: operation.target.y },
-        combatMarkerProgress(operation.access, animatedPhase),
-        operation.access,
-        bendDirection,
-      );
-      if (operation.access === 'naval') this.drawNavalRouteMarker(graphics, marker, operation.color, coreAlpha);
-      else this.drawLandRouteMarker(graphics, marker, operation.color, coreAlpha, animatedPhase);
     }
   }
 
@@ -1582,78 +1567,6 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
         end.y,
       );
     }
-  }
-
-  private drawLandRouteMarker(
-    graphics: Phaser.GameObjects.Graphics,
-    marker: CombatRouteSample,
-    actorColor: number,
-    alpha: number,
-    phase: number,
-  ): void {
-    const x = this.normalizedWorldX(marker.x);
-    const length = Math.max(0.000001, Math.hypot(marker.tangentX, marker.tangentY));
-    const forwardX = marker.tangentX / length;
-    const forwardY = marker.tangentY / length;
-    const sideX = -forwardY;
-    const sideY = forwardX;
-    const scale = this.combatWorldSize(1);
-    const pulse = 0.78 + 0.22 * Math.sin(phase * Math.PI * 2) ** 2;
-    graphics.fillStyle(0xff664f, 0.08 + pulse * 0.08);
-    graphics.fillCircle(x, marker.y, 5.2 * scale * pulse);
-    graphics.lineStyle(1.15 * scale, 0xffe2a3, alpha);
-    for (const offset of [-3.8, 2.4]) {
-      const tipX = x + forwardX * offset * scale;
-      const tipY = marker.y + forwardY * offset * scale;
-      const backX = tipX - forwardX * 4.6 * scale;
-      const backY = tipY - forwardY * 4.6 * scale;
-      graphics.lineBetween(tipX, tipY, backX + sideX * 2.5 * scale, backY + sideY * 2.5 * scale);
-      graphics.lineBetween(tipX, tipY, backX - sideX * 2.5 * scale, backY - sideY * 2.5 * scale);
-    }
-    graphics.fillStyle(colorMix(actorColor, 0xffe2a3, 0.45), Math.min(1, alpha));
-    graphics.fillCircle(x - forwardX * 1.2 * scale, marker.y - forwardY * 1.2 * scale, 1.35 * scale);
-  }
-
-  private drawNavalRouteMarker(
-    graphics: Phaser.GameObjects.Graphics,
-    marker: CombatRouteSample,
-    actorColor: number,
-    alpha: number,
-  ): void {
-    const x = this.normalizedWorldX(marker.x);
-    const length = Math.max(0.000001, Math.hypot(marker.tangentX, marker.tangentY));
-    const forwardX = marker.tangentX / length;
-    const forwardY = marker.tangentY / length;
-    const sideX = -forwardY;
-    const sideY = forwardX;
-    const scale = this.combatWorldSize(1);
-    const sternX = x - forwardX * 4.4 * scale;
-    const sternY = marker.y - forwardY * 4.4 * scale;
-    graphics.lineStyle(0.72 * scale, 0x7ce7ff, 0.48 * alpha);
-    for (const side of [-1, 1]) {
-      graphics.lineBetween(
-        sternX + sideX * side * 1.6 * scale,
-        sternY + sideY * side * 1.6 * scale,
-        sternX - forwardX * 7.2 * scale + sideX * side * 2.5 * scale,
-        sternY - forwardY * 7.2 * scale + sideY * side * 2.5 * scale,
-      );
-    }
-    graphics.fillStyle(colorMix(actorColor, 0xd9f9ff, 0.58), Math.min(1, alpha));
-    graphics.fillTriangle(
-      x + forwardX * 5.0 * scale,
-      marker.y + forwardY * 5.0 * scale,
-      sternX + sideX * 2.5 * scale,
-      sternY + sideY * 2.5 * scale,
-      sternX - sideX * 2.5 * scale,
-      sternY - sideY * 2.5 * scale,
-    );
-    graphics.lineStyle(0.75 * scale, 0xd9f9ff, alpha);
-    graphics.lineBetween(
-      x - forwardX * 0.8 * scale,
-      marker.y - forwardY * 0.8 * scale,
-      x + sideX * 2.8 * scale,
-      marker.y + sideY * 2.8 * scale,
-    );
   }
 
   private normalizedWorldX(x: number): number {
@@ -1899,7 +1812,6 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       isSeaConnection(result.sourceId, result.targetId),
     );
     const descriptor = combatPresentationDescriptor(access);
-    const strike = this.add.graphics().setDepth(18);
     let adjustedTargetX = targetPoint.x;
     if (Math.abs(targetPoint.x - sourcePoint.x) > MAP_WIDTH / 2) {
       adjustedTargetX += targetPoint.x > sourcePoint.x ? -MAP_WIDTH : MAP_WIDTH;
@@ -1908,35 +1820,10 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
     const dx = adjustedTargetX - sourcePoint.x;
     const dy = targetPoint.y - sourcePoint.y;
     const distance = Math.max(1, Math.hypot(dx, dy));
-    const bendDirection = String(result.sourceId) < String(result.targetId) ? 1 : -1;
+    const bendDirection = combatRouteBendDirection(result.sourceId, result.targetId);
     const routeColor = result.conquered
       ? colorMix(descriptor.coreColor, 0x8fffc0, 0.38)
       : descriptor.coreColor;
-    const samples = sampleCombatRoute(
-      sourcePoint,
-      adjustedTarget,
-      access,
-      bendDirection,
-      access === 'naval' ? 36 : 24,
-    );
-    this.strokeCombatRoute(
-      strike,
-      samples,
-      descriptor.glowWidth + (result.conquered ? 1.2 : 0),
-      descriptor.glowColor,
-      result.conquered ? 0.26 : 0.16,
-      descriptor.routePattern,
-      0.15,
-    );
-    this.strokeCombatRoute(
-      strike,
-      samples,
-      descriptor.coreWidth + 0.25,
-      routeColor,
-      result.conquered ? 0.94 : 0.82,
-      descriptor.routePattern,
-      0.15,
-    );
     const effectScale = this.combatWorldSize(1);
     const sourcePulse = this.add.circle(sourcePoint.x, sourcePoint.y, 2.2 * effectScale, descriptor.glowColor, 0.16)
       .setStrokeStyle(0.8 * effectScale, routeColor, 0.82).setDepth(19);
@@ -1977,16 +1864,6 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       onComplete: () => {
         projectile.destroy();
         this.playBattleImpact(access, targetPoint, routeColor, result.conquered, effectScale);
-      },
-    });
-    this.tweens.add({
-      targets: strike,
-      alpha: 0,
-      delay: Math.max(0, flightDuration - (this.reducedCombatMotion ? 0 : 180)),
-      duration: this.reducedCombatMotion ? 240 : result.conquered ? 700 : 480,
-      ease: 'Quad.easeOut',
-      onComplete: () => {
-        strike.destroy();
         this.activeBattleEffects = Math.max(0, this.activeBattleEffects - 1);
       },
     });

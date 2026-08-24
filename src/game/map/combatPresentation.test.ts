@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  combatMarkerProgress,
   combatPresentationDescriptor,
+  combatRouteBendDirection,
   combatRouteSample,
   combatWorldUnits,
   resolveCombatPresentationAccess,
@@ -49,13 +49,10 @@ describe('map combat presentation', () => {
     expect(sampleCombatRoute(source, target, 'naval').at(-1)).toMatchObject(target);
   });
 
-  it('keeps animated markers clear of country labels at both endpoints', () => {
-    for (const access of ['land', 'naval'] as const) {
-      for (const phase of [-1, 0, 0.5, 1, 3.75]) {
-        expect(combatMarkerProgress(access, phase)).toBeGreaterThanOrEqual(0.2);
-        expect(combatMarkerProgress(access, phase)).toBeLessThanOrEqual(0.8);
-      }
-    }
+  it('keeps the persistent route and battle marker on one deterministic bend', () => {
+    expect(combatRouteBendDirection('greenland', 'iceland')).toBe(1);
+    expect(combatRouteBendDirection('iceland', 'greenland')).toBe(-1);
+    expect(combatRouteBendDirection('greenland', 'iceland')).toBe(1);
   });
 
   it('preserves combat stroke width across desktop, mobile canvas scaling, and zoom', () => {

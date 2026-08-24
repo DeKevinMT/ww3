@@ -32,7 +32,7 @@ import {
   selectTreasurySeizureShareV2,
   selectWeeklyFinanceBreakdownV2,
 } from './selectors';
-import { humanCountryTraitMultiplierV2 } from './traits';
+import { countryTraitFactorV2 } from './traits';
 import {
   nationIdV2,
   territoryIdV2,
@@ -192,13 +192,16 @@ function withSeaRouteV2(
 describe('country-trait selector runtime', () => {
   it('applies fiscal traits once and never inherits an annexed country trait', () => {
     const belgium = identityFixtureV2('bel', 82_001);
-    const humanMultiplier = humanCountryTraitMultiplierV2(belgium.traitId);
     expect(selectTaxEfficiencyMultiplierV2(belgium.traitState, belgium.traitId)
       / selectTaxEfficiencyMultiplierV2(belgium.neutralState, belgium.neutralId))
-      .toBeCloseTo(1 + 0.07 * humanMultiplier, 8);
+      .toBeCloseTo(countryTraitFactorV2(belgium.traitId, 'tax-efficiency', {
+        humanControlled: true,
+      }), 8);
     expect(selectBaseOperatingCostShareV2(belgium.traitState, belgium.traitId)
       / selectBaseOperatingCostShareV2(belgium.neutralState, belgium.neutralId))
-      .toBeCloseTo(1 - 0.08 * humanMultiplier, 8);
+      .toBeCloseTo(countryTraitFactorV2(belgium.traitId, 'base-operating-cost', {
+        humanControlled: true,
+      }), 8);
 
     const fusionState = createWorldStateV2(82_002);
     const netherlands = nationIdV2('nld');
@@ -214,19 +217,19 @@ describe('country-trait selector runtime', () => {
     const china = identityFixtureV2('chn', 82_010);
     expect(selectRecruitmentUnitCostV2(china.traitState, china.traitId, china.traitContent)
       / selectRecruitmentUnitCostV2(china.neutralState, china.neutralId, china.neutralContent))
-      .toBeCloseTo(0.98, 5);
+      .toBeCloseTo(countryTraitFactorV2(china.traitId, 'recruitment-cost'), 5);
 
     const venezuela = identityFixtureV2('ven', 82_011);
     expect(selectRecruitmentTrainingPipelineV2(
       venezuela.traitState, venezuela.traitContent, venezuela.traitId,
     ) / selectRecruitmentTrainingPipelineV2(
       venezuela.neutralState, venezuela.neutralContent, venezuela.neutralId,
-    )).toBeCloseTo(1.25, 1);
+    )).toBeCloseTo(countryTraitFactorV2(venezuela.traitId, 'recruitment-throughput'), 2);
 
     const guatemala = identityFixtureV2('gtm', 82_013);
     expect(selectTrainedReserveCapacityV2(guatemala.traitState, guatemala.traitId)
       / selectTrainedReserveCapacityV2(guatemala.neutralState, guatemala.neutralId))
-      .toBeCloseTo(1.18, 4);
+      .toBeCloseTo(countryTraitFactorV2(guatemala.traitId, 'reserve-capacity'), 5);
 
     const india = identityFixtureV2('ind', 82_014);
     configureBothV2(india, (state, playerId) => setArmyFillV2(state, playerId, 0));
@@ -236,7 +239,8 @@ describe('country-trait selector runtime', () => {
     const peacefulNeutral = selectRecruitmentThroughputV2(
       india.neutralState, india.neutralContent, india.neutralId,
     );
-    expect(peacefulTrait / peacefulNeutral).toBeCloseTo(1.02, 2);
+    expect(peacefulTrait / peacefulNeutral)
+      .toBeCloseTo(countryTraitFactorV2(india.traitId, 'passive-recruitment', { atWar: false }), 3);
     addOperationWarV2(india.traitState, india.traitId, nationIdV2('nld'), ['land']);
     addOperationWarV2(india.neutralState, india.neutralId, nationIdV2('nld'), ['land']);
     expect(selectRecruitmentThroughputV2(
@@ -261,7 +265,16 @@ describe('country-trait selector runtime', () => {
     const gtmNeutral = selectWeeklyFinanceBreakdownV2(
       guatemala.neutralState, guatemala.neutralContent, guatemala.neutralId,
     );
-    expect(gtmTrait.reserveTraining / gtmNeutral.reserveTraining).toBeCloseTo(1.22, 1);
+    const gtmPipelineRatio = selectRecruitmentTrainingPipelineV2(
+      guatemala.traitState, guatemala.traitContent, guatemala.traitId,
+    ) / selectRecruitmentTrainingPipelineV2(
+      guatemala.neutralState, guatemala.neutralContent, guatemala.neutralId,
+    );
+    expect(gtmTrait.reserveTraining / gtmNeutral.reserveTraining)
+      .toBeCloseTo(
+        gtmPipelineRatio * countryTraitFactorV2(guatemala.traitId, 'reserve-training'),
+        2,
+      );
 
     const korea = identityFixtureV2('kor', 82_021);
     configureBothV2(korea, (state, playerId) => {
@@ -275,7 +288,7 @@ describe('country-trait selector runtime', () => {
       korea.neutralState, korea.neutralContent, korea.neutralId,
     );
     expect(korTrait.acceleratedRecruitment / korNeutral.acceleratedRecruitment)
-      .toBeCloseTo(1.03, 3);
+      .toBeCloseTo(countryTraitFactorV2(korea.traitId, 'accelerated-recruitment'), 3);
 
     const cuba = identityFixtureV2('cub', 82_022);
     configureBothV2(cuba, (state, playerId) => {
@@ -290,7 +303,8 @@ describe('country-trait selector runtime', () => {
     const cubNeutral = selectWeeklyFinanceBreakdownV2(
       cuba.neutralState, cuba.neutralContent, cuba.neutralId,
     );
-    expect(cubTrait.reserveDeployment / cubNeutral.reserveDeployment).toBeCloseTo(1.12, 2);
+    expect(cubTrait.reserveDeployment / cubNeutral.reserveDeployment)
+      .toBeCloseTo(countryTraitFactorV2(cuba.traitId, 'reserve-deployment-throughput'), 3);
   });
 
   it('scales only development investment and the funded demographic component', () => {
@@ -310,7 +324,8 @@ describe('country-trait selector runtime', () => {
       dominicanRepublic.neutralState, dominicanRepublic.neutralContent, dominicanRepublic.neutralId,
     );
     expect(domTrait.economyInvestmentGrowthRate / domNeutral.economyInvestmentGrowthRate)
-      .toBeCloseTo(1.15, 4);
+      .toBeCloseTo(countryTraitFactorV2(dominicanRepublic.traitId,
+        'development-economy-growth', { atWar: false }), 3);
     expect(domTrait.economyBaseGrowthRate).toBe(domNeutral.economyBaseGrowthRate);
 
     const india = identityFixtureV2('ind', 82_031);
@@ -328,7 +343,7 @@ describe('country-trait selector runtime', () => {
     );
     expect((traitFunded.annualBirthRate - traitUnfunded.annualBirthRate)
       / (neutralFunded.annualBirthRate - neutralUnfunded.annualBirthRate))
-      .toBeCloseTo(1.02, 3);
+      .toBeCloseTo(countryTraitFactorV2(india.traitId, 'population-growth-funding'), 4);
   });
 
   it('applies research output, catch-up bonus and branch progress at separate layers', () => {
@@ -340,7 +355,7 @@ describe('country-trait selector runtime', () => {
       estonia.traitState, estonia.traitContent, estonia.traitId, sharedFinance, 1,
     ) / selectResearchOutputV2(
       estonia.neutralState, estonia.neutralContent, estonia.neutralId, sharedFinance, 1,
-    )).toBeCloseTo(1.30, 5);
+    )).toBeCloseTo(countryTraitFactorV2(estonia.traitId, 'research-output'), 5);
 
     const catchUpEstonia = identityFixtureV2('est', 82_041);
     const traitCatchUp = selectResearchCatchUpFactorV2(
@@ -355,31 +370,36 @@ describe('country-trait selector runtime', () => {
       catchUpEstonia.neutralId,
       { byNation: new Map(), leaderPower: 1, leaderBreakthroughs: RESEARCH_CATCH_UP_FULL_GAP },
     );
-    expect((traitCatchUp - 1) / (neutralCatchUp - 1)).toBeCloseTo(1.20, 5);
+    expect((traitCatchUp - 1) / (neutralCatchUp - 1))
+      .toBeCloseTo(countryTraitFactorV2(catchUpEstonia.traitId,
+        'research-catch-up-bonus'), 5);
 
-    const germany = identityFixtureV2('deu', 82_042);
+    const china = identityFixtureV2('chn', 82_042);
     const finance = selectWeeklyFinanceBreakdownV2(
-      germany.neutralState, germany.neutralContent, germany.neutralId,
+      china.neutralState, china.neutralContent, china.neutralId,
     );
     const traitPortfolio = selectResearchPortfolioV2(
-      germany.traitState,
-      germany.traitContent,
-      germany.traitId,
+      china.traitState,
+      china.traitContent,
+      china.traitId,
       finance,
-      createPowerSnapshotV2(germany.traitState, germany.traitContent),
+      createPowerSnapshotV2(china.traitState, china.traitContent),
       1,
     );
     const neutralPortfolio = selectResearchPortfolioV2(
-      germany.neutralState,
-      germany.neutralContent,
-      germany.neutralId,
+      china.neutralState,
+      china.neutralContent,
+      china.neutralId,
       finance,
-      createPowerSnapshotV2(germany.neutralState, germany.neutralContent),
+      createPowerSnapshotV2(china.neutralState, china.neutralContent),
       1,
     );
     const traitIndustry = traitPortfolio.find((entry) => entry.branch === 'military-industry')!;
     const neutralIndustry = neutralPortfolio.find((entry) => entry.branch === 'military-industry')!;
-    expect(traitIndustry.weeklyProgress / neutralIndustry.weeklyProgress).toBeCloseTo(1.04, 5);
+    expect(traitIndustry.weeklyProgress / neutralIndustry.weeklyProgress)
+      .toBeCloseTo(countryTraitFactorV2(china.traitId, 'research-progress', {
+        researchBranch: 'military-industry',
+      }), 5);
   });
 
   it('wires food capacity, post-wealth costs, storage, access and export income', () => {
@@ -388,7 +408,7 @@ describe('country-trait selector runtime', () => {
       argentina.traitState, argentina.traitContent, argentina.traitId,
     ) / selectFoodLandCapacityV2(
       argentina.neutralState, argentina.neutralContent, argentina.neutralId,
-    )).toBeCloseTo(1.10, 5);
+    )).toBeCloseTo(countryTraitFactorV2(argentina.traitId, 'food-production'), 5);
 
     const honduras = identityFixtureV2('hnd', 82_051);
     configureBothV2(honduras, (state, playerId) => {
@@ -401,8 +421,9 @@ describe('country-trait selector runtime', () => {
     const hndNeutral = selectWeeklyFinanceBreakdownV2(
       honduras.neutralState, honduras.neutralContent, honduras.neutralId,
     );
-    expect(hndTrait.foodProduction / hndNeutral.foodProduction).toBeCloseTo(0.80, 4);
-    expect(hndTrait.foodImported).toBeCloseTo(hndNeutral.foodImported, 5);
+    expect(hndTrait.foodProduction / hndNeutral.foodProduction)
+      .toBeCloseTo(countryTraitFactorV2(honduras.traitId, 'food-import-cost'), 4);
+    expect(hndTrait.foodImported).toBeCloseTo(hndNeutral.foodImported, 3);
 
     const venezuela = identityFixtureV2('ven', 82_052);
     configureBothV2(venezuela, (state, playerId) => {
@@ -417,7 +438,8 @@ describe('country-trait selector runtime', () => {
     const venNeutral = selectWeeklyFinanceBreakdownV2(
       venezuela.neutralState, venezuela.neutralContent, venezuela.neutralId,
     );
-    expect(venTrait.foodProduction / venNeutral.foodProduction).toBeCloseTo(0.82, 4);
+    expect(venTrait.foodProduction / venNeutral.foodProduction)
+      .toBeCloseTo(countryTraitFactorV2(venezuela.traitId, 'food-production-cost'), 5);
 
     const mongolia = identityFixtureV2('mng', 82_053);
     const mngDemand = selectFoodDemandV2(mongolia.traitState, mongolia.traitId);
@@ -452,7 +474,8 @@ describe('country-trait selector runtime', () => {
       ghana.neutralState, ghana.neutralContent, ghana.neutralId,
     );
     expect(ghaTrait.foodExported).toBeGreaterThan(0);
-    expect(ghaTrait.foodExportIncome / ghaNeutral.foodExportIncome).toBeCloseTo(1.12, 4);
+    expect(ghaTrait.foodExportIncome / ghaNeutral.foodExportIncome)
+      .toBeCloseTo(countryTraitFactorV2(ghana.traitId, 'food-export-income'), 4);
   });
 
   it('keeps operation, naval-distance, fatigue and active food-logistics layers separate', () => {
@@ -466,7 +489,10 @@ describe('country-trait selector runtime', () => {
     const cmrNeutral = selectWeeklyFinanceBreakdownV2(
       cameroon.neutralState, cameroon.neutralContent, cameroon.neutralId,
     );
-    expect(cmrTrait.warOperations / cmrNeutral.warOperations).toBeCloseTo(0.85, 4);
+    expect(cmrTrait.warOperations / cmrNeutral.warOperations)
+      .toBeCloseTo(countryTraitFactorV2(cameroon.traitId, 'operation-cost', {
+        bothFronts: true,
+      }), 4);
 
     const denmark = identityFixtureV2('dnk', 82_061);
     const traitRoute = addOperationWarV2(
@@ -485,12 +511,17 @@ describe('country-trait selector runtime', () => {
     const dnkNeutral = selectWeeklyFinanceBreakdownV2(
       denmark.neutralState, denmark.neutralContent, denmark.neutralId,
     );
+    const denmarkDistanceFactor = countryTraitFactorV2(
+      denmark.traitId, 'naval-distance-pressure', { access: 'naval' },
+    );
     expect(dnkTrait.warOperations / dnkNeutral.warOperations)
-      .toBeCloseTo((1.35 + (2.15 - 1.35) * 0.80) / 2.15, 4);
+      .toBeCloseTo((1.35 + (2.15 - 1.35) * denmarkDistanceFactor) / 2.15, 4);
     const traitBaseDemand = selectFoodDemandV2(denmark.traitState, denmark.traitId);
     const neutralBaseDemand = selectFoodDemandV2(denmark.neutralState, denmark.neutralId);
     expect((dnkTrait.foodDemand - traitBaseDemand) / (dnkNeutral.foodDemand - neutralBaseDemand))
-      .toBeCloseTo(0.88, 3);
+      .toBeCloseTo(countryTraitFactorV2(denmark.traitId, 'food-logistics-pressure', {
+        access: 'naval',
+      }), 5);
 
     const italy = identityFixtureV2('ita', 82_062);
     configureBothV2(italy, (state, playerId) => {
@@ -501,7 +532,11 @@ describe('country-trait selector runtime', () => {
     const itaNeutral = selectWeeklyFinanceBreakdownV2(
       italy.neutralState, italy.neutralContent, italy.neutralId,
     );
-    expect(itaTrait.warOperations / itaNeutral.warOperations).toBeCloseTo(1.27 / 1.30, 4);
+    const italyFatigueFactor = countryTraitFactorV2(
+      italy.traitId, 'war-fatigue-operation-surcharge', { atWar: true },
+    );
+    expect(itaTrait.warOperations / itaNeutral.warOperations)
+      .toBeCloseTo((1 + 0.30 * italyFatigueFactor) / 1.30, 5);
   });
 
   it('uses the defeated identity for the exact treasury replacement in forecast and runtime helper', () => {

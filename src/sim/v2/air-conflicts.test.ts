@@ -86,6 +86,20 @@ describe('2026 conflicts and strategic naval warfare', () => {
     assertInvariantsV2(solventState, WORLD_CONTENT_V2);
   });
 
+  it('keeps the human seat out of scripted AI conflicts throughout the 2030 safety window', () => {
+    for (const protectedSide of ['attackerId', 'defenderId'] as const) {
+      const state = createWorldStateV2(2026);
+      const scenario = openingConflictScheduleV2(state.seed, WORLD_CONTENT_V2)[0]!;
+      state.tick = scenario.tick;
+      state.humanPlayerId = scenario[protectedSide];
+      state.humanPlayerIds = [scenario[protectedSide]];
+
+      processOpeningConflictsV2(state, WORLD_CONTENT_V2);
+
+      expect(state.wars).toHaveLength(0);
+    }
+  });
+
   it('removes air attacks while keeping a broad naval network with free declarations', () => {
     const state = createWorldStateV2(77);
     state.wars = [];

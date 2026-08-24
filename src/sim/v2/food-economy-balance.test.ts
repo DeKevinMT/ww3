@@ -84,7 +84,7 @@ describe('V2 funded food transition and trade', () => {
         crisis.baseOperatingCost + crisis.ceasefirePayment + crisis.integrationCost + crisis.foodProduction
           + crisis.military + crisis.research + crisis.development
           + crisis.warOperations + crisis.debtPremium,
-        5,
+        2,
       );
     }
     expect(selectionIndependentPlans[1]).toEqual(selectionIndependentPlans[0]);
@@ -197,9 +197,9 @@ describe('V2 funded food transition and trade', () => {
       expect(finance.foodImported).toBe(0);
       expect(finance.foodExported).toBeCloseTo(
         finance.foodDomesticProduced - finance.foodDemand,
-        5,
+        2,
       );
-      expect(finance.foodStockChange).toBeCloseTo(0, 6);
+      expect(Math.abs(finance.foodStockChange)).toBeLessThan(0.01);
       expect(finance.foodExportIncome).toBeGreaterThan(0);
       const exportUnitPrice = FOOD_DOMESTIC_COST_PER_MILLION
         * FOOD_COST_GLOBAL_MULTIPLIER

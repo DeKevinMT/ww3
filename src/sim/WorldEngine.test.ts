@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   COUNTRIES,
   COUNTRY_BY_ID,
+  LANDLOCKED_COUNTRY_IDS,
+  MINIMUM_ISLAND_NAVAL_ROUTES,
+  MINIMUM_NAVAL_ROUTES,
   STRATEGIC_SEA_ROUTE_PAIRS,
   TERRITORIES,
   TERRITORY_BY_ID,
@@ -240,15 +243,15 @@ describe('strategic world simulation', () => {
   it('moves reserves through an empire toward its most hostile border', () => {
     const engine = new WorldEngine(92);
     engine.state.territories.nld!.ownerId = 'bel';
-    engine.state.territories.bel!.force = { hp: 240, maxHp: 240, attack: 70, defense: 65, readiness: 0.9, recovery: 0.5 };
+    engine.state.territories.bel!.force = { hp: 500, maxHp: 500, attack: 220, defense: 210, readiness: 0.9, recovery: 0.5 };
     engine.state.territories.nld!.force = { hp: 22, maxHp: 40, attack: 6, defense: 6, readiness: 0.7, recovery: 0.1 };
-    engine.state.territories.deu!.force = { hp: 50, maxHp: 50, attack: 12, defense: 11, readiness: 0.8, recovery: 0.2 };
+    engine.state.territories.deu!.force = { hp: 120, maxHp: 120, attack: 35, defense: 32, readiness: 0.8, recovery: 0.2 };
     const hostile = engine.relation('bel', 'deu')!;
     hostile.status = 'tension';
-    hostile.score = -80;
-    engine.step(2);
+    hostile.score = -100;
+    (engine as unknown as { processMobilization: () => void }).processMobilization();
     expect(engine.state.territories.nld!.force.maxHp).toBeGreaterThan(40);
-    expect(engine.state.territories.bel!.force.maxHp).toBeLessThan(240);
+    expect(engine.state.territories.bel!.force.maxHp).toBeLessThan(500);
   });
 
   it('versterkt een pas veroverd zwak grensgebied onmiddellijk wanneer de vijand tegenaanvalt', () => {
@@ -367,13 +370,20 @@ describe('strategic world simulation', () => {
     expect(engine.canDeclareWar('bel', 'gbr')).toBe(true);
   });
 
-  it('geeft kustlanden meerdere regionale zeeroutes maar houdt landlocked landen op land', () => {
-    expect(STRATEGIC_SEA_ROUTE_PAIRS.length).toBeGreaterThan(120);
-    expect(TERRITORY_BY_ID.bel!.seaNeighbors.length).toBeGreaterThanOrEqual(3);
-    expect(TERRITORY_BY_ID.gbr!.seaNeighbors.length).toBeGreaterThanOrEqual(5);
-    for (const landlockedId of ['lux', 'che', 'npl', 'kaz']) {
-      expect(TERRITORY_BY_ID[landlockedId]!.seaNeighbors, landlockedId).toEqual([]);
+  it('guarantees every naval country enough routes while keeping landlocked countries on land', () => {
+    expect(STRATEGIC_SEA_ROUTE_PAIRS.length).toBeGreaterThan(500);
+    for (const territory of TERRITORIES) {
+      if (LANDLOCKED_COUNTRY_IDS.has(territory.id)) {
+        expect(territory.seaNeighbors, territory.id).toEqual([]);
+        continue;
+      }
+      const minimum = territory.neighbors.length === territory.seaNeighbors.length
+        ? MINIMUM_ISLAND_NAVAL_ROUTES
+        : MINIMUM_NAVAL_ROUTES;
+      expect(territory.seaNeighbors.length, territory.id).toBeGreaterThanOrEqual(minimum);
     }
+    expect(TERRITORY_BY_ID.grl!.seaNeighbors.length).toBeGreaterThanOrEqual(12);
+    expect(TERRITORY_BY_ID.isl!.seaNeighbors.length).toBeGreaterThanOrEqual(12);
   });
 
   it('maakt een maritieme oorlog aantoonbaar duurder dan een landoorlog', () => {

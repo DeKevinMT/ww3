@@ -23,8 +23,16 @@ const militaryIndustryOnly = Object.fromEntries(
 
 describe('V2 research-progress country traits', () => {
   it('applies the active country factor only to matching research branches', () => {
-    expect(applyResearchProgressTraitV2(germany, 'military-industry', 2.5)).toBe(2.6);
-    expect(applyResearchProgressTraitV2(germany, 'economy-science', 2.5)).toBe(2.6);
+    expect(applyResearchProgressTraitV2(germany, 'military-industry', 2.5)).toBe(
+      round(2.5 * countryTraitFactorV2(germany, 'research-progress', {
+        researchBranch: 'military-industry',
+      })),
+    );
+    expect(applyResearchProgressTraitV2(germany, 'economy-science', 2.5)).toBe(
+      round(2.5 * countryTraitFactorV2(germany, 'research-progress', {
+        researchBranch: 'economy-science',
+      })),
+    );
   });
 
   it('leaves non-matching branches and empty progress unchanged', () => {

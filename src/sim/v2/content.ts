@@ -10,6 +10,7 @@ import rawDeathRateData from '../../assets/wb_death_rate.json?raw';
 import rawFoodSelfSufficiencyData from '../../assets/fao_food_self_sufficiency.json?raw';
 import rawTaxRevenueData from '../../assets/imf_tax_revenue.json?raw';
 import {
+  ARMY_CAPACITY_INITIAL_FORCE_FLOOR,
   ARMY_CAPACITY_STRUCTURAL_POPULATION_SHARE,
   NATIONAL_COMBAT_GDP_PER_CAPITA_CEILING,
   NATIONAL_COMBAT_GDP_PER_CAPITA_FLOOR,
@@ -279,6 +280,108 @@ const SIPRI_2025_DEFENCE_SPENDING: Readonly<Record<string, number>> = {
   esp: 40.2,
 };
 
+/**
+ * 2026 conventional-strength order. The game uses this only as an immutable
+ * opening calibration: the live ranking remains a pure calculation from the
+ * armies that actually exist in the simulation.
+ */
+const PUBLISHED_MILITARY_ORDER_2026_V2: readonly string[] = Object.freeze([
+  'usa', 'chn', 'rus', 'ind', 'kor', 'fra', 'jpn', 'gbr', 'tur', 'ita',
+  'bra', 'deu', 'idn', 'pak', 'isr', 'irn', 'aus', 'esp', 'egy', 'ukr',
+  'pol', 'twn', 'vnm', 'tha', 'sau', 'swe', 'dza', 'can', 'sgp', 'grc',
+  'prk', 'arg', 'nga', 'nld', 'mmr', 'mex', 'bgd', 'prt', 'nor', 'zaf',
+  'phl', 'mys', 'col', 'irq', 'dnk', 'che', 'eth', 'fin', 'chl', 'per',
+  'ven', 'rou', 'uzb', 'are', 'cze', 'mar', 'hun', 'kaz', 'ago', 'aze',
+  'bel', 'bgr', 'srb', 'cod', 'cub', 'sdn', 'aut', 'lka', 'svk', 'blr',
+  'qat', 'ecu', 'hrv', 'jor', 'bhr', 'kwt', 'alb', 'tkm', 'tun', 'lby',
+  'pry', 'bol', 'khm', 'ken', 'tcd', 'omn', 'syr', 'ltu', 'tza', 'nzl',
+  'svn', 'moz', 'mng', 'irl', 'geo', 'gtm', 'ury', 'yem', 'cmr', 'tjk',
+  'arm', 'lva', 'hnd', 'mli', 'zwe', 'est', 'uga', 'civ', 'kgz', 'lux',
+  'zmb', 'gha', 'sds', 'mkd', 'dom', 'nic', 'cog', 'lbn', 'eri', 'ner',
+  'afg', 'nam', 'mrt', 'npl', 'lao', 'sen', 'bfa', 'mne', 'slv', 'bwa',
+  'mdg', 'gab', 'bih', 'isl', 'pan', 'mda', 'som', 'ben', 'kos', 'sle',
+  'lbr', 'sur', 'caf', 'blz', 'btn',
+]);
+
+const publishedMilitaryRank2026V2 = new Map(
+  PUBLISHED_MILITARY_ORDER_2026_V2.map((countryId, index) => [countryId, index + 1]),
+);
+
+const publishedMilitaryIds2026V2 = new Set(PUBLISHED_MILITARY_ORDER_2026_V2);
+const playableMilitaryIds2026V2 = new Set(COUNTRIES.map((country) => country.id));
+
+/**
+ * Complete strength order used by the human country-trait curve. Countries
+ * outside the 145-state reference remain playable and follow below it using
+ * their existing strategic data; Greenland therefore remains in the true
+ * underdog tail instead of receiving an arbitrary major-country modifier.
+ */
+export const OPENING_MILITARY_ORDER_2026_V2: readonly PlayerId[] = Object.freeze([
+  ...PUBLISHED_MILITARY_ORDER_2026_V2.filter((countryId) => (
+    playableMilitaryIds2026V2.has(countryId)
+  )),
+  ...COUNTRIES
+    .filter((country) => !publishedMilitaryIds2026V2.has(country.id))
+    .sort((a, b) => b.powerIndex - a.powerIndex || a.id.localeCompare(b.id))
+    .map((country) => country.id),
+] as unknown as readonly PlayerId[]);
+
+/**
+ * Combat-deployable force calibration in millions. Russia is deliberately
+ * represented at its broader 2026 wartime establishment (1.50M), above
+ * the US active-force abstraction (1.30M); the ratings layer separately gives
+ * the US much more capability per soldier. Small zero-force states retain a
+ * tiny playable simulation force.
+ */
+const ACTIVE_MILITARY_MANPOWER_2026_V2: Readonly<Record<string, number>> = Object.freeze({
+  chn: 2.035, ind: 1.431, rus: 1.50, usa: 1.30, prk: 1.32,
+  ukr: 0.9, pak: 0.66, irn: 0.61, eth: 0.503, tur: 0.481,
+  kor: 0.45, vnm: 0.45, egy: 0.4385, col: 0.429, idn: 0.4045,
+  mar: 0.4, mex: 0.387, bra: 0.376, tha: 0.36085, eri: 0.35,
+  lka: 0.346, sdn: 0.3, fra: 0.264, jpn: 0.2515, pol: 0.25,
+  sau: 0.247, twn: 0.23, nga: 0.23, mmr: 0.228, bgd: 0.204,
+  irq: 0.193, sds: 0.185, deu: 0.184324, isr: 0.1695, cod: 0.16658,
+  ita: 0.1655, phl: 0.16, tjk: 0.15, che: 0.147178, grc: 0.1427,
+  gbr: 0.14133, dza: 0.13, aze: 0.128, khm: 0.1243, esp: 0.121802,
+  uzb: 0.12, per: 0.12, jor: 0.1145, mys: 0.113, kaz: 0.11,
+  ven: 0.109, arg: 0.108, ago: 0.107, gtm: 0.106114, syr: 0.1,
+  omn: 0.1, lao: 0.1, npl: 0.0985, rou: 0.09, tun: 0.0898,
+  dom: 0.089, lbn: 0.08, chl: 0.08, kwt: 0.078, afg: 0.075,
+  zaf: 0.068731, arm: 0.065, are: 0.065, can: 0.0635, blr: 0.063,
+  aus: 0.05891, hnd: 0.052225, sgp: 0.051, ken: 0.05, cub: 0.05,
+  uga: 0.045, nic: 0.045, nld: 0.044245, hun: 0.0416, ecu: 0.04125,
+  mli: 0.04, bol: 0.04, cmr: 0.038, tcd: 0.03775, geo: 0.037,
+  bgr: 0.03695, tkm: 0.0365, mng: 0.035, nor: 0.03344, yem: 0.03335,
+  lby: 0.032, mrt: 0.03154, cze: 0.030334, som: 0.03, caf: 0.03,
+  zwe: 0.029, qat: 0.02655, bel: 0.02639, swe: 0.0256, slv: 0.025,
+  prt: 0.025, aut: 0.025, ner: 0.025, tza: 0.025, fin: 0.024,
+  ury: 0.024, ltu: 0.023, kgz: 0.023, srb: 0.0225, civ: 0.022,
+  dnk: 0.021, svk: 0.020982, bhr: 0.0184, bih: 0.018, lva: 0.01787,
+  nam: 0.017567, sen: 0.017, pan: 0.0163, btn: 0.016, pry: 0.01565,
+  gha: 0.0155, zmb: 0.01515, hrv: 0.014325, mdg: 0.0135, sle: 0.013,
+  bwa: 0.012, moz: 0.0112, nzl: 0.01005, mkd: 0.01001, cog: 0.01,
+  est: 0.0077, irl: 0.007557, bfa: 0.0075, alb: 0.0075, svn: 0.007,
+  mda: 0.0065, gab: 0.005, ben: 0.00475, kos: 0.004, sur: 0.0025,
+  mne: 0.00235, lbr: 0.0021, blz: 0.002, lux: 0.0012, isl: 0.0005,
+});
+
+/**
+ * Recent real-world military posture, expressed as a neutral activity/expansion
+ * prior rather than a moral judgement. Live declarations, occupations and
+ * exhaustion move the displayed value after the 2026 start.
+ */
+export const RECENT_MILITARY_POSTURE_2026_V2: Readonly<Record<string, number>> = Object.freeze({
+  rus: 0.96, isr: 0.92, mmr: 0.88, sdn: 0.86, irn: 0.82,
+  prk: 0.80, tur: 0.76, usa: 0.72, aze: 0.72, syr: 0.70,
+  sau: 0.68, are: 0.65, eth: 0.64, pak: 0.62, blr: 0.61,
+  chn: 0.58, ind: 0.54, ukr: 0.52, arm: 0.50, irq: 0.50,
+});
+
+function recentMilitaryPosture2026V2(countryId: string, militaryBurden: number): number {
+  return RECENT_MILITARY_POSTURE_2026_V2[countryId]
+    ?? round(clamp(0.24 + 4.5 * Math.max(0, militaryBurden), 0.22, 0.58), 6);
+}
+
 // Soft diplomatic affinity only. These tags never invoke automatic defence;
 // they make threatened AI countries more willing to build a coalition together.
 const NATO_MEMBERS = new Set([
@@ -301,16 +404,26 @@ function realWorldAlignmentTags(iso3: string): string[] {
 }
 
 function calibratedMilitaryPowerIndex(
+  countryId: string,
   population: number,
   gdp: number,
   defenceSpending: number,
 ): number {
+  const publishedRank = publishedMilitaryRank2026V2.get(countryId);
+  if (publishedRank !== undefined) {
+    // Rank is ordinal, not a percentage of the leader's strength. A curved
+    // conversion keeps the published order but restores the much larger real
+    // gap between global superpowers, regional powers and the long tail.
+    return round(100 / (1 + 0.14 * (publishedRank - 1)) ** 1.35, 9);
+  }
   const spendingScore = Math.log10(defenceSpending + 1) / Math.log10(955);
   const economyScore = Math.log10(gdp + 1) / Math.log10(31_000);
   const populationScore = Math.log10(population + 1) / Math.log10(1_500);
-  return Math.max(4, Math.min(100,
-    100 * (0.62 * spendingScore + 0.23 * economyScore + 0.15 * populationScore),
-  ));
+  const fallbackStrength = 100
+    * (0.62 * spendingScore + 0.23 * economyScore + 0.15 * populationScore);
+  // Unranked dependencies remain below the published field while their own
+  // economy, population and military spending still order them consistently.
+  return round(clamp(0.25 + 0.0065 * fallbackStrength, 0.25, 0.90), 9);
 }
 
 function normalizedLogRangeV2(value: number, floor: number, ceiling: number): number {
@@ -523,24 +636,46 @@ export function nationalCombatSystemQualityMultiplierV2(
  * Translate strategic readiness into per-soldier ATK and DEF. GDP per capita
  * plus the IQ gameplay proxy form the national quality input; strategic power
  * and force size retain the readiness calibration that keeps opening armies
- * and the global order credible. Spending per soldier only tilts the common
+ * and the global order credible. Equipment depth only tilts the common
  * quality toward ATK or DEF. The 55/45 blend remains equal to `combined`, so
  * ATK/DEF do not secretly add a second power source.
  */
 export function calibratedMilitaryRatingsV2(
-  powerIndex: number,
+  _powerIndex: number,
   defenceSpending: number,
-  deployedManpower: number,
+  _deployedManpower: number,
   gdpPerCapita?: number,
   iqScore?: number,
+  totalGdp?: number,
 ): { combined: number; attack: number; defense: number } {
-  const manpower = Math.max(0.0001, deployedManpower);
-  const combatQualityMultiplier = gdpPerCapita === undefined || iqScore === undefined
-    ? 1 : openingCombatQualityMultiplierV2(gdpPerCapita, iqScore);
-  const combined = clamp(powerIndex / (100 * manpower) * combatQualityMultiplier, 0.35, 14);
-  const equipmentPerSoldier = Math.max(0, defenceSpending) / manpower;
-  const equipmentScore = clamp(Math.log10(equipmentPerSoldier + 1) / Math.log10(2_500), 0, 1);
-  const attackTilt = 0.10 * (equipmentScore - 0.50);
+  const spendingDepth = normalizedLogRangeV2(Math.max(0.01, defenceSpending), 0.01, 1_000);
+  const militaryBurden = Math.max(0, defenceSpending) / Math.max(0.1, totalGdp ?? defenceSpending * 40);
+  const equipmentScore = 0.72 * spendingDepth + 0.28 * clamp(militaryBurden / 0.12, 0, 1);
+  const incomeScore = normalizedLogRangeV2(
+    gdpPerCapita ?? 8_000,
+    NATIONAL_COMBAT_GDP_PER_CAPITA_FLOOR,
+    NATIONAL_COMBAT_GDP_PER_CAPITA_CEILING,
+  );
+  const industrialScore = normalizedLogRangeV2(
+    totalGdp ?? Math.max(1, defenceSpending * 40),
+    10,
+    32_000,
+  );
+  const iqQuality = clamp(
+    ((iqScore ?? 94) - NATIONAL_IQ_SCORE_MIN)
+      / Math.max(0.000001, NATIONAL_IQ_EFFECTIVE_SCORE_MAX - NATIONAL_IQ_SCORE_MIN),
+    0,
+    1,
+  );
+  // These four national systems form soldier quality directly. The exponential
+  // conversion makes the economic and equipment gulf between a rich modern
+  // force and a mass army visible in the actual ATK/DEF numbers.
+  const qualityFoundation = 0.34 * equipmentScore
+    + 0.28 * incomeScore
+    + 0.22 * industrialScore
+    + 0.16 * iqQuality;
+  const combined = clamp(0.55 + 0.40 * Math.exp(4 * qualityFoundation), 0.65, 20);
+  const attackTilt = 0.12 * (equipmentScore - 0.50);
   const attack = combined * (1 + attackTilt);
   const defense = combined * (1 - (0.55 / 0.45) * attackTilt);
   return {
@@ -580,7 +715,12 @@ function approximateLandAreaKm2(country: (typeof COUNTRIES)[number]): number {
 function makeNationContent(country: (typeof COUNTRIES)[number]): NationContentV2 {
   const color = countryColor(country.id);
   const defenceSpending = SIPRI_2025_DEFENCE_SPENDING[country.id] ?? Math.max(0.01, country.military);
-  const powerIndex = calibratedMilitaryPowerIndex(country.population, country.gdp, defenceSpending);
+  const powerIndex = calibratedMilitaryPowerIndex(
+    country.id,
+    country.population,
+    country.gdp,
+    defenceSpending,
+  );
   const fiscal = fiscalBaseline(country);
   const militaryBurden = defenceSpending / Math.max(0.1, country.gdp);
   const wealthScore = Math.log10(Math.max(1, country.gdpPerCapita) + 1) / 5;
@@ -607,18 +747,62 @@ function makeNationContent(country: (typeof COUNTRIES)[number]): NationContentV2
   const capacityPotential = country.population * 0.004
     * (0.85 + 0.15 * militaryQuality) * mobilizationInstitution;
   const deploymentRatio = Math.max(0.58, Math.min(0.93, 0.55 + 0.004 * powerIndex));
-  const initialManpower = Math.max(0.0001, Math.min(provisionalManpower, capacityPotential * deploymentRatio));
-  const openingDeployedManpower = Math.min(
-    initialManpower,
-    Math.max(0.0001, country.population * ARMY_CAPACITY_STRUCTURAL_POPULATION_SHARE),
+  const publishedActiveManpower = ACTIVE_MILITARY_MANPOWER_2026_V2[country.id];
+  const sourceManpower = publishedActiveManpower === undefined
+    ? Math.max(0.0001, Math.min(provisionalManpower, capacityPotential * deploymentRatio))
+    : Math.max(0.0001, publishedActiveManpower);
+  const qualityFoundation = calibratedMilitaryRatingsV2(
+    powerIndex,
+    defenceSpending,
+    sourceManpower,
+    country.gdpPerCapita,
+    iqScore,
+    country.gdp,
   );
-  const militaryRatings = calibratedMilitaryRatingsV2(
+  const deterrenceAttackBonus = (NUCLEAR_POWER_LEVELS[country.id] ?? 0) * 0.04;
+  const effectiveFoundation = 0.55 * qualityFoundation.attack * (1 + deterrenceAttackBonus)
+    + 0.45 * qualityFoundation.defense;
+  const targetOpeningPower = powerIndex / 10;
+  // Split the remaining calibration equally (in log space) between force
+  // quantity and readiness. Published manpower remains recognizable, while
+  // GDP, GDP/capita, equipment and IQ continue to form final ATK/DEF.
+  const targetManpower = targetOpeningPower / Math.max(0.0001, effectiveFoundation);
+  // Tiny, wealthy states need enough force volume that rank calibration never
+  // turns their per-soldier rating into an implausible outlier. Shift that
+  // remaining power into manpower/capacity while preserving the exact target.
+  const maximumOpeningRating = 18.5;
+  const minimumManpowerForRatingCap = targetOpeningPower
+    * Math.max(qualityFoundation.attack, qualityFoundation.defense)
+    / Math.max(0.0001, effectiveFoundation * maximumOpeningRating);
+  const initialManpower = round(Math.max(
+    0.0001,
+    Math.sqrt(sourceManpower * targetManpower),
+    minimumManpowerForRatingCap,
+  ), 9);
+  const openingCapacity = Math.max(
+    0.0001,
+    country.population * ARMY_CAPACITY_STRUCTURAL_POPULATION_SHARE,
+    initialManpower * ARMY_CAPACITY_INITIAL_FORCE_FLOOR,
+  );
+  const openingDeployedManpower = Math.min(initialManpower, openingCapacity);
+  const uncalibratedRatings = calibratedMilitaryRatingsV2(
     powerIndex,
     defenceSpending,
     openingDeployedManpower,
     country.gdpPerCapita,
     iqScore,
+    country.gdp,
   );
+  const uncalibratedEffective = 0.55 * uncalibratedRatings.attack
+      * (1 + deterrenceAttackBonus)
+    + 0.45 * uncalibratedRatings.defense;
+  const readinessCalibration = targetOpeningPower
+    / Math.max(0.0001, openingDeployedManpower * uncalibratedEffective);
+  const militaryRatings = {
+    combined: round(uncalibratedRatings.combined * readinessCalibration, 9),
+    attack: round(uncalibratedRatings.attack * readinessCalibration, 9),
+    defense: round(uncalibratedRatings.defense * readinessCalibration, 9),
+  };
   const landArea = approximateLandAreaKm2(country);
   const foodInsecurityRate = initialFoodInsecurityRate(country);
   const foodSelfSufficiencyRatio = FAO_FOOD_SELF_SUFFICIENCY.get(country.id);
@@ -647,7 +831,7 @@ function makeNationContent(country: (typeof COUNTRIES)[number]): NationContentV2
     militaryAttackRating: militaryRatings.attack,
     militaryDefenseRating: militaryRatings.defense,
     nuclearPowerLevel: NUCLEAR_POWER_LEVELS[country.id] ?? 0,
-    ambition: Math.max(0, Math.min(1, 0.45 + ((country.id.charCodeAt(0) * 17 + country.id.charCodeAt(country.id.length - 1)) % 51) / 100)),
+    ambition: recentMilitaryPosture2026V2(country.id, militaryBurden),
     continent: country.continent,
     subregion: country.subregion,
     real: {

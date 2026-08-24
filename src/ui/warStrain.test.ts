@@ -9,7 +9,7 @@ describe('war strain HUD summary', () => {
       warFatigue: 0,
       armyFillRatio: 1,
       reserveFillRatio: 1,
-    })).toMatchObject({ score: 14, level: 'sustainable', label: 'SUSTAINABLE' });
+    })).toMatchObject({ score: 5, level: 'sustainable', label: 'SUSTAINABLE' });
   });
 
   it('warns clearly when multiple fronts, losses and empty reserves compound', () => {
@@ -25,7 +25,7 @@ describe('war strain HUD summary', () => {
     expect(summary.guidance).toMatch(/exhaustion|recovery/i);
   });
 
-  it('uses diminishing strain for simultaneous fronts instead of a linear dogpile spike', () => {
+  it('uses diminishing strain for simultaneous fronts inside one war', () => {
     const scoreAt = (activeFronts: number) => summarizeWarStrainV2({
       activeWars: 1,
       activeFronts,
@@ -34,9 +34,71 @@ describe('war strain HUD summary', () => {
       reserveFillRatio: 1,
     }).score;
 
-    expect(scoreAt(1)).toBe(14);
-    expect(scoreAt(4)).toBeLessThanOrEqual(24);
+    expect(scoreAt(1)).toBe(5);
+    expect(scoreAt(4)).toBeLessThanOrEqual(12);
     expect(scoreAt(2) - scoreAt(1)).toBeGreaterThan(scoreAt(5) - scoreAt(4));
+  });
+
+  it('keeps a normally underfilled opening army and empty reserves calm at declaration', () => {
+    expect(summarizeWarStrainV2({
+      activeWars: 1,
+      activeFronts: 1,
+      warFatigue: 0,
+      armyFillRatio: 0.8,
+      reserveFillRatio: 0,
+    })).toMatchObject({ score: 13, level: 'sustainable' });
+  });
+
+  it('builds much more strain with time than at declaration', () => {
+    const scoreAt = (warDurationWeeks: number) => summarizeWarStrainV2({
+      activeWars: 1,
+      activeFronts: 1,
+      warDurationWeeks,
+      warFatigue: 0,
+      armyFillRatio: 1,
+      reserveFillRatio: 1,
+    }).score;
+
+    expect(scoreAt(0)).toBe(5);
+    expect(scoreAt(26)).toBeGreaterThanOrEqual(12);
+    expect(scoreAt(104)).toBeGreaterThanOrEqual(22);
+  });
+
+  it('penalizes separate simultaneous wars more sharply than extra fronts in one war', () => {
+    const singleWar = summarizeWarStrainV2({
+      activeWars: 1,
+      activeFronts: 3,
+      warFatigue: 0,
+      armyFillRatio: 1,
+      reserveFillRatio: 1,
+    }).score;
+    const threeWars = summarizeWarStrainV2({
+      activeWars: 3,
+      activeFronts: 3,
+      warFatigue: 0,
+      armyFillRatio: 1,
+      reserveFillRatio: 1,
+    }).score;
+
+    expect(threeWars - singleWar).toBeGreaterThanOrEqual(20);
+  });
+
+  it('adds a temporary conquest aftershock that fades to zero', () => {
+    const baseline = summarizeWarStrainV2({
+      activeWars: 1,
+      activeFronts: 1,
+      warFatigue: 0,
+      armyFillRatio: 1,
+      reserveFillRatio: 1,
+    }).score;
+    expect(summarizeWarStrainV2({
+      activeWars: 1,
+      activeFronts: 1,
+      conquestAftershock: 8,
+      warFatigue: 0,
+      armyFillRatio: 1,
+      reserveFillRatio: 1,
+    }).score).toBe(baseline + 8);
   });
 
   it('counts naval routes as lighter theatre strain than the same number of land fronts', () => {

@@ -68,6 +68,7 @@ describe('V2 permanent territory integration lifecycle', () => {
     expect(territory.coreOwner).toBe(luxembourg);
     expect(territory.integration).toBe(CONQUEST_INITIAL_INTEGRATION_SHARE);
     expect(territory.integrationProgram).toEqual({
+      cause: 'conquest',
       fromOwnerId: luxembourg,
       fromCoreOwnerId: luxembourg,
       toOwnerId: belgium,
@@ -238,6 +239,7 @@ describe('V2 permanent territory integration lifecycle', () => {
     expect(territory.coreOwner).toBe(luxembourg);
     expect(territory.integration).toBe(CONQUEST_INITIAL_INTEGRATION_SHARE);
     expect(territory.integrationProgram).toEqual({
+      cause: 'conquest',
       fromOwnerId: belgium,
       fromCoreOwnerId: luxembourg,
       toOwnerId: netherlands,

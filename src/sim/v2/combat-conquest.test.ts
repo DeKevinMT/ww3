@@ -3,6 +3,7 @@ import { WorldEngineV2 } from './WorldEngineV2';
 import {
   CONQUEST_CAPTURE_GUARD_MAX_TRANSFER_SHARE,
   DEFENDER_POSITION_MULTIPLIER,
+  QUICK_CONQUEST_MIN_ATTACKER_LOSS_SHARE,
   TERRAIN_DEFENSE_MODIFIER,
   WAR_MOBILIZATION_TICKS,
 } from './balance';
@@ -268,7 +269,10 @@ describe('V2 combat, capture and absorption', () => {
 
     expect(event.conquered).toBe(true);
     expect(target.owner).toBe(bel);
-    expect(event.attackerLosses).toBe(0);
+    expect(event.attackerLosses).toBeCloseTo(
+      beforeSourceManpower * QUICK_CONQUEST_MIN_ATTACKER_LOSS_SHARE,
+      6,
+    );
     expect(event.capturedPopulation).toBeCloseTo(beforePopulation - event.populationLoss, 5);
     expect(event.capturedEconomy).toBeCloseTo(beforeEconomy - event.economyLoss, 5);
     expect(target.population).toBeCloseTo(event.capturedPopulation, 8);
@@ -277,13 +281,15 @@ describe('V2 combat, capture and absorption', () => {
       stateTerritoryArmyCapacityTargetV2(state, WORLD_CONTENT_V2, nldTerritory, bel),
       8,
     );
-    expect(source.army.manpower + target.army.manpower).toBeCloseTo(beforeSourceManpower, 5);
+    expect(source.army.manpower + target.army.manpower)
+      .toBeCloseTo(beforeSourceManpower - event.attackerLosses, 6);
     expect(target.army.manpower).toBeCloseTo(Math.min(
       beforeSourceManpower * CONQUEST_CAPTURE_GUARD_MAX_TRANSFER_SHARE,
       stateTerritoryArmySupportCeilingV2(state, WORLD_CONTENT_V2, nldTerritory, bel),
     ), 8);
     expect(source.army.manpower).toBeGreaterThanOrEqual(
-      beforeSourceManpower * (1 - CONQUEST_CAPTURE_GUARD_MAX_TRANSFER_SHARE) - 1e-9,
+      beforeSourceManpower * (1 - CONQUEST_CAPTURE_GUARD_MAX_TRANSFER_SHARE)
+        - event.attackerLosses - 1e-7,
     );
     expect(target.integration).toBe(0.10);
     expect(target.integrationProgram?.startedTick).toBe(state.tick);

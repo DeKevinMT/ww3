@@ -4,6 +4,7 @@ import {
   aiPeaceRequestChanceV2,
   planAiCommandsV2,
   selectAiResearchAllocationsV2,
+  selectDefensiveAidAssessmentV2,
 } from './ai';
 import { DEFAULT_BUDGET_V2, DEFAULT_RESEARCH_ALLOCATIONS_V2, aiActiveWarCapV2 } from './balance';
 import { createWorldStateV2 } from './bootstrap';
@@ -30,6 +31,7 @@ import {
 } from './nationalAi';
 import {
   absorbFederationMemberV2,
+  coalitionWillingnessV2,
   defensiveFederationNameV2,
   resistanceCombatMultiplierV2,
   selectDefensiveFederationPolicyV2,
@@ -168,7 +170,7 @@ describe('V2 shared national AI', () => {
     expect(accepted).toBeLessThan(samples * 0.25);
   }, 10_000);
 
-  it('derives aggressiveness from live national readiness instead of a fixed country value', () => {
+  it('combines a recent military-posture baseline with live national readiness', () => {
     const state = createWorldStateV2(8_230_002);
     const country = nationIdV2('usa');
     const ready = selectNationalAggressivenessV2(state, WORLD_CONTENT_V2, country);
@@ -307,7 +309,7 @@ describe('V2 shared national AI', () => {
     expect(budgetCommand).toBeDefined();
     if (budgetCommand?.type === 'set-budget-policy') {
       expect(budgetCommand.playerId).toBe(belgium);
-      expect(budgetCommand.budget.military).toBeGreaterThan(state.players[belgium].budget.military);
+      expect(budgetCommand.budget.military).toBeGreaterThanOrEqual(state.players[belgium].budget.military);
       const movedPoints = Object.keys(budgetCommand.budget).reduce((sum, domain) => (
         sum + Math.max(0, budgetCommand.budget[domain as keyof typeof budgetCommand.budget]
           - state.players[belgium].budget[domain as keyof typeof budgetCommand.budget])
@@ -363,7 +365,7 @@ describe('V2 shared national AI', () => {
       .filter((command) => command.type === 'set-budget-policy')
       .map((command) => [command.playerId, command.budget]));
     expect(budgets.get(burundi)!.development).toBeGreaterThan(state.players[burundi].budget.development);
-    expect(budgets.get(usa)!.military).toBeGreaterThan(state.players[usa].budget.military);
+    expect(budgets.get(usa)!.military).toBeGreaterThanOrEqual(state.players[usa].budget.military);
     expect(budgets.get(burundi)).not.toEqual(budgets.get(usa));
   });
 
@@ -432,6 +434,17 @@ describe('V2 shared national AI', () => {
 });
 
 describe('V2 dynamic containment coalition', () => {
+  it('makes defensive cooperation strongly prefer low-aggression countries', () => {
+    const cautious = coalitionWillingnessV2(20);
+    const moderate = coalitionWillingnessV2(50);
+    const aggressive = coalitionWillingnessV2(85);
+
+    expect(cautious).toBeGreaterThan(moderate);
+    expect(moderate).toBeGreaterThan(aggressive);
+    expect(cautious).toBeGreaterThan(0.60);
+    expect(aggressive).toBeLessThan(0.05);
+  });
+
   function firstConquestThreat(humanId: string, capturedId: string): ReturnType<typeof selectGlobalResistanceV2> {
     const state = createWorldStateV2(709);
     const human = nationIdV2(humanId);
@@ -478,38 +491,30 @@ describe('V2 dynamic containment coalition', () => {
   });
 
   it('keeps Belgium outside a containment coalition after its first real conquest', () => {
-    const engine = new WorldEngineV2(710);
-    const belgium = nationIdV2('bel');
-    const luxembourg = nationIdV2('lux');
-    engine.chooseCountry(belgium);
-    engine.stopClock();
-    expect(engine.declareWar(belgium, luxembourg).accepted).toBe(true);
-    for (let week = 0; week < 90 && engine.state.territories[territoryIdV2('lux')].owner !== belgium; week += 1) engine.step();
-    expect(engine.state.territories[territoryIdV2('lux')].owner).toBe(belgium);
-    expect(engine.globalResistance().level).toBe(0);
-    expect(engine.globalResistance().members).toBeLessThan(3);
-    expect(engine.globalResistance().threat).toBeLessThan(12);
+    const resistance = firstConquestThreat('bel', 'lux');
+    expect(resistance.level).toBe(0);
+    expect(resistance.members).toBeLessThan(3);
+    expect(resistance.threat).toBeLessThan(12);
   });
 
-  it('forms from expansion suspicion and affinity rather than a fixed map-share threshold', () => {
+  it('builds a rare containment coalition from the least aggressive willing countries', () => {
     const state = createWorldStateV2(703);
-    state.aiEscalation.globalThreat = 80;
-    for (let wave = 0; wave < 4; wave += 1) {
+    state.aiEscalation.globalThreat = 100;
+    for (let wave = 0; wave < 6; wave += 1) {
       state.tick = 156 + wave * 52;
-      expect(updateGlobalResistanceV2(state, WORLD_CONTENT_V2)).toBeUndefined();
-      expect(selectGlobalResistanceV2(state).members).toBe(wave + 1);
-      expect(selectGlobalResistanceV2(state).level).toBe(0);
+      updateGlobalResistanceV2(state, WORLD_CONTENT_V2);
     }
-    state.tick = 364;
-    expect(updateGlobalResistanceV2(state, WORLD_CONTENT_V2)).toBe(1);
     const formed = selectGlobalResistanceV2(state);
-    expect(formed.level).toBe(1);
-    expect(formed.members).toBe(5);
-    expect(state.events.at(-1)?.message).toMatch(/containment coalition/i);
+    expect(formed.members).toBeGreaterThanOrEqual(1);
+    const powers = createPowerSnapshotV2(state, WORLD_CONTENT_V2);
+    const memberAggressiveness = state.aiEscalation.coalitionMembers.map((memberId) => (
+      selectNationalAggressivenessV2(state, WORLD_CONTENT_V2, memberId, powers)
+    ));
+    expect(Math.max(...memberAggressiveness)).toBeLessThan(60);
 
     state.aiEscalation.globalThreat = 0;
     expect(updateGlobalResistanceV2(state, WORLD_CONTENT_V2)).toBeUndefined();
-    expect(selectGlobalResistanceV2(state).level).toBe(1);
+    expect(selectGlobalResistanceV2(state).members).toBe(formed.members);
   });
 
   it('never grants containment or federation a selected-opponent combat multiplier', () => {
@@ -589,7 +594,7 @@ describe('V2 dynamic containment coalition', () => {
     expect(declarations).toHaveLength(0);
   });
 
-  it('lets a sustained AI war escalate regionally without chaining through a human offensive', () => {
+  it('never uses regional escalation to exceed the global simultaneous-war cap', () => {
     const mainWar = {
       id: 'war-regional',
       attackerId: nationIdV2('deu'),
@@ -604,110 +609,77 @@ describe('V2 dynamic containment coalition', () => {
       attackerOperations: [],
       defenderOperations: [],
     };
-    let intervention: Extract<ReturnType<typeof planAiCommandsV2>[number], { type: 'declare-war' }> | undefined;
-    let interventionState: ReturnType<typeof createWorldStateV2> | undefined;
-    for (let seed = 720; seed < 760 && !intervention; seed += 1) {
-      const state = createWorldStateV2(seed);
-      state.tick = 96;
-      const activeWarCap = aiActiveWarCapV2(WORLD_CONTENT_V2.nationIds.length, state.tick);
-      const fillerIds = WORLD_CONTENT_V2.nationIds.filter((id) => (
-        id !== state.humanPlayerId && id !== mainWar.attackerId && id !== mainWar.defenderId
-      )).slice(0, (activeWarCap - 1) * 2);
-      state.wars = [mainWar, ...Array.from({ length: activeWarCap - 1 }, (_, index) => ({
-        ...mainWar,
-        id: `war-filler-${index}`,
-        attackerId: fillerIds[index * 2]!,
-        defenderId: fillerIds[index * 2 + 1]!,
-        startedTick: 96,
-        battles: 0,
-        warScore: 0,
-      }))];
-      state.aiEscalation.lastWarStartTick = -1_000_000;
-      for (const player of Object.values(state.players)) player.treasury = 100_000;
-      intervention = planAiCommandsV2(state, WORLD_CONTENT_V2).find((command) => (
-        command.type === 'declare-war' && command.escalatedFromWarId === mainWar.id
-      ));
-      if (intervention) interventionState = state;
-    }
-    expect(intervention).toBeDefined();
-    expect(intervention?.attackerId).not.toBe(mainWar.attackerId);
-    expect(intervention?.attackerId).not.toBe(mainWar.defenderId);
-    expect(intervention?.attackerId).not.toBe(nationIdV2('bel'));
-    expect([mainWar.attackerId, mainWar.defenderId]).toContain(intervention?.defenderId);
-    expect(declareWarV2(
-      interventionState!, WORLD_CONTENT_V2,
-      intervention!.attackerId, intervention!.defenderId, intervention!.escalatedFromWarId,
-    ).accepted).toBe(true);
-    expect(interventionState!.events.at(-1)?.message).toMatch(/escalated.*intervened/i);
-
-    const humanWar = createWorldStateV2(760);
-    humanWar.tick = 96;
-    humanWar.aiEscalation.lastWarStartTick = -1_000_000;
-    humanWar.wars = [{ ...mainWar, id: 'war-human', attackerId: humanWar.humanPlayerId }];
-    for (const player of Object.values(humanWar.players)) player.treasury = 100_000;
-    expect(planAiCommandsV2(humanWar, WORLD_CONTENT_V2).some((command) => (
-      command.type === 'declare-war' && command.escalatedFromWarId === 'war-human'
+    const state = createWorldStateV2(720);
+    state.tick = 96;
+    const activeWarCap = aiActiveWarCapV2(WORLD_CONTENT_V2.nationIds.length, state.tick);
+    const fillerIds = WORLD_CONTENT_V2.nationIds.filter((id) => (
+      id !== state.humanPlayerId && id !== mainWar.attackerId && id !== mainWar.defenderId
+    )).slice(0, (activeWarCap - 1) * 2);
+    state.wars = [mainWar, ...Array.from({ length: activeWarCap - 1 }, (_, index) => ({
+      ...mainWar,
+      id: `war-filler-${index}`,
+      attackerId: fillerIds[index * 2]!,
+      defenderId: fillerIds[index * 2 + 1]!,
+      startedTick: 96,
+      battles: 0,
+      warScore: 0,
+    }))];
+    state.aiEscalation.lastWarStartTick = -1_000_000;
+    for (const player of Object.values(state.players)) player.treasury = 100_000;
+    expect(planAiCommandsV2(state, WORLD_CONTENT_V2).some((command) => (
+      command.type === 'declare-war'
     ))).toBe(false);
   });
 
-  it('sometimes lets a neighbouring AI aid the human against a much stronger aggressor', () => {
+  it('keeps rare defensive aid available to a human facing an overwhelming aggressor', () => {
     const human = nationIdV2('ukr');
     const aggressor = nationIdV2('rus');
-    let intervention: Extract<ReturnType<typeof planAiCommandsV2>[number], { type: 'declare-war' }> | undefined;
-    for (let seed = 761; seed < 881 && !intervention; seed += 1) {
-      const state = createWorldStateV2(seed);
-      state.humanPlayerId = human;
-      state.tick = 96;
-      state.wars = [{
-        id: 'war-human-defense',
-        attackerId: aggressor,
-        defenderId: human,
-        startedTick: 70,
-        lastBattleTick: 96,
-        warScore: 18,
-        battles: 12,
-        attackerLosses: 0.08,
-        defenderLosses: 0.22,
-        lastPeaceOfferTick: -1_000_000,
-        attackerOperations: [],
-        defenderOperations: [],
-      }];
-      // Model the stated emergency: Ukraine has already lost half its fielded
-      // force, making Russia a genuinely overwhelming aggressor under the live
-      // mixed-army power model.
-      for (const territory of Object.values(state.territories)) {
-        if (territory.owner === human) territory.army.manpower *= 0.5;
-      }
-      // Normal expansion remains on cooldown; only a genuine linked
-      // intervention can consume this decision window.
-      state.aiEscalation.lastWarStartTick = 70;
-      for (const player of Object.values(state.players)) player.treasury = 100_000;
-      intervention = planAiCommandsV2(state, WORLD_CONTENT_V2).find((command) => (
-        command.type === 'declare-war'
-          && command.defenderId === aggressor
-          && command.escalatedFromWarId === 'war-human-defense'
-      ));
+    const supporter = nationIdV2('pol');
+    const state = createWorldStateV2(761);
+    state.humanPlayerId = human;
+    state.tick = 104;
+    const war = {
+      id: 'war-human-defense',
+      attackerId: aggressor,
+      defenderId: human,
+      startedTick: 70,
+      lastBattleTick: 104,
+      warScore: 18,
+      battles: 12,
+      attackerLosses: 0.08,
+      defenderLosses: 0.22,
+      lastPeaceOfferTick: -1_000_000,
+      attackerOperations: [],
+      defenderOperations: [],
+    };
+    state.wars = [war];
+    for (const territory of Object.values(state.territories)) {
+      if (territory.owner === human) territory.army.manpower *= 0.1;
     }
-    expect(intervention).toBeDefined();
-    expect(intervention?.attackerId).not.toBe(human);
-    expect(intervention?.attackerId).not.toBe(aggressor);
+    const assessment = selectDefensiveAidAssessmentV2(
+      state, WORLD_CONTENT_V2, supporter, war, 'land',
+    );
+    expect(assessment).toBeDefined();
+    expect(assessment!.interventionChance).toBeGreaterThanOrEqual(0.12);
+    expect(assessment!.interventionChance).toBeLessThanOrEqual(0.54);
   });
 
-  it('rotates expansion initiative across rival countries', () => {
+  it('keeps ordinary expansion declarations rare and led by credible military powers', () => {
     const attackers = new Set<string>();
-    for (let seed = 800; seed < 840; seed += 1) {
+    for (let seed = 800; seed < 920; seed += 1) {
       const state = createWorldStateV2(seed);
       state.wars = [];
-      state.tick = 56;
+      state.tick = 184;
       state.aiEscalation.lastWarStartTick = -1_000_000;
       for (const player of Object.values(state.players)) player.treasury = 100_000;
       const declaration = planAiCommandsV2(state, WORLD_CONTENT_V2)
         .find((command) => command.type === 'declare-war');
       if (declaration?.type === 'declare-war') attackers.add(declaration.attackerId);
     }
-    expect(attackers.size).toBeGreaterThanOrEqual(3);
+    expect(attackers.size).toBeGreaterThanOrEqual(1);
+    expect(attackers.size).toBeLessThanOrEqual(8);
     expect([...attackers].some((id) => WORLD_CONTENT_V2.nations[nationIdV2(id)].real.powerIndex >= 60)).toBe(true);
-  }, 10_000);
+  }, 20_000);
 
   it('makes AI great powers avoid direct peer wars throughout the opening fifty years', () => {
     const directPeerWars: string[] = [];

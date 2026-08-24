@@ -1,0 +1,14 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2022"],
+    "types": ["@cloudflare/workers-types"],
+    "noEmit": true
+  },
+  "include": [
+    "src",
+    "../src/multiplayer/matchmakingGroups.ts",
+    "../src/multiplayer/matchmakingProtocol.ts"
+  ],
+  "exclude": []
+}

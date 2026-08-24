@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { WorldEngineV2 } from '../sim/v2/WorldEngineV2';
 import { WORLD_CONTENT_V2 } from '../sim/v2/content';
-import { selectNationalIqViewV2 } from '../sim/v2/selectors';
 import { nationIdV2 } from '../sim/v2/types';
 import {
   compareIntroNationMetricsV2,
@@ -47,9 +46,24 @@ describe('intro opening metrics cache', () => {
   it('offers one unambiguous pure military ranking choice', () => {
     expect(INTRO_SORT_OPTIONS.map((option) => option.value)).toEqual([
       'power', 'aggressiveness', 'attack', 'defense', 'iq', 'manpower',
-      'economy', 'economic-growth', 'tax', 'population', 'growth',
+      'economy', 'gdp-per-capita', 'economic-growth', 'tax', 'population', 'growth',
     ]);
     expect(INTRO_SORT_OPTIONS[0]?.label).toBe('Military ranking');
+  });
+
+  it('sorts GDP per capita from the same neutral AI opening snapshot', () => {
+    const engine = new WorldEngineV2(12_005);
+    const opening = new IntroOpeningMetricsCacheV2().read(engine);
+    const sorted = WORLD_CONTENT_V2.nationIds
+      .map((id) => WORLD_CONTENT_V2.nations[id])
+      .filter((nation): nation is NonNullable<typeof nation> => Boolean(nation))
+      .sort((left, right) => compareIntroNationMetricsV2(left, right, 'gdp-per-capita', opening));
+    const values = sorted.map((nation) => opening.byNation.get(nation.id)?.['gdp-per-capita'] ?? 0);
+
+    expect(values).toEqual([...values].sort((left, right) => right - left));
+    for (const metrics of opening.byNation.values()) {
+      expect(metrics['gdp-per-capita']).toBe(metrics.economyView.wealthPerPerson / 1e6);
+    }
   });
 
   it('sorts the country picker by the cached pure military rank', () => {
@@ -72,43 +86,25 @@ describe('intro opening metrics cache', () => {
     }
   });
 
-  it('previews Greenland exactly as it appears immediately after human selection', () => {
+  it('keeps Greenland stats and ranking at the neutral AI baseline', () => {
     const greenland = nationIdV2('grl');
     const engine = new WorldEngineV2(12_004);
     const opening = new IntroOpeningMetricsCacheV2().read(engine);
     const preview = opening.byNation.get(greenland);
     expect(preview).toBeDefined();
-    expect(preview!.army.capacity).toBeGreaterThan(engine.armyStrength(greenland).capacity);
+    const baselineArmy = engine.armyStrength(greenland);
+    const baselineMilitary = engine.militaryBaseSnapshot();
+    const baselinePower = engine.powerSnapshot(baselineMilitary);
+    expect(preview!.army).toEqual(baselineArmy);
+    expect(preview!.combatPower).toBe(baselinePower.byNation.get(greenland));
+    expect(opening.ranking.map((entry) => entry.player.id)).toEqual(
+      engine.globalRanking(baselinePower).map((entry) => entry.player.id),
+    );
 
     expect(engine.chooseCountry(greenland)).toEqual({ accepted: true });
     engine.stopClock();
     const actualArmy = engine.armyStrength(greenland);
-    const actualMilitary = engine.militaryBaseSnapshot();
-    const actualPower = engine.powerSnapshot(actualMilitary);
-    const actualFinance = engine.weeklyFinanceBreakdown(greenland);
-    const actualQuality = actualMilitary.byNation.get(greenland)!;
-    const actualArmyState = {
-      manpower: actualArmy.deployed,
-      capacity: actualArmy.capacity,
-      baseAttack: actualQuality.attack,
-      baseDefense: actualQuality.defense,
-    };
-
-    expect(preview!.player).toEqual(engine.player(greenland));
-    expect(preview!.army).toEqual(actualArmy);
-    expect(preview!.combatPower).toBe(actualPower.byNation.get(greenland));
-    expect(preview!.economyView).toEqual(engine.nationalEconomy(greenland));
-    expect(preview!.finance).toEqual(actualFinance);
-    expect(preview!.populationDynamics).toEqual(
-      engine.populationDynamics(greenland, actualFinance.populationGrowth),
-    );
-    expect(preview!.iqView).toEqual(selectNationalIqViewV2(
-      engine.state,
-      WORLD_CONTENT_V2,
-      greenland,
-    ));
-    expect(preview!.aggressiveness).toBe(engine.nationalAggressiveness(greenland, actualPower));
-    expect(preview!.attack).toBe(engine.effectiveAttack(greenland, actualArmyState, actualMilitary));
-    expect(preview!.defense).toBe(engine.effectiveDefense(greenland, actualArmyState, actualMilitary));
+    expect(actualArmy.capacity).toBeGreaterThan(preview!.army.capacity);
+    expect(engine.currentPower(greenland)).toBe(preview!.combatPower);
   });
 });

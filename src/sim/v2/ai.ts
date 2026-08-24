@@ -14,6 +14,7 @@ import {
   NATIONAL_IQ_EFFECTIVE_SCORE_MAX,
   NATIONAL_IQ_SCORE_MIN,
   aiActiveWarCapV2,
+  aiHumanAttackSafetyActiveV2,
   PEACE_REQUEST_MIN_WAR_AGE_TICKS,
   RESEARCH_BRANCHES,
   clamp,
@@ -232,6 +233,7 @@ interface AiExpansionChanceInputsV2 {
   regionalEscalation: boolean;
   rivalInvaderCount: number;
   humanWarStrainPressure?: number;
+  globalWarLoad?: number;
 }
 
 /**
@@ -244,19 +246,26 @@ export function aiExpansionDeclarationChanceV2({
   regionalEscalation,
   rivalInvaderCount,
   humanWarStrainPressure = 0,
+  globalWarLoad = 0,
 }: AiExpansionChanceInputsV2): number {
   const strainPressure = clamp(humanWarStrainPressure, 0, 1);
-  const baseChance = clamp(0.14 + 0.10 * Math.max(0, ratio - 1)
+  const worldLoad = clamp(globalWarLoad, 0, 1);
+  const unbrakedChance = clamp(0.10 + 0.10 * Math.max(0, ratio - 1)
     + 0.65 * expansionChance
-    + (regionalEscalation ? 0.05 : 0), 0.10, regionalEscalation ? 0.48 : 0.42);
+    + (regionalEscalation ? 0.04 : 0), 0.07, regionalEscalation ? 0.40 : 0.34);
+  // Existing world conflict suppresses optional AI-vs-AI escalation. A
+  // critically strained human target removes most, but never all, of that
+  // caution so the intended anti-overreach response remains clearly visible.
+  const worldBrake = 1 - 0.50 * worldLoad * (1 - 0.75 * strainPressure);
+  const baseChance = unbrakedChance * worldBrake;
   if (rivalInvaderCount > 0 && !regionalEscalation) {
-    const ordinaryDogpileChance = Math.min(0.08, baseChance * 0.15);
-    return clamp(ordinaryDogpileChance + 0.16 * strainPressure, 0, 0.30);
+    const ordinaryDogpileChance = Math.min(0.05, baseChance * 0.12);
+    return clamp(ordinaryDogpileChance + 0.22 * strainPressure, 0, 0.28);
   }
   return clamp(
-    baseChance + 0.16 * strainPressure,
-    0.10,
-    regionalEscalation ? 0.48 : 0.42,
+    baseChance + 0.22 * strainPressure,
+    0.05,
+    regionalEscalation ? 0.44 : 0.40,
   );
 }
 
@@ -476,6 +485,7 @@ interface AiNationalPlanningViewV2 {
   army: ReturnType<typeof selectArmyStrengthV2>;
   economy: ReturnType<typeof selectNationalEconomyV2>;
   territories: ReturnType<typeof selectTerritoriesOfV2>;
+  integrationWeeklyCost: number;
   controlledPopulation: number;
   populationAnnualNetRate: number;
   foodDemand: number;
@@ -492,11 +502,15 @@ function createAiNationalPlanningViewV2(
   content: WorldContentV2,
   playerId: PlayerId,
 ): AiNationalPlanningViewV2 {
+  const territories = selectTerritoriesOfV2(state, playerId);
   return {
     activeWars: selectWarsOfV2(state, playerId),
     army: selectArmyStrengthV2(state, content, playerId),
     economy: selectNationalEconomyV2(state, content, playerId),
-    territories: selectTerritoriesOfV2(state, playerId),
+    territories,
+    integrationWeeklyCost: territories.reduce((sum, territory) => (
+      sum + (territory.integrationProgram?.annualCost ?? 0) / 52
+    ), 0),
     controlledPopulation: Math.max(0.05, selectControlledPopulationV2(state, playerId)),
     populationAnnualNetRate: selectPopulationDynamicsV2(
       state,
@@ -506,6 +520,23 @@ function createAiNationalPlanningViewV2(
     ).annualNetRate,
     foodDemand: Math.max(0.01, selectFoodDemandV2(state, playerId)),
     effectiveIq: selectNationalIqViewV2(state, content, playerId).score,
+  };
+}
+
+export function aiIntegrationBudgetPressureV2(
+  integrationWeeklyCost: number,
+  weeklyRevenue: number,
+  treasuryWeeks: number,
+): { burden: number; blocksExpansion: boolean; additionalRunwayWeeks: number } {
+  const burden = clamp(
+    Math.max(0, integrationWeeklyCost) / Math.max(0.01, weeklyRevenue),
+    0,
+    2,
+  );
+  return {
+    burden,
+    blocksExpansion: burden >= 0.40 || (burden >= 0.15 && treasuryWeeks < 10),
+    additionalRunwayWeeks: Math.min(12, burden * 20),
   };
 }
 
@@ -535,6 +566,12 @@ function aiBudgetTargetV2(
   const controlledPopulation = view.controlledPopulation;
   const poverty = clamp((20 - economy.controlledOutput / controlledPopulation) / 18, 0, 1);
   const debtStress = clamp(-treasuryWeeks / 8, 0, 1);
+  const integrationPressure = aiIntegrationBudgetPressureV2(
+    view.integrationWeeklyCost,
+    economy.weeklyRevenue,
+    treasuryWeeks,
+  );
+  const integrationStress = clamp((integrationPressure.burden - 0.05) / 0.40, 0, 1);
   const researchGap = clamp((leaderResearch - ownResearch) / 10, 0, 1);
   const populationDecline = clamp(
     -view.populationAnnualNetRate / 0.02,
@@ -543,7 +580,13 @@ function aiBudgetTargetV2(
   );
   const foodReserveWeeks = player.foodStock / view.foodDemand;
   const reserveStress = clamp((2 - foodReserveWeeks) / 2, 0, 1);
-  const survivalStress = Math.max(foodStress, populationDecline, reserveStress, debtStress);
+  const survivalStress = Math.max(
+    foodStress,
+    populationDecline,
+    reserveStress,
+    debtStress,
+    integrationStress,
+  );
   if (wars.length === 0 && survivalStress > 0.02) {
     return weightedBudgetPolicyV2({
       military: 0.40 + 0.30 * (1 - army.fillRatio),
@@ -557,6 +600,7 @@ function aiBudgetTargetV2(
     research: 0.85 + 1.30 * researchGap + 0.80 * researchStrength
       + 0.65 * foodStress,
     development: 1.10 + 1.65 * foodStress + 1.10 * (1 - condition)
+      + 1.20 * integrationStress
       + 1.25 * debtStress + 0.85 * poverty + (wars.length === 0 ? 0.35 : 0),
   });
 }
@@ -882,12 +926,19 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
     const ownPower = (powerSnapshot.byNation.get(playerId) ?? 0) / (1 + ownWars.length * 0.65);
     const ownEconomy = planningView.economy;
     const treasuryWeeks = player.treasury / Math.max(0.01, ownEconomy.weeklyRevenue);
+    const integrationPressure = aiIntegrationBudgetPressureV2(
+      planningView.integrationWeeklyCost,
+      ownEconomy.weeklyRevenue,
+      treasuryWeeks,
+    );
     const foodReserveWeeks = player.foodStock / planningView.foodDemand;
     const populationTrend = planningView.populationAnnualNetRate;
     const survivalBlocksExpansion = player.foodSecurity < 0.92 || foodReserveWeeks < 0.75
-      || populationTrend < -0.005 || player.treasury < 0;
+      || populationTrend < -0.005 || player.treasury < 0
+      || integrationPressure.blocksExpansion;
     const candidates = accessibleOwnersV2(warAccessIndex, playerId).filter(({ targetId }) => (
       !selectIsEliminatedV2(state, targetId)
+      && !(humanPlayerIds.has(targetId) && aiHumanAttackSafetyActiveV2(state.tick))
       // A loose containment network is diplomatic preparation, not an
       // automatic pile-on. Its members neither attack one another nor open a
       // new player front; they wait to fuse into a real federation first.
@@ -957,7 +1008,8 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
         3,
         4 + ownWars.length * 4 - 1.5 * majorPowerDrive + (access === 'naval' ? 0.5 : 0),
       )
-        + (regionalEscalation ? 0.50 : 1) * warDiscipline.additionalRunwayWeeks;
+        + (regionalEscalation ? 0.50 : 1) * warDiscipline.additionalRunwayWeeks
+        + integrationPressure.additionalRunwayWeeks;
       const remainingRunway = treasuryWeeks - costWeeks;
       return {
         targetId,
@@ -976,6 +1028,7 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
           - 12 * Math.log2(1 + rivalPower * rivalCautionMultiplier / Math.max(1, ownPower))
           - 1.5 * targetWars * targetAlignment
           - 2.5 * costWeeks - 3 * Math.max(0, requiredRunway + 2 - remainingRunway)
+          - 12 * integrationPressure.burden
           - (access === 'naval' ? 2 : 0),
         cost,
         remainingRunway,
@@ -1076,6 +1129,7 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
         regionalEscalation: Boolean(candidate.regionalEscalation),
         rivalInvaderCount: candidate.rivalInvaderCount,
         humanWarStrainPressure: candidate.humanStrainOpportunity.pressure,
+        globalWarLoad: state.wars.length / Math.max(1, activeWarCap),
       });
     if (nextRandom(state) >= chance) continue;
     commands.push({
