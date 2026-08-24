@@ -7,10 +7,18 @@ import {
   nationalArmyCapacityTargetV2,
   stateArmyCapacityTargetsV2,
   stateTerritoryArmyCapacityTargetV2,
+  synchronizeArmyCapacityV2,
   territoryArmyCapacityTargetV2,
 } from './capacity';
 import { WORLD_CONTENT_V2 } from './content';
+import {
+  createFinancePlansV2,
+  processDevelopmentPhaseV2,
+  processFinanceMilitaryV2,
+} from './economy';
 import { calculateBlendedFiscalCapacityV2 } from './fiscal';
+import { synchronizeOpeningTreasuryHumanRosterV2 } from './nationState';
+import { selectTotalManpowerV2, selectWeeklyFinanceBreakdownV2 } from './selectors';
 import { countryTraitFactorV2 } from './traits';
 import { nationIdV2, territoryIdV2 } from './types';
 
@@ -26,6 +34,71 @@ describe('country trait opening economy and army capacity', () => {
     expect(countryTraitFactorV2(mexico, 'army-capacity')).toBeCloseTo(1.06);
     expect(army.capacity).toBeCloseTo(rawCapacity * 1.06, 5);
     expect(army.manpower).toBeCloseTo(rawCapacity * openingFill, 5);
+  });
+
+  it('gives Greenland exceptional recruitable room without free opening soldiers', () => {
+    const state = createWorldStateV2(91_000);
+    const greenland = nationIdV2('grl');
+    const greenlandTerritory = territoryIdV2('grl');
+    const rawCapacity = initialTerritoryArmyCapacityV2(WORLD_CONTENT_V2, greenlandTerritory);
+    const openingFill = initialArmyCapacityRatioV2(WORLD_CONTENT_V2, greenland);
+    const army = state.territories[greenlandTerritory].army;
+
+    expect(countryTraitFactorV2(greenland, 'army-capacity')).toBeCloseTo(13, 10);
+    expect(army.capacity).toBeCloseTo(rawCapacity * 13, 5);
+    expect(army.manpower).toBeCloseTo(rawCapacity * openingFill, 5);
+
+    const previousHumanIds = [...state.humanPlayerIds];
+    state.humanPlayerId = greenland;
+    state.humanPlayerIds = [greenland];
+    synchronizeOpeningTreasuryHumanRosterV2(
+      state,
+      WORLD_CONTENT_V2,
+      previousHumanIds,
+      [greenland],
+    );
+    synchronizeArmyCapacityV2(state, WORLD_CONTENT_V2);
+    expect(stateTerritoryArmyCapacityTargetV2(
+      state,
+      WORLD_CONTENT_V2,
+      greenlandTerritory,
+      greenland,
+    )).toBeCloseTo(rawCapacity * 22.6, 4);
+    const finance = selectWeeklyFinanceBreakdownV2(
+      state,
+      WORLD_CONTENT_V2,
+      greenland,
+    );
+    expect(finance.mandatoryFundingRatio).toBe(1);
+    expect(finance.recruitmentFundingRatio).toBe(1);
+    expect(finance.passiveRecruitment + finance.acceleratedRecruitment).toBeGreaterThan(0);
+    expect(finance.armyUpkeep).toBeGreaterThan(0);
+
+    let fullReadinessWeek: number | undefined;
+    for (let week = 1; week <= 156; week += 1) {
+      const plans = createFinancePlansV2(state, WORLD_CONTENT_V2);
+      processFinanceMilitaryV2(state, WORLD_CONTENT_V2, plans);
+      processDevelopmentPhaseV2(state, WORLD_CONTENT_V2, plans);
+      state.tick += 1;
+      const manpower = selectTotalManpowerV2(state, greenland);
+      if (manpower.capacity - manpower.deployed < 0.000001) {
+        fullReadinessWeek = week;
+        break;
+      }
+    }
+    expect(fullReadinessWeek).toBeDefined();
+    expect(fullReadinessWeek).toBeLessThanOrEqual(156);
+  }, 15_000);
+
+  it('gives Eswatini capacity instead of an inactive reserve-training identity', () => {
+    const state = createWorldStateV2(91_005);
+    const eswatini = nationIdV2('swz');
+    const eswatiniTerritory = territoryIdV2('swz');
+    const rawCapacity = initialTerritoryArmyCapacityV2(WORLD_CONTENT_V2, eswatiniTerritory);
+
+    expect(countryTraitFactorV2(eswatini, 'army-capacity')).toBeCloseTo(1.30);
+    expect(state.territories[eswatiniTerritory].army.capacity)
+      .toBeCloseTo(rawCapacity * 1.30, 5);
   });
 
   it('uses only the live empire leader trait after conquest or fusion', () => {

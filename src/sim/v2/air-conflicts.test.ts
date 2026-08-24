@@ -5,7 +5,11 @@ import {
   WAR_ACCESS_SUPPLY_MULTIPLIER,
   WAR_MOBILIZATION_TICKS,
 } from './balance';
-import { createWorldStateV2, openingConflictScheduleV2 } from './bootstrap';
+import {
+  createWorldStateV2,
+  openingConflictScheduleV2,
+  processOpeningConflictsV2,
+} from './bootstrap';
 import { WORLD_CONTENT_V2 } from './content';
 import { STRATEGIC_SEA_ROUTE_PAIRS } from '../../game/data/worldMap';
 import { assertInvariantsV2 } from './invariants';
@@ -50,6 +54,37 @@ describe('2026 conflicts and strategic naval warfare', () => {
     expect(state.territories[nationIdV2('sdn')]!.condition).toBeLessThan(0.70);
     assertInvariantsV2(state, WORLD_CONTENT_V2);
   }, 10_000);
+
+  it('blocks a scripted opening conflict only while its attacker has negative treasury', () => {
+    const blockedState = createWorldStateV2(2026);
+    const blockedScenario = openingConflictScheduleV2(blockedState.seed, WORLD_CONTENT_V2)[0]!;
+    blockedState.tick = blockedScenario.tick;
+    blockedState.players[blockedScenario.attackerId]!.treasury = -0.001;
+    const blockedNextWarId = blockedState.nextWarId;
+    const blockedLastWarStartTick = blockedState.aiEscalation.lastWarStartTick;
+
+    processOpeningConflictsV2(blockedState, WORLD_CONTENT_V2);
+
+    expect(blockedState.wars).toHaveLength(0);
+    expect(blockedState.nextWarId).toBe(blockedNextWarId);
+    expect(blockedState.aiEscalation.lastWarStartTick).toBe(blockedLastWarStartTick);
+
+    const solventState = createWorldStateV2(2026);
+    const solventScenario = openingConflictScheduleV2(solventState.seed, WORLD_CONTENT_V2)[0]!;
+    solventState.tick = solventScenario.tick;
+    solventState.players[solventScenario.attackerId]!.treasury = 0;
+
+    processOpeningConflictsV2(solventState, WORLD_CONTENT_V2);
+
+    expect(solventState.wars).toHaveLength(1);
+    expect(solventState.wars[0]).toMatchObject({
+      attackerId: solventScenario.attackerId,
+      defenderId: solventScenario.defenderId,
+      startedTick: solventScenario.tick,
+    });
+    expect(solventState.aiEscalation.lastWarStartTick).toBe(solventScenario.tick);
+    assertInvariantsV2(solventState, WORLD_CONTENT_V2);
+  });
 
   it('removes air attacks while keeping a broad naval network with free declarations', () => {
     const state = createWorldStateV2(77);

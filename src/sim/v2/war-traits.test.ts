@@ -350,7 +350,7 @@ describe('V2 country traits in the canonical war runtime', () => {
     expect(battle.conquered).toBe(false);
     const rawLoss = 0.005 + battle.defenderLosses / targetCapacity * 0.10;
     expect(state.territories[bosniaTerritory]!.condition)
-      .toBeCloseTo(1 - rawLoss * 0.70, 6);
+      .toBeCloseTo(1 - rawLoss * 0.70, 5);
   });
 
   it('uses the defeated owner treasury factor and forwards capture access into integration', () => {

@@ -440,8 +440,10 @@ export interface WeeklyFinanceBreakdownV2 {
   baseOperatingCost: number;
   /** Principal newly borrowed this week because committed payments exceeded liquidity. */
   newBorrowing: number;
-  /** One-time 10% premium added to newly borrowed principal. */
+  /** 10% origination premium plus the bounded carrying premium on persistent debt. */
   debtPremium: number;
+  /** Opening cash above 10% of live GDP invested through recurring autonomous programmes this week. */
+  excessCashInvestment: number;
   /** Required weekly payroll and maintenance; underfunding alone never demobilizes. */
   armyUpkeep: number;
   /** Portion of required upkeep actually funded inside the military envelope. */

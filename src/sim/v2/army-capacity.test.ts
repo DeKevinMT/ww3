@@ -7,6 +7,9 @@ import { createWorldStateV2 } from './bootstrap';
 import {
   CONQUERED_TERRITORY_EMPIRE_COMBAT_CAP_SHARE_V2,
   INTEGRATED_CORE_EMPIRE_COMBAT_CAP_SHARE_V2,
+  INTEGRATED_FOREIGN_TERRITORY_EMPIRE_COMBAT_CAP_SHARE_V2,
+  ORIGINAL_HOMELAND_EMPIRE_COMBAT_CAP_SHARE_V2,
+  foreignTerritoryEmpireCombatCapShareV2,
   nationalArmyCapacityTargetV2,
   stateTerritoryArmyCapacityTargetV2,
   stateTerritoryArmySupportCeilingV2,
@@ -141,9 +144,16 @@ describe('population and research army cap', () => {
     }
   });
 
-  it('uses 1.25 percent support after conquest and 3 percent for integrated and homeland territory', () => {
-    expect(CONQUERED_TERRITORY_EMPIRE_COMBAT_CAP_SHARE_V2).toBe(0.0125);
+  it('declines foreign empire support from 10 to 5 percent while homeland remains unchanged', () => {
+    expect(CONQUERED_TERRITORY_EMPIRE_COMBAT_CAP_SHARE_V2).toBe(0.10);
     expect(INTEGRATED_CORE_EMPIRE_COMBAT_CAP_SHARE_V2).toBe(0.03);
+    expect(INTEGRATED_FOREIGN_TERRITORY_EMPIRE_COMBAT_CAP_SHARE_V2).toBe(0.05);
+    expect(ORIGINAL_HOMELAND_EMPIRE_COMBAT_CAP_SHARE_V2).toBe(0.03);
+    expect(foreignTerritoryEmpireCombatCapShareV2(0.10)).toBe(0.10);
+    expect(foreignTerritoryEmpireCombatCapShareV2(0.55)).toBe(0.075);
+    expect(foreignTerritoryEmpireCombatCapShareV2(1)).toBe(0.05);
+    expect(foreignTerritoryEmpireCombatCapShareV2(-1)).toBe(0.10);
+    expect(foreignTerritoryEmpireCombatCapShareV2(2)).toBe(0.05);
     const state = createWorldStateV2(8_107);
     const capturedId = territoryIdV2('nld');
     const captured = state.territories[capturedId]!;
@@ -164,6 +174,17 @@ describe('population and research army cap', () => {
       );
     expect(selectTotalManpowerV2(state, bel).capacity).toBe(visibleArmyCap);
 
+    captured.integration = 0.55;
+    synchronizeArmyCapacityV2(state, WORLD_CONTENT_V2);
+    const midpointNationalCap = nationalArmyCapacityTargetV2(
+      state, WORLD_CONTENT_V2, bel,
+    );
+    const midpointLocalCap = stateTerritoryArmyCapacityTargetV2(
+      state, WORLD_CONTENT_V2, capturedId, bel,
+    );
+    expect(stateTerritoryArmySupportCeilingV2(state, WORLD_CONTENT_V2, capturedId, bel))
+      .toBeCloseTo(midpointLocalCap + midpointNationalCap * 0.075, 8);
+
     captured.integration = 1;
     captured.coreOwner = bel;
     delete captured.integrationProgram;
@@ -177,14 +198,15 @@ describe('population and research army cap', () => {
     expect(stateTerritoryArmySupportCeilingV2(state, WORLD_CONTENT_V2, capturedId, bel))
       .toBeCloseTo(
         integratedLocalCap
-          + integratedNationalCap * INTEGRATED_CORE_EMPIRE_COMBAT_CAP_SHARE_V2,
+          + integratedNationalCap
+            * INTEGRATED_FOREIGN_TERRITORY_EMPIRE_COMBAT_CAP_SHARE_V2,
         8,
       );
     const homeId = territoryIdV2('bel');
     expect(stateTerritoryArmySupportCeilingV2(state, WORLD_CONTENT_V2, homeId, bel))
       .toBeCloseTo(
         stateTerritoryArmyCapacityTargetV2(state, WORLD_CONTENT_V2, homeId, bel)
-          + integratedNationalCap * INTEGRATED_CORE_EMPIRE_COMBAT_CAP_SHARE_V2,
+          + integratedNationalCap * ORIGINAL_HOMELAND_EMPIRE_COMBAT_CAP_SHARE_V2,
         8,
       );
     expect(selectTotalManpowerV2(state, bel).capacity).toBeCloseTo(integratedNationalCap, 8);

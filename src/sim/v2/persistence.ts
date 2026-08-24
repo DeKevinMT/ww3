@@ -74,6 +74,8 @@ const LEGACY_RULES_VERSION_V19 = 'frontier-command-v2.54-faster-integration';
 const LEGACY_RULES_VERSION_V20 = 'frontier-command-v2.55-combat-rebalance';
 const LEGACY_RULES_VERSION_V20_RESEARCH = 'frontier-command-v2.56-research-expansion';
 const LEGACY_RULES_VERSION_V21 = 'frontier-command-v2.57-performance-multiplayer';
+/** Last authenticated schema-22 release before the V2.60 rule rebalance. */
+const LEGACY_RULES_VERSION_V22 = 'frontier-command-v2.59-country-traits';
 const LEGACY_CONTENT_VERSION_V16 = 'natural-earth-countries-2026-v6-naval';
 const LEGACY_CONTENT_VERSION_V17 = 'natural-earth-countries-2026-v7-greenland';
 const LEGACY_BOT_MANPOWER_PER_UNIT = 0.10;
@@ -1122,6 +1124,9 @@ function migrateLegacyStateV18(
     territories: canonicalTerritories,
   };
   migrateRetiredSystemsV2(legacyState);
+  // Army capacity is derived from the current population/research/trait rules.
+  // Normalize it only after the exact legacy payload has authenticated.
+  synchronizeArmyCapacityV2(legacyState, content);
   // Validate the authenticated old payload before the new calendar is allowed
   // to normalize its endpoint.
   assertInvariantsV2(legacyState, content);
@@ -1227,6 +1232,7 @@ export function loadSaveV2(
                 : LEGACY_RULES_VERSION_V13;
   const supportedRules = schemaVersion === 22
     ? parsed.rulesVersion === V2_RULES_VERSION
+      || parsed.rulesVersion === LEGACY_RULES_VERSION_V22
     : schemaVersion === 21
       ? parsed.rulesVersion === LEGACY_RULES_VERSION_V21
       : schemaVersion === 20
@@ -1269,7 +1275,13 @@ export function loadSaveV2(
                   : migrateLegacySaveV13(parsed as unknown as LegacySaveGameV13),
                 content,
               )), content), content);
-  if (parsed.rulesVersion !== V2_RULES_VERSION) migrateRetiredSystemsV2(state);
+  if (parsed.rulesVersion !== V2_RULES_VERSION) {
+    migrateRetiredSystemsV2(state);
+    // Supported older rule sets predate the current trait-capacity curve.
+    // Capacity is derived, so preserving an obsolete stored value would make
+    // an otherwise authentic save fail current invariants (notably Greenland).
+    synchronizeArmyCapacityV2(state, content);
+  }
   // Normalize authenticated legacy/current saves at the load boundary. This
   // never mutates the caller's live state or changes the authenticated input.
   retireDormantAbsorbedNationsV2(state, content);

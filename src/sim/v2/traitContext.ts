@@ -1,4 +1,5 @@
 import type { WorldContentV2 } from './content';
+import { isHumanPlayerV2 } from './humanPlayers';
 import type {
   TraitEvaluationContextV2,
   TraitWarRoleV2,
@@ -103,6 +104,7 @@ export function traitNationContextV2(
     playerWarOperationsV2(war, activePlayerId)
   ));
   return Object.freeze({
+    humanControlled: isHumanPlayerV2(state, activePlayerId),
     atWar: relevantWars.length > 0,
     treasury: player?.treasury,
     foodSecurity: player?.foodSecurity,

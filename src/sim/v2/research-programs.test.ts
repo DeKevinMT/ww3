@@ -262,7 +262,7 @@ describe('V2 integrated research programs and army economy', () => {
     expect(Object.keys(finance).sort()).toEqual([
       'acceleratedDemobilization', 'acceleratedRecruitment', 'activeBudget', 'aiEfficiency', 'aiMode', 'annualEconomyGrowthRate', 'armyUpkeep', 'baseOperatingCost',
       'ceasefireIncome', 'ceasefirePayment', 'closingTreasury', 'condition', 'conditionFundingRatio', 'debtPremium', 'demobilizationCost', 'development',
-      'economyBaseGrowthRate', 'economyFoodGrowthRate', 'economyGrowth', 'economyInvestmentGrowthRate', 'economyResearchGrowthRate', 'expenses',
+      'economyBaseGrowthRate', 'economyFoodGrowthRate', 'economyGrowth', 'economyInvestmentGrowthRate', 'economyResearchGrowthRate', 'excessCashInvestment', 'expenses',
       'foodAccessCeiling', 'foodBalance', 'foodConsumed', 'foodCoverage', 'foodDemand', 'foodDevelopmentTransfer', 'foodDomesticProduced', 'foodExportIncome', 'foodExported', 'foodImported', 'foodLandCapacity', 'foodProduced',
       'foodProduction', 'foodStockChange', 'foodStorageCapacity', 'foodTargetStock', 'fundedArmyUpkeep',
       'integrationCost', 'mandatoryFundingRatio', 'military', 'mode', 'net', 'newBorrowing', 'passiveRecruitment', 'populationGrowth', 'recruitment',

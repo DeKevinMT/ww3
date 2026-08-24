@@ -1,5 +1,5 @@
 import { round } from './balance';
-import { countryTraitFactorV2 } from './traits';
+import { countryTraitFactorV2, type TraitEvaluationContextV2 } from './traits';
 import type { PlayerId, ResearchBranchV2 } from './types';
 
 /**
@@ -12,11 +12,12 @@ export function applyResearchProgressTraitV2(
   activePlayerId: PlayerId | string,
   researchBranch: ResearchBranchV2,
   baseProgress: number,
+  context: TraitEvaluationContextV2 = {},
 ): number {
   if (!Number.isFinite(baseProgress) || baseProgress <= 0) return 0;
   return round(baseProgress * countryTraitFactorV2(
     activePlayerId,
     'research-progress',
-    { researchBranch },
+    { ...context, researchBranch },
   ), 9);
 }

@@ -42,6 +42,8 @@ export interface MapFrontOperation {
   sourceId: string;
   targetId: string;
   doctrine: string;
+  /** Land contact or a naval sea lane. Optional only for legacy snapshots. */
+  access?: 'land' | 'naval';
   momentum: number;
   supply?: number;
 }

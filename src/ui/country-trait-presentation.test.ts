@@ -35,6 +35,25 @@ describe('country trait presentation', () => {
     expect(rendered.html).toContain(trait.effect);
     expect(rendered.html).toContain(trait.description);
     expect(rendered.html).toContain('UNIQUE COUNTRY TRAIT');
+    expect(rendered.html).toContain('PLAYER CONTROL ×');
+    expect(rendered.html).toContain('This amplifies the same trait; it never adds a second trait.');
+  });
+
+  it('previews the selected human multiplier before country choice', () => {
+    const engine = new WorldEngineV2(42_005);
+    const opening = new IntroOpeningMetricsCacheV2().read(engine);
+    const greenland = nationIdV2('grl');
+    const rendered = renderNationPickerV2(opening, {
+      previewCountryId: greenland,
+      searchQuery: '',
+      continent: 'ALL',
+      sort: 'power',
+      context: 'campaign',
+    });
+
+    expect(rendered.html).toContain('PLAYER CONTROL ×1.80');
+    expect(rendered.html).toContain('opening military rank #166');
+    expect(rendered.html).toContain('+1200% army capacity');
   });
 
   it('renders one active nation trait and explicitly rejects fusion stacking', () => {
@@ -48,6 +67,7 @@ describe('country trait presentation', () => {
     expect(nationPanelTrait).toContain(activeTrait.name);
     expect(nationPanelTrait).toContain(activeTrait.effect);
     expect(nationPanelTrait).toContain('Fused or conquered countries never add or stack their traits.');
+    expect(nationPanelTrait).toContain('This amplifies the same trait; it never adds a second trait.');
     expect(nationPanelTrait).not.toContain(absorbedTrait.name);
     expect(nationPanelTrait).not.toContain(absorbedTrait.effect);
   });

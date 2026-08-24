@@ -1,5 +1,6 @@
 import {
   ARMY_CAPACITY_STRUCTURAL_POPULATION_SHARE,
+  CONQUEST_INITIAL_INTEGRATION_SHARE,
   clamp,
   round,
 } from './balance';
@@ -40,9 +41,34 @@ const liveTerritoryArmyCapacityTargetV2 = (
 };
 
 /** A newly conquered foreign territory can host this extra share of empire forces. */
-export const CONQUERED_TERRITORY_EMPIRE_COMBAT_CAP_SHARE_V2 = 0.0125;
-/** Full integration expands that scalable foreign-territory deployment allowance. */
+export const CONQUERED_TERRITORY_EMPIRE_COMBAT_CAP_SHARE_V2 = 0.10;
+/** Existing public name for the established opening-homeland allowance. */
 export const INTEGRATED_CORE_EMPIRE_COMBAT_CAP_SHARE_V2 = 0.03;
+/** A fully integrated foreign territory retains this bounded empire allowance. */
+export const INTEGRATED_FOREIGN_TERRITORY_EMPIRE_COMBAT_CAP_SHARE_V2 = 0.05;
+/** Explicit semantic alias used by the ownership-aware support selector. */
+export const ORIGINAL_HOMELAND_EMPIRE_COMBAT_CAP_SHARE_V2
+  = INTEGRATED_CORE_EMPIRE_COMBAT_CAP_SHARE_V2;
+
+/**
+ * Foreign occupation starts with a large consolidation envelope, then releases
+ * half of that empire-wide deployment room as integration becomes permanent.
+ * This is only a stationing ceiling: it neither requires nor creates troops.
+ */
+export function foreignTerritoryEmpireCombatCapShareV2(integration: number): number {
+  const progress = clamp(
+    (integration - CONQUEST_INITIAL_INTEGRATION_SHARE)
+      / (1 - CONQUEST_INITIAL_INTEGRATION_SHARE),
+    0,
+    1,
+  );
+  return round(
+    CONQUERED_TERRITORY_EMPIRE_COMBAT_CAP_SHARE_V2
+      + (INTEGRATED_FOREIGN_TERRITORY_EMPIRE_COMBAT_CAP_SHARE_V2
+        - CONQUERED_TERRITORY_EMPIRE_COMBAT_CAP_SHARE_V2) * progress,
+    12,
+  );
+}
 
 /**
  * The one canonical army-cap rule. Captured territory unlocks its structural
@@ -163,8 +189,8 @@ export function stateTerritoryArmyCapacityTargetV2(
 
 /**
  * Hard ceiling for new recruitment or logistics entering one territory.
- * Every owned core receives the mature empire allowance; a newly conquered
- * foreign territory receives the smaller allowance until integration ends.
+ * Opening homeland retains its mature allowance. Foreign territory receives a
+ * larger consolidation envelope that declines smoothly throughout integration.
  */
 export function stateTerritoryArmySupportCeilingV2(
   state: WorldStateV2,
@@ -184,9 +210,9 @@ export function stateTerritoryArmySupportCeilingV2(
   const isOriginalHomeland = isOwned
     && content.territories[territoryId]?.initialOwnerId === ownerId;
   const empireSupportShare = !isOwned ? 0
-    : isOriginalHomeland || territory.integration >= 1
-      ? INTEGRATED_CORE_EMPIRE_COMBAT_CAP_SHARE_V2
-      : CONQUERED_TERRITORY_EMPIRE_COMBAT_CAP_SHARE_V2;
+    : isOriginalHomeland
+      ? ORIGINAL_HOMELAND_EMPIRE_COMBAT_CAP_SHARE_V2
+      : foreignTerritoryEmpireCombatCapShareV2(territory.integration);
   const empireSupport = empireSupportShare <= 0 ? 0
     : (empireArmyCapacityOverride
       ?? nationalArmyCapacityTargetV2(state, content, ownerId)) * empireSupportShare;

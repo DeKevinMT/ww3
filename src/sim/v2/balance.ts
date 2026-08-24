@@ -7,7 +7,7 @@ import type {
   TerrainType,
 } from './types';
 
-export const V2_RULES_VERSION = 'frontier-command-v2.59-country-traits';
+export const V2_RULES_VERSION = 'frontier-command-v2.60-revolutions-debt';
 export const V2_CONTENT_VERSION = 'natural-earth-countries-2026-v7-greenland';
 export const V2_MAP_ID = 'natural-earth-countries-2026';
 export const V2_TICK_DURATION_MS = 1_000;
@@ -40,11 +40,35 @@ export const MANUAL_PROPAGANDA_COST_GROWTH = 1.35;
 /** Healthy countries preserve their whole trained army and always rebuild toward full capacity. */
 export const AI_HEALTHY_ARMY_TARGET = 1;
 export const AI_SEVERE_DEBT_REVENUE_WEEKS = 26;
+/** A one-week overdraft remains a recoverable liquidity event rather than a systemic crisis. */
+export const DEBT_RECOVERY_GRACE_REVENUE_WEEKS = 1;
+/** A full year of ordinary revenue in debt marks the critical end of the progressive curve. */
+export const DEBT_CRITICAL_REVENUE_WEEKS = 52;
+/** Existing debt starts accruing a small carrying premium only after two revenue-weeks. */
+export const DEBT_CARRYING_PREMIUM_START_REVENUE_WEEKS = 2;
+export const DEBT_CARRYING_PREMIUM_FULL_REVENUE_WEEKS = 8;
+export const DEBT_CARRYING_PREMIUM_BASE_RATE = 0.0005;
+export const DEBT_CARRYING_PREMIUM_RECOVERY_RATE = 0.0015;
+export const DEBT_CARRYING_PREMIUM_CRITICAL_RATE = 0.002;
+export const DEBT_CARRYING_PREMIUM_MAX_REVENUE_SHARE = 0.25;
+export const DEBT_NEW_BORROWING_PREMIUM = 0.10;
+/** Debt makes imported food progressively dearer without penalising a brief overdraft. */
+export const DEBT_IMPORT_COST_RECOVERY_BONUS = 0.30;
+export const DEBT_IMPORT_COST_CRITICAL_BONUS = 0.20;
+/** Discretionary programmes contract gradually while mandatory survival costs remain real. */
+export const DEBT_PROGRAM_PENALTY_PEACE_RECOVERY = 0.22;
+export const DEBT_PROGRAM_PENALTY_PEACE_CRITICAL = 0.12;
+export const DEBT_PROGRAM_PENALTY_WAR_RECOVERY = 0.18;
+export const DEBT_PROGRAM_PENALTY_WAR_CRITICAL = 0.10;
+export const DEBT_PROGRAM_ENVELOPE_FLOOR_PEACE = 0.35;
+export const DEBT_PROGRAM_ENVELOPE_FLOOR_WAR = 0.45;
 /** Only a catastrophic, genuinely unaffordable force may shrink, and then over decades. */
 export const EXTREME_CRISIS_FOOD_COVERAGE = 0.50;
 export const EXTREME_CRISIS_FOOD_RESERVE_WEEKS = 0.25;
 export const EXTREME_CRISIS_MAX_UPKEEP_FUNDING = 0.50;
 export const EXTREME_CRISIS_DEMOBILIZATION_RATE = 0.0005;
+/** Even an extreme fiscal collapse preserves one quarter of live capacity as a home guard. */
+export const EXTREME_CRISIS_HOME_GUARD_CAPACITY_SHARE = 0.25;
 /** Normal training is slow and predictable; Training research improves the pipeline. */
 export const PASSIVE_RECRUITMENT_CAPACITY_RATE = 0.00085;
 /** Smaller maximum armies complete the same readiness rebuild somewhat sooner. */
@@ -217,17 +241,18 @@ export const NATIONAL_IQ_INSTITUTIONAL_CAPACITY_FLOOR = 0.2;
 export const NATIONAL_IQ_INSTITUTIONAL_CAPACITY_CEILING = 18;
 export const NATIONAL_IQ_PROXY_GDP_WEIGHT = 0.75;
 export const NATIONAL_IQ_PROXY_INSTITUTION_WEIGHT = 0.25;
-/** GDP per capita remains the primary opening-force quality input; IQ refines it. */
-export const NATIONAL_QUALITY_GDP_WEIGHT = 0.70;
-export const NATIONAL_QUALITY_IQ_WEIGHT = 0.30;
+/** GDP per capita remains primary, while IQ now carries a clearly material 35% share. */
+export const NATIONAL_QUALITY_GDP_WEIGHT = 0.65;
+export const NATIONAL_QUALITY_IQ_WEIGHT = 0.35;
 /** Total opening combat-quality spread around the neutral readiness baseline. */
 export const NATIONAL_QUALITY_COMBAT_SPAN = 0.06;
 /**
  * Live national combat systems make prosperity and IQ materially important on
- * top of the local force quality carried by soldiers. The full 1.0 span gives
- * the poorest/lowest-IQ and richest/highest-IQ systems 0.5x and 1.5x quality.
+ * top of the local force quality carried by soldiers. The 1.3 span gives the
+ * poorest/lowest-IQ and richest/opening-IQ systems 0.35x and 1.65x quality;
+ * Education research can raise the latter smoothly to 1.715x at IQ 112.
  */
-export const NATIONAL_COMBAT_SYSTEM_QUALITY_SPAN = 1;
+export const NATIONAL_COMBAT_SYSTEM_QUALITY_SPAN = 1.3;
 /** A higher ceiling leaves room for already-rich countries to keep modernising. */
 export const NATIONAL_COMBAT_GDP_PER_CAPITA_FLOOR = 500;
 export const NATIONAL_COMBAT_GDP_PER_CAPITA_CEILING = 250_000;
@@ -288,6 +313,8 @@ export const WAR_OPERATION_COST_PER_MILLION = 0.08;
 /** Repeat campaigns strain the same treasury and logistics network; the softened surcharge is bounded at +30%. */
 export const WAR_FATIGUE_OPERATION_COST_PER_POINT = 0.015;
 export const WAR_FATIGUE_OPERATION_COST_MAX_BONUS = 0.30;
+/** Sea battles create less sustained national fatigue than equivalent ground contact. */
+export const NAVAL_BATTLE_FATIGUE_MULTIPLIER = 0.65;
 export const WAR_ACCESS_OPERATION_MULTIPLIER = {
   land: 1,
   naval: 1.35,
@@ -416,20 +443,30 @@ export const NATIONAL_AI_WAR_FREE_CASHFLOW_SHARE_MIN = 0.14;
 export const NATIONAL_AI_WAR_FREE_CASHFLOW_SHARE_MAX = 0.18;
 /** Even a fully funded peacetime reserve keeps a small continuing emergency contribution. */
 export const NATIONAL_AI_FUNDED_FREE_CASHFLOW_SHARE = 0.05;
+/** Cash above ten percent of live controlled GDP is an investable long-run national surplus. */
+export const AI_EXCESS_TREASURY_GDP_THRESHOLD_SHARE = 0.10;
+/** The surplus draw reaches full speed only after another five percent of GDP accumulates. */
+export const AI_EXCESS_TREASURY_RAMP_GDP_SHARE = 0.05;
+/** At most two percent of the actual surplus and one quarter of weekly revenue is invested per week. */
+export const AI_EXCESS_TREASURY_WEEKLY_SURPLUS_RATE = 0.02;
+export const AI_EXCESS_TREASURY_WEEKLY_REVENUE_CAP = 0.25;
+/** Productive non-military investment always retains both research and development capacity. */
+export const AI_EXCESS_TREASURY_RESEARCH_SHARE_MIN = 0.35;
+export const AI_EXCESS_TREASURY_RESEARCH_SHARE_MAX = 0.65;
 
 /** A conquest exposes ten percent of its surviving potential immediately. */
 export const CONQUEST_INITIAL_INTEGRATION_SHARE = 0.10;
-/** Every unfinished integration costs 2% of that territory's live GDP per year. */
-export const INTEGRATION_ADMINISTRATION_ANNUAL_OUTPUT_SHARE = 0.02;
+/** Every unfinished integration costs 3% of its frozen conquest GDP per year. */
+export const INTEGRATION_ADMINISTRATION_ANNUAL_OUTPUT_SHARE = 0.03;
 export const WEEKS_PER_YEAR = 52;
 /** A minimum guard slice crosses the border after decisive conquest. */
 export const CONQUEST_GUARD_MIN_TRANSFER_SHARE = 0.02;
 /** A fresh conquest may commit up to 10% of its surviving source as a real one-year guard. */
 export const CONQUEST_CAPTURE_GUARD_MAX_TRANSFER_SHARE = 0.10;
 export const CONQUEST_CAPTURE_GUARD_TICKS = 52;
-/** Loose containment networks prefer consolidation over a many-country dogpile. */
-export const DEFENSIVE_FEDERATION_THREAT = 78;
-export const DEFENSIVE_FEDERATION_COOLDOWN_TICKS = 312;
+/** Permanent defensive mergers are an exceptional, late containment response. */
+export const DEFENSIVE_FEDERATION_THREAT = 86;
+export const DEFENSIVE_FEDERATION_COOLDOWN_TICKS = 416;
 
 export const DEFAULT_BUDGET_V2: Readonly<BudgetPolicyV2> = {
   military: 35,
@@ -598,6 +635,76 @@ export function round(value: number, digits = 6): number {
 export function smoothstep(edge0: number, edge1: number, value: number): number {
   const unit = clamp((value - edge0) / (edge1 - edge0), 0, 1);
   return unit * unit * (3 - 2 * unit);
+}
+
+export interface ExcessTreasuryInvestmentV2 {
+  threshold: number;
+  excess: number;
+  activation: number;
+  weeklyDraw: number;
+}
+
+/**
+ * Pure GDP-scaled surplus curve for recurring autonomous investment. The untouched
+ * ten-percent buffer is materially larger than the ordinary revenue runway;
+ * the smooth five-percent ramp and two independent caps prevent windfall
+ * spending while accumulated cash itself supplies all required memory.
+ */
+export function excessTreasuryInvestmentV2(
+  treasury: number,
+  controlledOutput: number,
+  weeklyRevenue: number,
+): ExcessTreasuryInvestmentV2 {
+  const safeTreasury = Math.max(0, Number.isFinite(treasury) ? treasury : 0);
+  const safeOutput = Math.max(0, Number.isFinite(controlledOutput) ? controlledOutput : 0);
+  const safeRevenue = Math.max(0, Number.isFinite(weeklyRevenue) ? weeklyRevenue : 0);
+  const threshold = safeOutput * AI_EXCESS_TREASURY_GDP_THRESHOLD_SHARE;
+  const excess = Math.max(0, safeTreasury - threshold);
+  const rampWidth = safeOutput * AI_EXCESS_TREASURY_RAMP_GDP_SHARE;
+  const activation = rampWidth > 0 ? smoothstep(0, rampWidth, excess) : 0;
+  return {
+    threshold,
+    excess,
+    activation,
+    weeklyDraw: Math.min(
+      excess,
+      excess * AI_EXCESS_TREASURY_WEEKLY_SURPLUS_RATE,
+      safeRevenue * AI_EXCESS_TREASURY_WEEKLY_REVENUE_CAP * activation,
+    ),
+  };
+}
+
+export interface DebtPressureV2 {
+  /** Outstanding debt measured in ordinary weekly tax revenue. */
+  debtWeeks: number;
+  /** Smooth pressure from the one-week grace point through the severe 26-week threshold. */
+  recovery: number;
+  /** Additional pressure between severe debt and one full revenue-year of debt. */
+  critical: number;
+}
+
+/**
+ * One deterministic debt curve shared by finance and food costs. It is derived
+ * from the live treasury and therefore adds no persisted timer or multiplayer
+ * state. A brief overdraft receives a genuine grace band; long debt compounds
+ * through the systems the country already has to fund.
+ */
+export function debtPressureV2(treasuryWeeks: number): DebtPressureV2 {
+  const finiteWeeks = Number.isFinite(treasuryWeeks) ? treasuryWeeks : 0;
+  const debtWeeks = Math.max(0, -finiteWeeks);
+  return {
+    debtWeeks,
+    recovery: smoothstep(
+      DEBT_RECOVERY_GRACE_REVENUE_WEEKS,
+      AI_SEVERE_DEBT_REVENUE_WEEKS,
+      debtWeeks,
+    ),
+    critical: smoothstep(
+      AI_SEVERE_DEBT_REVENUE_WEEKS,
+      DEBT_CRITICAL_REVENUE_WEEKS,
+      debtWeeks,
+    ),
+  };
 }
 
 /** Converts uncapped research levels into a still-improving, diminishing effective level. */

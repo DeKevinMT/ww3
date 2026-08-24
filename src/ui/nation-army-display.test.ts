@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest';
+import { createWorldStateV2 } from '../sim/v2/bootstrap';
+import { nationIdV2 } from '../sim/v2/types';
 import {
   armyCapacityLabel,
   baseOperatingCostLabel,
   globalRankingDetail,
   taxIncomeBasisLabel,
   toastVisibilityDuration,
+  treasuryTopbarPresentationV2,
+  worldTopbarStatsV2,
 } from './WorldUIV2';
 
 describe('nation army display', () => {
@@ -13,8 +17,39 @@ describe('nation army display', () => {
     expect(armyCapacityLabel(0.05, 0.125)).toBe('50.00K / 125.00K');
   });
 
-  it('shows combat power and economy together under one global score', () => {
-    expect(globalRankingDetail(1_250_000, 5)).toBe('COMBAT 1.25M · ECONOMY $5.00B');
+  it('shows only military power in global ranking detail', () => {
+    expect(globalRankingDetail(1_250_000, 5)).toBe('MILITARY POWER 1.25M');
+  });
+
+  it('presents current treasury separately from its weekly forecast', () => {
+    expect(treasuryTopbarPresentationV2(4.25, -0.125)).toEqual({
+      className: 'top-metric--treasury',
+      value: '$4.25B',
+      trend: '−$125.00M/wk',
+      trendClassName: 'is-negative',
+      ariaLabel: 'Current empire treasury $4.25B; projected recurring net −$125.00M per week',
+    });
+    expect(treasuryTopbarPresentationV2(-0.5, 0.05)).toMatchObject({
+      className: 'top-metric--treasury is-debt',
+      value: '−$500.00M',
+      trend: '+$50.00M/wk',
+      trendClassName: 'is-positive',
+    });
+  });
+
+  it('reports live world population and mapped land-area control', () => {
+    const state = createWorldStateV2(77_001);
+    const belgium = nationIdV2('bel');
+    const stats = worldTopbarStatsV2(state, belgium);
+
+    expect(stats.population).toBeCloseTo(
+      Object.values(state.territories).reduce((sum, territory) => sum + territory.population, 0),
+      8,
+    );
+    expect(stats.controlledLandShare).toBeGreaterThan(0);
+    expect(stats.controlledLandShare).toBeLessThan(1);
+    expect(stats.controlledTerritories).toBeGreaterThan(0);
+    expect(stats.worldTerritories).toBe(166);
   });
 
   it('keeps important bottom notifications readable for longer', () => {

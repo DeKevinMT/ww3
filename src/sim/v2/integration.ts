@@ -7,15 +7,19 @@ import {
   clamp,
   round,
 } from './balance';
+import { synchronizeArmyCapacityV2 } from './capacity';
 import type { WorldContentV2 } from './content';
 import { addWorldEventV2 } from './events';
 import { isHumanPlayerV2, selectHumanPlayerIdsV2 } from './humanPlayers';
-import { invalidateNationIndexV2 } from './selectors';
+import { createNationStateV2 } from './nationState';
+import { invalidateNationIndexV2, invalidateTerritoryIndexV2 } from './selectors';
 import { countryTraitFactorV2, type TraitEvaluationContextV2 } from './traits';
 import {
   territoryIdV2,
+  type IntegrationProgramStateV2,
   type PlayerId,
   type TerritoryId,
+  type TerritoryStateV2,
   type WarAccessV2,
   type WorldStateV2,
 } from './types';
@@ -36,6 +40,61 @@ const INTEGRATION_LARGE_COUNTRY_YEARS = 100;
 export const INTEGRATION_DURATION_MULTIPLIER_V2 = 1.02;
 /** Voluntary defensive unions complete four times faster than conquest. */
 export const FEDERATION_INTEGRATION_DURATION_FACTOR_V2 = 0.25;
+/** Exactly one keyed roll is made for each frozen integration program. */
+export const TERRITORY_INTEGRATION_REVOLUTION_CHANCE_V2 = 0.02;
+/** A destined revolution occurs away from both capture and completion edges. */
+export const TERRITORY_INTEGRATION_REVOLUTION_WINDOW_START_V2 = 0.20;
+export const TERRITORY_INTEGRATION_REVOLUTION_WINDOW_END_V2 = 0.80;
+
+function integrationRevolutionHashV2(seed: number, key: string, salt: number): number {
+  let value = (seed ^ Math.imul(salt + 1, 0x9e3779b1)) >>> 0;
+  for (let index = 0; index < key.length; index += 1) {
+    value = Math.imul(value ^ key.charCodeAt(index), 0x85ebca6b) >>> 0;
+    value ^= value >>> 13;
+  }
+  value = Math.imul(value ^ (value >>> 16), 0xc2b2ae35) >>> 0;
+  return value >>> 0;
+}
+
+/**
+ * Derives a single optional revolution tick without consuming the campaign RNG.
+ * Saving, loading and iteration order therefore cannot change either the event
+ * or any unrelated future battle, research or AI draw.
+ */
+export function territoryIntegrationRevolutionTickV2(
+  state: Pick<WorldStateV2, 'seed'>,
+  territoryId: TerritoryId,
+  program: IntegrationProgramStateV2,
+): number | undefined {
+  const duration = program.completesTick - program.startedTick;
+  if (!Number.isInteger(duration) || duration < 2) return undefined;
+  const key = [
+    territoryId,
+    program.fromOwnerId,
+    program.fromCoreOwnerId,
+    program.toOwnerId,
+    program.startedTick,
+    program.completesTick,
+  ].join('|');
+  const chanceRoll = integrationRevolutionHashV2(state.seed, key, 0)
+    / 4_294_967_296;
+  if (chanceRoll >= TERRITORY_INTEGRATION_REVOLUTION_CHANCE_V2) return undefined;
+  const firstTick = Math.max(
+    program.startedTick + 1,
+    program.startedTick + Math.ceil(
+      duration * TERRITORY_INTEGRATION_REVOLUTION_WINDOW_START_V2,
+    ),
+  );
+  const lastTick = Math.min(
+    program.completesTick - 1,
+    program.startedTick + Math.floor(
+      duration * TERRITORY_INTEGRATION_REVOLUTION_WINDOW_END_V2,
+    ),
+  );
+  if (lastTick < firstTick) return undefined;
+  const window = lastTick - firstTick + 1;
+  return firstTick + integrationRevolutionHashV2(state.seed, key, 1) % window;
+}
 
 /**
  * Administration price frozen from the territory's live output at conquest.
@@ -238,6 +297,7 @@ export function quoteTerritoryIntegrationV2(
   ));
   const leader = state.players[newOwnerId];
   const context: TraitEvaluationContextV2 = {
+    humanControlled: isHumanPlayerV2(state, newOwnerId),
     access: options.access,
     terrain: definition?.terrain,
     homeland: definition?.initialOwnerId === newOwnerId,
@@ -354,6 +414,137 @@ export function beginFederationTerritoryIntegrationV2(
     'federation',
     integrationAccessV2(accessOrOptions),
   );
+}
+
+export interface IntegrationRevolutionV2 {
+  territoryId: TerritoryId;
+  displacedOwnerId: PlayerId;
+  restoredOwnerId: PlayerId;
+}
+
+/**
+ * Recreates only the canonical shell of an absorbed opening nation. Its old
+ * inventories and knowledge were already transferred during permanent fusion,
+ * so a revolution must not mint those national resources a second time.
+ */
+function restoreAbsorbedOpeningNationV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  playerId: PlayerId,
+  capitalId: TerritoryId,
+): void {
+  if (state.players[playerId]) return;
+  const restored = createNationStateV2(playerId, content);
+  restored.treasury = 0;
+  restored.foodStock = 0;
+  restored.domesticFoodCapacity = 0;
+  restored.trainedReserves = 0;
+  restored.capitalId = capitalId;
+  state.players[playerId] = restored;
+  invalidateNationIndexV2(state);
+}
+
+function relocateLostCapitalsV2(
+  state: WorldStateV2,
+  playerIds: ReadonlySet<PlayerId>,
+): void {
+  for (const playerId of [...playerIds].sort((left, right) => left.localeCompare(right))) {
+    const nation = state.players[playerId];
+    if (!nation || state.territories[nation.capitalId]?.owner === playerId) continue;
+    const replacement = (Object.entries(state.territories) as Array<[
+      TerritoryId,
+      TerritoryStateV2,
+    ]>)
+      .filter(([, territory]) => territory.owner === playerId)
+      .sort((left, right) => right[1].economy - left[1].economy
+        || left[0].localeCompare(right[0]))[0]?.[0];
+    if (replacement) nation.capitalId = replacement;
+  }
+}
+
+/** Ownership changes can invalidate either end of a stored operation. */
+function pruneRevolutionWarOperationsV2(state: WorldStateV2): void {
+  for (const war of state.wars) {
+    war.attackerOperations = war.attackerOperations.filter((operation) => (
+      state.territories[operation.sourceId]?.owner === war.attackerId
+        && state.territories[operation.targetId]?.owner === war.defenderId
+    ));
+    war.defenderOperations = war.defenderOperations.filter((operation) => (
+      state.territories[operation.sourceId]?.owner === war.defenderId
+        && state.territories[operation.targetId]?.owner === war.attackerId
+    ));
+  }
+}
+
+/**
+ * Resolves rare, seed-stable revolutions before weekly finance is projected.
+ * The immutable 2026 opening owner is the sole restoration source; live owner,
+ * mutable core identity and fusion leader are deliberately ignored.
+ */
+export function processTerritoryIntegrationRevolutionsV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+): IntegrationRevolutionV2[] {
+  const revolutions: IntegrationRevolutionV2[] = [];
+  const displacedOwners = new Map<PlayerId, PlayerId>();
+  for (const territoryId of content.territoryIds) {
+    const territory = state.territories[territoryId];
+    const program = territory?.integrationProgram;
+    const restoredOwnerId = content.territories[territoryId]?.initialOwnerId;
+    if (!territory || !program || !restoredOwnerId
+      || program.toOwnerId !== territory.owner
+      || restoredOwnerId === territory.owner
+      || state.tick <= program.startedTick
+      || state.tick >= program.completesTick
+      || territoryIntegrationRevolutionTickV2(state, territoryId, program) !== state.tick) {
+      continue;
+    }
+    const displacedOwnerId = territory.owner;
+    const displacedName = state.players[displacedOwnerId]?.empireName
+      || content.nations[displacedOwnerId]?.shortName || displacedOwnerId;
+    const restoredName = content.nations[restoredOwnerId]?.shortName || restoredOwnerId;
+    const territoryName = content.territories[territoryId]?.name || territoryId;
+    restoreAbsorbedOpeningNationV2(
+      state,
+      content,
+      restoredOwnerId,
+      territoryId,
+    );
+    territory.owner = restoredOwnerId;
+    territory.coreOwner = restoredOwnerId;
+    territory.integration = 1;
+    delete territory.integrationProgram;
+    displacedOwners.set(displacedOwnerId, restoredOwnerId);
+    revolutions.push({ territoryId, displacedOwnerId, restoredOwnerId });
+    addWorldEventV2(
+      state,
+      'critical',
+      'critical',
+      `${restoredName} rose in revolution and restored its 2026 sovereignty in ${territoryName}, ending integration into ${displacedName}.`,
+      territoryId,
+      restoredOwnerId,
+    );
+  }
+  if (revolutions.length === 0) return revolutions;
+  invalidateTerritoryIndexV2(state);
+  relocateLostCapitalsV2(state, new Set([
+    ...displacedOwners.keys(),
+    ...revolutions.map((revolution) => revolution.restoredOwnerId),
+  ]));
+  pruneRevolutionWarOperationsV2(state);
+  // Resolve a landless occupier only after every simultaneous revolution has
+  // changed ownership, so canonical successor selection is order-independent.
+  for (const [displacedOwnerId, fallbackOwnerId] of [...displacedOwners]
+    .sort(([left], [right]) => left.localeCompare(right))) {
+    retireAbsorbedNationV2(
+      state,
+      content,
+      displacedOwnerId,
+      fallbackOwnerId,
+    );
+  }
+  synchronizeArmyCapacityV2(state, content);
+  return revolutions;
 }
 
 function nationStillHasBackendIdentityV2(

@@ -30,6 +30,7 @@ import {
   PEACE_REQUEST_COOLDOWN_TICKS,
   PEACE_REQUEST_MIN_WAR_AGE_TICKS,
   POST_WAR_TRANSITION_FATIGUE,
+  NAVAL_BATTLE_FATIGUE_MULTIPLIER,
   STALE_WAR_TICKS,
   TERRAIN_DEFENSE_MODIFIER,
   TRUCE_TICKS,
@@ -67,6 +68,7 @@ import {
   traitWarContextV2,
 } from './traitContext';
 import { countryTraitFactorV2, type TraitEvaluationContextV2 } from './traits';
+import { selectWarStrainSummaryV2 } from './warStrain';
 import {
   createMilitaryBaseSnapshotV2,
   selectActiveWarBetweenV2,
@@ -272,6 +274,33 @@ function competingInvaderIdsV2(
     .sort((left, right) => left.localeCompare(right));
 }
 
+/**
+ * Once a human empire is critically overextended, AI attackers may pressure it
+ * in parallel instead of turning that opportunity into extra wars among one
+ * another. Their target wars remain independent and still count normally
+ * against every ordinary attacker and global cap in the planner.
+ */
+function declarationRivalInvaderIdsV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  attackerId: PlayerId,
+  defenderId: PlayerId,
+  escalatedFromWarId?: string,
+): PlayerId[] {
+  const rivals = competingInvaderIdsV2(
+    state,
+    attackerId,
+    defenderId,
+    escalatedFromWarId,
+  );
+  if (isHumanPlayerV2(state, attackerId) || !isHumanPlayerV2(state, defenderId)) {
+    return rivals;
+  }
+  return selectWarStrainSummaryV2(state, content, defenderId).score >= 75
+    ? []
+    : rivals;
+}
+
 export function canDeclareWarV2(
   state: WorldStateV2,
   content: WorldContentV2,
@@ -297,7 +326,13 @@ export function warDeclarationStatusV2(
   const armyWarning = army.fillRatio < 0.55
     ? `Only ${Math.round(army.fillRatio * 100)}% of the population-based army cap is currently manned; war remains legal but high risk.`
     : undefined;
-  const rivalInvaders = competingInvaderIdsV2(state, attackerId, defenderId, escalatedFromWarId);
+  const rivalInvaders = declarationRivalInvaderIdsV2(
+    state,
+    content,
+    attackerId,
+    defenderId,
+    escalatedFromWarId,
+  );
   const frontWarning = activeFronts > 0
     ? `Opening front ${activeFronts + 1}: manpower, supply and war funding will be shared across every active war.`
     : undefined;
@@ -311,6 +346,7 @@ export function warDeclarationStatusV2(
   const attacker = state.players[attackerId];
   if (!attacker || !state.players[defenderId] || attackerId === defenderId) return status(false, 'Invalid nation pair.');
   if (selectIsEliminatedV2(state, attackerId) || selectIsEliminatedV2(state, defenderId)) return status(false, 'An eliminated nation cannot fight.');
+  if (attacker.treasury < 0) return status(false, 'Repay national debt before declaring a new war.');
   if (selectActiveWarBetweenV2(state, attackerId, defenderId)) return status(false, 'These nations are already at war.');
   if (areAlliedV2(state, attackerId, defenderId)) return status(false, 'Player allies cannot declare war on each other.');
   const truceWeeks = truceWeeksRemainingV2(state, attackerId, defenderId);
@@ -335,8 +371,24 @@ export function declareWarV2(
 ): CommandResultV2 {
   const linkedWar = escalatedFromWarId
     ? state.wars.find((war) => war.id === escalatedFromWarId) : undefined;
-  if (!canDeclareWarV2(state, content, attackerId, defenderId, escalatedFromWarId)) return { accepted: false, reason: 'War is not legal or affordable.' };
-  const rivalInvaders = competingInvaderIdsV2(state, attackerId, defenderId, escalatedFromWarId);
+  const declaration = warDeclarationStatusV2(
+    state,
+    content,
+    attackerId,
+    defenderId,
+    escalatedFromWarId,
+  );
+  if (!declaration.allowed) return {
+    accepted: false,
+    reason: declaration.reason ?? 'War is not legal or affordable.',
+  };
+  const rivalInvaders = declarationRivalInvaderIdsV2(
+    state,
+    content,
+    attackerId,
+    defenderId,
+    escalatedFromWarId,
+  );
   const openWar = (newAttackerId: PlayerId, newDefenderId: PlayerId): void => {
     state.allianceOffers = state.allianceOffers.filter((offer) => !(
       (offer.fromId === newAttackerId && offer.toId === newDefenderId)
@@ -1363,16 +1415,20 @@ export function resolveBattlePulseV2(
   }
   const attackerCapacity = selectTotalManpowerV2(state, attackerId).capacity;
   const defenderCapacity = selectTotalManpowerV2(state, defenderId).capacity;
+  const battleFatigueMultiplier = operation.access === 'naval'
+    ? NAVAL_BATTLE_FATIGUE_MULTIPLIER : 1;
   addWarFatigueGainV2(
     state,
     attackerId,
-    0.08 + 4 * damageToAttacker / Math.max(0.000001, attackerCapacity),
+    (0.08 + 4 * damageToAttacker / Math.max(0.000001, attackerCapacity))
+      * battleFatigueMultiplier,
     attackerTraitContext,
   );
   addWarFatigueGainV2(
     state,
     defenderId,
-    0.08 + 4 * damageToDefender / Math.max(0.000001, defenderCapacity),
+    (0.08 + 4 * damageToDefender / Math.max(0.000001, defenderCapacity))
+      * battleFatigueMultiplier,
     defenderTraitContext,
   );
 

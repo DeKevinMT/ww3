@@ -25,6 +25,42 @@ describe('war strain HUD summary', () => {
     expect(summary.guidance).toMatch(/exhaustion|recovery/i);
   });
 
+  it('uses diminishing strain for simultaneous fronts instead of a linear dogpile spike', () => {
+    const scoreAt = (activeFronts: number) => summarizeWarStrainV2({
+      activeWars: 1,
+      activeFronts,
+      warFatigue: 0,
+      armyFillRatio: 1,
+      reserveFillRatio: 1,
+    }).score;
+
+    expect(scoreAt(1)).toBe(14);
+    expect(scoreAt(4)).toBeLessThanOrEqual(24);
+    expect(scoreAt(2) - scoreAt(1)).toBeGreaterThan(scoreAt(5) - scoreAt(4));
+  });
+
+  it('counts naval routes as lighter theatre strain than the same number of land fronts', () => {
+    const land = summarizeWarStrainV2({
+      activeWars: 1,
+      activeFronts: 6,
+      navalFronts: 0,
+      warFatigue: 20,
+      armyFillRatio: 0.9,
+      reserveFillRatio: 0.8,
+    });
+    const naval = summarizeWarStrainV2({
+      activeWars: 1,
+      activeFronts: 6,
+      navalFronts: 6,
+      warFatigue: 20,
+      armyFillRatio: 0.9,
+      reserveFillRatio: 0.8,
+    });
+
+    expect(naval.score).toBeLessThan(land.score);
+    expect(land.score - naval.score).toBeGreaterThanOrEqual(6);
+  });
+
   it('uses the same meter after peace to explain the fading recovery tail', () => {
     expect(summarizeWarStrainV2({
       activeWars: 0,

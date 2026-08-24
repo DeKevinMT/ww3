@@ -20,6 +20,7 @@ import {
   FEDERATION_INTEGRATION_DURATION_FACTOR_V2,
   territoryIntegrationDurationWeeksV2,
 } from './integration';
+import { invariantErrorsV2 } from './invariants';
 import {
   moveBudgetTowardTargetV2,
   moveResearchTowardTargetV2,
@@ -29,6 +30,7 @@ import {
 } from './nationalAi';
 import {
   absorbFederationMemberV2,
+  defensiveFederationNameV2,
   resistanceCombatMultiplierV2,
   selectDefensiveFederationPolicyV2,
   selectGlobalResistanceV2,
@@ -529,6 +531,48 @@ describe('V2 dynamic containment coalition', () => {
     expect(selectGlobalResistanceV2(state)).toMatchObject({ defenseBonus: 0, offensiveBonus: 0 });
   });
 
+  it('gives each founding pair a stable, varied federation identity without adding bonuses', () => {
+    const lowCountries = defensiveFederationNameV2(
+      WORLD_CONTENT_V2,
+      [nationIdV2('lux'), nationIdV2('nld')],
+    );
+    const balticPair = defensiveFederationNameV2(
+      WORLD_CONTENT_V2,
+      [nationIdV2('est'), nationIdV2('lva')],
+    );
+    expect(defensiveFederationNameV2(
+      WORLD_CONTENT_V2,
+      [nationIdV2('nld'), nationIdV2('lux')],
+    )).toBe(lowCountries);
+    expect(lowCountries).toMatch(/^LUX–NLD .* Defense Federation$/);
+    expect(balticPair).toMatch(/^EST–LVA .* Defense Federation$/);
+    expect(balticPair).not.toBe(lowCountries);
+
+    const allPairNames: string[] = [];
+    for (let left = 0; left < WORLD_CONTENT_V2.nationIds.length; left += 1) {
+      for (let right = left + 1; right < WORLD_CONTENT_V2.nationIds.length; right += 1) {
+        allPairNames.push(defensiveFederationNameV2(
+          WORLD_CONTENT_V2,
+          [WORLD_CONTENT_V2.nationIds[left]!, WORLD_CONTENT_V2.nationIds[right]!],
+        ));
+      }
+    }
+    expect(allPairNames.every((name) => (
+      name.length <= 36
+      && !/[<>\r\n]/.test(name)
+      && name.endsWith('Defense Federation')
+    ))).toBe(true);
+    expect(new Set(allPairNames).size).toBe(allPairNames.length);
+
+    const state = createWorldStateV2(704_001);
+    const centralAfrica = nationIdV2('caf');
+    state.players[centralAfrica].empireName = defensiveFederationNameV2(
+      WORLD_CONTENT_V2,
+      [centralAfrica, nationIdV2('cod')],
+    );
+    expect(invariantErrorsV2(state, WORLD_CONTENT_V2)).toEqual([]);
+  });
+
   it('does not turn every loose coalition member into an automatic player attacker', () => {
     const state = createWorldStateV2(714);
     state.wars = [];
@@ -736,7 +780,14 @@ describe('V2 dynamic containment coalition', () => {
     const home = state.territories[state.players[human].capitalId];
     home.army.capacity = 2;
     home.army.manpower = 2;
-    state.tick = selectDefensiveFederationPolicyV2(state, WORLD_CONTENT_V2).cooldown;
+    const firstEligibleWindow = Math.ceil(
+      selectDefensiveFederationPolicyV2(state, WORLD_CONTENT_V2).cooldown / 104,
+    ) * 104;
+    state.tick = firstEligibleWindow + 52;
+    expect(updateGlobalResistanceV2(state, WORLD_CONTENT_V2)).toBeUndefined();
+    expect(new Set(Object.values(state.territories).map((territory) => territory.owner)).size)
+      .toBe(livingOwnersBefore.length);
+    state.tick = firstEligibleWindow + 104;
     const livingBefore = new Set(Object.values(state.territories).map((territory) => territory.owner)).size;
     const rivalTreasuryBefore = Object.entries(state.players)
       .filter(([id]) => id !== human)
@@ -841,7 +892,7 @@ describe('V2 dynamic containment coalition', () => {
     const ukraine = nationIdV2('ukr');
     state.humanPlayerId = human;
     state.wars = [];
-    state.tick = 520;
+    state.tick = 832;
     state.aiEscalation.globalThreat = 0;
     state.aiEscalation.coalitionMembers = [];
     state.aiEscalation.lastFederationTick = 0;

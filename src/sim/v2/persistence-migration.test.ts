@@ -157,6 +157,46 @@ function legacySaveV14(): Record<string, any> {
 }
 
 describe('V2 legacy save migration', () => {
+  it('authenticates schema-22 V2.59 saves before upgrading their rules version', () => {
+    const state = createWorldStateV2(8_590);
+    state.tick = 37;
+    const legacy = structuredClone(createSaveV2(state, WORLD_CONTENT_V2)) as Record<string, any>;
+    legacy.rulesVersion = 'frontier-command-v2.59-country-traits';
+    legacy.canonicalStateHash = canonicalStateHashV2(legacy);
+
+    const loaded = loadSaveV2(legacy as never, WORLD_CONTENT_V2);
+    expect(loaded.schemaVersion).toBe(22);
+    expect(loaded.rulesVersion).toBe(V2_RULES_VERSION);
+    expect(loaded.tick).toBe(37);
+    expect(createSaveV2(loaded, WORLD_CONTENT_V2).rulesVersion).toBe(V2_RULES_VERSION);
+  });
+
+  it('rehydrates derived Greenland capacity after authenticating a V2.59 save', () => {
+    const greenland = nationIdV2('grl');
+    const greenlandTerritory = territoryIdV2('grl');
+    const state = createWorldStateV2(8_591);
+    state.humanPlayerId = greenland;
+    state.humanPlayerIds = [greenland];
+    synchronizeArmyCapacityV2(state, WORLD_CONTENT_V2);
+    const legacy = structuredClone(createSaveV2(state, WORLD_CONTENT_V2)) as Record<string, any>;
+    legacy.rulesVersion = 'frontier-command-v2.59-country-traits';
+    const obsoleteCapacity = legacy.territories[greenlandTerritory].army.manpower;
+    legacy.territories[greenlandTerritory].army.capacity = obsoleteCapacity;
+    legacy.canonicalStateHash = canonicalStateHashV2(legacy);
+
+    const loaded = loadSaveV2(legacy as never, WORLD_CONTENT_V2);
+    expect(loaded.territories[greenlandTerritory]!.army.capacity).toBeCloseTo(
+      stateTerritoryArmyCapacityTargetV2(
+        loaded,
+        WORLD_CONTENT_V2,
+        greenlandTerritory,
+        greenland,
+      ),
+      9,
+    );
+    expect(loaded.territories[greenlandTerritory]!.army.capacity).toBeGreaterThan(obsoleteCapacity);
+  });
+
   it('migrates schema 21 alliance defaults and canonically round-trips revenge state', () => {
     const state = createWorldStateV2(85);
     const belgium = nationIdV2('bel');

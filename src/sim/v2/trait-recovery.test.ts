@@ -10,7 +10,8 @@ import {
   processFinanceMilitaryV2,
 } from './economy';
 import { invalidateTerritoryIndexV2 } from './selectors';
-import { traitTerritoryFrontAccessV2 } from './traitContext';
+import { traitNationContextV2, traitTerritoryFrontAccessV2 } from './traitContext';
+import { countryTraitFactorV2 } from './traits';
 import {
   nationIdV2,
   territoryIdV2,
@@ -168,8 +169,13 @@ describe('V2 country-trait recovery hooks', () => {
 
     const plans = createFinancePlansV2(state, content);
     const finance = plans.get(newZealand)!;
+    const navalRecoveryFactor = countryTraitFactorV2(
+      newZealand,
+      'condition-recovery',
+      { ...traitNationContextV2(state, newZealand), access: 'naval' },
+    );
     const navalExpected = expectedConditionAfterWeek(
-      state, newZealandTerritory, finance, true, 1.18,
+      state, newZealandTerritory, finance, true, navalRecoveryFactor,
     );
     const landExpected = expectedConditionAfterWeek(
       state, papuaNewGuineaTerritory, finance, true, 1,

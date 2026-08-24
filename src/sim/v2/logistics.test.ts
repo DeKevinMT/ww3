@@ -117,7 +117,7 @@ describe('route-aware empire logistics', () => {
     const frontierSupportCeiling = stateTerritoryArmySupportCeilingV2(
       state, WORLD_CONTENT_V2, secondId, bel,
     );
-    const legacyOvershoot = frontier.army.capacity * 10;
+    const legacyOvershoot = frontierSupportCeiling * 10;
     frontier.army.manpower = legacyOvershoot;
     const overshootEmpireManpower = selectTerritoriesOfV2(state, bel)
       .reduce((sum, territory) => sum + territory.army.manpower, 0);

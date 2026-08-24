@@ -20,7 +20,6 @@ import {
   selectFoodLandCapacityV2,
   selectFoodStorageCapacityV2,
   selectPopulationDynamicsV2,
-  selectRapidRecruitmentTermsV2,
   selectRecruitmentThroughputV2,
   selectRecruitmentTrainingPipelineV2,
   selectRecruitmentUnitCostV2,
@@ -33,6 +32,7 @@ import {
   selectTreasurySeizureShareV2,
   selectWeeklyFinanceBreakdownV2,
 } from './selectors';
+import { humanCountryTraitMultiplierV2 } from './traits';
 import {
   nationIdV2,
   territoryIdV2,
@@ -192,12 +192,13 @@ function withSeaRouteV2(
 describe('country-trait selector runtime', () => {
   it('applies fiscal traits once and never inherits an annexed country trait', () => {
     const belgium = identityFixtureV2('bel', 82_001);
+    const humanMultiplier = humanCountryTraitMultiplierV2(belgium.traitId);
     expect(selectTaxEfficiencyMultiplierV2(belgium.traitState, belgium.traitId)
       / selectTaxEfficiencyMultiplierV2(belgium.neutralState, belgium.neutralId))
-      .toBeCloseTo(1.07, 8);
+      .toBeCloseTo(1 + 0.07 * humanMultiplier, 8);
     expect(selectBaseOperatingCostShareV2(belgium.traitState, belgium.traitId)
       / selectBaseOperatingCostShareV2(belgium.neutralState, belgium.neutralId))
-      .toBeCloseTo(0.92, 8);
+      .toBeCloseTo(1 - 0.08 * humanMultiplier, 8);
 
     const fusionState = createWorldStateV2(82_002);
     const netherlands = nationIdV2('nld');
@@ -209,7 +210,7 @@ describe('country-trait selector runtime', () => {
     expect(selectTaxEfficiencyMultiplierV2(fusionState, netherlands)).toBe(1);
   });
 
-  it('wires recruitment cost, throughput, rapid cost and reserve capacity independently', () => {
+  it('wires recruitment cost, throughput and reserve capacity independently', () => {
     const china = identityFixtureV2('chn', 82_010);
     expect(selectRecruitmentUnitCostV2(china.traitState, china.traitId, china.traitContent)
       / selectRecruitmentUnitCostV2(china.neutralState, china.neutralId, china.neutralContent))
@@ -221,17 +222,6 @@ describe('country-trait selector runtime', () => {
     ) / selectRecruitmentTrainingPipelineV2(
       venezuela.neutralState, venezuela.neutralContent, venezuela.neutralId,
     )).toBeCloseTo(1.25, 1);
-
-    const greenland = identityFixtureV2('grl', 82_012);
-    configureBothV2(greenland, (state, playerId) => {
-      state.players[playerId]!.treasury = 1_000_000;
-      setArmyFillV2(state, playerId, 0.25);
-    });
-    expect(selectRapidRecruitmentTermsV2(
-      greenland.traitState, greenland.traitContent, greenland.traitId,
-    ).cost / selectRapidRecruitmentTermsV2(
-      greenland.neutralState, greenland.neutralContent, greenland.neutralId,
-    ).cost).toBeCloseTo(0.70, 5);
 
     const guatemala = identityFixtureV2('gtm', 82_013);
     expect(selectTrainedReserveCapacityV2(guatemala.traitState, guatemala.traitId)

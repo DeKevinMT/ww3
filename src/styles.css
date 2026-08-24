@@ -1820,6 +1820,9 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
 .world-ui-v2 .simple-metrics small { max-width: 100%; font-size: 7px; }
 .world-ui-v2 .simple-metrics > .is-debt span,
 .world-ui-v2 .simple-metrics > .is-debt strong { color: #ff8179; }
+.world-ui-v2 .simple-metrics .top-metric--treasury:not(.is-debt) strong { color: #9fe7dc; }
+.world-ui-v2 .simple-metrics .top-metric--world-population strong { color: #d9eef4; }
+.world-ui-v2 .simple-metrics .top-metric--world-control strong { color: #c6b9ec; }
 .world-ui-v2 .command-dock { width: 236px; grid-template-columns: repeat(2,1fr); }
 
 .simple-panel-intro {
@@ -4271,6 +4274,15 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
   font-weight: 850;
   letter-spacing: .35px;
   line-height: 1.4;
+}
+.country-trait-card > em.country-trait-card__player-bonus {
+  color: #b7dce5;
+  letter-spacing: .1px;
+}
+.country-trait-card > em.country-trait-card__player-bonus b {
+  margin-right: 5px;
+  color: #8fe7d8;
+  letter-spacing: .45px;
 }
 .world-ui-v2 .country-trait-card--nation {
   margin: 0 0 9px;

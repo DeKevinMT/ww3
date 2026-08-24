@@ -68,6 +68,25 @@ describe('clear war decisions and attrition', () => {
     expect(engine.rapidRecruitment('bel').accepted).toBe(false);
   });
 
+  it('blocks every new war declaration while the attacker is in debt', () => {
+    const engine = isolatedEngine(1_507, 'bel');
+    const belgium = id('bel');
+    const netherlands = id('nld');
+    engine.state.players[belgium].treasury = -0.001;
+
+    expect(engine.warDeclarationStatus(belgium, netherlands)).toMatchObject({
+      allowed: false,
+      reason: expect.stringMatching(/repay.*debt/i),
+    });
+    expect(engine.declareWar(belgium, netherlands)).toMatchObject({
+      accepted: false,
+      reason: expect.stringMatching(/repay.*debt/i),
+    });
+
+    engine.state.players[belgium].treasury = 0;
+    expect(engine.warDeclarationStatus(belgium, netherlands).allowed).toBe(true);
+  });
+
   it('does not let India regenerate indefinitely while fighting a stronger China', () => {
     const engine = isolatedEngine(1_504, 'chn');
     engine.state.players[id('chn')].treasury = 100_000;

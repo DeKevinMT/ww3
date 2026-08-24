@@ -60,8 +60,8 @@ describe('V2 authoritative manpower projection', () => {
     const finance = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, belgium);
     const projection = projectFinanceManpowerPhaseV2(state, WORLD_CONTENT_V2, belgium, finance);
 
-    expect(finance.mandatoryFundingRatio).toBeGreaterThan(0);
-    expect(finance.mandatoryFundingRatio).toBeLessThan(1);
+    expect(finance.excessCashInvestment).toBeGreaterThan(0);
+    expect(finance.mandatoryFundingRatio).toBe(1);
     expect(finance.acceleratedDemobilization).toBe(0);
     expect(finance.demobilizationCost).toBe(0);
     expect(projection.demobilized).toBeCloseTo(0, 12);

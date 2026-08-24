@@ -61,6 +61,16 @@ const war = (
 });
 
 describe('V2 trait hook context', () => {
+  it('marks every configured multiplayer human seat without marking AI countries', () => {
+    const state = createWorldStateV2(81_000);
+    state.humanPlayerId = bel;
+    state.humanPlayerIds = [bel, nld].sort((left, right) => left.localeCompare(right));
+
+    expect(traitNationContextV2(state, bel).humanControlled).toBe(true);
+    expect(traitNationContextV2(state, nld).humanControlled).toBe(true);
+    expect(traitNationContextV2(state, deu).humanControlled).toBe(false);
+  });
+
   it('keeps homeland tied to immutable opening ownership after conquest and integration', () => {
     const state = createWorldStateV2(81_001);
     state.wars = [];

@@ -28,25 +28,18 @@ describe('V2 opening candidate finance projections', () => {
     }
   });
 
-  it('does not let the temporary bootstrap human determine the growth ranking', () => {
+  it('limits the human multiplier to the controlled country\'s own applicable trait', () => {
     const belgiumState = createWorldStateV2(8_229);
     const usaState = { ...belgiumState, humanPlayerId: nationIdV2('usa') };
     const belgiumPlans = selectOpeningCandidateFinancePlansV2(belgiumState, WORLD_CONTENT_V2);
     const usaPlans = selectOpeningCandidateFinancePlansV2(usaState, WORLD_CONTENT_V2);
 
-    for (const playerId of WORLD_CONTENT_V2.nationIds) {
+    const belgium = nationIdV2('bel');
+    for (const playerId of WORLD_CONTENT_V2.nationIds.filter((id) => id !== belgium)) {
       expect(usaPlans.get(playerId)?.annualEconomyGrowthRate, String(playerId))
         .toBeCloseTo(belgiumPlans.get(playerId)?.annualEconomyGrowthRate ?? 0, 9);
     }
-
-    const ranked = WORLD_CONTENT_V2.nationIds
-      .filter((playerId) => belgiumPlans.has(playerId))
-      .sort((left, right) => (
-        (belgiumPlans.get(right)?.annualEconomyGrowthRate ?? 0)
-          - (belgiumPlans.get(left)?.annualEconomyGrowthRate ?? 0)
-          || left.localeCompare(right)
-      ));
-    expect(ranked[0]).not.toBe(nationIdV2('bel'));
-    expect(ranked.indexOf(nationIdV2('bel'))).toBeGreaterThan(0);
+    expect(belgiumPlans.get(belgium)!.annualEconomyGrowthRate)
+      .toBeGreaterThan(usaPlans.get(belgium)!.annualEconomyGrowthRate);
   });
 });

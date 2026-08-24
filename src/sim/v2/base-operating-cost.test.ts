@@ -7,7 +7,7 @@ import {
   selectWeeklyFinanceBreakdownV2,
 } from './selectors';
 import { traitNationContextV2 } from './traitContext';
-import { countryTraitFactorV2 } from './traits';
+import { countryTraitFactorV2, humanCountryTraitMultiplierV2 } from './traits';
 import { nationIdV2, territoryIdV2 } from './types';
 
 describe('universal base operating cost', () => {
@@ -30,7 +30,7 @@ describe('universal base operating cost', () => {
     }
   });
 
-  it('is selection-independent and leaves revenue after Belgium\'s lower-overhead trait', () => {
+  it('keeps one selected trait and amplifies Belgium\'s lower overhead for human control', () => {
     const state = createWorldStateV2(72_002);
     const belgium = nationIdV2('bel');
     const before = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, belgium);
@@ -45,7 +45,10 @@ describe('universal base operating cost', () => {
 
     expect(after.baseOperatingCost).toBe(before.baseOperatingCost);
     expect(after.net).toBe(before.net);
-    expect(effectiveShare).toBeCloseTo(0.20 * 0.92, 8);
+    expect(effectiveShare).toBeCloseTo(
+      0.20 * (1 - 0.08 * humanCountryTraitMultiplierV2(belgium)),
+      8,
+    );
     expect(after.baseOperatingCost).toBeCloseTo(after.revenue * effectiveShare, 6);
     expect(after.revenue - after.baseOperatingCost)
       .toBeCloseTo(after.revenue * (1 - effectiveShare), 6);

@@ -26,6 +26,8 @@ const UNITED_THREAT = 78;
 const COALITION_JOIN_THRESHOLD = 72;
 const COALITION_RECRUITMENT_MIN_TICK = 156;
 const COALITION_RECRUITMENT_INTERVAL = 52;
+const FEDERATION_FORMATION_INTERVAL = 104;
+const AI_FEDERATION_FORMATION_MIN_TICK = 832;
 
 interface OwnerTopologyV2 {
   signature: string;
@@ -194,13 +196,29 @@ function endCoalitionInternalWarsV2(state: WorldStateV2): number {
   return internalWars.length;
 }
 
-function federationNameV2(content: WorldContentV2, leaderId: PlayerId): string {
-  const continent = content.nations[leaderId]?.continent ?? 'Regional';
-  const adjective: Record<string, string> = {
-    Africa: 'African', Asia: 'Asian', Europe: 'European', Oceania: 'Oceanian',
-    'North America': 'North American', 'South America': 'South American',
-  };
-  return `${adjective[continent] ?? continent} Defense Federation`;
+/**
+ * Founding countries permanently determine a federation's visible name.
+ * The suffix deliberately stays compatible with existing save detection.
+ */
+export function defensiveFederationNameV2(
+  content: WorldContentV2,
+  founderIds: readonly PlayerId[],
+): string {
+  const founders = [...new Set(founderIds)].sort((left, right) => left.localeCompare(right));
+  const signature = founders.join('|') || 'regional';
+  let hash = 2_166_136_261;
+  for (let index = 0; index < signature.length; index += 1) {
+    hash = Math.imul(hash ^ signature.charCodeAt(index), 16_777_619) >>> 0;
+  }
+  // The canonical empire-name limit is 36 characters. ISO3 founder tokens
+  // keep every pair visibly unique while leaving room for a varied identity
+  // and the compatibility-sensitive `Defense Federation` suffix.
+  const identities = ['Shield', 'Sovereign', 'Mutual', 'Frontier', 'Guardian', 'Concord'] as const;
+  const identity = identities[hash % identities.length]!;
+  const founderNames = founders.slice(0, 2)
+    .map((id) => (content.nations[id]?.iso3 ?? String(id)).toUpperCase().slice(0, 3))
+    .join('–');
+  return `${founderNames || 'REG'} ${identity} Defense Federation`;
 }
 
 export function isDefensiveFederationV2(state: WorldStateV2, playerId: PlayerId): boolean {
@@ -233,13 +251,13 @@ export function selectDefensiveFederationPolicyV2(
   const expansion = clamp((conquests - 2) / 8, 0, 1);
   return {
     threshold: round(clamp(
-      DEFENSIVE_FEDERATION_THREAT - 10 * majorPower - 6 * lateGame - 5 * expansion,
-      64,
+      DEFENSIVE_FEDERATION_THREAT - 6 * majorPower - 3 * lateGame - 3 * expansion,
+      75,
       DEFENSIVE_FEDERATION_THREAT,
     )),
     cooldown: Math.round(clamp(
-      DEFENSIVE_FEDERATION_COOLDOWN_TICKS - 52 * majorPower - 52 * lateGame - 52 * expansion,
-      208,
+      DEFENSIVE_FEDERATION_COOLDOWN_TICKS - 52 * majorPower - 26 * lateGame - 26 * expansion,
+      312,
       DEFENSIVE_FEDERATION_COOLDOWN_TICKS,
     )),
     maxParticipants: Math.round(clamp(
@@ -300,6 +318,7 @@ function maybeFormDefensiveFederationV2(
 ): boolean {
   const policy = selectDefensiveFederationPolicyV2(state, content, powers);
   if (state.aiEscalation.globalThreat < policy.threshold
+    || state.tick % FEDERATION_FORMATION_INTERVAL !== 0
     || state.tick - state.aiEscalation.lastFederationTick < policy.cooldown) return false;
   const humanId = state.humanPlayerId;
   const adjacency = topology.adjacency;
@@ -353,9 +372,7 @@ function maybeFormDefensiveFederationV2(
     for (const memberId of absorbed) absorbFederationMemberV2(state, content, leaderId, memberId);
     invalidateTerritoryIndexV2(state);
     synchronizeArmyCapacityV2(state, content);
-    if (!state.players[leaderId]!.empireName) {
-      state.players[leaderId]!.empireName = federationNameV2(content, leaderId);
-    }
+    if (!growing) state.players[leaderId]!.empireName = defensiveFederationNameV2(content, cluster);
     const absorbedSet = new Set(absorbed);
     state.aiEscalation.coalitionMembers = [...new Set(state.aiEscalation.coalitionMembers
       .filter((id) => !absorbedSet.has(id)).concat(leaderId))].sort((a, b) => a.localeCompare(b));
@@ -390,7 +407,7 @@ function maybeFormAiDefensiveFederationV2(
   topology: OwnerTopologyV2,
   powers: PowerSnapshotV2,
 ): boolean {
-  if (state.tick < 520 || state.tick % 52 !== 0
+  if (state.tick < AI_FEDERATION_FORMATION_MIN_TICK || state.tick % FEDERATION_FORMATION_INTERVAL !== 0
     || state.tick - state.aiEscalation.lastFederationTick < DEFENSIVE_FEDERATION_COOLDOWN_TICKS) return false;
   const living = new Set(topology.living);
   const humanPlayerIds = new Set(selectHumanPlayerIdsV2(state));
@@ -440,7 +457,7 @@ function maybeFormAiDefensiveFederationV2(
     absorbFederationMemberV2(state, content, leaderId, memberId);
     invalidateTerritoryIndexV2(state);
     synchronizeArmyCapacityV2(state, content);
-    if (!state.players[leaderId]!.empireName) state.players[leaderId]!.empireName = federationNameV2(content, leaderId);
+    if (!growing) state.players[leaderId]!.empireName = defensiveFederationNameV2(content, [leaderId, memberId]);
     state.truces = state.truces.filter((truce) => truce.leftId !== memberId && truce.rightId !== memberId);
     state.offers = state.offers.filter((offer) => offer.fromId !== memberId && offer.toId !== memberId);
     state.ceasefireObligations = state.ceasefireObligations.filter((obligation) => (

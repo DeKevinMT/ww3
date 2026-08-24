@@ -6,6 +6,7 @@ import {
   MAP_WIDTH,
   TERRITORIES,
   TERRITORY_BY_ID,
+  isSeaConnection,
   projectWorldPoint,
 } from '../data/worldMap';
 import {
@@ -24,6 +25,16 @@ import {
   MAP_FLAG_TEXTURE_WIDTH,
 } from '../../ui/countryFlags';
 import { forcePresentationSignature } from './forcePresentation';
+import {
+  combatMarkerProgress,
+  combatPresentationDescriptor,
+  combatRouteSample,
+  combatWorldUnits,
+  resolveCombatPresentationAccess,
+  sampleCombatRoute,
+  type CombatAccessPresentation,
+  type CombatRouteSample,
+} from './combatPresentation';
 
 interface TerritoryVisual {
   parts: Phaser.GameObjects.Polygon[];
@@ -66,6 +77,15 @@ function sortedWarOperations(war: MapWarState): MapFrontOperation[] {
 
 function ownerPairKey(leftId: string, rightId: string): string {
   return leftId < rightId ? `${leftId}:${rightId}` : `${rightId}:${leftId}`;
+}
+
+function stableTextFraction(value: string): number {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0) / 0x1_0000_0000;
 }
 
 function colorMix(color: number, target: number, amount: number): number {
@@ -142,19 +162,15 @@ interface RenderPoint {
   y: number;
 }
 
-interface TerritoryConnection {
+interface FrontRenderOperation {
   sourceId: string;
   targetId: string;
-  source: RenderPoint;
-  target: RenderPoint;
-}
-
-interface FrontRenderOperation {
   source: RenderPoint;
   target: RenderPoint;
   color: number;
   isHuman: boolean;
   momentum: number;
+  access: CombatAccessPresentation;
 }
 
 interface RenderRectangle {
@@ -288,28 +304,6 @@ const COUNTRY_RENDER_BOUNDS = new Map(COUNTRIES.flatMap((country) => {
   return bounds ? [[country.id, bounds] as const] : [];
 }));
 
-const TERRITORY_CONNECTIONS: readonly TerritoryConnection[] = (() => {
-  const connections: TerritoryConnection[] = [];
-  const seen = new Set<string>();
-  for (const territory of TERRITORIES) {
-    for (const neighborId of territory.neighbors) {
-      const key = territory.id < neighborId
-        ? `${territory.id}:${neighborId}` : `${neighborId}:${territory.id}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const neighbor = TERRITORY_BY_ID[neighborId];
-      if (!neighbor) continue;
-      connections.push({
-        sourceId: territory.id,
-        targetId: neighborId,
-        source: territory,
-        target: neighbor,
-      });
-    }
-  }
-  return connections;
-})();
-
 function flagTextureKey(nationId: string): string {
   return `${FLAG_TEXTURE_PREFIX}${nationId}`;
 }
@@ -379,6 +373,7 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
   private hintTargetIds = new Set<string>();
   private engine?: WorldMapEngineContract;
   private frontGraphics?: Phaser.GameObjects.Graphics;
+  private operationGraphics?: Phaser.GameObjects.Graphics;
   private routeGraphics?: Phaser.GameObjects.Graphics;
   private graticuleGraphics?: Phaser.GameObjects.Graphics;
   private logisticsGraphics?: Phaser.GameObjects.Graphics;
@@ -424,6 +419,9 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
   private lastForcePresentationSignature = '';
   private activeBattleEffects = 0;
   private battleLabelRefresh?: Phaser.Time.TimerEvent;
+  private combatAnimationElapsed = 0;
+  private combatAnimationPhase = 0;
+  private reducedCombatMotion = false;
   private zoomTarget = 1;
   private zoomAnchorScreen?: RenderPoint;
   private zoomAnchorWorld?: RenderPoint;
@@ -462,6 +460,8 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
     this.logisticsGraphics = this.add.graphics().setDepth(5.5);
     this.ownershipBoundaryGraphics = this.add.graphics().setDepth(2);
     this.frontGraphics = this.add.graphics().setDepth(6);
+    this.operationGraphics = this.add.graphics().setDepth(6.2);
+    this.reducedCombatMotion = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
     this.buildOwnershipBoundarySegments();
     this.createCountries();
     this.configureCamera();
@@ -1035,6 +1035,16 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
     return screenPixels / Math.max(0.000001, this.cameras.main.zoom);
   }
 
+  private combatWorldSize(cssPixels: number): number {
+    const bounds = this.game.canvas.getBoundingClientRect();
+    const camera = this.cameras.main;
+    const displayScale = Math.min(
+      bounds.width / Math.max(1, camera.width),
+      bounds.height / Math.max(1, camera.height),
+    );
+    return combatWorldUnits(cssPixels, camera.zoom, displayScale);
+  }
+
   private cancelWheelZoom(): void {
     this.zoomTarget = this.cameras.main.zoom;
     this.zoomAnchorScreen = undefined;
@@ -1076,6 +1086,17 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
   }
 
   update(_time: number, delta: number): void {
+    if (!this.reducedCombatMotion && this.frontRenderOperations.length > 0) {
+      this.combatAnimationElapsed += Math.max(0, Math.min(delta, 250));
+      const cadence = this.frontRenderOperations.some((operation) => operation.access === 'land')
+        ? combatPresentationDescriptor('land').animationCadenceMs
+        : combatPresentationDescriptor('naval').animationCadenceMs;
+      if (this.combatAnimationElapsed >= cadence) {
+        this.combatAnimationPhase = (this.combatAnimationPhase + this.combatAnimationElapsed / 2_400) % 1;
+        this.combatAnimationElapsed = 0;
+        this.drawOperationRoutes(this.combatAnimationPhase);
+      }
+    }
     if (!this.zoomAnchorScreen || !this.zoomAnchorWorld) return;
     const camera = this.cameras.main;
     const difference = this.zoomTarget - camera.zoom;
@@ -1293,11 +1314,17 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
         const commander = playerFor(operation.commanderId);
         if (!source || !target || !commander) continue;
         frontRenderOperations.push({
+          sourceId: operation.sourceId,
+          targetId: operation.targetId,
           source,
           target,
           color: commander.isHuman ? 0x70ecff : commander.color,
           isHuman: commander.isHuman,
           momentum: operation.momentum,
+          access: resolveCombatPresentationAccess(
+            operation.access,
+            isSeaConnection(operation.sourceId, operation.targetId),
+          ),
         });
       }
     }
@@ -1325,7 +1352,7 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
     }
     const operationSignature = warOperations
       .map(({ war, operations }) => `${war.id}:${operations
-        .map((operation) => `${operation.commanderId}:${operation.sourceId}:${operation.targetId}:${operation.doctrine}:${Math.round((operation.supply ?? 1) * 10)}:${Math.round(operation.momentum)}`)
+        .map((operation) => `${operation.commanderId}:${operation.sourceId}:${operation.targetId}:${operation.doctrine}:${operation.access ?? ''}:${Math.round((operation.supply ?? 1) * 10)}:${Math.round(operation.momentum)}`)
         .join('|')}`).join(';');
     const operationChanged = operationSignature !== this.lastOperationSignature;
     if (operationChanged) this.lastOperationSignature = operationSignature;
@@ -1457,30 +1484,180 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
     graphics.clear();
     const state = this.mapState;
     if (!state) return;
-    graphics.lineStyle(this.screenWorldSize(0.75), 0xff8a79, 0.24);
-    for (const connection of TERRITORY_CONNECTIONS) {
-      const ownerId = state.territories[connection.sourceId]?.ownerId;
-      const neighborOwnerId = state.territories[connection.targetId]?.ownerId;
-      if (!ownerId || !neighborOwnerId || ownerId === neighborOwnerId
-        || !this.hostileOwnerPairs.has(ownerPairKey(ownerId, neighborOwnerId))) continue;
+    // Land fronts sit on the real shared border. This turns warfare into a
+    // readable contact line instead of drawing an abstract centre-to-centre ray.
+    const hostileLandSegments = this.ownershipBoundarySegments.filter((segment) => {
+      const owners = [...new Set(segment.territoryIds
+        .map((territoryId) => state.territories[territoryId]?.ownerId)
+        .filter((ownerId): ownerId is string => Boolean(ownerId)))];
+      return owners.some((ownerId, index) => owners.slice(index + 1)
+        .some((otherOwnerId) => this.hostileOwnerPairs.has(ownerPairKey(ownerId, otherOwnerId))));
+    });
+    const drawBorderPass = (width: number, color: number, alpha: number): void => {
+      graphics.lineStyle(this.combatWorldSize(width), color, alpha);
+      for (const segment of hostileLandSegments) {
+        this.drawWrappedLine(graphics, segment.x1, segment.y1, segment.x2, segment.y2);
+      }
+    };
+    drawBorderPass(5.4, 0xff493f, 0.10);
+    drawBorderPass(2.3, 0xff6a56, 0.54);
+    drawBorderPass(0.72, 0xffd39a, 0.92);
+    this.drawOperationRoutes(this.combatAnimationPhase);
+  }
+
+  private drawOperationRoutes(phase: number): void {
+    const graphics = this.operationGraphics;
+    if (!graphics) return;
+    graphics.clear();
+    for (const operation of this.frontRenderOperations) {
+      const descriptor = combatPresentationDescriptor(operation.access);
+      let targetX = operation.target.x;
+      if (Math.abs(targetX - operation.source.x) > MAP_WIDTH / 2) {
+        targetX += targetX > operation.source.x ? -MAP_WIDTH : MAP_WIDTH;
+      }
+      const routeKey = `${operation.sourceId}:${operation.targetId}`;
+      const routeOffset = stableTextFraction(routeKey);
+      const bendDirection = routeOffset < 0.5 ? -1 : 1;
+      const samples = sampleCombatRoute(
+        operation.source,
+        { x: targetX, y: operation.target.y },
+        operation.access,
+        bendDirection,
+        operation.access === 'naval' ? 34 : 22,
+      );
+      const momentum = Phaser.Math.Clamp((operation.momentum + 20) / 90, 0, 1);
+      const glowAlpha = (operation.isHuman ? 0.20 : 0.13) + momentum * 0.07;
+      const coreAlpha = (operation.isHuman ? 0.88 : 0.65) + momentum * 0.10;
+      const animatedPhase = this.reducedCombatMotion ? routeOffset : (phase + routeOffset) % 1;
+      this.strokeCombatRoute(
+        graphics,
+        samples,
+        descriptor.glowWidth,
+        descriptor.glowColor,
+        glowAlpha,
+        descriptor.routePattern,
+        animatedPhase,
+      );
+      this.strokeCombatRoute(
+        graphics,
+        samples,
+        descriptor.coreWidth,
+        descriptor.coreColor,
+        coreAlpha,
+        descriptor.routePattern,
+        animatedPhase,
+      );
+      const marker = combatRouteSample(
+        operation.source,
+        { x: targetX, y: operation.target.y },
+        combatMarkerProgress(operation.access, animatedPhase),
+        operation.access,
+        bendDirection,
+      );
+      if (operation.access === 'naval') this.drawNavalRouteMarker(graphics, marker, operation.color, coreAlpha);
+      else this.drawLandRouteMarker(graphics, marker, operation.color, coreAlpha, animatedPhase);
+    }
+  }
+
+  private strokeCombatRoute(
+    graphics: Phaser.GameObjects.Graphics,
+    samples: readonly CombatRouteSample[],
+    width: number,
+    color: number,
+    alpha: number,
+    pattern: 'solid' | 'dashed',
+    phase: number,
+  ): void {
+    graphics.lineStyle(this.combatWorldSize(width), color, alpha);
+    const dashOffset = Math.floor(phase * 10);
+    for (let index = 1; index < samples.length; index += 1) {
+      if (pattern === 'dashed' && (index + dashOffset) % 5 >= 3) continue;
+      const start = samples[index - 1]!;
+      const end = samples[index]!;
       this.drawWrappedLine(
         graphics,
-        connection.source.x,
-        connection.source.y,
-        connection.target.x,
-        connection.target.y,
+        this.normalizedWorldX(start.x),
+        start.y,
+        this.normalizedWorldX(end.x),
+        end.y,
       );
     }
-    for (const operation of this.frontRenderOperations) {
-      graphics.lineStyle(
-        this.screenWorldSize(1.4),
-        operation.color,
-        0.045 + Math.max(0, operation.momentum) * 0.0008,
-      );
-      this.drawWrappedLine(graphics, operation.source.x, operation.source.y, operation.target.x, operation.target.y);
-      graphics.lineStyle(this.screenWorldSize(0.65), operation.color, operation.isHuman ? 0.34 : 0.22);
-      this.drawWrappedLine(graphics, operation.source.x, operation.source.y, operation.target.x, operation.target.y);
+  }
+
+  private drawLandRouteMarker(
+    graphics: Phaser.GameObjects.Graphics,
+    marker: CombatRouteSample,
+    actorColor: number,
+    alpha: number,
+    phase: number,
+  ): void {
+    const x = this.normalizedWorldX(marker.x);
+    const length = Math.max(0.000001, Math.hypot(marker.tangentX, marker.tangentY));
+    const forwardX = marker.tangentX / length;
+    const forwardY = marker.tangentY / length;
+    const sideX = -forwardY;
+    const sideY = forwardX;
+    const scale = this.combatWorldSize(1);
+    const pulse = 0.78 + 0.22 * Math.sin(phase * Math.PI * 2) ** 2;
+    graphics.fillStyle(0xff664f, 0.08 + pulse * 0.08);
+    graphics.fillCircle(x, marker.y, 5.2 * scale * pulse);
+    graphics.lineStyle(1.15 * scale, 0xffe2a3, alpha);
+    for (const offset of [-3.8, 2.4]) {
+      const tipX = x + forwardX * offset * scale;
+      const tipY = marker.y + forwardY * offset * scale;
+      const backX = tipX - forwardX * 4.6 * scale;
+      const backY = tipY - forwardY * 4.6 * scale;
+      graphics.lineBetween(tipX, tipY, backX + sideX * 2.5 * scale, backY + sideY * 2.5 * scale);
+      graphics.lineBetween(tipX, tipY, backX - sideX * 2.5 * scale, backY - sideY * 2.5 * scale);
     }
+    graphics.fillStyle(colorMix(actorColor, 0xffe2a3, 0.45), Math.min(1, alpha));
+    graphics.fillCircle(x - forwardX * 1.2 * scale, marker.y - forwardY * 1.2 * scale, 1.35 * scale);
+  }
+
+  private drawNavalRouteMarker(
+    graphics: Phaser.GameObjects.Graphics,
+    marker: CombatRouteSample,
+    actorColor: number,
+    alpha: number,
+  ): void {
+    const x = this.normalizedWorldX(marker.x);
+    const length = Math.max(0.000001, Math.hypot(marker.tangentX, marker.tangentY));
+    const forwardX = marker.tangentX / length;
+    const forwardY = marker.tangentY / length;
+    const sideX = -forwardY;
+    const sideY = forwardX;
+    const scale = this.combatWorldSize(1);
+    const sternX = x - forwardX * 4.4 * scale;
+    const sternY = marker.y - forwardY * 4.4 * scale;
+    graphics.lineStyle(0.72 * scale, 0x7ce7ff, 0.48 * alpha);
+    for (const side of [-1, 1]) {
+      graphics.lineBetween(
+        sternX + sideX * side * 1.6 * scale,
+        sternY + sideY * side * 1.6 * scale,
+        sternX - forwardX * 7.2 * scale + sideX * side * 2.5 * scale,
+        sternY - forwardY * 7.2 * scale + sideY * side * 2.5 * scale,
+      );
+    }
+    graphics.fillStyle(colorMix(actorColor, 0xd9f9ff, 0.58), Math.min(1, alpha));
+    graphics.fillTriangle(
+      x + forwardX * 5.0 * scale,
+      marker.y + forwardY * 5.0 * scale,
+      sternX + sideX * 2.5 * scale,
+      sternY + sideY * 2.5 * scale,
+      sternX - sideX * 2.5 * scale,
+      sternY - sideY * 2.5 * scale,
+    );
+    graphics.lineStyle(0.75 * scale, 0xd9f9ff, alpha);
+    graphics.lineBetween(
+      x - forwardX * 0.8 * scale,
+      marker.y - forwardY * 0.8 * scale,
+      x + sideX * 2.8 * scale,
+      marker.y + sideY * 2.8 * scale,
+    );
+  }
+
+  private normalizedWorldX(x: number): number {
+    return (x % MAP_WIDTH + MAP_WIDTH) % MAP_WIDTH;
   }
 
   private drawLogistics(): void {
@@ -1688,95 +1865,213 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
     const sourcePoint = TERRITORY_BY_ID[result.sourceId];
     const attacker = this.engine?.player(result.attackerId);
     if (sourcePoint && targetPoint) {
-      const strike = this.add.graphics().setDepth(18);
-      const operationColor = result.conquered ? 0x8fffc0
-        : humanDefending ? 0xff6d63 : attacker?.isHuman ? 0x70ecff : attacker?.color ?? 0xff8a72;
-      let adjustedTargetX = targetPoint.x;
-      if (Math.abs(targetPoint.x - sourcePoint.x) > MAP_WIDTH / 2) {
-        adjustedTargetX += targetPoint.x > sourcePoint.x ? -MAP_WIDTH : MAP_WIDTH;
-      }
-      const dx = adjustedTargetX - sourcePoint.x;
-      const dy = targetPoint.y - sourcePoint.y;
-      const distance = Math.max(1, Math.hypot(dx, dy));
-      const wrapped = Math.abs(targetPoint.x - sourcePoint.x) > MAP_WIDTH / 2;
-      const arcDirection = String(result.sourceId) < String(result.targetId) ? 1 : -1;
-      const arcHeight = wrapped ? 0 : Phaser.Math.Clamp(distance * 0.14, 7, 34) * arcDirection;
-      const effectScale = this.screenWorldSize(1);
-      const controlX = sourcePoint.x + dx * 0.5 - dy / distance * arcHeight;
-      const controlY = sourcePoint.y + dy * 0.5 + dx / distance * arcHeight;
-      const drawRoute = (width: number, alpha: number) => {
-        strike.lineStyle(width * effectScale, operationColor, alpha);
-        if (wrapped) this.drawWrappedLine(strike, sourcePoint.x, sourcePoint.y, targetPoint.x, targetPoint.y);
-        else {
-          const curve = new Phaser.Curves.QuadraticBezier(
-            new Phaser.Math.Vector2(sourcePoint.x, sourcePoint.y),
-            new Phaser.Math.Vector2(controlX, controlY),
-            new Phaser.Math.Vector2(adjustedTargetX, targetPoint.y),
-          );
-          strike.strokePoints(curve.getPoints(28), false, false);
-        }
-      };
-      drawRoute(2.4, result.conquered ? 0.17 : 0.10);
-      drawRoute(0.85, result.conquered ? 0.78 : 0.58);
-      const sourcePulse = this.add.circle(sourcePoint.x, sourcePoint.y, 2.2 * effectScale, operationColor, 0.18)
-        .setStrokeStyle(0.8 * effectScale, operationColor, 0.72).setDepth(19);
-      this.tweens.add({ targets: sourcePulse, scale: 2.2, alpha: 0, duration: 380,
-        ease: 'Sine.easeOut', onComplete: () => sourcePulse.destroy() });
-      const projectile = this.add.container(sourcePoint.x, sourcePoint.y).setDepth(19).setScale(effectScale)
-        .setRotation(Math.atan2(dy, dx));
-      const glow = this.add.circle(-3, 0, 3.2, operationColor, 0.16);
-      const tail = this.add.rectangle(-5, 0, 9, 0.75, operationColor, 0.52).setOrigin(0.5);
-      const core = this.add.circle(0, 0, 1.35, 0xf5ffff, 0.98);
-      projectile.add([glow, tail, core]);
-      const travel = { progress: 0 };
-      const flightDuration = Phaser.Math.Clamp(distance * 3.4, 380, 900);
-      this.tweens.add({
-        targets: travel,
-        progress: 1,
-        duration: flightDuration,
-        ease: 'Sine.easeInOut',
-        onUpdate: () => {
-          const t = travel.progress;
-          const inv = 1 - t;
-          const rawX = wrapped ? sourcePoint.x + dx * t
-            : inv * inv * sourcePoint.x + 2 * inv * t * controlX + t * t * adjustedTargetX;
-          const rawY = wrapped ? sourcePoint.y + dy * t
-            : inv * inv * sourcePoint.y + 2 * inv * t * controlY + t * t * targetPoint.y;
-          const tangentX = wrapped ? dx : 2 * inv * (controlX - sourcePoint.x) + 2 * t * (adjustedTargetX - controlX);
-          const tangentY = wrapped ? dy : 2 * inv * (controlY - sourcePoint.y) + 2 * t * (targetPoint.y - controlY);
-          projectile.x = (rawX % MAP_WIDTH + MAP_WIDTH) % MAP_WIDTH;
-          projectile.y = rawY;
-          projectile.rotation = Math.atan2(tangentY, tangentX);
-          projectile.alpha = Math.sin(Math.PI * t) ** 0.28;
-        },
-        onComplete: () => {
-          projectile.destroy();
-          const impact = this.add.circle(targetPoint.x, targetPoint.y,
-            (result.conquered ? 3.2 : 2.4) * effectScale,
-            operationColor, 0.10).setStrokeStyle(effectScale, operationColor, 0.78).setDepth(19);
-          this.tweens.add({ targets: impact, scale: result.conquered ? 4.2 : 3.1, alpha: 0,
-            duration: result.conquered ? 620 : 420, ease: 'Sine.easeOut', onComplete: () => impact.destroy() });
-        },
-      });
-      this.tweens.add({
-        targets: strike,
-        alpha: 0,
-        delay: Math.max(0, flightDuration - 180),
-        duration: result.conquered ? 700 : 460,
-        ease: 'Quad.easeOut',
-        onComplete: () => {
-          strike.destroy();
-          this.activeBattleEffects = Math.max(0, this.activeBattleEffects - 1);
-        },
-      });
+      this.playBattleRouteEffect(
+        result,
+        sourcePoint,
+        targetPoint,
+        humanDefending,
+        attacker?.isHuman === true,
+        attacker?.color,
+      );
     } else {
       this.activeBattleEffects = Math.max(0, this.activeBattleEffects - 1);
     }
-    if (result.conquered && (attacker?.isHuman || humanDefending)) this.cameras.main.shake(130, 0.0025);
+    if (!this.reducedCombatMotion && result.conquered && (attacker?.isHuman || humanDefending)) {
+      this.cameras.main.shake(130, 0.0025);
+    }
     this.battleLabelRefresh?.remove(false);
     this.battleLabelRefresh = this.time.delayedCall(720, () => {
       this.battleLabelRefresh = undefined;
       this.setSelection(this.selection);
+    });
+  }
+
+  private playBattleRouteEffect(
+    result: MapBattleEvent,
+    sourcePoint: RenderPoint,
+    targetPoint: RenderPoint,
+    humanDefending: boolean,
+    humanAttacking: boolean,
+    actorColor?: number,
+  ): void {
+    const access = resolveCombatPresentationAccess(
+      undefined,
+      isSeaConnection(result.sourceId, result.targetId),
+    );
+    const descriptor = combatPresentationDescriptor(access);
+    const strike = this.add.graphics().setDepth(18);
+    let adjustedTargetX = targetPoint.x;
+    if (Math.abs(targetPoint.x - sourcePoint.x) > MAP_WIDTH / 2) {
+      adjustedTargetX += targetPoint.x > sourcePoint.x ? -MAP_WIDTH : MAP_WIDTH;
+    }
+    const adjustedTarget = { x: adjustedTargetX, y: targetPoint.y };
+    const dx = adjustedTargetX - sourcePoint.x;
+    const dy = targetPoint.y - sourcePoint.y;
+    const distance = Math.max(1, Math.hypot(dx, dy));
+    const bendDirection = String(result.sourceId) < String(result.targetId) ? 1 : -1;
+    const routeColor = result.conquered
+      ? colorMix(descriptor.coreColor, 0x8fffc0, 0.38)
+      : descriptor.coreColor;
+    const samples = sampleCombatRoute(
+      sourcePoint,
+      adjustedTarget,
+      access,
+      bendDirection,
+      access === 'naval' ? 36 : 24,
+    );
+    this.strokeCombatRoute(
+      strike,
+      samples,
+      descriptor.glowWidth + (result.conquered ? 1.2 : 0),
+      descriptor.glowColor,
+      result.conquered ? 0.26 : 0.16,
+      descriptor.routePattern,
+      0.15,
+    );
+    this.strokeCombatRoute(
+      strike,
+      samples,
+      descriptor.coreWidth + 0.25,
+      routeColor,
+      result.conquered ? 0.94 : 0.82,
+      descriptor.routePattern,
+      0.15,
+    );
+    const effectScale = this.combatWorldSize(1);
+    const sourcePulse = this.add.circle(sourcePoint.x, sourcePoint.y, 2.2 * effectScale, descriptor.glowColor, 0.16)
+      .setStrokeStyle(0.8 * effectScale, routeColor, 0.82).setDepth(19);
+    this.tweens.add({
+      targets: sourcePulse,
+      scale: access === 'naval' ? 2.8 : 2.2,
+      alpha: 0,
+      duration: this.reducedCombatMotion ? 180 : access === 'naval' ? 520 : 360,
+      ease: 'Sine.easeOut',
+      onComplete: () => sourcePulse.destroy(),
+    });
+    const projectile = this.createBattleMarker(
+      access,
+      sourcePoint,
+      actorColor ?? (humanDefending ? 0xff6d63 : humanAttacking ? 0x70ecff : 0xff8a72),
+      routeColor,
+      effectScale,
+    );
+    projectile.setVisible(!this.reducedCombatMotion);
+    const travel = { progress: 0 };
+    const flightDuration = this.reducedCombatMotion ? 120 : Phaser.Math.Clamp(
+      distance * (access === 'naval' ? 4.1 : 3.0),
+      access === 'naval' ? 520 : 340,
+      access === 'naval' ? 1_080 : 780,
+    );
+    this.tweens.add({
+      targets: travel,
+      progress: 1,
+      duration: flightDuration,
+      ease: access === 'naval' ? 'Sine.easeInOut' : 'Cubic.easeInOut',
+      onUpdate: () => {
+        const sample = combatRouteSample(sourcePoint, adjustedTarget, travel.progress, access, bendDirection);
+        projectile.x = this.normalizedWorldX(sample.x);
+        projectile.y = sample.y;
+        projectile.rotation = Math.atan2(sample.tangentY, sample.tangentX);
+        projectile.alpha = Math.sin(Math.PI * travel.progress) ** 0.28;
+      },
+      onComplete: () => {
+        projectile.destroy();
+        this.playBattleImpact(access, targetPoint, routeColor, result.conquered, effectScale);
+      },
+    });
+    this.tweens.add({
+      targets: strike,
+      alpha: 0,
+      delay: Math.max(0, flightDuration - (this.reducedCombatMotion ? 0 : 180)),
+      duration: this.reducedCombatMotion ? 240 : result.conquered ? 700 : 480,
+      ease: 'Quad.easeOut',
+      onComplete: () => {
+        strike.destroy();
+        this.activeBattleEffects = Math.max(0, this.activeBattleEffects - 1);
+      },
+    });
+  }
+
+  private createBattleMarker(
+    access: CombatAccessPresentation,
+    source: RenderPoint,
+    actorColor: number,
+    routeColor: number,
+    effectScale: number,
+  ): Phaser.GameObjects.Container {
+    const marker = this.add.container(source.x, source.y).setDepth(19).setScale(effectScale);
+    if (access === 'naval') {
+      const portWake = this.add.rectangle(-7, -1.7, 10, 0.55, routeColor, 0.48).setOrigin(0.5);
+      const starboardWake = this.add.rectangle(-7, 1.7, 10, 0.55, routeColor, 0.48).setOrigin(0.5);
+      const hull = this.add.triangle(1, 0, 5, 0, -4.5, -3.2, -4.5, 3.2,
+        colorMix(actorColor, 0xd9f9ff, 0.48), 0.96);
+      const bridge = this.add.circle(-0.7, 0, 1.25, 0xecfdff, 0.98);
+      marker.add([portWake, starboardWake, hull, bridge]);
+    } else {
+      const groundGlow = this.add.circle(-1, 0, 5.2, 0xff5e52, 0.14);
+      const top = this.add.rectangle(-1.2, 0, 7.6, 4.8,
+        colorMix(actorColor, 0xffcf87, 0.42), 0.96).setOrigin(0.5);
+      const upperTrack = this.add.rectangle(-2.2, -3.1, 8.5, 1.15, 0x2c1a18, 0.92).setOrigin(0.5);
+      const lowerTrack = this.add.rectangle(-2.2, 3.1, 8.5, 1.15, 0x2c1a18, 0.92).setOrigin(0.5);
+      const thrust = this.add.triangle(4.4, 0, 4.8, 0, -2.2, -3.1, -2.2, 3.1, routeColor, 0.98);
+      marker.add([groundGlow, upperTrack, lowerTrack, top, thrust]);
+    }
+    return marker;
+  }
+
+  private playBattleImpact(
+    access: CombatAccessPresentation,
+    target: RenderPoint,
+    color: number,
+    conquered: boolean,
+    effectScale: number,
+  ): void {
+    const duration = this.reducedCombatMotion ? 220 : conquered ? 660 : 460;
+    const ringCount = access === 'naval' ? 3 : 2;
+    for (let index = 0; index < ringCount; index += 1) {
+      const ring = this.add.circle(
+        target.x,
+        target.y,
+        (access === 'naval' ? 1.5 + index * 0.8 : 2.3 + index) * effectScale,
+        access === 'naval' ? 0x85eaff : 0xff7159,
+        index === 0 ? 0.12 : 0,
+      ).setStrokeStyle((access === 'naval' ? 0.75 : 1.05) * effectScale, color, 0.88).setDepth(19);
+      this.tweens.add({
+        targets: ring,
+        scaleX: (conquered ? 4.5 : 3.3) + index * 0.6,
+        scaleY: access === 'naval' ? 1.8 + index * 0.28 : (conquered ? 4.5 : 3.3) + index * 0.6,
+        alpha: 0,
+        delay: this.reducedCombatMotion ? 0 : index * 55,
+        duration,
+        ease: 'Sine.easeOut',
+        onComplete: () => ring.destroy(),
+      });
+    }
+    const burst = this.add.graphics({ x: target.x, y: target.y }).setDepth(19);
+    if (access === 'naval') {
+      burst.lineStyle(0.85 * effectScale, 0xd9f9ff, 0.86);
+      burst.lineBetween(-4 * effectScale, 0, -1.5 * effectScale, -7 * effectScale);
+      burst.lineBetween(0, 0, 0, -9 * effectScale);
+      burst.lineBetween(4 * effectScale, 0, 1.5 * effectScale, -7 * effectScale);
+    } else {
+      burst.lineStyle(1.0 * effectScale, 0xffddb0, 0.88);
+      for (let index = 0; index < 8; index += 1) {
+        const angle = index * Math.PI / 4;
+        burst.lineBetween(
+          Math.cos(angle) * 2.2 * effectScale,
+          Math.sin(angle) * 2.2 * effectScale,
+          Math.cos(angle) * 8.0 * effectScale,
+          Math.sin(angle) * 8.0 * effectScale,
+        );
+      }
+    }
+    this.tweens.add({
+      targets: burst,
+      alpha: 0,
+      scale: access === 'naval' ? { from: 0.8, to: 1.35 } : { from: 0.72, to: 1.28 },
+      duration: this.reducedCombatMotion ? 180 : access === 'naval' ? 520 : 380,
+      ease: 'Quad.easeOut',
+      onComplete: () => burst.destroy(),
     });
   }
 

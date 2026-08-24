@@ -10,6 +10,7 @@ import { addWorldEventV2 } from './events';
 import { processPropagandaProgramsV2, selectPropagandaTermsV2 } from './propaganda';
 import { selectGlobalResistanceV2, updateGlobalResistanceV2 } from './resistance';
 import { createPowerSnapshotV2, selectNationViewV2 } from './selectors';
+import { selectWarStrainSummaryV2 } from './warStrain';
 import {
   nationIdV2,
   territoryIdV2,
@@ -62,6 +63,9 @@ describe('multi-human simulation boundaries', () => {
     }];
 
     const commands = planAiCommandsV2(state, WORLD_CONTENT_V2);
+
+    expect(selectWarStrainSummaryV2(state, WORLD_CONTENT_V2, secondHuman).score)
+      .toBeGreaterThanOrEqual(75);
 
     expect(commands.some((command) => (
       command.type === 'set-budget-policy' && command.playerId === secondHuman

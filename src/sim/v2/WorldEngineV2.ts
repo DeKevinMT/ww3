@@ -21,9 +21,13 @@ import { synchronizeArmyCapacityV2 } from './capacity';
 import { WORLD_CONTENT_V2, type WorldContentV2 } from './content';
 import { createFinancePlansV2, processDevelopmentPhaseV2, processFinanceMilitaryV2 } from './economy';
 import { pruneWorldHistoryV2 } from './events';
-import { retireAbsorbedNationV2 } from './integration';
+import {
+  processTerritoryIntegrationRevolutionsV2,
+  retireAbsorbedNationV2,
+} from './integration';
 import { assertInvariantsV2 } from './invariants';
 import { isHumanPlayerV2, selectHumanPlayerIdsV2 } from './humanPlayers';
+import { synchronizeOpeningTreasuryHumanRosterV2 } from './nationState';
 import { createSaveV2, loadSaveV2, serializeSaveV2, type SaveGameV2 } from './persistence';
 import { processPropagandaProgramsV2, selectPropagandaTermsV2 } from './propaganda';
 import { processResearchV2 } from './research';
@@ -43,6 +47,7 @@ import {
   selectEffectivePowerV2,
   selectEffectiveRecoveryV2,
   selectGlobalRankingV2,
+  selectIsEliminatedV2,
   selectNationViewV2,
   selectNationalAggressivenessV2,
   selectNationalAiPlanV2,
@@ -134,6 +139,105 @@ type WorldListenerV2 = (state: WorldStateV2, change: WorldChangeV2) => void;
 export interface QueuedWorldActionV2 {
   sequence: number;
   command: WorldCommandV2;
+}
+
+/**
+ * Bounded, derived opening view used by the country picker. Every country's
+ * own values include the human version of its trait without mutating the
+ * authoritative campaign or pretending that all countries share one player.
+ */
+export interface OpeningCandidatePreviewSnapshotV2 {
+  readonly state: WorldStateV2;
+  readonly militaryBaseSnapshot: MilitaryBaseSnapshotV2;
+  readonly powerSnapshot: PowerSnapshotV2;
+  readonly openingFinance: ReadonlyMap<PlayerId, WeeklyFinanceBreakdownV2>;
+  readonly aggressivenessByNation: ReadonlyMap<PlayerId, number>;
+  readonly ranking: RankingEntryV2[];
+}
+
+/** Pure builder so UI previews can never mutate or become part of save state. */
+export function createOpeningCandidatePreviewSnapshotV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+): OpeningCandidatePreviewSnapshotV2 {
+  const candidateIds = content.nationIds.filter((id) => (
+    Boolean(state.players[id]) && !selectIsEliminatedV2(state, id)
+  ));
+
+  const ordinaryState = structuredClone(state);
+  synchronizeOpeningTreasuryHumanRosterV2(
+    ordinaryState,
+    content,
+    candidateIds,
+    [],
+  );
+  const previewAiId = nationIdV2('__opening-candidate-preview-ai__');
+  ordinaryState.humanPlayerId = previewAiId;
+  ordinaryState.humanPlayerIds = [previewAiId];
+  synchronizeArmyCapacityV2(ordinaryState, content);
+
+  const ordinaryMilitary = createMilitaryBaseSnapshotV2(ordinaryState, content);
+  const ordinaryPower = createPowerSnapshotV2(ordinaryState, content, ordinaryMilitary);
+
+  const previewState = structuredClone(ordinaryState);
+  previewState.humanPlayerId = candidateIds[0] ?? state.humanPlayerId;
+  previewState.humanPlayerIds = [...candidateIds];
+  synchronizeOpeningTreasuryHumanRosterV2(
+    previewState,
+    content,
+    [],
+    candidateIds,
+  );
+  synchronizeArmyCapacityV2(previewState, content);
+
+  const militaryBaseSnapshot = createMilitaryBaseSnapshotV2(previewState, content);
+  const powerSnapshot = createPowerSnapshotV2(previewState, content, militaryBaseSnapshot);
+  const openingFinance = new Map<PlayerId, WeeklyFinanceBreakdownV2>();
+  const aggressivenessByNation = new Map<PlayerId, number>();
+
+  for (const candidateId of candidateIds) {
+    const byNation = new Map(ordinaryPower.byNation);
+    byNation.set(candidateId, powerSnapshot.byNation.get(candidateId) ?? 0);
+    let leaderPower = 1;
+    for (const [playerId, power] of byNation) {
+      if (!selectIsEliminatedV2(previewState, playerId)) {
+        leaderPower = Math.max(leaderPower, power);
+      }
+    }
+    const candidatePowerSnapshot: PowerSnapshotV2 = {
+      byNation,
+      leaderPower,
+      leaderBreakthroughs: ordinaryPower.leaderBreakthroughs,
+    };
+    openingFinance.set(candidateId, selectWeeklyFinanceBreakdownV2(
+      previewState,
+      content,
+      candidateId,
+      candidatePowerSnapshot,
+    ));
+    aggressivenessByNation.set(candidateId, selectNationalAggressivenessV2(
+      previewState,
+      content,
+      candidateId,
+      candidatePowerSnapshot,
+    ));
+  }
+
+  // Ranking entries retain authoritative controller metadata for map/HUD
+  // consumers, while score, combat power and economy are the picker preview.
+  const ranking = selectGlobalRankingV2(previewState, content, powerSnapshot)
+    .map((entry) => ({
+      ...entry,
+      player: selectNationViewV2(state, content, entry.player.id) ?? entry.player,
+    }));
+  return {
+    state: previewState,
+    militaryBaseSnapshot,
+    powerSnapshot,
+    openingFinance,
+    aggressivenessByNation,
+    ranking,
+  };
 }
 
 export type ClientCommandSinkV2 = (command: WorldCommandV2) => CommandResultV2;
@@ -500,12 +604,20 @@ export class WorldEngineV2 {
     const primaryId = ids.includes(this.state.humanPlayerId)
       ? this.state.humanPlayerId
       : ids[0]!;
+    const previousHumanPlayerIds = selectHumanPlayerIdsV2(this.state);
 
     this.stopClock();
     // The primary id is canonical shared state; the viewer is local runtime
     // state. Never let different client seats produce different save hashes.
     this.state.humanPlayerId = primaryId;
     this.state.humanPlayerIds = ids;
+    synchronizeOpeningTreasuryHumanRosterV2(
+      this.state,
+      this.content,
+      previousHumanPlayerIds,
+      ids,
+    );
+    synchronizeArmyCapacityV2(this.state, this.content);
     this.state.alliances = [];
     this.state.allianceOffers = [];
     this._viewerPlayerId = viewerId;
@@ -533,6 +645,7 @@ export class WorldEngineV2 {
     const forwarded = this.forwardClientCommand(command);
     if (forwarded) return forwarded;
     const publishAction = !this.applyingCommand;
+    const previousHumanPlayerIds = selectHumanPlayerIdsV2(this.state);
     const formerHumanId = this.state.humanPlayerId;
     if (this.state.tick === 0 && formerHumanId !== id) {
       this.state.players[formerHumanId]!.propagandaProgram = null;
@@ -540,6 +653,13 @@ export class WorldEngineV2 {
     }
     this.state.humanPlayerId = id;
     this.state.humanPlayerIds = [id];
+    synchronizeOpeningTreasuryHumanRosterV2(
+      this.state,
+      this.content,
+      previousHumanPlayerIds,
+      [id],
+    );
+    synchronizeArmyCapacityV2(this.state, this.content);
     this.state.alliances = [];
     this.state.allianceOffers = [];
     this._viewerPlayerId = id;
@@ -557,7 +677,6 @@ export class WorldEngineV2 {
     this.state.speed = 1;
     this.recordAppliedAction();
     if (publishAction) this.emitQueuedAction({ sequence: this.state.actionSequence, command });
-    this.startClock();
     this.emit({ reason: 'country-chosen' });
     return { accepted: true };
   }
@@ -569,7 +688,7 @@ export class WorldEngineV2 {
   }
 
   stopClock(): void {
-    if (this.clock) clearInterval(this.clock);
+    if (this.clock !== undefined) clearInterval(this.clock);
     this.clock = undefined;
   }
 
@@ -702,10 +821,20 @@ export class WorldEngineV2 {
     return selectWeeklyFinanceBreakdownV2(this.state, this.content, nationIdV2(playerId));
   }
 
+  /** Generic batch for the current roster; picker previews use the method below. */
   openingCandidateFinancePlans(
     powerSnapshot?: PowerSnapshotV2,
   ): ReadonlyMap<PlayerId, WeeklyFinanceBreakdownV2> {
     return selectOpeningCandidateFinancePlansV2(this.state, this.content, powerSnapshot);
+  }
+
+  /**
+   * Evaluates every opening country as the human choice in one bounded batch.
+   * Candidate-specific power contexts keep catch-up finance and aggressiveness
+   * identical to the state immediately after choosing that country.
+   */
+  openingCandidatePreviewSnapshot(): OpeningCandidatePreviewSnapshotV2 {
+    return createOpeningCandidatePreviewSnapshotV2(this.state, this.content);
   }
 
   /** Pure authoritative preview; does not queue or mutate the proposed budget. */
@@ -946,7 +1075,17 @@ export class WorldEngineV2 {
     const attacker = nationIdV2(attackerId);
     const defender = nationIdV2(defenderId);
     if (!this.applyingCommand) {
-      if (!canDeclareWarV2(this.state, this.content, attacker, defender)) return { accepted: false, reason: 'War is not legal or affordable.' };
+      const declaration = warDeclarationStatusV2(
+        this.state,
+        this.content,
+        attacker,
+        defender,
+        escalatedFromWarId,
+      );
+      if (!declaration.allowed) return {
+        accepted: false,
+        reason: declaration.reason ?? 'War is not legal or affordable.',
+      };
       return this.queue({ type: 'declare-war', attackerId: attacker, defenderId: defender, escalatedFromWarId });
     }
     const humanBaseline = this.captureHumanNationBaseline();
@@ -1148,6 +1287,24 @@ export class WorldEngineV2 {
       this.state.tick += 1;
       pruneAllianceStateV2(this.state);
       processOpeningConflictsV2(this.state, this.content);
+      const integrationRevolutions = processTerritoryIntegrationRevolutionsV2(
+        this.state,
+        this.content,
+      );
+      if (integrationRevolutions.length > 0) pruneAllianceStateV2(this.state);
+      for (const revolution of integrationRevolutions) this.emit({
+        reason: 'revolution',
+        victorId: revolution.restoredOwnerId,
+        defeatedId: revolution.displacedOwnerId,
+        critical: revolution.restoredOwnerId === this._viewerPlayerId
+          || revolution.displacedOwnerId === this._viewerPlayerId,
+      });
+      if (this.state.gameOver) {
+        pruneWorldHistoryV2(this.state);
+        this.assertStateIntegrity(true);
+        this.emit({ reason: 'tick', critical: true });
+        return;
+      }
       this.trackHumanWars();
       const financePowers = createPowerSnapshotV2(this.state, this.content);
       const finance = createFinancePlansV2(this.state, this.content, financePowers);

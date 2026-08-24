@@ -17,6 +17,7 @@ import {
   PEACE_REQUEST_MIN_WAR_AGE_TICKS,
   RESEARCH_BRANCHES,
   clamp,
+  smoothstep,
 } from './balance';
 import { nextRandom } from '../../game/random';
 import type { WorldContentV2 } from './content';
@@ -53,6 +54,7 @@ import {
 } from './selectors';
 import { isDefensiveFederationV2, selectGlobalResistanceV2 } from './resistance';
 import { forecastWarV2, peaceProposalTermsV2 } from './war';
+import { selectWarStrainSummaryV2 } from './warStrain';
 
 /**
  * Soft strategic deterrence between nuclear powers. It is strongest between
@@ -94,6 +96,31 @@ interface RegionalEscalationCandidateV2 {
  * aid is exceptional and does not consume this roll.
  */
 export const AI_EXPANSION_ROLLS_PER_DECISION = 1;
+
+export interface AiHumanWarStrainOpportunityV2 {
+  pressure: number;
+  priorityBonus: number;
+  declarationChanceBonus: number;
+  rivalCautionMultiplier: number;
+  targetWarLimit: number;
+}
+
+/**
+ * Only very high strain makes a human empire a materially more tempting
+ * target. The integer target cap advances in two bounded steps, while every
+ * scoring modifier remains continuous and reaches zero below overextension.
+ */
+export function aiHumanWarStrainOpportunityV2(score: number): AiHumanWarStrainOpportunityV2 {
+  const boundedScore = Number.isFinite(score) ? clamp(score, 0, 100) : 0;
+  const pressure = smoothstep(65, 85, boundedScore);
+  return {
+    pressure,
+    priorityBonus: 36 * pressure,
+    declarationChanceBonus: 0.16 * pressure,
+    rivalCautionMultiplier: 1 - 0.65 * pressure,
+    targetWarLimit: boundedScore >= 85 ? 3 : boundedScore >= 75 ? 2 : 1,
+  };
+}
 
 export interface AiPeaceOfferDecisionV2 {
   aggressiveness: number;
@@ -204,6 +231,7 @@ interface AiExpansionChanceInputsV2 {
   expansionChance: number;
   regionalEscalation: boolean;
   rivalInvaderCount: number;
+  humanWarStrainPressure?: number;
 }
 
 /**
@@ -215,13 +243,21 @@ export function aiExpansionDeclarationChanceV2({
   expansionChance,
   regionalEscalation,
   rivalInvaderCount,
+  humanWarStrainPressure = 0,
 }: AiExpansionChanceInputsV2): number {
+  const strainPressure = clamp(humanWarStrainPressure, 0, 1);
   const baseChance = clamp(0.14 + 0.10 * Math.max(0, ratio - 1)
     + 0.65 * expansionChance
     + (regionalEscalation ? 0.05 : 0), 0.10, regionalEscalation ? 0.48 : 0.42);
-  return rivalInvaderCount > 0 && !regionalEscalation
-    ? Math.min(0.08, baseChance * 0.15)
-    : baseChance;
+  if (rivalInvaderCount > 0 && !regionalEscalation) {
+    const ordinaryDogpileChance = Math.min(0.08, baseChance * 0.15);
+    return clamp(ordinaryDogpileChance + 0.16 * strainPressure, 0, 0.30);
+  }
+  return clamp(
+    baseChance + 0.16 * strainPressure,
+    0.10,
+    regionalEscalation ? 0.48 : 0.42,
+  );
 }
 
 /** Ordinary countries fight one war at a time; mature great powers may sustain two. */
@@ -670,6 +706,9 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
   const humanPlayerIds = new Set(selectHumanPlayerIdsV2(state));
   const militaryBaseSnapshot = createMilitaryBaseSnapshotV2(state, content);
   const powerSnapshot = createPowerSnapshotV2(state, content, militaryBaseSnapshot);
+  const humanWarStrainByNation = new Map([...humanPlayerIds]
+    .filter((id) => Boolean(state.players[id]) && !selectIsEliminatedV2(state, id))
+    .map((id) => [id, selectWarStrainSummaryV2(state, content, id).score] as const));
   const warAccessIndex = createAiWarAccessIndexV2(state, content);
   // Rotate strategic initiative so every country gets credible expansion
   // windows instead of alphabetically early nations consuming the war slot.
@@ -873,9 +912,15 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
         .filter((id) => id !== playerId && id !== interventionAlly
           && !ownWars.some((war) => war.attackerId === id || war.defenderId === id)))];
       const rivalPower = rivalInvaderIds.reduce((sum, id) => sum + (powerSnapshot.byNation.get(id) ?? 0), 0);
+      const humanStrainOpportunity = aiHumanWarStrainOpportunityV2(
+        humanWarStrainByNation.get(targetId) ?? 0,
+      );
+      const rivalCautionMultiplier = humanStrainOpportunity.rivalCautionMultiplier;
       // A country already under attack is not discounted as a free prize: a
-      // new invader must be able to survive both the target and rival armies.
-      const targetPower = (powerSnapshot.byNation.get(targetId) ?? 0) + rivalPower;
+      // new invader still prices in rival armies. Only a critically strained
+      // human empire softens that caution, and never removes it completely.
+      const targetPower = (powerSnapshot.byNation.get(targetId) ?? 0)
+        + rivalPower * rivalCautionMultiplier;
       const ratio = ownPower / Math.max(1, targetPower);
       const targetEconomy = selectNationalEconomyV2(state, content, targetId);
       const targetNation = content.nations[targetId]!;
@@ -923,11 +968,12 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
           + 0.35 * state.players[targetId]!.warFatigue
           - 9 * ownWars.length
           + expansionPriority
+          + humanStrainOpportunity.priorityBonus
           + (regionalEscalation?.priority ?? 0)
           - majorPeerWarRisk
           - nuclearDeterrence
-          - 30 * rivalInvaderIds.length
-          - 12 * Math.log2(1 + rivalPower / Math.max(1, ownPower))
+          - 30 * rivalInvaderIds.length * rivalCautionMultiplier
+          - 12 * Math.log2(1 + rivalPower * rivalCautionMultiplier / Math.max(1, ownPower))
           - 1.5 * targetWars * targetAlignment
           - 2.5 * costWeeks - 3 * Math.max(0, requiredRunway + 2 - remainingRunway)
           - (access === 'naval' ? 2 : 0),
@@ -937,7 +983,13 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
         regionalEscalation,
         targetWars,
         rivalInvaderCount: rivalInvaderIds.length,
-        prospectiveFronts: 1 + rivalInvaderIds.length,
+        // At score 75+ the human-overreach exception creates one independent
+        // target war; otherwise a contested declaration also creates one real
+        // rival war per existing invader. Every actual war is counted whole.
+        prospectiveFronts: humanStrainOpportunity.targetWarLimit > 1
+          ? 1
+          : 1 + rivalInvaderIds.length,
+        humanStrainOpportunity,
         expansionChance: 0.03 * expansionAmbition + 0.03 * majorPowerDrive + 0.02 * regionalFit
           + 0.0015 * Math.max(0, geopoliticalGuidance),
       };
@@ -949,14 +1001,18 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
         (truce.leftId === playerId && truce.rightId === candidate.targetId)
         || (truce.leftId === candidate.targetId && truce.rightId === playerId)
       ))
-      && state.wars.length < (candidate.regionalEscalation ? escalationWarCap : activeWarCap)
+      && state.wars.length + candidate.prospectiveFronts
+        <= (candidate.regionalEscalation ? escalationWarCap : activeWarCap)
       && state.tick - state.aiEscalation.lastWarStartTick >= (candidate.regionalEscalation
         ? candidate.regionalEscalation.defensiveAid
           ? AI_DEFENSIVE_AID_COOLDOWN : AI_REGIONAL_ESCALATION_COOLDOWN
         : AI_GLOBAL_WAR_COOLDOWN)
-      && candidate.targetWars < aiTargetWarLimitV2(
-        Boolean(candidate.regionalEscalation),
-        candidate.regionalEscalation?.defensiveAid === true,
+      && candidate.targetWars < Math.max(
+        aiTargetWarLimitV2(
+          Boolean(candidate.regionalEscalation),
+          candidate.regionalEscalation?.defensiveAid === true,
+        ),
+        candidate.humanStrainOpportunity.targetWarLimit,
       )
       // Survival crises block optional expansion. Emergency aid to a neighbour
       // already under attack remains the sole exception and immediately puts
@@ -969,6 +1025,7 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
           : (candidate.access === 'land' ? 0.72 : 0.78)
         : (candidate.access === 'land' ? 1.03 : 1.10)
           + 0.30 * candidate.rivalInvaderCount
+            * candidate.humanStrainOpportunity.rivalCautionMultiplier
           + (state.tick < AI_MAJOR_POWER_AVOIDANCE_TICKS
             ? 0.30 * majorPowerDrive * clamp(((content.nations[candidate.targetId]?.real.powerIndex ?? 0) - 45) / 55, 0, 1)
             : 0))
@@ -1001,7 +1058,9 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
       const minimumChance = candidate.regionalEscalation?.defensiveAid ? 0
         : candidate.regionalEscalation ? 20
           : warDiscipline.minimumWinChance + ownWars.length * 6
-            + candidate.rivalInvaderCount * 12 + (candidate.access === 'naval' ? 1 : 0);
+            + candidate.rivalInvaderCount * 12
+              * candidate.humanStrainOpportunity.rivalCautionMultiplier
+            + (candidate.access === 'naval' ? 1 : 0);
       return candidate.forecast.winChance >= minimumChance;
     }).sort((left, right) => right.priority - left.priority || left.targetId.localeCompare(right.targetId));
     const candidate = forecastedCandidates[0];
@@ -1016,6 +1075,7 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
         expansionChance: candidate.expansionChance,
         regionalEscalation: Boolean(candidate.regionalEscalation),
         rivalInvaderCount: candidate.rivalInvaderCount,
+        humanWarStrainPressure: candidate.humanStrainOpportunity.pressure,
       });
     if (nextRandom(state) >= chance) continue;
     commands.push({

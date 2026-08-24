@@ -139,7 +139,8 @@ describe('multiplayer lobby launch recovery', () => {
     expect(rendered.html).toContain('Choose your nation');
     expect(rendered.html).toContain('id="mp-country-search"');
     expect(rendered.html).toContain('id="mp-country-sort"');
-    expect(rendered.html).toContain('Military power');
+    expect(rendered.html).toContain('Military ranking');
+    expect(rendered.html).toContain('MILITARY POWER');
     expect(rendered.html).toContain('Aggressiveness');
     expect(rendered.html).toContain('data-mp-action="continent-filter"');
     expect(rendered.html).toContain('data-mp-action="select-country"');

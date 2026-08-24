@@ -1,6 +1,23 @@
 import {
   AI_HEALTHY_ARMY_TARGET,
   AI_SEVERE_DEBT_REVENUE_WEEKS,
+  AI_EXCESS_TREASURY_RESEARCH_SHARE_MAX,
+  AI_EXCESS_TREASURY_RESEARCH_SHARE_MIN,
+  DEBT_CARRYING_PREMIUM_BASE_RATE,
+  DEBT_CARRYING_PREMIUM_CRITICAL_RATE,
+  DEBT_CARRYING_PREMIUM_FULL_REVENUE_WEEKS,
+  DEBT_CARRYING_PREMIUM_MAX_REVENUE_SHARE,
+  DEBT_CARRYING_PREMIUM_RECOVERY_RATE,
+  DEBT_CARRYING_PREMIUM_START_REVENUE_WEEKS,
+  DEBT_IMPORT_COST_CRITICAL_BONUS,
+  DEBT_IMPORT_COST_RECOVERY_BONUS,
+  DEBT_NEW_BORROWING_PREMIUM,
+  DEBT_PROGRAM_ENVELOPE_FLOOR_PEACE,
+  DEBT_PROGRAM_ENVELOPE_FLOOR_WAR,
+  DEBT_PROGRAM_PENALTY_PEACE_CRITICAL,
+  DEBT_PROGRAM_PENALTY_PEACE_RECOVERY,
+  DEBT_PROGRAM_PENALTY_WAR_CRITICAL,
+  DEBT_PROGRAM_PENALTY_WAR_RECOVERY,
   BASE_OPERATING_COST_MIN_TAX_REVENUE_SHARE,
   BASE_OPERATING_COST_TAX_REVENUE_SHARE,
   CONQUEST_INITIAL_INTEGRATION_SHARE,
@@ -76,6 +93,7 @@ import {
   EXTREME_CRISIS_DEMOBILIZATION_RATE,
   EXTREME_CRISIS_FOOD_COVERAGE,
   EXTREME_CRISIS_FOOD_RESERVE_WEEKS,
+  EXTREME_CRISIS_HOME_GUARD_CAPACITY_SHARE,
   EXTREME_CRISIS_MAX_UPKEEP_FUNDING,
   PASSIVE_RECRUITMENT_CAPACITY_RATE,
   PASSIVE_RECRUITMENT_TRAINING_BONUS,
@@ -135,7 +153,9 @@ import {
   WAR_RECRUITMENT_THROUGHPUT_FACTOR,
   researchFundingShareV2,
   clamp,
+  debtPressureV2,
   diminishingResearchLevelV2,
+  excessTreasuryInvestmentV2,
   round,
   smoothstep,
 } from './balance';
@@ -171,6 +191,7 @@ import { applyResearchProgressTraitV2 } from './traitResearch';
 import {
   countryTraitFactorV2,
   countryTraitModifiersV2,
+  countryTraitReplacementValueV2,
   traitModifierAppliesV2,
   type TraitEvaluationContextV2,
 } from './traits';
@@ -1509,7 +1530,12 @@ function selectFoodPlanV2(
   // meaningful bill without turning the value into a coverage cap.
   const systemInefficiency = clamp((1 - capacityPlan.accessCeiling) / 0.35, 0, 1);
   const warPressure = selectWarPressureV2(state, playerId).outputPenalty;
-  const debtStress = nation.treasury < 0 ? 1.25 : 1;
+  const debtPressure = debtPressureV2(
+    nation.treasury / Math.max(0.001, economy.weeklyRevenue),
+  );
+  const debtImportCostMultiplier = 1
+    + DEBT_IMPORT_COST_RECOVERY_BONUS * debtPressure.recovery
+    + DEBT_IMPORT_COST_CRITICAL_BONUS * debtPressure.critical;
   const localPriceLevel = foodPriceLevelForOutputPerPersonV2(outputPerPerson);
   const domesticUnitCost = FOOD_DOMESTIC_COST_PER_MILLION
     * FOOD_COST_GLOBAL_MULTIPLIER
@@ -1526,7 +1552,7 @@ function selectFoodPlanV2(
     // penalty here made India-like economies structurally unable to recover.
     // Import dependence and actual access vulnerability remain the visible risks.
     * (1 + 0.70 * dependency + 1.50 * systemInefficiency)
-    * (1 + 2 * warPressure) * debtStress
+    * (1 + 2 * warPressure) * debtImportCostMultiplier
     * countryTraitFactorV2(
       playerId,
       'food-import-cost',
@@ -1976,6 +2002,7 @@ export function selectResearchPortfolioV2(
         playerId,
         branch,
         outputShare,
+        traitNationContextV2(state, playerId),
       ),
       progressRatio: nextCost > 0 ? clamp(progress / nextCost, 0, 1) : 1,
       breakthroughs: nation.research.breakthroughs[branch],
@@ -2158,6 +2185,7 @@ export function selectWeeklyFinanceBreakdownV2(
     availableTaxRevenue + ordinaryFood.foodExportIncome - ordinaryFoodProduction,
   );
   const treasuryWeeks = nation.treasury / Math.max(0.001, economy.weeklyRevenue);
+  const debtPressure = debtPressureV2(treasuryWeeks);
   // Free cash is a strategic reserve rather than an invitation to buy sudden
   // one-off advantages. National IQ only improves the consistency of this
   // shared cash discipline; selection status never changes the rules.
@@ -2167,6 +2195,11 @@ export function selectWeeklyFinanceBreakdownV2(
     activeWars,
     economyScale,
   );
+  const excessCashInvestment = excessTreasuryInvestmentV2(
+    nation.treasury,
+    economy.controlledOutput,
+    economy.weeklyRevenue,
+  ).weeklyDraw;
   const reserveProgress = clamp(
     treasuryWeeks / Math.max(0.25, treasuryPolicy.reserveWeeks),
     0,
@@ -2181,10 +2214,21 @@ export function selectWeeklyFinanceBreakdownV2(
       6,
       Math.max(0, treasuryWeeks - treasuryPolicy.reserveWeeks),
     );
-  const envelopeRate = nation.treasury < 0
-    // Debt recovery cuts the discretionary envelope sharply, especially
-    // while a peace contract is already consuming national revenue.
-    ? clamp((atWar ? 0.92 : 0.80) - mandatoryPaymentShare, 0.10, atWar ? 0.86 : 0.70)
+  const debtProgramPenalty = (atWar
+    ? DEBT_PROGRAM_PENALTY_WAR_RECOVERY : DEBT_PROGRAM_PENALTY_PEACE_RECOVERY)
+      * debtPressure.recovery
+    + (atWar
+      ? DEBT_PROGRAM_PENALTY_WAR_CRITICAL : DEBT_PROGRAM_PENALTY_PEACE_CRITICAL)
+      * debtPressure.critical;
+  const envelopeRate = debtPressure.debtWeeks > 0
+    // A one-week overdraft keeps the ordinary disciplined envelope. Deeper
+    // debt then contracts every existing programme smoothly while treaty and
+    // integration obligations continue to consume real national revenue.
+    ? clamp(
+      disciplinedSpendingRate - debtProgramPenalty - mandatoryPaymentShare,
+      atWar ? DEBT_PROGRAM_ENVELOPE_FLOOR_WAR : DEBT_PROGRAM_ENVELOPE_FLOOR_PEACE,
+      disciplinedSpendingRate,
+    )
     : atWar
       // Crossing a cash-runway threshold never unlocks a sudden spending
       // block. Excess war-chest weeks smoothly raise the envelope over a
@@ -2227,49 +2271,23 @@ export function selectWeeklyFinanceBreakdownV2(
       'army-upkeep',
       traitNationContextV2(state, playerId),
     );
-  // Weekly costs use the persisted allocation exactly. The shared national AI
-  // can correct an underfunded army only at its next gradual eight-week review.
-  const military = envelope * budget.military / 100;
-  // Research remains fully financed in food crises because its logistics,
-  // medicine and economy programs are the durable route out of shortages.
-  const research = envelope * budget.research / 100;
-  const plannedDevelopment = envelope * budget.development / 100;
-  const foodDevelopmentRedirect = redirectDevelopmentFundingToFoodV2({
-    baseBudget: budget,
-    plannedDevelopment,
-    foodFundingGap: foodPlan.request - ordinaryFoodProduction,
-    foodCoverage: ordinaryFood.foodCoverage,
-    foodReserveWeeks: reserveWeeks,
-    foodStockChange: ordinaryFood.foodStockChange,
-    foodDemand: foodPlan.demand,
-    iqScore: iq.score,
-  });
-  const development = foodDevelopmentRedirect.development;
-  const foodDevelopmentTransfer = foodDevelopmentRedirect.transfer;
-  const fundedFood = fundFoodPlanV2(
-    nation,
-    foodPlan,
-    ordinaryFoodProduction + foodDevelopmentTransfer,
-    foodExportIncomeTraitFactor,
+  // Ordinary revenue uses the persisted budget exactly. A GDP-scale cash
+  // surplus may supplement only real military needs before its remainder is
+  // routed into productive research and development below.
+  let excessCashRemaining = excessCashInvestment;
+  let military = envelope * budget.military / 100;
+  const excessArmyUpkeep = Math.min(
+    excessCashRemaining,
+    Math.max(0, armyUpkeep - military),
   );
-  const {
-    foodProduction,
-    foodProduced,
-    foodDomesticProduced,
-    foodImported,
-    foodExported,
-    foodExportIncome,
-    foodConsumed,
-    foodCoverage,
-    foodStockChange,
-  } = fundedFood;
-  // The ten-program portfolio divides this actually funded pot once; capped shares remain spent.
+  military += excessArmyUpkeep;
+  excessCashRemaining -= excessArmyUpkeep;
   // Front operations are paid directly below. They do not consume the Armed
   // Forces envelope a second time or masquerade as ordinary standing upkeep.
   const mandatoryRequest = armyUpkeep;
   const mandatoryFundingRatio = mandatoryRequest > 0 ? clamp(military / mandatoryRequest, 0, 1) : 1;
   const mandatoryFunded = Math.min(military, mandatoryRequest);
-  const remainingMilitary = Math.max(0, military - mandatoryFunded);
+  let remainingMilitary = Math.max(0, military - mandatoryFunded);
   const passiveRecruitmentRequest = selectRecruitmentThroughputV2(state, content, playerId, powerSnapshot);
   const fundedPassiveCapacity = passiveRecruitmentRequest * mandatoryFundingRatio;
   const trainingPipeline = selectRecruitmentTrainingPipelineV2(state, content, playerId);
@@ -2292,6 +2310,13 @@ export function selectWeeklyFinanceBreakdownV2(
       ),
   );
   const recruitmentRequest = acceleratedRecruitmentRequest * recruitmentUnitCost * accelerationCostMultiplier;
+  const excessRecruitment = mandatoryFundingRatio >= 0.999999 ? Math.min(
+    excessCashRemaining,
+    Math.max(0, recruitmentRequest - remainingMilitary),
+  ) : 0;
+  military += excessRecruitment;
+  remainingMilitary += excessRecruitment;
+  excessCashRemaining -= excessRecruitment;
   const affordableRecruitmentCost = mandatoryFundingRatio >= 0.999999
     ? Math.min(remainingMilitary, recruitmentRequest) : 0;
   const affordableAcceleratedRecruitment = recruitmentUnitCost > 0
@@ -2358,6 +2383,17 @@ export function selectWeeklyFinanceBreakdownV2(
       )
     : 0;
   const reserveTrainingCostPerUnit = recruitmentUnitCost * TRAINED_RESERVE_TRAINING_COST_MULTIPLIER;
+  const reserveTrainingCostRequest = Math.min(
+    reserveRoomAfterDeployment,
+    reserveTrainingRequest,
+  ) * reserveTrainingCostPerUnit;
+  const excessReserveTraining = mandatoryFundingRatio >= 0.999999 ? Math.min(
+    excessCashRemaining,
+    Math.max(0, reserveTrainingCostRequest - Math.max(0, remainingMilitary - recruitment)),
+  ) : 0;
+  military += excessReserveTraining;
+  remainingMilitary += excessReserveTraining;
+  excessCashRemaining -= excessReserveTraining;
   const reserveTrainingFunds = Math.max(0, remainingMilitary - recruitment);
   const reserveTraining = mandatoryFundingRatio >= 0.999999 && reserveTrainingCostPerUnit > 0
     ? Math.min(
@@ -2370,6 +2406,50 @@ export function selectWeeklyFinanceBreakdownV2(
     Math.max(trainedReserveCapacity, nation.trainedReserves - reserveDeployment),
     Math.max(0, nation.trainedReserves - reserveDeployment + reserveTraining),
   );
+  // Once genuine readiness needs are covered, all remaining surplus goes to
+  // programmes that always create durable output. Development retains its
+  // existing repair-first and food-emergency redirection behavior.
+  const nonMilitaryBudget = budget.research + budget.development;
+  const excessResearchShare = clamp(
+    nonMilitaryBudget > 0 ? budget.research / nonMilitaryBudget : 0.45,
+    AI_EXCESS_TREASURY_RESEARCH_SHARE_MIN,
+    AI_EXCESS_TREASURY_RESEARCH_SHARE_MAX,
+  );
+  const excessResearch = excessCashRemaining * excessResearchShare;
+  const excessDevelopment = excessCashRemaining - excessResearch;
+  // Research remains fully financed in food crises because its logistics,
+  // medicine and economy programs are the durable route out of shortages.
+  const research = envelope * budget.research / 100 + excessResearch;
+  const plannedDevelopment = envelope * budget.development / 100 + excessDevelopment;
+  const foodDevelopmentRedirect = redirectDevelopmentFundingToFoodV2({
+    baseBudget: budget,
+    plannedDevelopment,
+    foodFundingGap: foodPlan.request - ordinaryFoodProduction,
+    foodCoverage: ordinaryFood.foodCoverage,
+    foodReserveWeeks: reserveWeeks,
+    foodStockChange: ordinaryFood.foodStockChange,
+    foodDemand: foodPlan.demand,
+    iqScore: iq.score,
+  });
+  const development = foodDevelopmentRedirect.development;
+  const foodDevelopmentTransfer = foodDevelopmentRedirect.transfer;
+  const fundedFood = fundFoodPlanV2(
+    nation,
+    foodPlan,
+    ordinaryFoodProduction + foodDevelopmentTransfer,
+    foodExportIncomeTraitFactor,
+  );
+  const {
+    foodProduction,
+    foodProduced,
+    foodDomesticProduced,
+    foodImported,
+    foodExported,
+    foodExportIncome,
+    foodConsumed,
+    foodCoverage,
+    foodStockChange,
+  } = fundedFood;
   const standingOperations = Math.max(
     0,
     military - mandatoryFunded - recruitment - reserveTrainingCost,
@@ -2383,7 +2463,11 @@ export function selectWeeklyFinanceBreakdownV2(
   // This legacy-named telemetry field now represents the only permitted force
   // reduction: at most 0.05% per week in an extreme survival crisis.
   const acceleratedDemobilization = shouldDemobilize
-    ? round(army.deployed * EXTREME_CRISIS_DEMOBILIZATION_RATE, 9) : 0;
+    ? round(Math.min(
+      army.deployed * EXTREME_CRISIS_DEMOBILIZATION_RATE,
+      Math.max(0, army.deployed
+        - army.capacity * EXTREME_CRISIS_HOME_GUARD_CAPACITY_SHARE),
+    ), 9) : 0;
   const demobilizationCost = 0;
   const conditionRequest = selectTerritoriesOfV2(state, playerId)
     .reduce((sum, territory) => sum + (1 - territory.condition) * 0.20, 0);
@@ -2409,7 +2493,25 @@ export function selectWeeklyFinanceBreakdownV2(
   const debtBefore = Math.max(0, -nation.treasury);
   const debtAfterBeforePremium = Math.max(0, -prePremiumTreasury);
   const newBorrowing = Math.max(0, debtAfterBeforePremium - debtBefore);
-  const debtPremium = newBorrowing * 0.10;
+  const carryingPremiumActivation = smoothstep(
+    DEBT_CARRYING_PREMIUM_START_REVENUE_WEEKS,
+    DEBT_CARRYING_PREMIUM_FULL_REVENUE_WEEKS,
+    debtPressure.debtWeeks,
+  );
+  const carryingPremiumRate = carryingPremiumActivation * (
+    DEBT_CARRYING_PREMIUM_BASE_RATE
+    + DEBT_CARRYING_PREMIUM_RECOVERY_RATE * debtPressure.recovery
+    + DEBT_CARRYING_PREMIUM_CRITICAL_RATE * debtPressure.critical
+  );
+  // Charge carrying cost only on opening debt that remains after this week's
+  // operating result. New principal pays its origination premium once below;
+  // a final successful repayment never reopens a microscopic balance.
+  const oldDebtRemaining = Math.min(debtBefore, debtAfterBeforePremium);
+  const carryingPremium = Math.min(
+    economy.weeklyRevenue * DEBT_CARRYING_PREMIUM_MAX_REVENUE_SHARE,
+    oldDebtRemaining * carryingPremiumRate,
+  );
+  const debtPremium = newBorrowing * DEBT_NEW_BORROWING_PREMIUM + carryingPremium;
   const closingTreasury = prePremiumTreasury - debtPremium;
   return roundedFinanceV2({
     activeBudget: { ...foodDevelopmentRedirect.activeBudget },
@@ -2438,6 +2540,7 @@ export function selectWeeklyFinanceBreakdownV2(
     baseOperatingCost,
     newBorrowing,
     debtPremium,
+    excessCashInvestment,
     armyUpkeep,
     fundedArmyUpkeep: mandatoryFunded,
     warOperations,
@@ -2483,9 +2586,11 @@ export function selectWeeklyFinanceBreakdownV2(
 }
 
 /**
- * Compare opening candidates with the same shared national AI. The selected
- * country grants no hidden efficiency; only each country's bounded IQ score
- * affects execution. One power snapshot keeps the batch deterministic.
+ * Batch finance under the controller roster already encoded in `state`.
+ * This deliberately does not rewrite controller identity; the country picker
+ * uses `createOpeningCandidatePreviewSnapshotV2` to evaluate each candidate as
+ * human-controlled. One supplied power snapshot keeps this generic batch
+ * deterministic.
  */
 export function selectOpeningCandidateFinancePlansV2(
   state: WorldStateV2,
@@ -2568,10 +2673,14 @@ export function projectFinanceManpowerPhaseV2(
   // Never infer demobilisation from capacity or ordinary underfunding. The
   // finance phase may explicitly request the extreme-crisis trickle only.
   const maximumWeeklyDemobilization = deployedBefore * EXTREME_CRISIS_DEMOBILIZATION_RATE;
+  const emergencyHomeGuard = nationalCapacity * EXTREME_CRISIS_HOME_GUARD_CAPACITY_SHARE;
   const requestedDemobilization = clamp(
     finance.acceleratedDemobilization,
     0,
-    maximumWeeklyDemobilization,
+    Math.min(
+      maximumWeeklyDemobilization,
+      Math.max(0, deployedBefore - emergencyHomeGuard),
+    ),
   );
   const demobilizationTarget = deployedBefore - requestedDemobilization;
   const demobilizationScale = deployedBefore > 0
@@ -2816,11 +2925,14 @@ export function selectTreasurySeizureShareV2(
   const context = traitNationContextV2(state, defeatedPlayerId);
   const applicable = countryTraitModifiersV2(defeatedPlayerId, 'treasury-seizure')
     .filter((entry) => traitModifierAppliesV2(entry, context));
-  const replacement = applicable.find((entry) => (
+  const replacementEntry = applicable.find((entry) => (
     entry.replacement?.unit === 'share'
     && Math.abs(entry.replacement.from - baseShare) <= 0.000000001
-  ))?.replacement;
-  if (replacement) return replacement.to;
+  ));
+  const replacement = replacementEntry
+    ? countryTraitReplacementValueV2(defeatedPlayerId, replacementEntry, context)
+    : undefined;
+  if (replacement !== undefined) return clamp(replacement, 0, 1);
   return baseShare * countryTraitFactorV2(
     defeatedPlayerId,
     'treasury-seizure',
@@ -2835,15 +2947,15 @@ export function selectStrategicScoreV2(
   militaryBaseSnapshot: MilitaryBaseSnapshotV2 = createMilitaryBaseSnapshotV2(state, content),
 ): number {
   if (!state.players[playerId]) return 0;
-  const combatPower = selectCurrentPowerV2(state, content, playerId, militaryBaseSnapshot);
-  const controlledOutput = selectNationalEconomyV2(state, content, playerId).controlledOutput;
-  return strategicScoreFromComponentsV2(combatPower, controlledOutput);
+  return militaryRankingScoreV2(
+    selectCurrentPowerV2(state, content, playerId, militaryBaseSnapshot),
+  );
 }
 
-function strategicScoreFromComponentsV2(combatPower: number, controlledOutput: number): number {
-  // The geometric mean gives military and economy equal weight in relative
-  // growth: doubling either dimension changes the global score identically.
-  return round(Math.sqrt(Math.max(0, combatPower) * Math.max(0, controlledOutput)));
+function militaryRankingScoreV2(combatPower: number): number {
+  // The one global rank is deliberately pure military power. Economy remains
+  // visible alongside it, but can never move a country above a stronger force.
+  return round(Math.max(0, combatPower));
 }
 
 export function selectGlobalRankingV2(
@@ -2856,11 +2968,11 @@ export function selectGlobalRankingV2(
     const economicOutput = selectNationalEconomyV2(state, content, id).controlledOutput;
     return {
       player: selectNationViewV2(state, content, id)!,
-      score: strategicScoreFromComponentsV2(combatPower, economicOutput),
+      score: militaryRankingScoreV2(combatPower),
       combatPower,
       economicOutput,
     };
-  }).sort((a, b) => b.score - a.score || a.player.id.localeCompare(b.player.id));
+  }).sort((a, b) => b.combatPower - a.combatPower || a.player.id.localeCompare(b.player.id));
 }
 
 export function selectWarAccessTypeV2(state: WorldStateV2, content: WorldContentV2, attackerId: PlayerId, defenderId: PlayerId): WarAccessV2 {

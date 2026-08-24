@@ -8,6 +8,7 @@ import {
 import {
   AI_EXPANSION_ROLLS_PER_DECISION,
   aiExpansionDeclarationChanceV2,
+  aiHumanWarStrainOpportunityV2,
   aiConcurrentWarLimitV2,
   aiTargetWarLimitV2,
   aiWarCandidateForecastScoreV2,
@@ -45,6 +46,33 @@ describe('quiet but active AI war pacing', () => {
     expect(ordinary).toBeCloseTo(0.212, 6);
     expect(regional).toBeCloseTo(0.262, 6);
     expect(dogpile).toBeLessThanOrEqual(0.08);
+  });
+
+  it('opens a bounded opportunistic window only for very high human war strain', () => {
+    const ordinary = aiHumanWarStrainOpportunityV2(65);
+    const critical = aiHumanWarStrainOpportunityV2(75);
+    const extreme = aiHumanWarStrainOpportunityV2(85);
+    const ordinaryDogpile = aiExpansionDeclarationChanceV2({
+      ratio: 1.2,
+      expansionChance: 0.08,
+      regionalEscalation: false,
+      rivalInvaderCount: 1,
+    });
+    const strainedDogpile = aiExpansionDeclarationChanceV2({
+      ratio: 1.2,
+      expansionChance: 0.08,
+      regionalEscalation: false,
+      rivalInvaderCount: 1,
+      humanWarStrainPressure: extreme.pressure,
+    });
+
+    expect(ordinary).toMatchObject({ pressure: 0, targetWarLimit: 1 });
+    expect(critical.pressure).toBeCloseTo(0.5, 8);
+    expect(critical.targetWarLimit).toBe(2);
+    expect(extreme).toMatchObject({ pressure: 1, targetWarLimit: 3 });
+    expect(extreme.rivalCautionMultiplier).toBeCloseTo(0.35, 8);
+    expect(strainedDogpile).toBeGreaterThan(ordinaryDogpile * 3);
+    expect(strainedDogpile).toBeLessThanOrEqual(0.30);
   });
 
   it('uses IQ for safer target selection and timing, never for a larger war roll', () => {

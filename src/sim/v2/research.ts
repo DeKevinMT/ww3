@@ -20,6 +20,7 @@ import {
   type PowerSnapshotV2,
 } from './selectors';
 import { applyResearchProgressTraitV2 } from './traitResearch';
+import { traitNationContextV2 } from './traitContext';
 import type { ResearchBranchV2, ResearchEffectV2, WorldStateV2 } from './types';
 
 export function branchIsMaxedV2(
@@ -72,7 +73,12 @@ export function processResearchV2(
         : round(poolOutput * fundingShares[branch], 9);
       assignedOutput = round(assignedOutput + outputShare, 9);
       if (maxed) continue;
-      const weeklyProgress = applyResearchProgressTraitV2(playerId, branch, outputShare);
+      const weeklyProgress = applyResearchProgressTraitV2(
+        playerId,
+        branch,
+        outputShare,
+        traitNationContextV2(state, playerId),
+      );
       nation.research.progress[branch] = round(
         nation.research.progress[branch] + weeklyProgress,
       );

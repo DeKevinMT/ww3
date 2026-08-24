@@ -1,11 +1,5 @@
 import { normalizeSeed } from '../../game/random';
 import {
-  DEFAULT_RESEARCH_ALLOCATIONS_V2,
-  DEFAULT_BUDGET_V2,
-  EMPTY_RESEARCH_BREAKTHROUGHS,
-  EMPTY_RESEARCH_EFFECT_LEVELS,
-  EMPTY_RESEARCH_PROGRESS,
-  FOOD_TARGET_WEEKS,
   V2_CONTENT_VERSION,
   V2_MAP_ID,
   V2_RULES_VERSION,
@@ -15,11 +9,10 @@ import {
 import { WORLD_CONTENT_V2, type WorldContentV2 } from './content';
 import {
   initialArmyCapacityRatioV2,
-  initialNationArmyCapacityBenchmarkV2,
   initialTerritoryArmyCapacityV2,
+  synchronizeArmyCapacityV2,
 } from './capacity';
-import { calculateBlendedFiscalCapacityV2 } from './fiscal';
-import { initialTrainedReserveManpowerV2 } from './reserveForces';
+import { createNationStateV2 } from './nationState';
 import { countryTraitFactorV2 } from './traits';
 import {
   invalidateTerritoryIndexV2,
@@ -27,7 +20,6 @@ import {
   selectFoodStorageCapacityV2,
 } from './selectors';
 import type {
-  NationStateV2,
   PlayerId,
   TerritoryId,
   TerritoryStateV2,
@@ -42,57 +34,6 @@ function defaultHumanPlayerId(content: WorldContentV2): PlayerId {
   const fallback = content.nationIds[0];
   if (!fallback) throw new Error('V2 content needs at least one nation.');
   return fallback;
-}
-
-function createNationState(id: PlayerId, content: WorldContentV2): NationStateV2 {
-  const definition = content.nations[id];
-  if (!definition) throw new Error(`Missing V2 nation content for ${id}.`);
-  const structuralPopulation = Math.max(0, definition.real.population);
-  const fiscalCapacity = calculateBlendedFiscalCapacityV2(
-    definition.real.gdp,
-    structuralPopulation,
-    structuralPopulation,
-  );
-  const weeklyRevenue = fiscalCapacity.weeklyTaxRevenue;
-  // Small, wealthy states commonly hold a much deeper liquid buffer than two
-  // tax weeks. Diminishing size scaling grants that identity without handing
-  // another enormous absolute windfall to the largest economy in the world.
-  const gdpPerCapita = fiscalCapacity.wealthPerPerson * 1_000;
-  const wealthTier = clamp(Math.log2(Math.max(10_000, gdpPerCapita) / 10_000), 0, 4);
-  const largeEconomyDamping = 1 / Math.sqrt(Math.max(1, definition.real.gdp / 500));
-  const startingCashWeeks = clamp(2 + 2.25 * wealthTier * largeEconomyDamping, 2, 9);
-  const initialFoodBufferWeeks = FOOD_TARGET_WEEKS
-    * clamp(1 - 4 * definition.real.foodInsecurityRate, 0.08, 1);
-  const initialArmyCapacity = initialNationArmyCapacityBenchmarkV2(content, id);
-  const startingTreasury = Math.max(0.10, weeklyRevenue * startingCashWeeks)
-    * countryTraitFactorV2(id, 'starting-treasury');
-  return {
-    empireName: '',
-    treasury: round(startingTreasury, 3),
-    foodStock: round(definition.real.population * initialFoodBufferWeeks),
-    domesticFoodCapacity: 0,
-    // Food security is a live result of funded supply plus stored reserves,
-    // never a country-data percentage imposed on the simulation. Historical
-    // vulnerability still starts fragile systems with a smaller buffer and a
-    // higher production/import burden below.
-    foodSecurity: 1,
-    trainedReserves: initialTrainedReserveManpowerV2(String(id), initialArmyCapacity),
-    budget: { ...DEFAULT_BUDGET_V2 },
-    research: {
-      allocations: { ...DEFAULT_RESEARCH_ALLOCATIONS_V2 },
-      progress: { ...EMPTY_RESEARCH_PROGRESS },
-      effectLevels: { ...EMPTY_RESEARCH_EFFECT_LEVELS },
-      breakthroughs: { ...EMPTY_RESEARCH_BREAKTHROUGHS },
-    },
-    ceasefiresRequested: 0,
-    manualActionUses: { rapidRecruitment: 0, researchSurge: 0, propaganda: 0 },
-    rapidRecruitmentAvailableTick: 0,
-    researchSurgeAvailableTick: 0,
-    propagandaAvailableTick: 0,
-    propagandaProgram: null,
-    warFatigue: 0,
-    capitalId: definition.initialCapitalId,
-  };
 }
 
 function createTerritoryState(id: TerritoryId, content: WorldContentV2): TerritoryStateV2 {
@@ -234,6 +175,7 @@ export function processOpeningConflictsV2(state: WorldStateV2, content: WorldCon
   const scenario = openingConflictScheduleV2(state.seed, content).find((entry) => entry.tick === state.tick);
   if (!scenario) return;
   if (!state.players[scenario.attackerId] || !state.players[scenario.defenderId]) return;
+  if (state.players[scenario.attackerId]!.treasury < 0) return;
   const attackerAlive = Object.values(state.territories).some((territory) => territory.owner === scenario.attackerId);
   const defenderAlive = Object.values(state.territories).some((territory) => territory.owner === scenario.defenderId);
   if (!attackerAlive || !defenderAlive) return;
@@ -268,7 +210,10 @@ export function createWorldStateV2(
 ): WorldStateV2 {
   const seed = normalizeSeed(seedInput);
   const humanPlayerId = defaultHumanPlayerId(content);
-  const players = Object.fromEntries(content.nationIds.map((id) => [id, createNationState(id, content)])) as WorldStateV2['players'];
+  const players = Object.fromEntries(content.nationIds.map((id) => [
+    id,
+    createNationStateV2(id, content, id === humanPlayerId),
+  ])) as WorldStateV2['players'];
   const territories = Object.fromEntries(
     content.territoryIds.map((id) => [id, createTerritoryState(id, content)]),
   );
@@ -331,6 +276,10 @@ export function createWorldStateV2(
       selectFoodStorageCapacityV2(state, content, playerId),
     ));
   }
+  // Territory shells are built before the human roster exists. Bring the
+  // selected opening country's capacity trait onto the same live-context path
+  // used after every later lobby roster change.
+  synchronizeArmyCapacityV2(state, content);
   // Storage selection builds an ephemeral ownership index. A freshly created
   // state is intentionally returned with that cache cold so callers may still
   // prepare fixtures/scenarios before the first derived selection.

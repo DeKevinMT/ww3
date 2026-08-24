@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clamp } from './balance';
+import { clamp, debtPressureV2 } from './balance';
 import { createWorldStateV2 } from './bootstrap';
 import { nationalArmyCapacityTargetV2, synchronizeArmyCapacityV2 } from './capacity';
 import { WORLD_CONTENT_V2 } from './content';
@@ -14,7 +14,8 @@ describe('V2 finance and research', () => {
   it('commits the full budget envelope and exposes unused military money as standing operations', () => {
     const state = createWorldStateV2(10);
     const bel = nationIdV2('bel');
-    state.players[bel].treasury = 100;
+    // Keep this baseline below the separate >10%-of-GDP surplus-investment path.
+    state.players[bel].treasury = 0;
     const plan = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, bel);
     expect(plan.expenses).toBeCloseTo(plan.baseOperatingCost + plan.foodProduction
       + plan.military + plan.research + plan.development, 5);
@@ -31,7 +32,9 @@ describe('V2 finance and research', () => {
     expect(plan.condition + plan.economyGrowth + plan.populationGrowth).toBeCloseTo(plan.development, 5);
     expect(plan.net).toBeCloseTo(plan.revenue + plan.foodExportIncome - plan.expenses, 5);
     expect(plan.closingTreasury).toBeCloseTo(state.players[bel].treasury + plan.net, 5);
-    expect(plan.activeBudget).toEqual(state.players[bel].budget);
+    expect(plan.activeBudget.military).toBeCloseTo(state.players[bel].budget.military, 10);
+    expect(plan.activeBudget.research).toBeCloseTo(state.players[bel].budget.research, 10);
+    expect(plan.activeBudget.development).toBeCloseTo(state.players[bel].budget.development, 10);
     expect(plan.military / (plan.military + plan.research + plan.development))
       .toBeCloseTo(state.players[bel].budget.military / 100, 6);
   });
@@ -107,10 +110,14 @@ describe('V2 finance and research', () => {
       - fundedOffensive.baseOperatingCost - fundedOffensive.foodProduction
       + fundedOffensive.foodDevelopmentTransfer;
     expect(fundedOffensive.military + fundedOffensive.research + fundedOffensive.development
-      + fundedOffensive.foodDevelopmentTransfer).toBeCloseTo(fundedDiscretionary * 1.02, 5);
+      + fundedOffensive.foodDevelopmentTransfer).toBeCloseTo(
+      fundedDiscretionary * 1.02 + fundedOffensive.excessCashInvestment,
+      5,
+    );
     expect(fundedOffensive.net).toBeCloseTo(
       -fundedDiscretionary * 0.02
-        - fundedOffensive.warOperations,
+        - fundedOffensive.warOperations
+        - fundedOffensive.excessCashInvestment,
       5,
     );
   });
@@ -184,10 +191,40 @@ describe('V2 finance and research', () => {
     state.players[bel].treasury = borrowed.closingTreasury;
     const recovery = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, bel);
     expect(recovery.newBorrowing).toBe(0);
+    // This particular windfall clears the old principal in one week, so the
+    // carrying premium correctly does not reopen a paid-off balance.
     expect(recovery.debtPremium).toBe(0);
+    expect(recovery.debtPremium).toBeLessThanOrEqual(recovery.revenue * 0.25 + 0.000001);
     expect(recovery.net).toBeGreaterThan(0);
     expect(recovery.closingTreasury).toBeGreaterThan(state.players[bel].treasury);
     expect(recovery.mode).toBe('insolvent');
+  });
+
+  it('escalates debt consequences smoothly while keeping a shallow deficit recoverable', () => {
+    const state = createWorldStateV2(1_107);
+    const bel = nationIdV2('bel');
+    const opening = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, bel);
+    const plans = [0.5, 8, 26, 52].map((debtWeeks) => {
+      state.players[bel].treasury = -opening.revenue * debtWeeks;
+      return selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, bel);
+    });
+    const programmeEnvelope = (index: number) => plans[index]!.military
+      + plans[index]!.research + plans[index]!.development;
+
+    expect(debtPressureV2(-0.5)).toMatchObject({ recovery: 0, critical: 0 });
+    expect(debtPressureV2(-8).recovery).toBeGreaterThan(0);
+    expect(debtPressureV2(-26)).toMatchObject({ recovery: 1, critical: 0 });
+    expect(debtPressureV2(-52)).toMatchObject({ recovery: 1, critical: 1 });
+    expect(plans[0]!.debtPremium).toBe(0);
+    expect(plans[0]!.net).toBeGreaterThan(0);
+    expect(plans[0]!.closingTreasury).toBeGreaterThan(-opening.revenue * 0.5);
+    expect(programmeEnvelope(1)).toBeLessThan(programmeEnvelope(0));
+    expect(programmeEnvelope(2)).toBeLessThan(programmeEnvelope(1));
+    expect(programmeEnvelope(3)).toBeLessThan(programmeEnvelope(2));
+    expect(plans[2]!.debtPremium / plans[2]!.revenue)
+      .toBeGreaterThan(plans[1]!.debtPremium / plans[1]!.revenue);
+    expect(plans[3]!.debtPremium / plans[3]!.revenue).toBeGreaterThan(0.15);
+    expect(plans.every((plan) => Number.isFinite(plan.closingTreasury))).toBe(true);
   });
 
   it('rebuilds a larger runway and fully funds mandatory costs on multiple fronts', () => {

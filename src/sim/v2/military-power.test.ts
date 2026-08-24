@@ -42,7 +42,7 @@ describe('V2 real-world military power calibration', () => {
     expect(indiaPower).toBeLessThan(usaPower * 0.80);
   });
 
-  it('starts from a credible combined military-economic global ranking', () => {
+  it('starts from a pure current-military-power global ranking', () => {
     const state = createWorldStateV2(2026);
     const ranking = selectGlobalRankingV2(state, WORLD_CONTENT_V2);
     const rankedIds = ranking.map((entry) => entry.player.id);
@@ -50,14 +50,14 @@ describe('V2 real-world military power calibration', () => {
     expect(rankedIds.slice(0, 10)).toEqual([
       nationIdV2('usa'),
       nationIdV2('chn'),
+      nationIdV2('rus'),
       nationIdV2('deu'),
       nationIdV2('jpn'),
       nationIdV2('gbr'),
-      nationIdV2('ind'),
       nationIdV2('fra'),
-      nationIdV2('rus'),
+      nationIdV2('kor'),
       nationIdV2('ita'),
-      nationIdV2('can'),
+      nationIdV2('esp'),
     ]);
     expect(ranking[0]!.score).toBe(
       selectStrategicScoreV2(state, WORLD_CONTENT_V2, ranking[0]!.player.id),
@@ -70,22 +70,19 @@ describe('V2 real-world military power calibration', () => {
     );
   });
 
-  it('weights current military power and controlled economic output exactly 50/50', () => {
+  it('uses current military power without a separate economy score component', () => {
     const state = createWorldStateV2(2_026);
     const usa = nationIdV2('usa');
     const power = selectCurrentPowerV2(state, WORLD_CONTENT_V2, usa);
-    const output = selectNationalEconomyV2(state, WORLD_CONTENT_V2, usa).controlledOutput;
-    const expected = Math.sqrt(Math.max(0, power) * Math.max(0, output));
-
-    expect(selectStrategicScoreV2(state, WORLD_CONTENT_V2, usa)).toBeCloseTo(expected, 6);
+    expect(selectStrategicScoreV2(state, WORLD_CONTENT_V2, usa)).toBe(power);
 
     const baseline = selectStrategicScoreV2(state, WORLD_CONTENT_V2, usa);
     state.players[usa].warFatigue = 100;
     expect(selectStrategicScoreV2(state, WORLD_CONTENT_V2, usa)).toBe(baseline);
 
-    // Equal relative growth in either dimension has exactly the same effect on
-    // the geometric score, documenting the intended 50/50 weighting.
-    expect(Math.sqrt(2 * power * output)).toBeCloseTo(Math.sqrt(power * 2 * output), 12);
+    state.territories[territoryIdV2('usa')].economy *= 100;
+    const modernizedPower = selectCurrentPowerV2(state, WORLD_CONTENT_V2, usa);
+    expect(selectStrategicScoreV2(state, WORLD_CONTENT_V2, usa)).toBe(modernizedPower);
   });
 
   it('keeps opening ratings exact and reports conquered armies by deployed manpower, never population', () => {
