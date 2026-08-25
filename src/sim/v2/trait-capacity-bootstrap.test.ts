@@ -70,7 +70,8 @@ describe('country trait opening economy and army capacity', () => {
       greenlandTerritory,
       greenland,
     )).toBeCloseTo(rawCapacity * humanFactor, 4);
-    expect(humanFactor).toBeGreaterThan(2);
+    expect(humanFactor).toBeGreaterThan(aiFactor);
+    expect(humanFactor).toBeLessThan(1.3);
     const finance = selectWeeklyFinanceBreakdownV2(
       state,
       WORLD_CONTENT_V2,

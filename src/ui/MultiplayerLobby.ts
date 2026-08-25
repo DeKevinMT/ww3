@@ -1,6 +1,14 @@
 import { V2_RULES_VERSION } from '../sim/v2/balance';
-import { WORLD_CONTENT_V2 } from '../sim/v2/content';
+import { normalizeSeed } from '../game/random';
+import {
+  normalizeScenarioConfigV2,
+  resolveScenarioV2,
+  type GameModeV2,
+  type ResolvedScenarioV2,
+  type ScenarioConfigV2,
+} from '../sim/v2/scenarios';
 import type { PlayerId } from '../sim/v2/types';
+import { WorldEngineV2 } from '../sim/v2/WorldEngineV2';
 import {
   DirectConnectGuest,
   DirectConnectHost,
@@ -19,6 +27,7 @@ import type {
 } from '../multiplayer/protocol';
 import {
   compareIntroNationMetricsV2,
+  IntroOpeningMetricsCacheV2,
   renderNationPickerV2,
   type IntroOpeningMetricsSnapshotV2,
   type IntroSort,
@@ -27,12 +36,14 @@ import {
 export interface MultiplayerHostLaunch {
   transport: DirectConnectHost;
   lobby: LobbyStateMessage;
+  scenario: ScenarioConfigV2;
 }
 
 export interface MultiplayerGuestLaunch {
   transport: DirectConnectGuest;
   lobby: LobbyStateMessage;
   snapshot: SnapshotMessage;
+  scenario: ScenarioConfigV2;
 }
 
 export interface MultiplayerLobbyOptions {
@@ -40,6 +51,7 @@ export interface MultiplayerLobbyOptions {
   onHostLaunch: (launch: MultiplayerHostLaunch) => void | Promise<void>;
   onGuestLaunch: (launch: MultiplayerGuestLaunch) => void | Promise<void>;
   openingMetrics: IntroOpeningMetricsSnapshotV2;
+  scenarioConfig?: ScenarioConfigV2;
   preferredCountryId?: PlayerId;
 }
 
@@ -65,6 +77,16 @@ function rememberCommanderName(name: string): void {
   } catch {
     // Private browsing may deny storage; the lobby remains fully usable.
   }
+}
+
+function freshScenarioSeedV2(): number {
+  const values = new Uint32Array(1);
+  globalThis.crypto?.getRandomValues?.(values);
+  return normalizeSeed(values[0] || Date.now());
+}
+
+function sameScenarioV2(left: ScenarioConfigV2, right: ScenarioConfigV2): boolean {
+  return left.mode === right.mode && left.version === right.version && left.seed === right.seed;
 }
 
 function connectionLabel(state: DirectConnectStateEvent['peer']['state']): string {
@@ -105,11 +127,26 @@ export class MultiplayerLobby {
   private pickerGridScrollTop = 0;
   private pickerSearchTimer?: number;
   private preferredCountryAttempted = false;
+  private resolvedScenario: ResolvedScenarioV2;
+  private openingMetrics: IntroOpeningMetricsSnapshotV2;
 
   constructor(private readonly options: MultiplayerLobbyOptions) {
+    const initialScenario = normalizeScenarioConfigV2(options.scenarioConfig ?? {
+      mode: 'standard-2026',
+      seed: freshScenarioSeedV2(),
+    });
+    this.resolvedScenario = resolveScenarioV2(initialScenario);
+    this.openingMetrics = new IntroOpeningMetricsCacheV2().read(new WorldEngineV2(
+      this.resolvedScenario.config.seed,
+      this.resolvedScenario.content,
+    ));
+    const content = this.resolvedScenario.content;
     this.pickerPreviewCountryId = options.preferredCountryId
-      ?? WORLD_CONTENT_V2.nationIds.find((id) => id === 'usa')
-      ?? WORLD_CONTENT_V2.nationIds[0]!;
+      ?? (initialScenario.mode === 'random-world'
+        ? this.openingMetrics.ranking[0]?.player.id
+        : undefined)
+      ?? content.nationIds.find((id) => id === 'usa')
+      ?? content.nationIds[0]!;
     this.root.className = 'multiplayer-lobby-layer';
     this.root.setAttribute('role', 'dialog');
     this.root.setAttribute('aria-modal', 'true');
@@ -226,6 +263,9 @@ export class MultiplayerLobby {
         break;
       }
       case 'start': this.applyLocalAction({ type: 'start' }); break;
+      case 'scenario-standard': this.changeScenario('standard-2026'); break;
+      case 'scenario-random': this.changeScenario('random-world'); break;
+      case 'scenario-reroll': this.changeScenario(this.lobby?.scenario.mode ?? 'random-world', true); break;
       case 'continent-filter': {
         this.capturePickerScroll();
         this.pickerContinent = target.dataset.continent ?? 'ALL';
@@ -345,7 +385,7 @@ export class MultiplayerLobby {
           displayName: name,
           maxPlayers: 8,
         });
-        this.hostModel = new HostLobbyModel(this.host.hostPeerId, name);
+        this.hostModel = new HostLobbyModel(this.host.hostPeerId, name, this.resolvedScenario.config);
         this.lobby = this.hostModel.snapshot();
         this.selectPreferredCountryIfAvailable();
         this.transportUnsubscribe = this.host.subscribe({
@@ -424,7 +464,7 @@ export class MultiplayerLobby {
     try {
       rememberCommanderName(name);
       this.host = new DirectConnectHost({ rulesVersion: V2_RULES_VERSION, displayName: name, maxPlayers: 8 });
-      this.hostModel = new HostLobbyModel(this.host.hostPeerId, name);
+      this.hostModel = new HostLobbyModel(this.host.hostPeerId, name, this.resolvedScenario.config);
       this.lobby = this.hostModel.snapshot();
       this.selectPreferredCountryIfAvailable();
       this.transportUnsubscribe = this.host.subscribe({
@@ -534,7 +574,7 @@ export class MultiplayerLobby {
 
   private onHostMessage(event: DirectHostMessageEvent): void {
     if (event.message.type !== 'lobby-action' || !this.hostModel) return;
-    const result = this.hostModel.apply(event.peerId, event.message.action);
+    const result = this.hostModel.apply(event.peerId, event.message.action, event.message.revision);
     if (!result.accepted) this.error = result.reason ?? 'Lobby action rejected.';
     this.publishLobby();
     this.render();
@@ -543,7 +583,10 @@ export class MultiplayerLobby {
 
   private onGuestMessage(message: SessionMessage): void {
     if (message.type === 'lobby-state') {
-      if (!this.lobby || message.revision >= this.lobby.revision) this.lobby = message;
+      if (!this.lobby || message.revision >= this.lobby.revision) {
+        this.lobby = message;
+        this.synchronizeScenarioPresentation(message.scenario);
+      }
       this.selectPreferredCountryIfAvailable();
       this.render();
       return;
@@ -555,6 +598,7 @@ export class MultiplayerLobby {
         transport: this.guest,
         lobby: this.lobby,
         snapshot: message,
+        scenario: { ...this.lobby.scenario },
       })).catch((error) => {
         this.launched = false;
         this.setError(error, 'The multiplayer campaign could not start.');
@@ -575,7 +619,7 @@ export class MultiplayerLobby {
   private applyLocalAction(action: LobbyAction): void {
     this.error = '';
     if (this.host && this.hostModel) {
-      const result = this.hostModel.apply(this.host.hostPeerId, action);
+      const result = this.hostModel.apply(this.host.hostPeerId, action, this.lobby?.revision);
       if (!result.accepted) this.error = result.reason ?? 'Lobby action rejected.';
       this.publishLobby();
       this.render();
@@ -598,7 +642,11 @@ export class MultiplayerLobby {
     this.finishMatchmakingConnection(true);
     this.launched = true;
     try {
-      await this.options.onHostLaunch({ transport: this.host, lobby: launchLobby });
+      await this.options.onHostLaunch({
+        transport: this.host,
+        lobby: launchLobby,
+        scenario: { ...launchLobby.scenario },
+      });
     } catch (error) {
       this.launched = false;
       const recovery = this.hostModel?.resetStartAfterLaunchFailure(
@@ -636,15 +684,16 @@ export class MultiplayerLobby {
   private availablePickerNationIds(): PlayerId[] {
     const query = this.pickerSearchQuery.trim().toLocaleLowerCase('en');
     const claimed = this.claimedCountryIds();
-    return [...WORLD_CONTENT_V2.nationIds]
-      .map((id) => WORLD_CONTENT_V2.nations[id])
+    const content = this.resolvedScenario.content;
+    return [...content.nationIds]
+      .map((id) => content.nations[id])
       .filter((nation): nation is NonNullable<typeof nation> => Boolean(nation)
-        && this.options.openingMetrics.byNation.has(nation!.id)
+        && this.openingMetrics.byNation.has(nation!.id)
         && !claimed.has(nation!.id)
         && (this.pickerContinent === 'ALL' || nation!.continent === this.pickerContinent)
         && (!query || `${nation!.name} ${nation!.sigil}`.toLowerCase().includes(query)))
       .sort((left, right) => compareIntroNationMetricsV2(
-        left, right, this.pickerSort, this.options.openingMetrics,
+        left, right, this.pickerSort, this.openingMetrics,
       ))
       .map((nation) => nation.id);
   }
@@ -671,11 +720,15 @@ export class MultiplayerLobby {
     this.preferredCountryAttempted = true;
     this.pickerPreviewCountryId = preferred;
     if (this.claimedCountryIds().has(preferred)) {
-      this.status = `${WORLD_CONTENT_V2.nations[preferred]?.name ?? 'That country'} is already claimed. Choose another nation.`;
+      this.status = `${this.resolvedScenario.content.nations[preferred]?.name ?? 'That country'} is already claimed. Choose another nation.`;
       return;
     }
     if (this.hostModel && this.host) {
-      const result = this.hostModel.apply(this.host.hostPeerId, { type: 'select-country', countryId: preferred });
+      const result = this.hostModel.apply(
+        this.host.hostPeerId,
+        { type: 'select-country', countryId: preferred },
+        this.lobby.revision,
+      );
       if (result.accepted) this.lobby = this.hostModel.snapshot();
       else this.error = result.reason ?? 'Your preferred country could not be selected.';
       return;
@@ -692,7 +745,7 @@ export class MultiplayerLobby {
   }
 
   private renderNationPicker(): string {
-    const picker = renderNationPickerV2(this.options.openingMetrics, {
+    const picker = renderNationPickerV2(this.openingMetrics, {
       previewCountryId: this.pickerPreviewCountryId,
       searchQuery: this.pickerSearchQuery,
       continent: this.pickerContinent,
@@ -701,6 +754,9 @@ export class MultiplayerLobby {
       claimedCountryIds: this.claimedCountryIds(),
       claimantNames: this.claimantNames(),
       selectedCountryId: this.localPlayer()?.countryId ?? undefined,
+      content: this.resolvedScenario.content,
+      scenarioConfig: this.lobby?.scenario ?? this.resolvedScenario.config,
+      scenarioEditable: Boolean(this.host && this.lobby?.hostPeerId === this.host.hostPeerId),
     });
     this.pickerPreviewCountryId = picker.previewCountryId;
     return picker.html;
@@ -723,7 +779,7 @@ export class MultiplayerLobby {
     const localId = this.host?.hostPeerId ?? this.guest?.peerId;
     return `<div class="mp-player-list">${this.lobby.players.map((player) => {
       const local = player.peerId === localId;
-      const country = player.countryId ? WORLD_CONTENT_V2.nations[player.countryId] : undefined;
+      const country = player.countryId ? this.resolvedScenario.content.nations[player.countryId] : undefined;
       return `<article class="mp-player ${local ? 'is-local' : ''} ${player.connected ? '' : 'is-offline'}"><div class="mp-player__identity"><span>${country?.sigil ?? '◇'}</span><div><strong>${escapeHtml(player.displayName)}${player.peerId === this.lobby!.hostPeerId ? ' · HOST' : ''}</strong><small>${player.connected ? player.ready ? 'READY' : 'CHOOSING' : 'DISCONNECTED'}</small></div></div><b>${escapeHtml(country?.name ?? (local ? 'Choose below' : 'No country'))}</b></article>`;
     }).join('')}</div>`;
   }
@@ -758,12 +814,42 @@ export class MultiplayerLobby {
   }
   private render(): void {
     this.capturePickerScroll();
+    if (this.lobby) this.synchronizeScenarioPresentation(this.lobby.scenario);
     const content = this.mode === 'menu' ? this.renderMenu()
       : this.mode === 'matchmaking' && !this.lobby ? this.renderMatchmaking()
         : this.mode === 'host' || this.host ? this.renderHost() : this.renderGuest();
-    const hasPicker = Boolean(this.lobby && ((this.mode === 'host' && this.host) || (this.mode === 'guest' && this.guest)));
+    // Matchmade rooms keep `mode === 'matchmaking'` after a host/guest transport
+    // has been elected. Key the fullscreen picker layout off the actual room
+    // state instead of the entry route, otherwise a public room renders the
+    // picker inside the unconstrained setup-card layout and the preview scrolls
+    // out of view beside the long country list.
+    const hasPicker = Boolean(this.mode !== 'menu' && this.lobby && (this.host || this.guest));
     this.root.innerHTML = `<section class="multiplayer-lobby-card ${hasPicker ? 'has-country-picker' : ''}"><button class="modal-close" data-mp-action="${this.mode === 'menu' ? 'close' : 'back'}" aria-label="${this.mode === 'menu' ? 'Close multiplayer' : 'Back'}">×</button>${content}<footer class="mp-status ${this.error ? 'has-error' : ''}"><i></i><span>${escapeHtml(this.error || this.status)}</span>${this.busy ? '<b>WORKING…</b>' : ''}</footer></section>`;
     const pickerGrid = this.root.querySelector<HTMLElement>('.country-select--lobby .country-grid');
     if (pickerGrid) pickerGrid.scrollTop = this.pickerGridScrollTop;
+  }
+
+  private changeScenario(mode: GameModeV2, reroll = false): void {
+    const current = this.lobby?.scenario ?? this.resolvedScenario.config;
+    const scenario = normalizeScenarioConfigV2({
+      mode,
+      seed: reroll ? freshScenarioSeedV2() : current.seed,
+    });
+    this.applyLocalAction({ type: 'set-scenario', scenario });
+  }
+
+  private synchronizeScenarioPresentation(scenario: ScenarioConfigV2): void {
+    if (sameScenarioV2(this.resolvedScenario.config, scenario)) return;
+    const resolved = resolveScenarioV2(scenario);
+    this.resolvedScenario = resolved;
+    this.openingMetrics = new IntroOpeningMetricsCacheV2().read(new WorldEngineV2(
+      resolved.config.seed,
+      resolved.content,
+    ));
+    this.pickerPreviewCountryId = resolved.config.mode === 'random-world'
+      ? this.openingMetrics.ranking[0]?.player.id ?? resolved.content.nationIds[0]!
+      : resolved.content.nationIds.find((id) => id === 'usa')
+        ?? resolved.content.nationIds[0]!;
+    this.pickerGridScrollTop = 0;
   }
 }

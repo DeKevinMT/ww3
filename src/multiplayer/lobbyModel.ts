@@ -1,6 +1,11 @@
 import { MAX_MULTIPLAYER_PLAYERS, MIN_MULTIPLAYER_PLAYERS, type LobbyAction, type LobbyPlayer, type LobbyStateMessage } from './protocol';
 import type { CommandResultV2 } from '../sim/v2/types';
-import { WORLD_CONTENT_V2 } from '../sim/v2/content';
+import type { WorldContentV2 } from '../sim/v2/content';
+import {
+  normalizeScenarioConfigV2,
+  resolveScenarioV2,
+  type ScenarioConfigV2,
+} from '../sim/v2/scenarios';
 
 function cleanName(value: string): string {
   return value.trim().replace(/\s+/g, ' ').slice(0, 40);
@@ -11,8 +16,17 @@ export class HostLobbyModel {
   private revision = 0;
   private started = false;
   private startedRevision?: number;
+  private scenario: ScenarioConfigV2;
+  private content: WorldContentV2;
 
-  constructor(readonly hostPeerId: string, hostName: string) {
+  constructor(
+    readonly hostPeerId: string,
+    hostName: string,
+    scenario: ScenarioConfigV2 = normalizeScenarioConfigV2({ mode: 'standard-2026', seed: 1 }),
+  ) {
+    const resolved = resolveScenarioV2(scenario);
+    this.scenario = resolved.config;
+    this.content = resolved.content;
     this.players.set(hostPeerId, {
       peerId: hostPeerId,
       displayName: cleanName(hostName) || 'Host',
@@ -54,7 +68,10 @@ export class HostLobbyModel {
     this.revision += 1;
   }
 
-  apply(peerId: string, action: LobbyAction): CommandResultV2 {
+  apply(peerId: string, action: LobbyAction, expectedRevision?: number): CommandResultV2 {
+    if (expectedRevision !== undefined && expectedRevision !== this.revision) {
+      return { accepted: false, reason: 'That lobby action is stale. Wait for the latest room update.' };
+    }
     if (this.started) return { accepted: false, reason: 'The campaign has already started.' };
     const player = this.players.get(peerId);
     if (!player?.connected) return { accepted: false, reason: 'This player is not connected.' };
@@ -62,8 +79,32 @@ export class HostLobbyModel {
     switch (action.type) {
       case 'set-name':
         return this.connect(peerId, action.displayName);
+      case 'set-scenario': {
+        if (peerId !== this.hostPeerId) {
+          return { accepted: false, reason: 'Only the room host can change the scenario.' };
+        }
+        let resolved: ReturnType<typeof resolveScenarioV2>;
+        try {
+          resolved = resolveScenarioV2(action.scenario);
+        } catch (error) {
+          return {
+            accepted: false,
+            reason: error instanceof Error ? error.message : 'That scenario is not supported.',
+          };
+        }
+        if (resolved.config.mode === this.scenario.mode
+          && resolved.config.version === this.scenario.version
+          && resolved.config.seed === this.scenario.seed) return { accepted: true };
+        this.scenario = resolved.config;
+        this.content = resolved.content;
+        for (const [candidatePeerId, candidate] of this.players) {
+          this.players.set(candidatePeerId, { ...candidate, countryId: null, ready: false });
+        }
+        this.revision += 1;
+        return { accepted: true };
+      }
       case 'select-country':
-        if (!WORLD_CONTENT_V2.nations[action.countryId]) {
+        if (!this.content.nations[action.countryId]) {
           return { accepted: false, reason: 'That country is not available in this scenario.' };
         }
         if ([...this.players.values()].some((candidate) => (
@@ -125,6 +166,7 @@ export class HostLobbyModel {
       type: 'lobby-state',
       revision: this.revision,
       hostPeerId: this.hostPeerId,
+      scenario: { ...this.scenario },
       started: this.started,
       players: [...this.players.values()]
         .sort((left, right) => (

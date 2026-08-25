@@ -7,7 +7,7 @@ import type {
   TerrainType,
 } from './types';
 
-export const V2_RULES_VERSION = 'frontier-command-v2.60-revolutions-debt';
+export const V2_RULES_VERSION = 'frontier-command-v2.62-temporary-opening-armies';
 export const V2_CONTENT_VERSION = 'natural-earth-countries-2026-v7-greenland';
 export const V2_MAP_ID = 'natural-earth-countries-2026';
 export const V2_TICK_DURATION_MS = 1_000;
@@ -125,6 +125,12 @@ export const COMBAT_POWER_RATIO_EXPONENT = 1;
 export const COMBAT_DAMAGE_EFFECTIVENESS = 0.008;
 /** Offensive formations take a modest extra exposure penalty in every exchange. */
 export const ATTACKER_MILITARY_LOSS_MULTIPLIER = 1.08;
+/** Local overmatch does not add exposure until the attacker fields more than 3:1. */
+export const ATTACKER_CONCENTRATION_EXPOSURE_START_RATIO = 3;
+/** At 8:1 and above, exposure has reached its deliberately bounded maximum. */
+export const ATTACKER_CONCENTRATION_EXPOSURE_MAX_RATIO = 8;
+/** Extreme force concentration can at most add 500% to real defender counter-fire. */
+export const ATTACKER_CONCENTRATION_EXPOSURE_MAX_BONUS = 5;
 /** Front-planning threshold for viability and initiative reassessment; it never adds casualties. */
 export const COMBAT_ROUTE_STRENGTH_RATIO = 0.05;
 /** Defensive research saturates at +20%; level 20 reaches +10%. */
@@ -137,9 +143,8 @@ export function effectiveDefenseStatV2(rawDefense: number): number {
 }
 /** A fresh entrant cannot claim a force another war already destroyed. */
 export const CAPTURE_MIN_CONTRIBUTION_SHARE = 0.10;
-/** A lightning conquest still consumes a small, visible assault/occupation force. */
-export const QUICK_CONQUEST_MAX_WAR_AGE_TICKS = 6;
-export const QUICK_CONQUEST_MIN_ATTACKER_LOSS_SHARE = 0.01;
+/** Every accepted declaration immediately commits one percent of the attacker's deployed army. */
+export const WAR_DECLARATION_ATTACKER_LOSS_SHARE = 0.01;
 /**
  * A front that has been decisively dominated for half a year can force the
  * last under-strength formation to surrender. This replaces gradual territorial

@@ -324,7 +324,7 @@ function interventionAffinityV2(content: WorldContentV2, leftId: PlayerId, right
   const shared = left.influenceTags.filter((tag) => right.influenceTags.includes(tag));
   return (shared.some((tag) => tag.startsWith('bloc:')) ? 10 : 0)
     + (left.subregion === right.subregion ? 4 : left.continent === right.continent ? 1 : 0)
-    + strategicAlignmentScoreV2(leftId, rightId);
+    + strategicAlignmentScoreV2(leftId, rightId, content);
 }
 
 export interface DefensiveAidAssessmentV2 {
@@ -981,7 +981,7 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
         state.tick,
         ratio,
       );
-      const targetAlignment = Math.max(0, strategicAlignmentScoreV2(playerId, targetId));
+      const targetAlignment = Math.max(0, strategicAlignmentScoreV2(playerId, targetId, content));
       const targetMajorPower = clamp((targetNation.real.powerIndex - 45) / 55, 0, 1);
       const greatPowerAvoidance = clamp(
         (AI_MAJOR_POWER_AVOIDANCE_TICKS - state.tick) / AI_MAJOR_POWER_AVOIDANCE_TICKS,
@@ -992,7 +992,7 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
         * majorPowerDrive * targetMajorPower;
       const regionalFit = nation.subregion === targetNation.subregion ? 1
         : nation.continent === targetNation.continent ? 0.45 : 0;
-      const geopoliticalGuidance = geopoliticalTargetGuidanceV2(playerId, targetId);
+      const geopoliticalGuidance = geopoliticalTargetGuidanceV2(playerId, targetId, content);
       const campaignVariation = campaignStrategicVariationV2(
         state.seed, state.tick, playerId, targetId,
       );

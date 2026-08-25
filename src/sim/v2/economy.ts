@@ -6,6 +6,7 @@ import {
 } from './balance';
 import type { WorldContentV2 } from './content';
 import { synchronizeArmyCapacityV2 } from './capacity';
+import { consumeOpeningArmyBonusLossV2 } from './openingArmyBonus';
 import {
   advanceTerritoryIntegrationProgramsV2,
   type IntegrationCompletionV2,
@@ -95,6 +96,7 @@ function processMilitaryAndCondition(
       * (atWar ? 0.35 : 1) * reconstructionReadiness * conditionRecoveryFactor;
     territory.condition = round(clamp(territory.condition + conditionGain, 0.15, 1));
   }
+  consumeOpeningArmyBonusLossV2(state, playerId, projectedArmy.demobilized);
 }
 
 function processDevelopment(

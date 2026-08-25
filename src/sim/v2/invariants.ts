@@ -3,11 +3,15 @@ import {
   CEASEFIRE_PAYMENT_WEEKS,
   PROPAGANDA_DURATION_TICKS,
   RESEARCH_BRANCHES,
+  V2_MAP_ID,
+  V2_RULES_VERSION,
   WAR_REVENGE_WINDOW_TICKS,
 } from './balance';
 import type { WorldContentV2 } from './content';
 import { stateTerritoryArmyCapacityTargetV2 } from './capacity';
 import { isHumanPlayerV2 } from './humanPlayers';
+import { OPENING_ARMY_BONUS_DURATION_TICKS_V2 } from './openingArmyBonus';
+import { contentVersionForWorldContentV2 } from './scenarios';
 import {
   finiteStateNumbersV2,
   relationKeyV2,
@@ -18,7 +22,7 @@ import {
 } from './selectors';
 import type { PlayerId, TerritoryId, WorldStateV2 } from './types';
 
-const NATION_KEYS = ['budget', 'capitalId', 'ceasefiresRequested', 'domesticFoodCapacity', 'empireName', 'foodSecurity', 'foodStock', 'manualActionUses', 'propagandaAvailableTick', 'propagandaProgram', 'rapidRecruitmentAvailableTick', 'research', 'researchSurgeAvailableTick', 'trainedReserves', 'treasury', 'warFatigue'];
+const NATION_KEYS = ['budget', 'capitalId', 'ceasefiresRequested', 'domesticFoodCapacity', 'empireName', 'foodSecurity', 'foodStock', 'manualActionUses', 'openingArmyBonus', 'propagandaAvailableTick', 'propagandaProgram', 'rapidRecruitmentAvailableTick', 'research', 'researchSurgeAvailableTick', 'trainedReserves', 'treasury', 'warFatigue'];
 const TERRITORY_KEYS = ['army', 'condition', 'coreOwner', 'economy', 'integration', 'integrationProgram', 'owner', 'population'];
 const RESEARCH_KEYS = ['allocations', 'breakthroughs', 'effectLevels', 'progress'];
 const BUDGET_KEYS = ['development', 'military', 'research'];
@@ -58,6 +62,7 @@ const BREAKTHROUGH_KEYS = [
 ];
 const ARMY_KEYS = ['baseAttack', 'baseDefense', 'capacity', 'manpower'];
 const PROPAGANDA_PROGRAM_KEYS = ['endsTick', 'startedTick', 'totalSuspicionReduction', 'weeklySuspicionReduction'];
+const OPENING_ARMY_BONUS_KEYS = ['expiresTick', 'initialManpower', 'remainingManpower', 'startedTick'];
 const INTEGRATION_PROGRAM_KEYS = ['annualCost', 'cause', 'completesTick', 'fromCoreOwnerId', 'fromOwnerId', 'startedTick', 'toOwnerId'];
 const WAR_KEYS = ['attackerCivilianLosses', 'attackerId', 'attackerLosses', 'attackerOperations', 'battles', 'defenderCivilianLosses', 'defenderId', 'defenderLosses', 'defenderOperations', 'id', 'lastBattleTick', 'lastPeaceOfferTick', 'revenge', 'startedTick', 'warScore'];
 const WAR_REVENGE_KEYS = ['claimantId', 'expiresTick', 'triggeredTick'];
@@ -98,6 +103,15 @@ function hasOnlyKeys(value: object, allowed: readonly string[]): boolean {
 export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2): string[] {
   const errors: string[] = [];
   if (state.schemaVersion !== 22) errors.push('Canonical state must use schema version 22.');
+  if (state.rulesVersion !== V2_RULES_VERSION) errors.push('Canonical state has an incompatible rules version.');
+  if (state.contentVersion !== contentVersionForWorldContentV2(content)) {
+    errors.push('Canonical state does not match the supplied scenario content version.');
+  }
+  if (content.metadata?.generatedFromSeed !== undefined
+    && state.seed !== content.metadata.generatedFromSeed) {
+    errors.push('Canonical state seed does not match the generated scenario seed.');
+  }
+  if (state.mapId !== V2_MAP_ID) errors.push('Canonical state has an incompatible map id.');
   if (!finiteStateNumbersV2(state)) errors.push('Canonical state contains a non-finite number.');
   const playerIds = Object.keys(state.players) as PlayerId[];
   const territoryIds = Object.keys(state.territories) as TerritoryId[];
@@ -128,8 +142,23 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
   for (const id of content.territoryIds) if (!state.territories[id]) errors.push(`Missing territory state: ${id}.`);
   for (const id of playerIds) {
     const nation = state.players[id]!;
+    const owned = selectTerritoriesOfV2(state, id);
     if (!content.nations[id]) errors.push(`Unknown nation state: ${id}.`);
     if (!exactKeys(nation, NATION_KEYS)) errors.push(`Nation ${id} has non-canonical keys.`);
+    if (nation.openingArmyBonus) {
+      const bonus = nation.openingArmyBonus;
+      const deployed = owned.reduce((sum, territory) => sum + territory.army.manpower, 0);
+      if (!exactKeys(bonus, OPENING_ARMY_BONUS_KEYS)
+        || ![bonus.initialManpower, bonus.remainingManpower, bonus.startedTick, bonus.expiresTick].every(Number.isFinite)
+        || !Number.isInteger(bonus.startedTick) || !Number.isInteger(bonus.expiresTick)
+        || bonus.startedTick < 0 || state.tick < bonus.startedTick
+        || bonus.expiresTick - bonus.startedTick !== OPENING_ARMY_BONUS_DURATION_TICKS_V2
+        || bonus.initialManpower <= 0 || bonus.remainingManpower <= 0
+        || bonus.remainingManpower > bonus.initialManpower + 0.000000001
+        || bonus.remainingManpower > deployed + 0.000000001) {
+        errors.push(`Nation ${id} has an invalid temporary opening army bonus.`);
+      }
+    }
     if (nation.propagandaProgram) {
       const program = nation.propagandaProgram;
       if (!isHumanPlayerV2(state, id)
@@ -182,7 +211,6 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
       if (!Number.isInteger(breakthroughs) || breakthroughs < 0) errors.push(`Nation ${id} has invalid ${branch} breakthroughs.`);
       if (!Number.isFinite(nation.research.progress[branch]) || nation.research.progress[branch] < 0) errors.push(`Nation ${id} has invalid ${branch} progress.`);
     }
-    const owned = selectTerritoriesOfV2(state, id);
     if (owned.length > 0 && state.territories[nation.capitalId]?.owner !== id) errors.push(`Living nation ${id} does not own its capital.`);
   }
   for (const id of territoryIds) {

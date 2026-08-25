@@ -64,11 +64,31 @@ describe('country trait presentation', () => {
 
     const trait = countryTraitV2(greenland)!;
     expect(rendered.html).toContain('PLAYER TRAIT');
-    expect(rendered.html).toContain('×20.00');
+    expect(rendered.html).toContain(
+      `×${humanCountryTraitMultiplierV2(greenland).toFixed(2)}`,
+    );
     expect(rendered.html).toContain(describeCountryTraitModifiersV2(
       trait.modifiers,
       humanCountryTraitMultiplierV2(greenland),
     ));
+    expect(rendered.html).toContain('FREE BONUS');
+    expect(rendered.html).toContain('FADES OVER 10 YEARS');
+  });
+
+  it('does not label the strongest-country opening reduction as a free bonus', () => {
+    const engine = new WorldEngineV2(42_006);
+    const opening = new IntroOpeningMetricsCacheV2().read(engine);
+    const usa = nationIdV2('usa');
+    const rendered = renderNationPickerV2(opening, {
+      previewCountryId: usa,
+      searchQuery: '',
+      continent: 'ALL',
+      sort: 'power',
+      context: 'campaign',
+    });
+
+    expect(rendered.html).toContain('PLAYER START ARMY · ×0.50');
+    expect(rendered.html).not.toContain('FREE BONUS');
   });
 
   it('renders one compact player-applied nation trait without fusion bloat', () => {
@@ -116,8 +136,12 @@ describe('country trait presentation', () => {
     const factor = countryTraitFactorV2(palestine, 'military-casualties', context);
     const rendered = renderCountryTraitPresentationV2(palestine, 'picker');
 
-    expect(factor).toBe(0.35);
-    expect(rendered).toContain('−65% military casualties');
+    expect(factor).toBeGreaterThanOrEqual(0.35);
+    expect(factor).toBeLessThan(1);
+    expect(rendered).toContain(describeCountryTraitModifiersV2(
+      countryTraitV2(palestine)!.modifiers,
+      humanCountryTraitMultiplierV2(palestine),
+    ));
     expect(rendered).not.toMatch(/−(?:[1-9]\d{2,}|100)% military casualties/);
   });
 
@@ -133,7 +157,8 @@ describe('country trait presentation', () => {
     expect(countryTraitFactorV2(albania, 'integration-duration', {
       access: 'naval', humanControlled: true,
     })).toBeGreaterThanOrEqual(0.25);
-    expect(madagascarCard).toContain('−80% naval distance penalty');
+    expect(madagascarCard).toContain('naval distance penalty');
+    expect(madagascarCard).not.toMatch(/−(?:8\d|9\d|\d{3,})(?:\.\d+)?% naval distance penalty/);
     expect(albaniaCard).not.toMatch(
       /−(?:7[6-9]|[89]\d|\d{3,})(?:\.\d+)?% integration duration/,
     );

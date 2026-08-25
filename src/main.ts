@@ -10,6 +10,13 @@ import {
 import type { PlayerId } from './sim/v2/types';
 import { WorldEngineV2 } from './sim/v2/WorldEngineV2';
 import {
+  normalizeScenarioConfigV2,
+  resolveScenarioV2,
+  scenarioConfigFromEngineV2,
+  type GameModeV2,
+  type ScenarioConfigV2,
+} from './sim/v2/scenarios';
+import {
   MultiplayerLobby,
   type MultiplayerGuestLaunch,
   type MultiplayerHostLaunch,
@@ -20,13 +27,36 @@ import { IntroOpeningMetricsCacheV2, WorldUIV2 } from './ui/WorldUIV2';
 const mapErrors = validateMap();
 if (mapErrors.length > 0) throw new Error(`Invalid map:\n${mapErrors.join('\n')}`);
 
-const requestedSeed = Number(new URLSearchParams(window.location.search).get('seed'));
-
-function freshSeed(): number {
-  if (Number.isInteger(requestedSeed) && requestedSeed > 0) return requestedSeed >>> 0;
+function randomSeed(): number {
   const randomSeed = new Uint32Array(1);
   window.crypto.getRandomValues(randomSeed);
   return randomSeed[0] || 1;
+}
+
+function initialScenarioFromLocation(): ScenarioConfigV2 {
+  const parameters = new URLSearchParams(window.location.search);
+  const requestedSeed = Number(parameters.get('seed'));
+  const requestedMode: GameModeV2 = parameters.get('mode') === 'random-world'
+    ? 'random-world'
+    : 'standard-2026';
+  return normalizeScenarioConfigV2({
+    mode: requestedMode,
+    seed: Number.isInteger(requestedSeed) && requestedSeed > 0
+      ? requestedSeed
+      : randomSeed(),
+  });
+}
+
+function publishScenarioToLocation(scenario: ScenarioConfigV2): void {
+  const url = new URL(window.location.href);
+  url.searchParams.set('seed', String(scenario.seed));
+  if (scenario.mode === 'random-world') url.searchParams.set('mode', 'random-world');
+  else url.searchParams.delete('mode');
+  window.history.replaceState(null, '', url);
+}
+
+function sameScenario(left: ScenarioConfigV2, right: ScenarioConfigV2): boolean {
+  return left.mode === right.mode && left.version === right.version && left.seed === right.seed;
 }
 
 let activeEngine: WorldEngineV2 | undefined;
@@ -36,6 +66,7 @@ let activeSession: HostGameSession | GuestGameSession | undefined;
 let activeSessionStatus: MultiplayerSessionStatus | undefined;
 let unsubscribeSessionStatus: (() => void) | undefined;
 let activeControllerNames: ReadonlyMap<PlayerId, string> = new Map();
+let activeScenario = initialScenarioFromLocation();
 
 createPhaserGame();
 
@@ -69,7 +100,30 @@ function mountWorldUi(
   activeEngine = engine;
   activeUi = new WorldUIV2(engine, multiplayer
     ? { introOpen: false, multiplayer: true, controllerNames }
-    : { onMultiplayerRequested: openMultiplayerLobby });
+    : {
+      onMultiplayerRequested: openMultiplayerLobby,
+      scenarioConfig: scenarioConfigFromEngineV2(engine),
+      onScenarioModeRequested: (mode) => launchSoloScenario({ mode, seed: randomSeed() }),
+      onScenarioRerollRequested: () => launchSoloScenario({
+        mode: activeScenario.mode,
+        seed: randomSeed(),
+      }),
+      onNewGameRequested: () => launchSoloScenario({
+        mode: activeScenario.mode,
+        seed: randomSeed(),
+      }),
+    });
+}
+
+function launchSoloScenario(input: Pick<ScenarioConfigV2, 'mode' | 'seed'>): void {
+  if (activeLobby || activeSession) return;
+  const resolved = resolveScenarioV2(input);
+  destroyActiveGame();
+  activeScenario = resolved.config;
+  publishScenarioToLocation(activeScenario);
+  const engine = new WorldEngineV2(activeScenario.seed, resolved.content);
+  mountWorldUi(engine, false);
+  engine.startClock();
 }
 
 function attachHostStatus(session: HostGameSession): void {
@@ -95,7 +149,11 @@ async function launchHostGame(launch: MultiplayerHostLaunch): Promise<void> {
   const seats = multiplayerSeatsFromLobby(launch.lobby);
   const controllerNames = multiplayerControllerNamesFromLobby(launch.lobby);
   const hostCountryId = localCountryFromLobby(launch.lobby, launch.transport.hostPeerId);
-  const engine = new WorldEngineV2(freshSeed());
+  if (!sameScenario(launch.scenario, launch.lobby.scenario)) {
+    throw new Error('The host launch scenario no longer matches the lobby.');
+  }
+  const scenario = resolveScenarioV2(launch.scenario);
+  const engine = new WorldEngineV2(scenario.config.seed, scenario.content);
   const countrySelection = engine.chooseCountry(hostCountryId);
   engine.setClockAuthority(false);
   if (!countrySelection.accepted) {
@@ -116,6 +174,8 @@ async function launchHostGame(launch: MultiplayerHostLaunch): Promise<void> {
   activeLobby?.destroy(false);
   activeLobby = undefined;
   destroyActiveGame();
+  activeScenario = scenario.config;
+  publishScenarioToLocation(activeScenario);
   activeControllerNames = controllerNames;
   activeSession = session;
   mountWorldUi(engine, true, controllerNames);
@@ -126,11 +186,16 @@ async function launchGuestGame(launch: MultiplayerGuestLaunch): Promise<void> {
   const seats = multiplayerSeatsFromLobby(launch.lobby);
   const controllerNames = multiplayerControllerNamesFromLobby(launch.lobby);
   const countryId = localCountryFromLobby(launch.lobby, launch.transport.peerId);
+  if (!sameScenario(launch.scenario, launch.lobby.scenario)) {
+    throw new Error('The guest launch scenario no longer matches the lobby.');
+  }
+  const scenario = resolveScenarioV2(launch.scenario);
   const session = new GuestGameSession({
     transport: launch.transport,
     countryId,
     seatCount: seats.size,
     humanPlayerIds: [...seats.values()],
+    content: scenario.content,
   });
   const accepted = session.acceptSnapshot(launch.snapshot);
   if (!accepted.accepted || !session.engine) {
@@ -138,10 +203,17 @@ async function launchGuestGame(launch: MultiplayerGuestLaunch): Promise<void> {
     throw new Error(accepted.reason ?? 'The host snapshot could not be loaded.');
   }
   const engine = worldEngineFromSession(session.engine);
+  const snapshotScenario = scenarioConfigFromEngineV2(engine);
+  if (!sameScenario(snapshotScenario, scenario.config)) {
+    session.close(false);
+    throw new Error('The host snapshot does not match the lobby game mode and seed.');
+  }
 
   activeLobby?.destroy(false);
   activeLobby = undefined;
   destroyActiveGame();
+  activeScenario = scenario.config;
+  publishScenarioToLocation(activeScenario);
   activeControllerNames = controllerNames;
   activeSession = session;
   mountWorldUi(engine, true, controllerNames);
@@ -165,15 +237,13 @@ function openMultiplayerLobby(preferredCountryId?: PlayerId): void {
     onHostLaunch: launchHostGame,
     onGuestLaunch: launchGuestGame,
     openingMetrics: new IntroOpeningMetricsCacheV2().read(pausedEngine),
+    scenarioConfig: scenarioConfigFromEngineV2(pausedEngine),
     preferredCountryId,
   });
   activeLobby = lobby;
 }
 
-const soloEngine = new WorldEngineV2(freshSeed());
-activeEngine = soloEngine;
-activeUi = new WorldUIV2(soloEngine, { onMultiplayerRequested: openMultiplayerLobby });
-soloEngine.startClock();
+launchSoloScenario(activeScenario);
 
 window.addEventListener('beforeunload', () => {
   activeLobby?.destroy();

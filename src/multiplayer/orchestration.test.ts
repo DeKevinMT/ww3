@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { nationIdV2 } from '../sim/v2/types';
+import { normalizeScenarioConfigV2 } from '../sim/v2/scenarios';
 import {
   localCountryFromLobby,
   multiplayerControllerNamesFromLobby,
@@ -12,6 +13,7 @@ function lobby(): LobbyStateMessage {
     type: 'lobby-state',
     revision: 9,
     hostPeerId: 'host_12345678',
+    scenario: normalizeScenarioConfigV2({ mode: 'standard-2026', seed: 123 }),
     started: true,
     players: [
       { peerId: 'host_12345678', displayName: 'Host', countryId: nationIdV2('BEL'), ready: true, connected: true },

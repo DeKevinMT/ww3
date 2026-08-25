@@ -78,7 +78,7 @@ describe('country trait catalog V2', () => {
       countryName: 'United States of America',
       name: 'Global Projection',
       effect: '−16.81% operation cost on naval fronts; +11.21% front supply on naval fronts.',
-      description: 'Offsets the cost and supply burden of projecting the strongest opening military across oceans.',
+      description: 'Offsets the cost and supply burden of projecting a globally deployable military across oceans.',
     });
     expect(countryTraitV2('lka')?.effect).toBe(
       describeCountryTraitModifiersV2(countryTraitV2('lka')!.modifiers),
@@ -154,7 +154,9 @@ describe('country trait catalog V2', () => {
     ]);
     expect(countryTraitFactorV2('grl', 'army-capacity')).toBeLessThanOrEqual(1.3);
     expect(countryTraitFactorV2('grl', 'army-capacity', { humanControlled: true }))
-      .toBeGreaterThan(2);
+      .toBeGreaterThan(countryTraitFactorV2('grl', 'army-capacity'));
+    expect(countryTraitFactorV2('grl', 'army-capacity', { humanControlled: true }))
+      .toBeLessThan(1.3);
     expect(countryTraitFactorV2('grl', 'recruitment-throughput', { humanControlled: true }))
       .toBeGreaterThan(countryTraitFactorV2('grl', 'recruitment-throughput'));
     expect(countryTraitFactorV2('grl', 'army-upkeep', { humanControlled: true }))

@@ -13,6 +13,7 @@ import { addWorldEventV2 } from './events';
 import { isHumanPlayerV2, selectHumanPlayerIdsV2 } from './humanPlayers';
 import { createNationStateV2 } from './nationState';
 import { invalidateNationIndexV2, invalidateTerritoryIndexV2 } from './selectors';
+import { composeTraitContextV2, traitNationContextV2 } from './traitContext';
 import { countryTraitFactorV2, type TraitEvaluationContextV2 } from './traits';
 import {
   territoryIdV2,
@@ -296,8 +297,9 @@ export function quoteTerritoryIntegrationV2(
     war.attackerId === newOwnerId || war.defenderId === newOwnerId
   ));
   const leader = state.players[newOwnerId];
-  const context: TraitEvaluationContextV2 = {
-    humanControlled: isHumanPlayerV2(state, newOwnerId),
+  const context: TraitEvaluationContextV2 = composeTraitContextV2(
+    traitNationContextV2(state, newOwnerId),
+    {
     access: options.access,
     terrain: definition?.terrain,
     homeland: definition?.initialOwnerId === newOwnerId,
@@ -306,7 +308,8 @@ export function quoteTerritoryIntegrationV2(
     treasury: leader?.treasury,
     foodSecurity: leader?.foodSecurity,
     condition: territory?.condition,
-  };
+    },
+  );
   const federationFactor = options.cause === 'federation'
     ? FEDERATION_INTEGRATION_DURATION_FACTOR_V2
     : 1;
@@ -525,7 +528,7 @@ export function processTerritoryIntegrationRevolutionsV2(
       state,
       'critical',
       'critical',
-      `${restoredName} rose in revolution and restored its 2026 sovereignty in ${territoryName}, ending integration into ${displacedName}.`,
+      `${restoredName} rose in revolution and restored its sovereignty in ${territoryName}, ending integration into ${displacedName}.`,
       territoryId,
       restoredOwnerId,
     );

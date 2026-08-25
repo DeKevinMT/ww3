@@ -27,10 +27,15 @@ import {
 } from './integration';
 import { assertInvariantsV2 } from './invariants';
 import { isHumanPlayerV2, selectHumanPlayerIdsV2 } from './humanPlayers';
-import { synchronizeOpeningTreasuryHumanRosterV2 } from './nationState';
+import { processOpeningArmyBonusDecayV2 } from './openingArmyBonus';
+import {
+  synchronizeOpeningArmyHumanRosterV2,
+  synchronizeOpeningTreasuryHumanRosterV2,
+} from './nationState';
 import { createSaveV2, loadSaveV2, serializeSaveV2, type SaveGameV2 } from './persistence';
 import { processPropagandaProgramsV2, selectPropagandaTermsV2 } from './propaganda';
 import { processResearchV2 } from './research';
+import { resolveScenarioV2, scenarioConfigFromSaveHeaderV2 } from './scenarios';
 import {
   createMilitaryBaseSnapshotV2,
   createPowerSnapshotV2,
@@ -165,10 +170,17 @@ export function createOpeningCandidatePreviewSnapshotV2(
   ));
 
   const ordinaryState = structuredClone(state);
+  const humanPlayerIds = selectHumanPlayerIdsV2(ordinaryState);
   synchronizeOpeningTreasuryHumanRosterV2(
     ordinaryState,
     content,
-    candidateIds,
+    humanPlayerIds,
+    [],
+  );
+  synchronizeOpeningArmyHumanRosterV2(
+    ordinaryState,
+    content,
+    humanPlayerIds,
     [],
   );
   const previewAiId = nationIdV2('__opening-candidate-preview-ai__');
@@ -275,8 +287,10 @@ export class WorldEngineV2 {
     this.trackHumanWars();
   }
 
-  static fromSave(input: string | SaveGameV2, content: WorldContentV2 = WORLD_CONTENT_V2): WorldEngineV2 {
-    return new WorldEngineV2(1, content, loadSaveV2(input, content));
+  static fromSave(input: string | SaveGameV2, content?: WorldContentV2): WorldEngineV2 {
+    const resolvedContent = content
+      ?? resolveScenarioV2(scenarioConfigFromSaveHeaderV2(input)).content;
+    return new WorldEngineV2(1, resolvedContent, loadSaveV2(input, resolvedContent));
   }
 
   save(): string {
@@ -590,6 +604,12 @@ export class WorldEngineV2 {
       previousHumanPlayerIds,
       ids,
     );
+    synchronizeOpeningArmyHumanRosterV2(
+      this.state,
+      this.content,
+      previousHumanPlayerIds,
+      ids,
+    );
     synchronizeArmyCapacityV2(this.state, this.content);
     this.state.alliances = [];
     this.state.allianceOffers = [];
@@ -627,6 +647,12 @@ export class WorldEngineV2 {
     this.state.humanPlayerId = id;
     this.state.humanPlayerIds = [id];
     synchronizeOpeningTreasuryHumanRosterV2(
+      this.state,
+      this.content,
+      previousHumanPlayerIds,
+      [id],
+    );
+    synchronizeOpeningArmyHumanRosterV2(
       this.state,
       this.content,
       previousHumanPlayerIds,
@@ -1268,6 +1294,7 @@ export class WorldEngineV2 {
         critical: revolution.restoredOwnerId === this._viewerPlayerId
           || revolution.displacedOwnerId === this._viewerPlayerId,
       });
+      processOpeningArmyBonusDecayV2(this.state, this.content);
       if (this.state.gameOver) {
         pruneWorldHistoryV2(this.state);
         this.assertStateIntegrity(true);

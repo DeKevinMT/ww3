@@ -88,8 +88,8 @@ describe('V2 one-source manpower combat', () => {
       'baseAttack', 'baseDefense', 'capacity', 'manpower',
     ]);
     const total = selectTotalManpowerV2(state, bel);
-    expect(total.deployed).toBe(state.territories[belTerritory].army.manpower);
-    expect(total.capacity).toBe(state.territories[belTerritory].army.capacity);
+    expect(total.deployed).toBeCloseTo(state.territories[belTerritory].army.manpower, 6);
+    expect(total.capacity).toBeCloseTo(state.territories[belTerritory].army.capacity, 6);
     const engine = new WorldEngineV2(301);
     expect(engine.player(bel)?.manpower).toBe(engine.totalManpower(bel).deployed);
     expect(engine.player(bel)?.capacity).toBe(engine.totalManpower(bel).capacity);
@@ -333,6 +333,7 @@ describe('V2 one-source manpower combat', () => {
       territory.army.capacity = capacityTarget;
       territory.army.manpower = territory.army.capacity * 0.25;
     }
+    engine.state.players[bel].openingArmyBonus = null;
     engine.state.players[bel].treasury = 1_000_000;
     const treasuryBefore = engine.state.players[bel].treasury;
     const before = engine.totalManpower(bel);

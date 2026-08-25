@@ -30,7 +30,7 @@ import {
   TAX_EFFICIENCY_RESEARCH_HALF_SATURATION,
   WAR_MOBILIZATION_TICKS,
 } from '../sim/v2/balance';
-import { WORLD_CONTENT_V2 } from '../sim/v2/content';
+import { WORLD_CONTENT_V2, type WorldContentV2 } from '../sim/v2/content';
 import {
   stateTerritoryArmyCapacityTargetV2,
   stateTerritoryArmySupportCeilingV2,
@@ -41,6 +41,7 @@ import {
   type TerritoryIntegrationQuoteV2,
 } from '../sim/v2/integration';
 import { openingStartingTreasuryV2 } from '../sim/v2/nationState';
+import type { GameModeV2, ScenarioConfigV2 } from '../sim/v2/scenarios';
 import {
   selectArmyStrengthV2,
   selectEffectiveAttackV2,
@@ -57,7 +58,8 @@ import type { OpeningCandidatePreviewSnapshotV2 } from '../sim/v2/WorldEngineV2'
 import {
   countryTraitV2,
   describeCountryTraitModifiersV2,
-  humanCountryTraitMultiplierV2,
+  humanCountryTraitMultiplierForContentV2,
+  humanStartingArmyMultiplierForContentV2,
 } from '../sim/v2/traits';
 import { countryFlagHtml } from './countryFlags';
 import { summarizeFoodTradeV2 } from './foodTrade';
@@ -128,6 +130,7 @@ type WarTargetCandidate = {
  * simulation replaceable without leaking mutable internals into the DOM layer.
  */
 export interface WorldEngineV2UIContract {
+  readonly content: WorldContentV2;
   readonly state: WorldStateV2;
   /** The local country being viewed. Differs from the canonical primary player in multiplayer. */
   readonly viewerPlayerId?: PlayerId;
@@ -189,6 +192,10 @@ export interface WorldUIV2Options {
   multiplayer?: boolean;
   controllerNames?: ReadonlyMap<PlayerId, string>;
   onMultiplayerRequested?: (preferredCountryId: PlayerId) => void;
+  scenarioConfig?: ScenarioConfigV2;
+  onScenarioModeRequested?: (mode: GameModeV2) => void;
+  onScenarioRerollRequested?: () => void;
+  onNewGameRequested?: () => void;
 }
 
 type PanelMode = 'war' | 'nation' | 'progress' | 'economy' | 'ranking';
@@ -462,14 +469,15 @@ export interface WorldTopbarStatsV2 {
 export function worldTopbarStatsV2(
   state: WorldStateV2,
   playerId: PlayerId,
+  content: WorldContentV2 = WORLD_CONTENT_V2,
 ): WorldTopbarStatsV2 {
   let worldPopulation = 0;
   let worldLandArea = 0;
   let controlledLandArea = 0;
   let controlledTerritories = 0;
-  for (const territoryId of WORLD_CONTENT_V2.territoryIds) {
+  for (const territoryId of content.territoryIds) {
     const territory = state.territories[territoryId];
-    const definition = WORLD_CONTENT_V2.territories[territoryId];
+    const definition = content.territories[territoryId];
     if (!territory || !definition) continue;
     worldPopulation += Math.max(0, territory.population);
     worldLandArea += Math.max(0, definition.baseline.landArea);
@@ -481,7 +489,7 @@ export function worldTopbarStatsV2(
     population: worldPopulation,
     controlledLandShare: worldLandArea > 0 ? controlledLandArea / worldLandArea : 0,
     controlledTerritories,
-    worldTerritories: WORLD_CONTENT_V2.territoryIds.length,
+    worldTerritories: content.territoryIds.length,
   });
 }
 
@@ -624,6 +632,7 @@ export interface IntroNationMetricsV2 extends IntroMetricValuesV2 {
 }
 
 export interface IntroOpeningMetricsSnapshotV2 {
+  contentVersion: string;
   tick: number;
   actionSequence: number;
   humanPlayerId: PlayerId;
@@ -640,8 +649,10 @@ export class IntroOpeningMetricsCacheV2 {
   private cached?: IntroOpeningMetricsSnapshotV2;
 
   read(engine: WorldEngineV2UIContract): IntroOpeningMetricsSnapshotV2 {
-    const { tick, actionSequence, humanPlayerId } = engine.state;
+    const content = engine.content;
+    const { contentVersion, tick, actionSequence, humanPlayerId } = engine.state;
     if (this.cached
+      && this.cached.contentVersion === contentVersion
       && this.cached.tick === tick
       && this.cached.actionSequence === actionSequence
       && this.cached.humanPlayerId === humanPlayerId) return this.cached;
@@ -655,11 +666,11 @@ export class IntroOpeningMetricsCacheV2 {
     const rankByNation = new Map(ranking.map((entry, index) => [entry.player.id, index + 1]));
     const byNation = new Map<PlayerId, IntroNationMetricsV2>();
 
-    for (const playerId of WORLD_CONTENT_V2.nationIds) {
-      const player = selectNationViewV2(previewState, WORLD_CONTENT_V2, playerId);
+    for (const playerId of content.nationIds) {
+      const player = selectNationViewV2(previewState, content, playerId);
       const finance = openingFinance.get(playerId);
       if (!player || !finance) continue;
-      const army = selectArmyStrengthV2(previewState, WORLD_CONTENT_V2, playerId);
+      const army = selectArmyStrengthV2(previewState, content, playerId);
       const quality = militaryBaseSnapshot.byNation.get(playerId) ?? { attack: 1, defense: 1 };
       const armyState: ArmyStateV2 = {
         manpower: army.deployed,
@@ -668,11 +679,11 @@ export class IntroOpeningMetricsCacheV2 {
         baseDefense: quality.defense,
       };
       const combatPower = powerSnapshot.byNation.get(playerId) ?? 0;
-      const economyView = selectNationalEconomyV2(previewState, WORLD_CONTENT_V2, playerId);
-      const iqView = selectNationalIqViewV2(previewState, WORLD_CONTENT_V2, playerId);
+      const economyView = selectNationalEconomyV2(previewState, content, playerId);
+      const iqView = selectNationalIqViewV2(previewState, content, playerId);
       const populationDynamics = selectPopulationDynamicsV2(
         previewState,
-        WORLD_CONTENT_V2,
+        content,
         playerId,
         finance.populationGrowth,
       );
@@ -689,10 +700,10 @@ export class IntroOpeningMetricsCacheV2 {
         military: combatPower,
         aggressiveness: preview.aggressivenessByNation.get(playerId) ?? 0,
         attack: selectEffectiveAttackV2(
-          previewState, WORLD_CONTENT_V2, playerId, armyState, militaryBaseSnapshot,
+          previewState, content, playerId, armyState, militaryBaseSnapshot,
         ),
         defense: selectEffectiveDefenseV2(
-          previewState, WORLD_CONTENT_V2, playerId, armyState, militaryBaseSnapshot,
+          previewState, content, playerId, armyState, militaryBaseSnapshot,
         ),
         iq: iqView.score,
         manpower: army.deployed,
@@ -705,7 +716,15 @@ export class IntroOpeningMetricsCacheV2 {
       });
     }
 
-    this.cached = { tick, actionSequence, humanPlayerId, byNation, openingFinance, ranking };
+    this.cached = {
+      contentVersion,
+      tick,
+      actionSequence,
+      humanPlayerId,
+      byNation,
+      openingFinance,
+      ranking,
+    };
     return this.cached;
   }
 }
@@ -734,6 +753,9 @@ export interface NationPickerRenderOptionsV2 {
   claimantNames?: ReadonlyMap<PlayerId, string>;
   selectedCountryId?: PlayerId;
   showMultiplayerButton?: boolean;
+  content?: WorldContentV2;
+  scenarioConfig?: ScenarioConfigV2;
+  scenarioEditable?: boolean;
 }
 
 export interface NationPickerRenderResultV2 {
@@ -751,10 +773,11 @@ export type CountryTraitPresentationSurfaceV2 = 'picker' | 'nation';
 export function renderCountryTraitPresentationV2(
   playerId: PlayerId,
   surface: CountryTraitPresentationSurfaceV2,
+  content: WorldContentV2 = WORLD_CONTENT_V2,
 ): string {
   const trait = countryTraitV2(playerId);
   if (!trait) return '';
-  const playerMultiplier = humanCountryTraitMultiplierV2(playerId);
+  const playerMultiplier = humanCountryTraitMultiplierForContentV2(content, playerId);
   const appliedEffect = describeCountryTraitModifiersV2(trait.modifiers, playerMultiplier);
   const identity = surface === 'picker'
     ? `<small>${escapeHtml(trait.description)}</small>`
@@ -769,10 +792,13 @@ export function renderCountryTraitPresentationV2(
 export function renderCountryTraitIntelV2(
   playerId: PlayerId,
   humanControlled: boolean,
+  content: WorldContentV2 = WORLD_CONTENT_V2,
 ): string {
   const trait = countryTraitV2(playerId);
   if (!trait) return '';
-  const multiplier = humanControlled ? humanCountryTraitMultiplierV2(playerId) : 1;
+  const multiplier = humanControlled
+    ? humanCountryTraitMultiplierForContentV2(content, playerId)
+    : 1;
   const effect = describeCountryTraitModifiersV2(trait.modifiers, multiplier);
   return `<section class="country-trait-card country-trait-card--intel" data-country-trait="${escapeHtml(trait.playerId)}"><div><span>${humanControlled ? 'PLAYER TRAIT' : 'COUNTRY TRAIT'}</span><strong>${escapeHtml(trait.name)}</strong></div><p>${escapeHtml(effect)}</p></section>`;
 }
@@ -791,6 +817,7 @@ export function quoteConquestIntegrationPreviewV2(
   newOwnerId: PlayerId,
   territoryIds: readonly TerritoryId[],
   access?: TerritoryIntegrationAccessV2,
+  content: WorldContentV2 = WORLD_CONTENT_V2,
 ): ConquestIntegrationPreviewV2 {
   // Quote the campaign in capture order. A copied ownership map makes the first
   // conquest condition true once, exactly as runtime capture would, while the
@@ -802,7 +829,7 @@ export function quoteConquestIntegrationPreviewV2(
   const quotes = territoryIds.map((territoryId) => {
     const quote = quoteTerritoryIntegrationV2(
       previewState,
-      WORLD_CONTENT_V2,
+      content,
       territoryId,
       newOwnerId,
       { cause: 'conquest', ...(access ? { access } : {}) },
@@ -825,18 +852,19 @@ export function renderNationPickerV2(
   opening: IntroOpeningMetricsSnapshotV2,
   options: NationPickerRenderOptionsV2,
 ): NationPickerRenderResultV2 {
+  const content = options.content ?? WORLD_CONTENT_V2;
   const claimed = options.claimedCountryIds ?? new Set<PlayerId>();
-  const allNations = [...WORLD_CONTENT_V2.nationIds]
-    .map((id) => WORLD_CONTENT_V2.nations[id])
+  const allNations = [...content.nationIds]
+    .map((id) => content.nations[id])
     .filter((nation): nation is NonNullable<typeof nation> => (
       nation !== undefined && opening.byNation.has(nation.id)
     ));
   const nations = allNations.sort((left, right) => (
     compareIntroNationMetricsV2(left, right, options.sort, opening)
   ));
-  const desired = WORLD_CONTENT_V2.nations[options.previewCountryId];
+  const desired = content.nations[options.previewCountryId];
   const selected = options.selectedCountryId
-    ? WORLD_CONTENT_V2.nations[options.selectedCountryId] : undefined;
+    ? content.nations[options.selectedCountryId] : undefined;
   const preview = desired && opening.byNation.has(desired.id) && !claimed.has(desired.id)
     ? desired
     : selected && opening.byNation.has(selected.id) && !claimed.has(selected.id)
@@ -851,10 +879,16 @@ export function renderNationPickerV2(
   const populationDynamics = previewMetrics.populationDynamics;
   const startingTreasury = openingStartingTreasuryV2(
     preview.id,
-    WORLD_CONTENT_V2,
-    false,
+    content,
+    true,
   );
-  const traitPresentation = renderCountryTraitPresentationV2(preview.id, 'picker');
+  const startingArmyMultiplier = humanStartingArmyMultiplierForContentV2(content, preview.id);
+  const startingArmy = army.deployed * startingArmyMultiplier;
+  const startingArmyBonus = Math.max(0, startingArmy - army.deployed);
+  const startingArmyBonusNote = startingArmyBonus > 0.000000001
+    ? `<small>+${people(startingArmyBonus)} FREE BONUS · FADES OVER 10 YEARS</small>`
+    : '';
+  const traitPresentation = renderCountryTraitPresentationV2(preview.id, 'picker', content);
   const query = options.searchQuery.trim().toLocaleLowerCase('en');
   const continents = [...new Set(nations.map((nation) => nation.continent))]
     .sort((left, right) => left.localeCompare(right, 'en'));
@@ -894,6 +928,28 @@ export function renderNationPickerV2(
       ? `✓ ${preview.name.toUpperCase()} SELECTED`
       : `SELECT ${preview.name.toUpperCase()}`
     : `COMMAND ${preview.name.toUpperCase()}`;
+  const scenario = options.scenarioConfig;
+  const scenarioMode = scenario?.mode ?? content.metadata?.scenarioId ?? 'standard-2026';
+  const randomWorld = scenarioMode === 'random-world';
+  const scenarioSeed = scenario?.seed ?? content.metadata?.generatedFromSeed;
+  const startYear = content.metadata?.startYear ?? 2026;
+  const scenarioButtonsDisabled = options.scenarioEditable ? '' : 'disabled aria-disabled="true"';
+  const scenarioControls = scenario ? `<div class="scenario-picker" role="group" aria-label="Game mode">
+    <div class="scenario-picker__modes">
+      <button class="${randomWorld ? '' : 'is-active'}" ${actionAttribute}="scenario-standard" ${scenarioButtonsDisabled}><b>STANDARD 2026</b><span>Authentic opening data</span></button>
+      <button class="${randomWorld ? 'is-active' : ''}" ${actionAttribute}="scenario-random" ${scenarioButtonsDisabled}><b>RANDOM WORLD</b><span>New balance every seed</span></button>
+    </div>
+    <div class="scenario-picker__seed"><span>${randomWorld ? 'WORLD SEED' : 'SIMULATION SEED'}</span><strong>${scenarioSeed ?? '—'}</strong>${randomWorld && options.scenarioEditable ? `<button ${actionAttribute}="scenario-reroll" title="Generate another Random World">↻ REROLL</button>` : ''}</div>
+  </div>` : '';
+  const scenarioDescription = randomWorld
+    ? 'Countries keep their geography, but population, economy, military quality and strategic power are rebuilt from the seed.'
+    : 'APEX runs the country. You choose who to attack.';
+  const sourceLabel = randomWorld
+    ? 'Random World · deterministic generated stats · geography unchanged'
+    : 'IQ: learning outcomes · Natural Earth · SIPRI 2025';
+  const iqTitle = randomWorld
+    ? 'Generated national learning and research capacity for this Random World seed'
+    : 'Calibrated from international learning outcomes, with a regional fallback';
   const cards = nations.map((nation) => {
     const searchable = `${nation.name} ${nation.sigil}`.toLowerCase();
     const hidden = !continentMatches(nation.continent) || (query.length > 0 && !searchable.includes(query));
@@ -906,7 +962,15 @@ export function renderNationPickerV2(
       : `<span><b>${displayMetric(nation.id)}</b><em>${sortLabels[options.sort]}</em></span>`;
     return `<button class="${nation.id === preview.id ? 'is-selected ' : ''}${isCurrent ? 'is-current ' : ''}${isClaimed ? 'is-claimed' : ''}" ${actionAttribute}="preview-country" data-country="${nation.id}" data-continent="${escapeHtml(nation.continent)}" data-country-name="${escapeHtml(nation.name.toLocaleLowerCase('en'))}" data-name="${escapeHtml(searchable)}" aria-pressed="${nation.id === preview.id}" ${isClaimed ? 'disabled aria-disabled="true"' : ''} ${hidden ? 'hidden' : ''} style="--country:${nation.cssColor}"><i class="country-flag">${countryFlagHtml(nation.id, nation.sigil)}</i><div><strong>${escapeHtml(nation.name)}${isCurrent ? ' · YOUR CHOICE' : ''}</strong><small>${escapeHtml(nation.subregion)} · ${population(nation.real.population)} people</small><em>${cash(nation.real.gdp)} GDP · ${signed(nationEconomicGrowth, 2)}%/yr</em></div>${metric}</button>`;
   }).join('');
-  const html = `<section class="${pickerClass}" data-nation-picker="${options.context}"><div class="country-select__head"><div><div class="panel-kicker">${isLobby ? 'MULTIPLAYER LOBBY · COUNTRY SEAT' : 'NEW CAMPAIGN · 2026'}</div><h1>Choose your nation</h1><p>${isLobby ? 'Your choice is reserved for you and cannot be selected by another commander.' : 'APEX runs the country. You choose who to attack.'}</p></div><div class="country-select__facts"><span><b>${nations.length}</b> countries</span><span><b>${isLobby ? '2–8' : 'ONE AI'}</b> ${isLobby ? 'players' : 'every country'}</span><span><b>2026</b> start date</span><span><b>LIVE</b> aggression</span></div></div><div class="country-select__tools"><label class="country-search"><span>⌕</span><input id="${searchId}" type="search" value="${escapeHtml(options.searchQuery)}" placeholder="Search countries…" autocomplete="off"></label><label class="country-sort"><span>SORT</span><select id="${sortId}" aria-label="Sort countries">${sortOptions}</select></label><div class="country-filters" role="group" aria-label="Filter countries by continent"><button class="${options.continent === 'ALL' ? 'is-active' : ''}" ${actionAttribute}="continent-filter" data-continent="ALL">ALL</button>${continents.map((continent) => `<button class="${options.continent === continent ? 'is-active' : ''}" ${actionAttribute}="continent-filter" data-continent="${escapeHtml(continent)}">${escapeHtml(continent.toUpperCase())}</button>`).join('')}<span>${visibleCount} shown</span></div></div><div class="country-select__body"><div class="country-grid">${cards}</div><aside class="country-preview" style="--country:${preview.cssColor}"><div class="country-preview__identity"><i class="country-flag country-flag--large">${countryFlagHtml(preview.id, preview.sigil, true)}</i><div><span>MILITARY RANK #${previewMetrics.rank}</span><h2 title="${escapeHtml(preview.name)}">${escapeHtml(previewState.shortName)}</h2><p>${escapeHtml(preview.subregion)}</p></div><b>${compactNumber(previewMetrics.combatPower)}<small>MILITARY POWER</small></b></div>${traitPresentation}<div class="country-preview__stats"><div class="stat-atk"><span>ATK</span><strong>${format(previewMetrics.attack, 2)}</strong></div><div class="stat-def"><span>DEF</span><strong>${format(previewMetrics.defense, 2)}</strong></div><div class="stat-aggression"><span>AGGRESSIVENESS</span><strong>${format(previewMetrics.aggressiveness, 1)}%</strong></div><div class="stat-iq" title="Calibrated from international learning outcomes, with a regional fallback"><span>IQ</span><strong>${format(previewMetrics.iqView.score, 1)}</strong></div><div><span>ARMY</span><strong>${people(army.deployed)}</strong></div><div><span>TRAINED RESERVE</span><strong>${people(previewState.trainedReserves)}</strong></div><div><span>POPULATION</span><strong>${population(economy.population)}</strong></div><div class="stat-economy"><span>ECONOMY</span><strong>${cash(economy.output)}</strong></div><div class="stat-treasury"><span>STARTING TREASURY</span><strong class="is-positive">${cash(startingTreasury)}</strong></div><div><span>ECONOMIC GROWTH</span><strong class="${finance.annualEconomyGrowthRate >= 0 ? 'is-positive' : 'danger-text'}">${signed(finance.annualEconomyGrowthRate * 100, 2)}%</strong></div><div title="Automatic 10–20% rate from integrated GDP per baseline productive person"><span>TAX</span><strong>${format(economy.dynamicTaxRate * 100, 1)}%</strong></div><div><span>POPULATION GROWTH</span><strong class="${populationDynamics.annualNetRate >= 0 ? 'is-positive' : 'danger-text'}">${populationDynamics.annualNetRate >= 0 ? '+' : ''}${format(populationDynamics.annualNetRate * 100, 2)}%</strong></div><div title="Live GDP divided by the currently controlled population"><span>GDP / CAPITA</span><strong>${cash(economy.wealthPerPerson / 1e6)}</strong></div></div><div class="country-preview__actions"><button class="primary-button country-preview__start" ${actionAttribute}="${isLobby ? 'select-country' : 'choose-country'}" data-country="${preview.id}">${escapeHtml(primaryLabel)}</button>${multiplayerButton}</div></aside></div><footer><span>IQ: learning outcomes · Natural Earth · SIPRI 2025</span><strong>Sorted by ${escapeHtml(sortLabels[options.sort].toLowerCase())}</strong></footer></section>`;
+  const html = `<section class="${pickerClass}" data-nation-picker="${options.context}" data-scenario="${scenarioMode}">
+    <div class="country-select__head">
+      <div><div class="panel-kicker">${isLobby ? 'MULTIPLAYER LOBBY · COUNTRY SEAT' : `NEW CAMPAIGN · ${randomWorld ? 'RANDOM WORLD' : startYear}`}</div><h1>Choose your nation</h1><p>${isLobby ? 'Your choice is reserved for you and cannot be selected by another commander.' : scenarioDescription}</p></div>
+      <div class="country-select__head-side">${scenarioControls}<div class="country-select__facts"><span><b>${nations.length}</b> countries</span><span><b>${isLobby ? '2–8' : 'ONE AI'}</b> ${isLobby ? 'players' : 'every country'}</span><span><b>${startYear}</b> start date</span><span><b>${randomWorld ? 'SEEDED' : 'LIVE'}</b> ${randomWorld ? 'world' : 'aggression'}</span></div></div>
+    </div>
+    <div class="country-select__tools"><label class="country-search"><span>⌕</span><input id="${searchId}" type="search" value="${escapeHtml(options.searchQuery)}" placeholder="Search countries…" autocomplete="off"></label><label class="country-sort"><span>SORT</span><select id="${sortId}" aria-label="Sort countries">${sortOptions}</select></label><div class="country-filters" role="group" aria-label="Filter countries by continent"><button class="${options.continent === 'ALL' ? 'is-active' : ''}" ${actionAttribute}="continent-filter" data-continent="ALL">ALL</button>${continents.map((continent) => `<button class="${options.continent === continent ? 'is-active' : ''}" ${actionAttribute}="continent-filter" data-continent="${escapeHtml(continent)}">${escapeHtml(continent.toUpperCase())}</button>`).join('')}<span>${visibleCount} shown</span></div></div>
+    <div class="country-select__body"><div class="country-grid">${cards}</div><aside class="country-preview" style="--country:${preview.cssColor}"><div class="country-preview__identity"><i class="country-flag country-flag--large">${countryFlagHtml(preview.id, preview.sigil, true)}</i><div><span>MILITARY RANK #${previewMetrics.rank}</span><h2 title="${escapeHtml(preview.name)}">${escapeHtml(previewState.shortName)}</h2><p>${escapeHtml(preview.subregion)}</p></div><b>${compactNumber(previewMetrics.combatPower)}<small>MILITARY POWER</small></b></div>${traitPresentation}<div class="country-preview__stats"><div class="stat-atk"><span>ATK</span><strong>${format(previewMetrics.attack, 2)}</strong></div><div class="stat-def"><span>DEF</span><strong>${format(previewMetrics.defense, 2)}</strong></div><div class="stat-aggression"><span>AGGRESSIVENESS</span><strong>${format(previewMetrics.aggressiveness, 1)}%</strong></div><div class="stat-iq" title="${iqTitle}"><span>IQ</span><strong>${format(previewMetrics.iqView.score, 1)}</strong></div><div class="stat-player-army" title="Only the extra player opening troops are free. They fade over ten years and never refill."><span>PLAYER START ARMY · ×${format(startingArmyMultiplier, 2)}</span><strong>${people(startingArmy)}</strong>${startingArmyBonusNote}</div><div><span>TRAINED RESERVE</span><strong>${people(previewState.trainedReserves)}</strong></div><div><span>POPULATION</span><strong>${population(economy.population)}</strong></div><div class="stat-economy"><span>ECONOMY</span><strong>${cash(economy.output)}</strong></div><div class="stat-treasury"><span>STARTING TREASURY</span><strong class="is-positive">${cash(startingTreasury)}</strong></div><div><span>ECONOMIC GROWTH</span><strong class="${finance.annualEconomyGrowthRate >= 0 ? 'is-positive' : 'danger-text'}">${signed(finance.annualEconomyGrowthRate * 100, 2)}%</strong></div><div title="Automatic 10–20% rate from integrated GDP per baseline productive person"><span>TAX</span><strong>${format(economy.dynamicTaxRate * 100, 1)}%</strong></div><div><span>POPULATION GROWTH</span><strong class="${populationDynamics.annualNetRate >= 0 ? 'is-positive' : 'danger-text'}">${populationDynamics.annualNetRate >= 0 ? '+' : ''}${format(populationDynamics.annualNetRate * 100, 2)}%</strong></div><div title="Live GDP divided by the currently controlled population"><span>GDP / CAPITA</span><strong>${cash(economy.wealthPerPerson / 1e6)}</strong></div></div><div class="country-preview__actions"><button class="primary-button country-preview__start" ${actionAttribute}="${isLobby ? 'select-country' : 'choose-country'}" data-country="${preview.id}">${escapeHtml(primaryLabel)}</button>${multiplayerButton}</div></aside></div>
+    <footer><span>${sourceLabel}</span><strong>Sorted by ${escapeHtml(sortLabels[options.sort].toLowerCase())}</strong></footer>
+  </section>`;
   return { html, previewCountryId: preview.id, visibleCount };
 }
 
@@ -1021,7 +1085,7 @@ export class WorldUIV2 {
   private contextPanelOpen = false;
   private confirmWarTargetId?: PlayerId;
   private confirmCeasefireWarId?: string;
-  private introPreviewCountryId: PlayerId = WORLD_CONTENT_V2.nationIds.find((id) => id === 'usa') ?? WORLD_CONTENT_V2.nationIds[0]!;
+  private introPreviewCountryId: PlayerId;
   private introSearchQuery = '';
   private introContinent = 'ALL';
   private introSort: IntroSort = 'power';
@@ -1056,6 +1120,10 @@ export class WorldUIV2 {
     private readonly engine: WorldEngineV2UIContract,
     private readonly options: WorldUIV2Options = {},
   ) {
+    const defaultPreviewId = engine.content.nationIds.find((id) => id === 'usa')
+      ?? engine.content.nationIds[0];
+    if (!defaultPreviewId) throw new Error('World UI requires at least one playable country.');
+    this.introPreviewCountryId = defaultPreviewId;
     this.introOpen = options.introOpen ?? true;
     this.hud = document.querySelector<HTMLElement>('#hud')!;
     this.tooltip = document.querySelector<HTMLElement>('#tooltip')!;
@@ -1095,6 +1163,10 @@ export class WorldUIV2 {
     `;
     document.head.append(this.responsiveStyle);
     const initialIntroMetrics = this.introMetricsCache.read(engine);
+    if (engine.content.metadata?.scenarioId === 'random-world') {
+      this.introPreviewCountryId = initialIntroMetrics.ranking[0]?.player.id
+        ?? this.introPreviewCountryId;
+    }
     this.rankingCache = initialIntroMetrics.ranking;
     this.lastRankingCalculationAt = performance.now();
     mapBridge.engine = createMapEngineAdapter(engine, () => this.ranking(), options.controllerNames);
@@ -1217,7 +1289,7 @@ export class WorldUIV2 {
     if (change.reason === 'integration-complete' && change.victorId && change.defeatedId) {
       const owner = this.engine.player(change.victorId);
       const formerCore = this.engine.player(change.defeatedId)
-        ?? WORLD_CONTENT_V2.nations[change.defeatedId];
+        ?? this.engine.content.nations[change.defeatedId];
       if (owner && formerCore) this.toast(
         `${formerCore.shortName} fully integrated · now permanent ${owner.shortName} core territory`,
         'conquest',
@@ -1330,7 +1402,7 @@ export class WorldUIV2 {
     const humanId = this.viewerPlayerId();
     const candidateOwners = new Set<PlayerId>();
     for (const source of this.engine.territoriesOf(humanId)) {
-      for (const connection of WORLD_CONTENT_V2.territories[source.id]?.connections ?? []) {
+      for (const connection of this.engine.content.territories[source.id]?.connections ?? []) {
         const owner = this.engine.state.territories[connection.targetId]?.owner;
         if (owner && owner !== humanId) candidateOwners.add(owner);
       }
@@ -1338,7 +1410,7 @@ export class WorldUIV2 {
     const attackableOwners = new Set([...candidateOwners].filter((targetId) => (
       this.engine.warDeclarationStatus(humanId, targetId).allowed
     )));
-    return WORLD_CONTENT_V2.territoryIds.filter((territoryId) => {
+    return this.engine.content.territoryIds.filter((territoryId) => {
       const owner = this.engine.state.territories[territoryId]?.owner;
       return Boolean(owner && attackableOwners.has(owner));
     });
@@ -1370,7 +1442,7 @@ export class WorldUIV2 {
       return;
     }
     const territory = this.engine.state.territories[territoryId];
-    const definition = WORLD_CONTENT_V2.territories[territoryId];
+    const definition = this.engine.content.territories[territoryId];
     const owner = territory ? this.engine.player(territory.owner) : undefined;
     if (!territory || !definition || !owner) return;
     const integration = territory.coreOwner !== territory.owner && territory.integration < 0.999999
@@ -1381,10 +1453,10 @@ export class WorldUIV2 {
       ? `<div class="tooltip__controller ${localHuman ? 'is-local' : ''}"><b>${localHuman ? 'YOU' : escapeHtml(controllerName ?? 'HUMAN PLAYER')}</b><span>${localHuman ? 'YOUR COUNTRY' : 'HUMAN CONTROLLED'}</span></div>`
       : '';
     const localArmyCapacity = stateTerritoryArmyCapacityTargetV2(
-      this.engine.state, WORLD_CONTENT_V2, territoryId, owner.id,
+      this.engine.state, this.engine.content, territoryId, owner.id,
     );
     const deploymentCeiling = stateTerritoryArmySupportCeilingV2(
-      this.engine.state, WORLD_CONTENT_V2, territoryId, owner.id,
+      this.engine.state, this.engine.content, territoryId, owner.id,
     );
     const empireSupport = Math.max(0, deploymentCeiling - localArmyCapacity);
     const trainedReserves = this.engine.state.players[owner.id]?.trainedReserves ?? 0;
@@ -1515,7 +1587,7 @@ export class WorldUIV2 {
     // This is the authoritative next-week recurring forecast.
     const displayedNet = finance.net;
     const treasuryTopbar = treasuryTopbarPresentationV2(human.treasury, displayedNet);
-    const worldTopbar = worldTopbarStatsV2(state, human.id);
+    const worldTopbar = worldTopbarStatsV2(state, human.id, this.engine.content);
     const controlledLandPercent = worldTopbar.controlledLandShare * 100;
     const army = humanOpening?.army ?? this.engine.armyStrength(human.id);
     const combatPower = humanOpening?.combatPower ?? this.engine.currentPower(human.id);
@@ -1634,7 +1706,7 @@ export class WorldUIV2 {
     finance: WeeklyFinanceBreakdownV2,
     populationDynamics: PopulationDynamicsV2,
   ): string {
-    const iq = selectNationalIqViewV2(this.engine.state, WORLD_CONTENT_V2, human.id);
+    const iq = selectNationalIqViewV2(this.engine.state, this.engine.content, human.id);
     const army = this.engine.armyStrength(human.id);
     const militarySnapshot = this.engine.militaryBaseSnapshot();
     const nationalArmy = nationalArmyState(this.engine, human.id, army, militarySnapshot);
@@ -1688,7 +1760,19 @@ export class WorldUIV2 {
       ? coalitionNames.map((name) => escapeHtml(name!)).join(' · ')
         + (resistance.members > coalitionNames.length ? ` · +${resistance.members - coalitionNames.length}` : '')
       : 'World powers are monitoring expansion.';
-    const traitPresentation = renderCountryTraitPresentationV2(human.id, 'nation');
+    const traitPresentation = renderCountryTraitPresentationV2(
+      human.id,
+      'nation',
+      this.engine.content,
+    );
+    const openingBonus = human.openingArmyBonus;
+    const openingBonusWeeks = openingBonus
+      ? Math.max(0, openingBonus.expiresTick - this.engine.state.tick) : 0;
+    const openingBonusCard = openingBonus
+      && openingBonus.remainingManpower > 0.000000001
+      && openingBonusWeeks > 0
+      ? `<article class="is-opening-force" title="Player-only opening troops are free, fade every week and reach zero after ten years. Casualties consume them first." aria-label="Temporary opening army bonus ${people(openingBonus.remainingManpower)}, ${openingBonusWeeks} weeks remaining"><span>OPENING BONUS LEFT</span><strong>${people(openingBonus.remainingManpower)}</strong><small>${format(openingBonusWeeks / 52, 1)} YEARS · FREE · NO REFILL</small></article>`
+      : '';
     return `
       <aside class="world-panel command-drawer glass-panel nation-command command-drawer--clean" data-scroll-session="${drawerScrollSessionId('nation')}">
         <button class="panel-close" data-action="close-panel" aria-label="Close nation overview">×</button>
@@ -1699,6 +1783,7 @@ export class WorldUIV2 {
           <div class="national-strength-head"><span>NATIONAL STRENGTH</span><strong>${compactNumber(currentPower)} POWER</strong></div>
           <div class="national-strength-grid">
             <article class="is-army" title="Active trained troops. Deployed manpower contributes directly to conventional power." aria-label="Active army ${people(army.deployed)}, ${format(army.fillRatio * 100)} percent of capacity"><span>ARMY</span><strong>${people(army.deployed)}</strong><small>${format(army.fillRatio * 100)}% · cap ${people(army.capacity)}</small></article>
+            ${openingBonusCard}
             <article class="is-army" title="Trained reserve troops replace wartime losses after mobilisation; they add no power while inactive." aria-label="Trained reserve ${people(human.trainedReserves)} of ${people(finance.trainedReserveCapacity)} capacity"><span>TRAINED RESERVE</span><strong>${people(human.trainedReserves)} / ${people(finance.trainedReserveCapacity)}</strong><small class="${reserveNet >= 0 ? 'is-positive' : 'is-negative'}">${reserveNet >= 0 ? '+' : '−'}${people(Math.abs(reserveNet))} this week · ${cash(annual(finance.reserveTrainingCost))}/yr training</small></article>
             <article class="is-atk" title="Effective attack: inherited force quality, live GDP and IQ, Economy R&D, weapons research and nuclear deterrence." aria-label="Effective attack ${format(attack, 2)}"><span>ATK</span><strong>${format(attack, 2)}</strong></article>
             <article class="is-def" title="Effective defence: inherited force quality, live GDP and IQ, Economy R&D and defensive research, followed by diminishing returns above 1.0." aria-label="Effective defense ${format(defense, 2)}"><span>DEF</span><strong>${format(defense, 2)}</strong></article>
@@ -1841,7 +1926,7 @@ export class WorldUIV2 {
     const armyStrength = this.engine.armyStrength(human.id);
     const nationalArmy = nationalArmyState(this.engine, human.id, armyStrength, militarySnapshot);
     const nationalQuality = militarySnapshot.nationalQualityByNation.get(human.id);
-    const liveIq = selectNationalIqViewV2(this.engine.state, WORLD_CONTENT_V2, human.id);
+    const liveIq = selectNationalIqViewV2(this.engine.state, this.engine.content, human.id);
     const effectDisplayContext: ResearchEffectDisplayContextV2 = {
       researchConversion: nationalQuality?.researchConversion ?? 1,
       baseDefense: nationalArmy.baseDefense,
@@ -1859,7 +1944,12 @@ export class WorldUIV2 {
       .sort(([left], [right]) => researchEffectLabel(left).localeCompare(researchEffectLabel(right)))
       .map(([effect, level]) => {
         const typedEffect = effect as ResearchEffectV2;
-        const impact = selectResearchEffectImpactV2(this.engine.state, WORLD_CONTENT_V2, human.id, typedEffect);
+        const impact = selectResearchEffectImpactV2(
+          this.engine.state,
+          this.engine.content,
+          human.id,
+          typedEffect,
+        );
         const total = researchEffectTotal(typedEffect, level, impact, effectDisplayContext);
         return `<article><span>${escapeHtml(researchEffectLabel(effect))}</span><strong>${escapeHtml(total)}</strong><small>LV ${level}</small></article>`;
       })
@@ -2022,17 +2112,21 @@ export class WorldUIV2 {
   }
 
   private renderTerritoryPanel(territoryId: TerritoryId, territory: TerritoryStateV2): string {
-    const definition = WORLD_CONTENT_V2.territories[territoryId]!;
+    const definition = this.engine.content.territories[territoryId]!;
     const owner = this.engine.player(territory.owner)!;
     const humanId = this.viewerPlayerId();
     const isOwnTerritory = owner.id === humanId;
     const ownerHumanControlled = this.engine.state.humanPlayerIds.includes(owner.id);
-    const ownerTraitIntel = renderCountryTraitIntelV2(owner.id, ownerHumanControlled);
+    const ownerTraitIntel = renderCountryTraitIntelV2(
+      owner.id,
+      ownerHumanControlled,
+      this.engine.content,
+    );
     const empireTerritories = this.engine.territoriesOf(owner.id);
     const economy = this.engine.nationalEconomy(owner.id);
     const finance = this.engine.weeklyFinanceBreakdown(owner.id);
     const integratedPopulation = this.engine.controlledPopulation(owner.id);
-    const iq = selectNationalIqViewV2(this.engine.state, WORLD_CONTENT_V2, owner.id);
+    const iq = selectNationalIqViewV2(this.engine.state, this.engine.content, owner.id);
     const army = this.engine.armyStrength(owner.id);
     const militarySnapshot = this.engine.militaryBaseSnapshot();
     const nationalArmy = nationalArmyState(this.engine, owner.id, army, militarySnapshot);
@@ -2062,10 +2156,10 @@ export class WorldUIV2 {
         + CONQUEST_CAPTURE_GUARD_TICKS - this.engine.state.tick)
       : 0;
     const localArmyCapacity = stateTerritoryArmyCapacityTargetV2(
-      this.engine.state, WORLD_CONTENT_V2, territoryId, owner.id,
+      this.engine.state, this.engine.content, territoryId, owner.id,
     );
     const deploymentCeiling = stateTerritoryArmySupportCeilingV2(
-      this.engine.state, WORLD_CONTENT_V2, territoryId, owner.id,
+      this.engine.state, this.engine.content, territoryId, owner.id,
     );
     const empireSupport = Math.max(0, deploymentCeiling - localArmyCapacity);
     const localArmyRatio = deploymentCeiling > 0
@@ -2173,7 +2267,7 @@ export class WorldUIV2 {
     // receive the same lighter 0.35 front weight seen by AI decisions.
     const summary = selectWarStrainSummaryV2(
       this.engine.state,
-      WORLD_CONTENT_V2,
+      this.engine.content,
       human.id,
     );
     const recoveryWeeks = Math.ceil(human.warFatigue / PEACE_FATIGUE_RECOVERY_PER_WEEK);
@@ -2210,7 +2304,9 @@ export class WorldUIV2 {
   }
 
   private initialTerritoryCount(playerId: PlayerId): number {
-    return WORLD_CONTENT_V2.territoryIds.filter((territoryId) => WORLD_CONTENT_V2.territories[territoryId]?.initialOwnerId === playerId).length;
+    return this.engine.content.territoryIds.filter((territoryId) => (
+      this.engine.content.territories[territoryId]?.initialOwnerId === playerId
+    )).length;
   }
 
   private shouldPromptEmpireName(): boolean {
@@ -2234,6 +2330,11 @@ export class WorldUIV2 {
       sort: this.introSort,
       context: 'campaign',
       showMultiplayerButton: Boolean(this.options.onMultiplayerRequested),
+      content: this.engine.content,
+      scenarioConfig: this.options.scenarioConfig,
+      scenarioEditable: Boolean(
+        this.options.onScenarioModeRequested || this.options.onScenarioRerollRequested
+      ),
     });
     this.introPreviewCountryId = picker.previewCountryId;
     return `<div class="modal-backdrop">${picker.html}</div>`;
@@ -2258,8 +2359,8 @@ export class WorldUIV2 {
     const gains = this.engine.conquestForecast(human.id, target.id);
     const targetFinance = this.engine.weeklyFinanceBreakdown(target.id);
     const targetEconomy = this.engine.nationalEconomy(target.id);
-    const targetIq = selectNationalIqViewV2(this.engine.state, WORLD_CONTENT_V2, target.id);
-    const ownedTargetTerritoryIds = WORLD_CONTENT_V2.territoryIds.filter((territoryId) => (
+    const targetIq = selectNationalIqViewV2(this.engine.state, this.engine.content, target.id);
+    const ownedTargetTerritoryIds = this.engine.content.territoryIds.filter((territoryId) => (
       this.engine.state.territories[territoryId]?.owner === target.id
     ));
     const targetTerritoryIds = forecast.targetId && ownedTargetTerritoryIds.includes(forecast.targetId)
@@ -2272,6 +2373,7 @@ export class WorldUIV2 {
       human.id,
       targetTerritoryIds,
       integrationAccess,
+      this.engine.content,
     );
     const integrationYears = integrationQuote.durationWeeks / WEEKS_PER_YEAR;
     const integrationAnnualCost = integrationQuote.annualCost;
@@ -2311,8 +2413,8 @@ export class WorldUIV2 {
       treaty: 'PEACE TREATY',
       stalemate: 'STALEMATE',
     };
-    const gainedNames = outcome.territoriesGained.map((id) => WORLD_CONTENT_V2.territories[id]?.name ?? id);
-    const lostNames = outcome.territoriesLost.map((id) => WORLD_CONTENT_V2.territories[id]?.name ?? id);
+    const gainedNames = outcome.territoriesGained.map((id) => this.engine.content.territories[id]?.name ?? id);
+    const lostNames = outcome.territoriesLost.map((id) => this.engine.content.territories[id]?.name ?? id);
     const territoryDetail = [
       gainedNames.length ? `Gained: ${gainedNames.join(', ')}` : '',
       lostNames.length ? `Lost: ${lostNames.join(', ')}` : '',
@@ -2366,7 +2468,7 @@ export class WorldUIV2 {
     const winner = this.engine.player(this.engine.state.winnerId ?? '')!;
     const viewerId = this.viewerPlayerId();
     const absorbed = !this.engine.state.players[viewerId];
-    const formerName = WORLD_CONTENT_V2.nations[viewerId]?.name ?? viewerId;
+    const formerName = this.engine.content.nations[viewerId]?.name ?? viewerId;
     const kicker = absorbed ? 'CAMPAIGN ENDED' : 'WORLD CAMPAIGN COMPLETE';
     const outcome = absorbed
       ? `${escapeHtml(formerName)} has been fully integrated and absorbed by ${escapeHtml(winner.name)}.`
@@ -2375,7 +2477,7 @@ export class WorldUIV2 {
   }
 
   private renderSpectatorBanner(formerId: PlayerId, watched: NationViewV2): string {
-    const formerName = WORLD_CONTENT_V2.nations[formerId]?.name ?? formerId;
+    const formerName = this.engine.content.nations[formerId]?.name ?? formerId;
     return `<aside class="multiplayer-spectator glass-panel" role="status"><b>SPECTATOR</b><span>${escapeHtml(formerName)} has been integrated. The shared campaign continues; you are watching ${escapeHtml(watched.shortName)}.</span></aside>`;
   }
 
@@ -2401,8 +2503,8 @@ export class WorldUIV2 {
             this.introContinent = element.dataset.continent ?? 'ALL';
             this.introGridScrollTop = 0;
             const opening = this.introMetricsCache.read(this.engine);
-            const firstVisible = WORLD_CONTENT_V2.nationIds
-              .map((id) => WORLD_CONTENT_V2.nations[id])
+            const firstVisible = this.engine.content.nationIds
+              .map((id) => this.engine.content.nations[id])
               .filter((nation): nation is NonNullable<typeof nation> => (
                 nation !== undefined && opening.byNation.has(nation.id)
               ))
@@ -2435,6 +2537,19 @@ export class WorldUIV2 {
           }
           case 'open-multiplayer':
             this.options.onMultiplayerRequested?.(this.introPreviewCountryId);
+            break;
+          case 'scenario-standard':
+            if (this.options.scenarioConfig?.mode !== 'standard-2026') {
+              this.options.onScenarioModeRequested?.('standard-2026');
+            }
+            break;
+          case 'scenario-random':
+            if (this.options.scenarioConfig?.mode !== 'random-world') {
+              this.options.onScenarioModeRequested?.('random-world');
+            }
+            break;
+          case 'scenario-reroll':
+            this.options.onScenarioRerollRequested?.();
             break;
           case 'dismiss-war-outcome': {
             this.warOutcomeQueue.shift();
@@ -2576,7 +2691,10 @@ export class WorldUIV2 {
             this.render();
             break;
           }
-          case 'new-game': window.location.reload(); break;
+          case 'new-game':
+            if (this.options.onNewGameRequested) this.options.onNewGameRequested();
+            else window.location.reload();
+            break;
         }
       });
     });

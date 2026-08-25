@@ -1,6 +1,5 @@
 import { normalizeSeed } from '../../game/random';
 import {
-  V2_CONTENT_VERSION,
   V2_MAP_ID,
   V2_RULES_VERSION,
   aiHumanAttackSafetyActiveV2,
@@ -13,8 +12,9 @@ import {
   initialTerritoryArmyCapacityV2,
   synchronizeArmyCapacityV2,
 } from './capacity';
-import { createNationStateV2 } from './nationState';
-import { countryTraitFactorV2 } from './traits';
+import { createNationStateV2, synchronizeOpeningArmyHumanRosterV2 } from './nationState';
+import { contentVersionForWorldContentV2 } from './scenarios';
+import { countryTraitFactorV2, registerTraitContentV2 } from './traits';
 import {
   invalidateTerritoryIndexV2,
   selectFoodDomesticCapacityTargetV2,
@@ -142,6 +142,7 @@ function initiallyConnectedV2(content: WorldContentV2, leftId: PlayerId, rightId
 
 /** Three seed-varied regional crises are staged across the first campaign year, never on week zero. */
 export function openingConflictScheduleV2(seed: number, content: WorldContentV2): OpeningConflictV2[] {
+  if (content.metadata?.openingProfile !== 'standard-2026') return [];
   const candidates = OPENING_CONFLICT_POOL.flatMap(([attacker, defender, label], index) => {
     const attackerId = content.nationIds.find((id) => String(id) === attacker);
     const defenderId = content.nationIds.find((id) => String(id) === defender);
@@ -172,7 +173,7 @@ export function openingConflictScheduleV2(seed: number, content: WorldContentV2)
 }
 
 export function processOpeningConflictsV2(state: WorldStateV2, content: WorldContentV2): void {
-  if (content !== WORLD_CONTENT_V2) return;
+  if (content.metadata?.openingProfile !== 'standard-2026') return;
   const scenario = openingConflictScheduleV2(state.seed, content).find((entry) => entry.tick === state.tick);
   if (!scenario) return;
   if (!state.players[scenario.attackerId] || !state.players[scenario.defenderId]) return;
@@ -212,6 +213,7 @@ export function createWorldStateV2(
   seedInput = 1,
   content: WorldContentV2 = WORLD_CONTENT_V2,
 ): WorldStateV2 {
+  registerTraitContentV2(content);
   const seed = normalizeSeed(seedInput);
   const humanPlayerId = defaultHumanPlayerId(content);
   const players = Object.fromEntries(content.nationIds.map((id) => [
@@ -224,7 +226,7 @@ export function createWorldStateV2(
   const state: WorldStateV2 = {
     schemaVersion: 22,
     rulesVersion: V2_RULES_VERSION,
-    contentVersion: V2_CONTENT_VERSION,
+    contentVersion: contentVersionForWorldContentV2(content),
     mapId: V2_MAP_ID,
     seed,
     rngState: seed,
@@ -266,7 +268,8 @@ export function createWorldStateV2(
     playerId: humanPlayerId,
     unread: true,
   });
-  if (content === WORLD_CONTENT_V2) seedScenarioPressureV2(state, content);
+  if (content.metadata?.openingProfile === 'standard-2026') seedScenarioPressureV2(state, content);
+  synchronizeOpeningArmyHumanRosterV2(state, content, [], [humanPlayerId]);
   // Opening buffers are population-based, but storage is derived from the
   // live economy, infrastructure and land. Never begin with food that the
   // current country could not physically store.

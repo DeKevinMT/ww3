@@ -181,6 +181,10 @@ import {
 import { initialManualActionCostV2, manualActionUseMultiplierV2 } from './manualActions';
 import { isHumanPlayerV2 } from './humanPlayers';
 import {
+  processOpeningArmyBonusDecayV2,
+  selectOpeningArmyBonusRemainingV2,
+} from './openingArmyBonus';
+import {
   composeTraitContextV2,
   traitNationContextV2,
   traitOperationContextV2,
@@ -2129,6 +2133,10 @@ export function selectWeeklyFinanceBreakdownV2(
   const budget = { ...(budgetOverride ?? nation.budget) };
   const economy = selectNationalEconomyV2(state, content, playerId);
   const army = selectTotalManpowerV2(state, playerId);
+  const paidDeployed = Math.max(
+    0,
+    army.deployed - selectOpeningArmyBonusRemainingV2(state, playerId),
+  );
   const activeWars = selectWarsOfV2(state, playerId).length;
   const warPressure = selectWarPressureV2(state, playerId);
   const atWar = activeWars > 0;
@@ -2317,13 +2325,13 @@ export function selectWeeklyFinanceBreakdownV2(
     );
   const warOperations = atWar ? frontLoad * (
     economy.weeklyRevenue * WAR_OPERATION_REVENUE_SHARE
-    + army.deployed * WAR_OPERATION_COST_PER_MILLION * armyCostOfLiving
+    + paidDeployed * WAR_OPERATION_COST_PER_MILLION * armyCostOfLiving
   ) * warFatigueCostMultiplier : 0;
   const weeklyRealDefence = Math.max(0.001, (content.nations[playerId]?.real.defenceSpending ?? 0.052) / 52);
   const initialArmy = Math.max(0.000001, initialNationArmyCapacityBenchmarkV2(content, playerId));
   const weaponsUpkeep = 1 + 0.005 * nation.research.effectLevels.attack;
   const baselineUpkeep = weeklyRealDefence * (
-    0.35 * army.deployed / initialArmy
+    0.35 * paidDeployed / initialArmy
     + 0.65 * army.capacity / initialArmy
   );
   const weaponsPremium = weeklyRealDefence * 0.65 * army.capacity / initialArmy * (weaponsUpkeep - 1);
@@ -2822,7 +2830,25 @@ export function selectWeeklyManpowerProjectionV2(
   // WorldEngine advances the calendar before it creates the next finance
   // plan. Forecast against that exact tick so treaty start/end boundaries do
   // not create a one-week mismatch in the header.
-  const financeState: WorldStateV2 = { ...state, tick: state.tick + 1 };
+  const deployedBefore = selectTotalManpowerV2(state, playerId).deployed;
+  // The authoritative step retires the temporary opening entitlement before
+  // finance. Project that same deterministic mutation on a narrow clone so the
+  // HUD includes the weekly fade without touching the live simulation.
+  const financeState: WorldStateV2 = {
+    ...state,
+    tick: state.tick + 1,
+    players: Object.fromEntries((Object.entries(state.players) as Array<[PlayerId, NationStateV2]>)
+      .map(([id, nation]) => [id, {
+        ...nation,
+        openingArmyBonus: nation.openingArmyBonus ? { ...nation.openingArmyBonus } : null,
+      }])) as Record<PlayerId, NationStateV2>,
+    territories: Object.fromEntries((Object.entries(state.territories) as Array<[TerritoryId, TerritoryStateV2]>)
+      .map(([id, territory]) => [id, {
+        ...territory,
+        army: { ...territory.army },
+      }])) as Record<TerritoryId, TerritoryStateV2>,
+  };
+  processOpeningArmyBonusDecayV2(financeState, content);
   const powerSnapshot = createPowerSnapshotV2(financeState, content);
   const finance = selectWeeklyFinanceBreakdownV2(financeState, content, playerId, powerSnapshot);
   const phase = projectFinanceManpowerPhaseV2(financeState, content, playerId, finance);
@@ -2831,12 +2857,13 @@ export function selectWeeklyManpowerProjectionV2(
     const losses = war.attackerId === playerId ? war.attackerLosses : war.defenderLosses;
     return sum + losses / Math.max(1, state.tick - war.startedTick + 1);
   }, 0);
-  const financePhaseNet = phase.deployedAfterFinance - phase.deployedBefore;
+  const openingRetirement = Math.max(0, deployedBefore - phase.deployedBefore);
+  const financePhaseNet = phase.deployedAfterFinance - deployedBefore;
   return {
-    deployedBefore: phase.deployedBefore,
+    deployedBefore: round(deployedBefore),
     deployedAfterFinance: phase.deployedAfterFinance,
     recruited: phase.recruited,
-    demobilized: phase.demobilized,
+    demobilized: round(openingRetirement + phase.demobilized),
     trainedReservesBefore: phase.trainedReservesBefore,
     trainedReservesAfter: phase.trainedReservesAfter,
     reserveTrained: phase.reserveTrained,

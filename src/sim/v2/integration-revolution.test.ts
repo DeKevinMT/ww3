@@ -177,7 +177,7 @@ describe('V2 rare deterministic integration revolutions', () => {
       territoryId: luxTerritory,
       playerId: lux,
     });
-    expect(state.events.at(-1)?.message).toMatch(/2026 sovereignty/i);
+    expect(state.events.at(-1)?.message).toMatch(/restored its sovereignty/i);
     expect(processTerritoryIntegrationRevolutionsV2(state, WORLD_CONTENT_V2)).toEqual([]);
     assertInvariantsV2(state, WORLD_CONTENT_V2);
   });

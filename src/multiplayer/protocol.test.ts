@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { SaveGameV2 } from '../sim/v2/persistence';
 import { V2_RULES_VERSION } from '../sim/v2/balance';
+import { normalizeScenarioConfigV2 } from '../sim/v2/scenarios';
 import { nationIdV2, type ResearchAllocationsV2 } from '../sim/v2/types';
 import {
   MULTIPLAYER_PROTOCOL_VERSION,
@@ -20,6 +21,7 @@ import {
 } from './protocol';
 
 const RULES_VERSION = V2_RULES_VERSION;
+const STANDARD_SCENARIO = normalizeScenarioConfigV2({ mode: 'standard-2026', seed: 12_345 });
 
 const allocations: ResearchAllocationsV2 = {
   'population-recruitment': 10,
@@ -52,11 +54,16 @@ function snapshotWithExtraPayload(payload: string): SnapshotMessage {
 }
 
 describe('multiplayer protocol', () => {
+  it('uses multiplayer protocol version 2 for scenario-aware rooms', () => {
+    expect(MULTIPLAYER_PROTOCOL_VERSION).toBe(2);
+  });
+
   it('round-trips typed lobby and unicode player data', () => {
     const message: MultiplayerProtocolMessage = {
       type: 'lobby-state',
       revision: 7,
       hostPeerId: 'host_12345678',
+      scenario: STANDARD_SCENARIO,
       started: false,
       players: [
         {
@@ -77,6 +84,43 @@ describe('multiplayer protocol', () => {
     };
 
     expect(decodeProtocolMessage(encodeProtocolMessage(message))).toEqual(message);
+  });
+
+  it('strictly validates scenario state and scenario-change actions', () => {
+    const randomScenario = normalizeScenarioConfigV2({ mode: 'random-world', seed: 987_654_321 });
+    expect(validateProtocolMessage({
+      type: 'lobby-action',
+      revision: 4,
+      action: { type: 'set-scenario', scenario: randomScenario },
+    })).toEqual({
+      type: 'lobby-action',
+      revision: 4,
+      action: { type: 'set-scenario', scenario: randomScenario },
+    });
+    expect(() => validateProtocolMessage({
+      type: 'lobby-action',
+      revision: 4,
+      action: { type: 'set-scenario', scenario: { ...randomScenario, extra: true } },
+    })).toThrow(/exactly mode, seed and version/i);
+    expect(() => validateProtocolMessage({
+      type: 'lobby-action',
+      revision: 4,
+      action: { type: 'set-scenario', scenario: { ...randomScenario, seed: 0 } },
+    })).toThrow(/seed must be an integer/i);
+    expect(() => validateProtocolMessage({
+      type: 'lobby-action',
+      revision: 4,
+      action: { type: 'set-scenario', scenario: { ...randomScenario, version: 999 } },
+    })).toThrow(/unsupported random-world scenario version/i);
+    expect(() => validateProtocolMessage({
+      type: 'lobby-state',
+      revision: 4,
+      hostPeerId: 'host_12345678',
+      started: false,
+      players: [{
+        peerId: 'host_12345678', displayName: 'Host', countryId: null, ready: false, connected: true,
+      }],
+    })).toThrow(/message\.scenario/i);
   });
 
   it('validates all research branches inside a client command', () => {
@@ -173,6 +217,7 @@ describe('multiplayer protocol', () => {
       type: 'lobby-state',
       revision: 1,
       hostPeerId: 'host_12345678',
+      scenario: STANDARD_SCENARIO,
       started: false,
       players: [
         { peerId: 'host_12345678', displayName: 'Host', countryId: 'BEL', ready: true, connected: true },

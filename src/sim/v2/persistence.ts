@@ -20,7 +20,13 @@ import {
   territoryIntegrationDurationWeeksV2,
 } from './integration';
 import { assertInvariantsV2 } from './invariants';
+import {
+  synchronizeOpeningArmyHumanRosterV2,
+  trackExistingOpeningArmyHumanRosterV2,
+} from './nationState';
+import { contentVersionForWorldContentV2 } from './scenarios';
 import { selectFoodDomesticCapacityTargetV2 } from './selectors';
+import { registerTraitContentV2 } from './traits';
 import type {
   AiEscalationStateV2,
   AllianceOfferV2,
@@ -76,6 +82,10 @@ const LEGACY_RULES_VERSION_V20_RESEARCH = 'frontier-command-v2.56-research-expan
 const LEGACY_RULES_VERSION_V21 = 'frontier-command-v2.57-performance-multiplayer';
 /** Last authenticated schema-22 release before the V2.60 rule rebalance. */
 const LEGACY_RULES_VERSION_V22 = 'frontier-command-v2.59-country-traits';
+/** Last authenticated schema-22 release before Random World and opening human forces. */
+const LEGACY_RULES_VERSION_V22_PRE_RANDOM = 'frontier-command-v2.60-revolutions-debt';
+/** Random World release whose boosted human armies did not yet track expiry. */
+const LEGACY_RULES_VERSION_V22_RANDOM = 'frontier-command-v2.61-random-world';
 const LEGACY_CONTENT_VERSION_V16 = 'natural-earth-countries-2026-v6-naval';
 const LEGACY_CONTENT_VERSION_V17 = 'natural-earth-countries-2026-v7-greenland';
 const LEGACY_BOT_MANPOWER_PER_UNIT = 0.10;
@@ -109,9 +119,10 @@ interface LegacyArmyV17 extends LegacyArmyV14 {
   baseDefense: number;
 }
 
-type LegacyNationV19 = Omit<NationStateV2, 'trainedReserves'> & { combatExperience: number };
-type LegacyNationV18 = Omit<NationStateV2, 'domesticFoodCapacity' | 'trainedReserves'> & { combatExperience: number };
-type LegacyNationV17 = Omit<NationStateV2, 'domesticFoodCapacity' | 'trainedReserves'>;
+type LegacyNationV21 = Omit<NationStateV2, 'openingArmyBonus'>;
+type LegacyNationV19 = Omit<NationStateV2, 'openingArmyBonus' | 'trainedReserves'> & { combatExperience: number };
+type LegacyNationV18 = Omit<NationStateV2, 'domesticFoodCapacity' | 'openingArmyBonus' | 'trainedReserves'> & { combatExperience: number };
+type LegacyNationV17 = Omit<NationStateV2, 'domesticFoodCapacity' | 'openingArmyBonus' | 'trainedReserves'>;
 type LegacyNationV15 = Omit<LegacyNationV17, 'manualActionUses'>;
 type LegacyNationV13 = LegacyNationV15 & { battleBots: LegacyBattleBotProgramV13 };
 interface LegacyControlStateV2 {
@@ -130,7 +141,7 @@ type LegacyTerritoryV18 = Omit<TerritoryStateV2, 'integrationProgram'> & {
   control?: LegacyControlStateV2;
 };
 
-type LegacyNationV20 = NationStateV2 & {
+type LegacyNationV20 = Omit<NationStateV2, 'openingArmyBonus'> & {
   research: NationStateV2['research'] & {
     effectLevels: NationStateV2['research']['effectLevels'] & { control?: number };
   };
@@ -142,9 +153,10 @@ type LegacyPeaceOfferV20 = Omit<PeaceOfferV2, 'settlement'> & {
 };
 type LegacyWarStateV21 = Omit<WarStateV2, 'revenge'>;
 interface LegacySaveGameV21 extends Omit<SaveGameV2,
-  'schemaVersion' | 'rulesVersion' | 'alliances' | 'allianceOffers' | 'wars'> {
+  'schemaVersion' | 'rulesVersion' | 'alliances' | 'allianceOffers' | 'players' | 'wars'> {
   schemaVersion: 21;
   rulesVersion: typeof LEGACY_RULES_VERSION_V21;
+  players: Record<PlayerId, LegacyNationV21>;
   wars: LegacyWarStateV21[];
 }
 interface LegacySaveGameV20 extends Omit<LegacySaveGameV21,
@@ -336,7 +348,12 @@ export function createSaveV2(state: WorldStateV2, content: WorldContentV2): Save
     actionSequence: state.actionSequence,
     humanPlayerId: state.humanPlayerId,
     humanPlayerIds: [...state.humanPlayerIds].sort((left, right) => left.localeCompare(right)),
-    players: sortedRecord(state.players) as Record<PlayerId, NationStateV2>,
+    players: Object.fromEntries((Object.entries(state.players) as Array<[PlayerId, NationStateV2]>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([id, nation]) => [id, {
+        ...nation,
+        openingArmyBonus: nation.openingArmyBonus ? { ...nation.openingArmyBonus } : null,
+      }])) as Record<PlayerId, NationStateV2>,
     territories: sortedRecord(state.territories) as Record<TerritoryId, TerritoryStateV2>,
     wars: [...state.wars]
       .sort((a, b) => a.id.localeCompare(b.id))
@@ -757,6 +774,7 @@ function legacyTerritoryFromCurrentV2(territory: TerritoryStateV2): LegacyTerrit
 function legacyNationFromCurrentV2(nation: NationStateV2): LegacyNationV17 {
   const {
     domesticFoodCapacity: _domesticFoodCapacity,
+    openingArmyBonus: _openingArmyBonus,
     trainedReserves: _trainedReserves,
     ...legacy
   } = nation;
@@ -917,6 +935,7 @@ function migrateLegacyStateV17(
       manualActionUses: { ...nation.manualActionUses },
       propagandaProgram: nation.propagandaProgram ? { ...nation.propagandaProgram } : null,
       domesticFoodCapacity: 0,
+      openingArmyBonus: null,
       trainedReserves: 0,
     }]
   ))) as Record<PlayerId, NationStateV2>;
@@ -1005,6 +1024,13 @@ function currentStateFromSave(
   const players = Object.fromEntries(Object.entries(save.players).map(([rawId, nation]) => {
     const playerId = rawId as PlayerId;
     const serializedCapacity = (nation as { domesticFoodCapacity?: number }).domesticFoodCapacity;
+    const hasOpeningArmyBonus = Object.prototype.hasOwnProperty.call(nation, 'openingArmyBonus');
+    const serializedOpeningArmyBonus = (nation as { openingArmyBonus?: unknown }).openingArmyBonus;
+    const clonedOpeningArmyBonus = serializedOpeningArmyBonus
+      && typeof serializedOpeningArmyBonus === 'object'
+      && !Array.isArray(serializedOpeningArmyBonus)
+      ? { ...serializedOpeningArmyBonus }
+      : serializedOpeningArmyBonus;
     const serializedNation = nation as NationStateV2 & { combatExperience?: number };
     const canonicalNation: NationStateV2 = retireLegacyCombatExperience
       ? (({ combatExperience: _retiredCombatExperience, ...rest }) => ({
@@ -1026,6 +1052,11 @@ function currentStateFromSave(
       },
       manualActionUses: { ...canonicalNation.manualActionUses },
       propagandaProgram: canonicalNation.propagandaProgram ? { ...canonicalNation.propagandaProgram } : null,
+      ...(hasOpeningArmyBonus
+        ? { openingArmyBonus: clonedOpeningArmyBonus }
+        : save.rulesVersion === V2_RULES_VERSION
+          ? {}
+          : { openingArmyBonus: null }),
     }];
   })) as Record<PlayerId, NationStateV2>;
   const territories = Object.fromEntries(Object.entries(save.territories).map(([rawId, territory]) => {
@@ -1218,6 +1249,7 @@ export function loadSaveV2(
   input: string | SaveGameV2 | LegacySaveGameV21 | LegacySaveGameV20 | LegacySaveGameV19 | LegacySaveGameV18 | LegacySaveGameV17 | LegacySaveGameV16 | LegacySaveGameV15 | LegacySaveGameV14 | LegacySaveGameV13,
   content: WorldContentV2,
 ): WorldStateV2 {
+  registerTraitContentV2(content);
   const unknownSave = typeof input === 'string' ? JSON.parse(input) as unknown : input;
   if (!unknownSave || typeof unknownSave !== 'object' || Array.isArray(unknownSave)) {
     throw new Error('V2 save is not an object.');
@@ -1243,6 +1275,8 @@ export function loadSaveV2(
                 : LEGACY_RULES_VERSION_V13;
   const supportedRules = schemaVersion === 22
     ? parsed.rulesVersion === V2_RULES_VERSION
+      || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_RANDOM
+      || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_PRE_RANDOM
       || parsed.rulesVersion === LEGACY_RULES_VERSION_V22
     : schemaVersion === 21
       ? parsed.rulesVersion === LEGACY_RULES_VERSION_V21
@@ -1252,8 +1286,15 @@ export function loadSaveV2(
       || parsed.rulesVersion === LEGACY_RULES_VERSION_V20
     : parsed.rulesVersion === expectedRules;
   if (!supportedRules) throw new Error(`Unsupported V2 rulesVersion: ${String(parsed.rulesVersion)}.`);
-  const expectedContent = schemaVersion >= 17 ? V2_CONTENT_VERSION : LEGACY_CONTENT_VERSION_V16;
+  const expectedContent = schemaVersion === 22
+    ? contentVersionForWorldContentV2(content)
+    : schemaVersion >= 17 ? V2_CONTENT_VERSION : LEGACY_CONTENT_VERSION_V16;
   if (parsed.contentVersion !== expectedContent) throw new Error(`Unsupported V2 contentVersion: ${String(parsed.contentVersion)}.`);
+  if (schemaVersion === 22 && parsed.contentVersion !== V2_CONTENT_VERSION
+    && parsed.rulesVersion !== V2_RULES_VERSION
+    && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_RANDOM) {
+    throw new Error('Random World saves require the current rules version.');
+  }
   if (parsed.mapId !== V2_MAP_ID) throw new Error(`Unsupported V2 mapId: ${String(parsed.mapId)}.`);
   if (typeof parsed.canonicalStateHash !== 'string') throw new Error('V2 canonical hash is missing.');
 
@@ -1292,6 +1333,13 @@ export function loadSaveV2(
     // Capacity is derived, so preserving an obsolete stored value would make
     // an otherwise authentic save fail current invariants (notably Greenland).
     synchronizeArmyCapacityV2(state, content);
+    if (schemaVersion === 22 && state.tick === 0) {
+      if (parsed.rulesVersion === LEGACY_RULES_VERSION_V22_RANDOM) {
+        trackExistingOpeningArmyHumanRosterV2(state, content);
+      } else if (parsed.contentVersion === V2_CONTENT_VERSION) {
+        synchronizeOpeningArmyHumanRosterV2(state, content, [], state.humanPlayerIds);
+      }
+    }
   }
   // Normalize authenticated legacy/current saves at the load boundary. This
   // never mutates the caller's live state or changes the authenticated input.

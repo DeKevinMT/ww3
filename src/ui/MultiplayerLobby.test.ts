@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DirectHostMessageEvent } from '../multiplayer/directConnect';
 import { HostLobbyModel } from '../multiplayer/lobbyModel';
-import type { LobbyStateMessage, SnapshotMessage } from '../multiplayer/protocol';
+import type { LobbyStateMessage, SessionMessage, SnapshotMessage } from '../multiplayer/protocol';
+import { normalizeScenarioConfigV2, type ResolvedScenarioV2 } from '../sim/v2/scenarios';
 import { nationIdV2 } from '../sim/v2/types';
 import { WorldEngineV2 } from '../sim/v2/WorldEngineV2';
 import { MultiplayerLobby } from './MultiplayerLobby';
@@ -29,7 +30,7 @@ const openingMetrics = new IntroOpeningMetricsCacheV2().read(pickerEngine);
 
 interface LobbyInternals {
   launched: boolean;
-  mode: 'menu' | 'host' | 'guest';
+  mode: 'menu' | 'matchmaking' | 'host' | 'guest';
   root: FakeElement;
   host?: {
     hostPeerId: string;
@@ -43,10 +44,14 @@ interface LobbyInternals {
   };
   hostModel?: HostLobbyModel;
   lobby?: LobbyStateMessage;
+  resolvedScenario: ResolvedScenarioV2;
+  openingMetrics: ReturnType<IntroOpeningMetricsCacheV2['read']>;
   launchHost(): Promise<void>;
   onHostMessage(event: DirectHostMessageEvent): void;
-  onGuestMessage(message: SnapshotMessage): void;
+  onGuestMessage(message: SessionMessage): void;
   selectPreferredCountryIfAvailable(): void;
+  changeScenario(mode: 'standard-2026' | 'random-world', reroll?: boolean): void;
+  render(): void;
 }
 
 function readyLobby(): HostLobbyModel {
@@ -97,6 +102,9 @@ describe('multiplayer lobby launch recovery', () => {
     internals.lobby = model.snapshot();
     await internals.launchHost();
     expect(onHostLaunch).toHaveBeenCalledTimes(2);
+    expect(onHostLaunch).toHaveBeenLastCalledWith(expect.objectContaining({
+      scenario: firstStart.scenario,
+    }));
     expect(internals.launched).toBe(true);
     ui.destroy(false);
   });
@@ -120,6 +128,9 @@ describe('multiplayer lobby launch recovery', () => {
     internals.onGuestMessage(snapshot);
     await vi.waitFor(() => expect(onGuestLaunch).toHaveBeenCalledTimes(2));
 
+    expect(onGuestLaunch).toHaveBeenLastCalledWith(expect.objectContaining({
+      scenario: model.snapshot().scenario,
+    }));
     expect(internals.launched).toBe(true);
     ui.destroy(false);
   });
@@ -197,6 +208,7 @@ describe('multiplayer lobby launch recovery', () => {
       invitationId: 'invite-bob',
       message: {
         type: 'lobby-action',
+        revision: model.snapshot().revision,
         action: { type: 'select-country', countryId: nationIdV2('can') },
       },
     });
@@ -205,6 +217,91 @@ describe('multiplayer lobby launch recovery', () => {
       .toMatchObject({ displayName: 'Bob', countryId: nationIdV2('can') });
     expect(internals.root.innerHTML).toContain('Bob');
     expect(internals.root.innerHTML).toContain('Canada');
+
+    const acceptedRevision = model.snapshot().revision;
+    internals.onHostMessage({
+      peerId: 'guest',
+      invitationId: 'invite-bob',
+      message: {
+        type: 'lobby-action',
+        revision: acceptedRevision - 1,
+        action: { type: 'clear-country' },
+      },
+    });
+    expect(model.snapshot().players.find((player) => player.peerId === 'guest')?.countryId)
+      .toBe(nationIdV2('can'));
+    ui.destroy(false);
+  });
+
+  it('uses the host scenario content and renders it read-only for guests', () => {
+    const scenario = normalizeScenarioConfigV2({ mode: 'random-world', seed: 424_242 });
+    const ui = new MultiplayerLobby({
+      onClose: vi.fn(), onHostLaunch: vi.fn(), onGuestLaunch: vi.fn(), openingMetrics,
+      scenarioConfig: scenario,
+    });
+    const internals = ui as unknown as LobbyInternals;
+    const model = new HostLobbyModel('host', 'Alice', scenario);
+    internals.mode = 'guest';
+    internals.guest = { peerId: 'guest', hostName: 'Alice', state: 'connected' };
+    model.connect('guest', 'Bob');
+
+    internals.onGuestMessage(model.snapshot());
+
+    expect(internals.resolvedScenario.config).toEqual(scenario);
+    expect(internals.resolvedScenario.content.metadata?.scenarioId).toBe('random-world');
+    expect(internals.openingMetrics.byNation.get(nationIdV2('usa'))?.economyView.population)
+      .toBeCloseTo(internals.resolvedScenario.content.nations[nationIdV2('usa')]!.real.population, 6);
+    expect(internals.root.innerHTML).toContain('RANDOM WORLD');
+    expect(internals.root.innerHTML).toContain('424242');
+    expect(internals.root.innerHTML).toContain('data-mp-action="scenario-random" disabled');
+    expect(internals.root.innerHTML).not.toContain('data-mp-action="scenario-reroll"');
+    ui.destroy(false);
+  });
+
+  it('lets the host reroll Random World and publishes the exact new seed', () => {
+    const scenario = normalizeScenarioConfigV2({ mode: 'random-world', seed: 111 });
+    vi.stubGlobal('crypto', {
+      getRandomValues: (values: Uint32Array) => {
+        values[0] = 222;
+        return values;
+      },
+    });
+    const ui = new MultiplayerLobby({
+      onClose: vi.fn(), onHostLaunch: vi.fn(), onGuestLaunch: vi.fn(), openingMetrics,
+      scenarioConfig: scenario,
+    });
+    const internals = ui as unknown as LobbyInternals;
+    const model = new HostLobbyModel('host', 'Alice', scenario);
+    internals.mode = 'host';
+    internals.host = { hostPeerId: 'host', roomId: 'room', broadcast: vi.fn() };
+    internals.hostModel = model;
+    internals.lobby = model.snapshot();
+
+    internals.changeScenario('random-world', true);
+
+    expect(internals.lobby?.scenario).toEqual(normalizeScenarioConfigV2({
+      mode: 'random-world', seed: 222,
+    }));
+    expect(internals.resolvedScenario.config).toEqual(internals.lobby?.scenario);
+    expect(internals.root.innerHTML).toContain('data-mp-action="scenario-reroll"');
+    ui.destroy(false);
+  });
+
+  it('keeps the constrained country picker layout after matchmaking elects a host', () => {
+    const ui = new MultiplayerLobby({
+      onClose: vi.fn(), onHostLaunch: vi.fn(), onGuestLaunch: vi.fn(), openingMetrics,
+    });
+    const internals = ui as unknown as LobbyInternals;
+    const model = new HostLobbyModel('host', 'Alice');
+    internals.mode = 'matchmaking';
+    internals.host = { hostPeerId: 'host', roomId: 'room', broadcast: vi.fn() };
+    internals.hostModel = model;
+    internals.lobby = model.snapshot();
+
+    internals.render();
+
+    expect(internals.root.innerHTML).toContain('multiplayer-lobby-card has-country-picker');
+    expect(internals.root.innerHTML).toContain('country-select--lobby');
     ui.destroy(false);
   });
 });

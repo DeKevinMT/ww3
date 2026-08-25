@@ -10,6 +10,7 @@ import {
   territoryIntegrationDurationWeeksV2,
 } from './integration';
 import { canonicalStateHashV2, createSaveV2, loadSaveV2 } from './persistence';
+import { synchronizeOpeningArmyHumanRosterV2 } from './nationState';
 import {
   invalidateTerritoryIndexV2,
   selectFoodDomesticCapacityTargetV2,
@@ -21,11 +22,16 @@ const LEGACY_CONTENT_VERSION_V16 = 'natural-earth-countries-2026-v6-naval';
 function removeSchema22Fields(save: Record<string, any>): void {
   delete save.alliances;
   delete save.allianceOffers;
+  for (const nation of Object.values(save.players) as Array<Record<string, any>>) {
+    delete nation.openingArmyBonus;
+  }
   for (const war of save.wars as Array<Record<string, any>>) delete war.revenge;
 }
 
 function legacySaveV16(seed: number): Record<string, any> {
-  const current = structuredClone(createSaveV2(createWorldStateV2(seed), WORLD_CONTENT_V2)) as Record<string, any>;
+  const state = createWorldStateV2(seed);
+  synchronizeOpeningArmyHumanRosterV2(state, WORLD_CONTENT_V2, state.humanPlayerIds, []);
+  const current = structuredClone(createSaveV2(state, WORLD_CONTENT_V2)) as Record<string, any>;
   removeSchema22Fields(current);
   delete current.humanPlayerIds;
   current.schemaVersion = 16;
@@ -65,7 +71,9 @@ function legacySaveV16(seed: number): Record<string, any> {
 }
 
 function legacySaveV17(seed: number): Record<string, any> {
-  const current = structuredClone(createSaveV2(createWorldStateV2(seed), WORLD_CONTENT_V2)) as Record<string, any>;
+  const state = createWorldStateV2(seed);
+  synchronizeOpeningArmyHumanRosterV2(state, WORLD_CONTENT_V2, state.humanPlayerIds, []);
+  const current = structuredClone(createSaveV2(state, WORLD_CONTENT_V2)) as Record<string, any>;
   removeSchema22Fields(current);
   delete current.humanPlayerIds;
   current.schemaVersion = 17;
@@ -86,7 +94,9 @@ function legacySaveV17(seed: number): Record<string, any> {
 }
 
 function legacySaveV19(seed: number): Record<string, any> {
-  const current = structuredClone(createSaveV2(createWorldStateV2(seed), WORLD_CONTENT_V2)) as Record<string, any>;
+  const state = createWorldStateV2(seed);
+  synchronizeOpeningArmyHumanRosterV2(state, WORLD_CONTENT_V2, state.humanPlayerIds, []);
+  const current = structuredClone(createSaveV2(state, WORLD_CONTENT_V2)) as Record<string, any>;
   removeSchema22Fields(current);
   delete current.humanPlayerIds;
   current.schemaVersion = 19;
@@ -159,9 +169,13 @@ function legacySaveV14(): Record<string, any> {
 describe('V2 legacy save migration', () => {
   it('authenticates schema-22 V2.59 saves before upgrading their rules version', () => {
     const state = createWorldStateV2(8_590);
+    synchronizeOpeningArmyHumanRosterV2(state, WORLD_CONTENT_V2, state.humanPlayerIds, []);
     state.tick = 37;
     const legacy = structuredClone(createSaveV2(state, WORLD_CONTENT_V2)) as Record<string, any>;
     legacy.rulesVersion = 'frontier-command-v2.59-country-traits';
+    for (const nation of Object.values(legacy.players) as Array<Record<string, any>>) {
+      delete nation.openingArmyBonus;
+    }
     legacy.canonicalStateHash = canonicalStateHashV2(legacy);
 
     const loaded = loadSaveV2(legacy as never, WORLD_CONTENT_V2);
@@ -175,11 +189,15 @@ describe('V2 legacy save migration', () => {
     const greenland = nationIdV2('grl');
     const greenlandTerritory = territoryIdV2('grl');
     const state = createWorldStateV2(8_591);
+    synchronizeOpeningArmyHumanRosterV2(state, WORLD_CONTENT_V2, state.humanPlayerIds, []);
     state.humanPlayerId = greenland;
     state.humanPlayerIds = [greenland];
     synchronizeArmyCapacityV2(state, WORLD_CONTENT_V2);
     const legacy = structuredClone(createSaveV2(state, WORLD_CONTENT_V2)) as Record<string, any>;
     legacy.rulesVersion = 'frontier-command-v2.59-country-traits';
+    for (const nation of Object.values(legacy.players) as Array<Record<string, any>>) {
+      delete nation.openingArmyBonus;
+    }
     const obsoleteCapacity = legacy.territories[greenlandTerritory].army.manpower;
     legacy.territories[greenlandTerritory].army.capacity = obsoleteCapacity;
     legacy.canonicalStateHash = canonicalStateHashV2(legacy);

@@ -3,7 +3,6 @@ import { WorldEngineV2 } from './WorldEngineV2';
 import {
   CONQUEST_CAPTURE_GUARD_MAX_TRANSFER_SHARE,
   DEFENDER_POSITION_MULTIPLIER,
-  QUICK_CONQUEST_MIN_ATTACKER_LOSS_SHARE,
   TERRAIN_DEFENSE_MODIFIER,
   WAR_MOBILIZATION_TICKS,
 } from './balance';
@@ -269,10 +268,9 @@ describe('V2 combat, capture and absorption', () => {
 
     expect(event.conquered).toBe(true);
     expect(target.owner).toBe(bel);
-    expect(event.attackerLosses).toBeCloseTo(
-      beforeSourceManpower * QUICK_CONQUEST_MIN_ATTACKER_LOSS_SHARE,
-      6,
-    );
+    // Declaration pays the one-percent opening loss once at war creation;
+    // direct conquest resolution must not charge that cost a second time.
+    expect(event.attackerLosses).toBe(0);
     expect(event.capturedPopulation).toBeCloseTo(beforePopulation - event.populationLoss, 5);
     expect(event.capturedEconomy).toBeCloseTo(beforeEconomy - event.economyLoss, 5);
     expect(target.population).toBeCloseTo(event.capturedPopulation, 8);

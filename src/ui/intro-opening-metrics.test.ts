@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { WorldEngineV2 } from '../sim/v2/WorldEngineV2';
 import { WORLD_CONTENT_V2 } from '../sim/v2/content';
+import { humanStartingArmyMultiplierForContentV2 } from '../sim/v2/traits';
 import { nationIdV2 } from '../sim/v2/types';
 import {
   compareIntroNationMetricsV2,
@@ -98,13 +99,18 @@ describe('intro opening metrics cache', () => {
     expect(preview!.army).toEqual(baselineArmy);
     expect(preview!.combatPower).toBe(baselinePower.byNation.get(greenland));
     expect(opening.ranking.map((entry) => entry.player.id)).toEqual(
-      engine.globalRanking(baselinePower).map((entry) => entry.player.id),
+      engine.openingCandidatePreviewSnapshot().ranking.map((entry) => entry.player.id),
     );
 
     expect(engine.chooseCountry(greenland)).toEqual({ accepted: true });
     engine.stopClock();
     const actualArmy = engine.armyStrength(greenland);
     expect(actualArmy.capacity).toBeGreaterThan(preview!.army.capacity);
-    expect(engine.currentPower(greenland)).toBe(preview!.combatPower);
+    expect(actualArmy.deployed).toBeCloseTo(
+      preview!.army.deployed
+        * humanStartingArmyMultiplierForContentV2(WORLD_CONTENT_V2, greenland),
+      6,
+    );
+    expect(engine.currentPower(greenland)).toBeGreaterThan(preview!.combatPower);
   });
 });

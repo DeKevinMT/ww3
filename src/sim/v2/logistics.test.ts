@@ -185,6 +185,7 @@ describe('route-aware empire logistics', () => {
     const frontier = state.territories[frontierId]!;
     capital.army.manpower = 0;
     frontier.army.manpower = 0;
+    state.players[bel]!.openingArmyBonus = null;
     relay.army.manpower = stateTerritoryArmySupportCeilingV2(
       state, WORLD_CONTENT_V2, relayId, bel,
     );

@@ -1,4 +1,5 @@
 import type { SaveGameV2 } from '../sim/v2/persistence';
+import { normalizeScenarioConfigV2, type ScenarioConfigV2 } from '../sim/v2/scenarios';
 import type {
   PlayerId,
   ResearchBranchV2,
@@ -6,7 +7,7 @@ import type {
   WorldSpeedV2,
 } from '../sim/v2/types';
 
-export const MULTIPLAYER_PROTOCOL_VERSION = 1 as const;
+export const MULTIPLAYER_PROTOCOL_VERSION = 2 as const;
 export const MIN_MULTIPLAYER_PLAYERS = 2;
 export const MAX_MULTIPLAYER_PLAYERS = 8;
 export const MAX_PROTOCOL_MESSAGE_BYTES = 4 * 1024 * 1024;
@@ -66,6 +67,7 @@ export interface LobbyPlayer {
 
 export type LobbyAction =
   | { type: 'set-name'; displayName: string }
+  | { type: 'set-scenario'; scenario: ScenarioConfigV2 }
   | { type: 'select-country'; countryId: PlayerId }
   | { type: 'clear-country' }
   | { type: 'set-ready'; ready: boolean }
@@ -110,6 +112,7 @@ export interface LobbyStateMessage {
   type: 'lobby-state';
   revision: number;
   hostPeerId: string;
+  scenario: ScenarioConfigV2;
   started: boolean;
   players: LobbyPlayer[];
 }
@@ -250,6 +253,27 @@ function requireBoolean(value: unknown, label: string): boolean {
   return value;
 }
 
+function requireScenarioConfig(value: unknown, label: string): ScenarioConfigV2 {
+  const scenario = requireRecord(value, label);
+  const expectedKeys = ['mode', 'seed', 'version'];
+  const keys = Object.keys(scenario).sort((left, right) => left.localeCompare(right, 'en'));
+  if (keys.length !== expectedKeys.length || keys.some((key, index) => key !== expectedKeys[index])) {
+    fail(`${label} must contain exactly mode, seed and version.`);
+  }
+  if (scenario.mode !== 'standard-2026' && scenario.mode !== 'random-world') {
+    fail(`${label}.mode is not supported.`);
+  }
+  const version = requireInteger(scenario.version, `${label}.version`, 1, 1_000);
+  const seed = requireInteger(scenario.seed, `${label}.seed`, 1, 0xffff_ffff);
+  try {
+    const normalized = normalizeScenarioConfigV2({ mode: scenario.mode, version, seed });
+    if (normalized.seed !== seed) fail(`${label}.seed is not canonical.`);
+    return normalized;
+  } catch (error) {
+    fail(error instanceof Error ? `${label} is invalid: ${error.message}` : `${label} is invalid.`);
+  }
+}
+
 function requireHash(value: unknown, label: string): string {
   return requireString(value, label, 128);
 }
@@ -381,6 +405,8 @@ function validateLobbyAction(value: unknown): LobbyAction {
   switch (type) {
     case 'set-name':
       return { type, displayName: requireString(action.displayName, 'action.displayName', MAX_NAME_LENGTH) };
+    case 'set-scenario':
+      return { type, scenario: requireScenarioConfig(action.scenario, 'action.scenario') };
     case 'select-country':
       return { type, countryId: requirePlayerId(action.countryId, 'action.countryId') };
     case 'clear-country':
@@ -462,6 +488,7 @@ export function validateProtocolMessage(value: unknown): MultiplayerProtocolMess
         type,
         revision: requireInteger(message.revision, 'message.revision'),
         hostPeerId: requireString(message.hostPeerId, 'message.hostPeerId'),
+        scenario: requireScenarioConfig(message.scenario, 'message.scenario'),
         started: requireBoolean(message.started, 'message.started'),
         players,
       };

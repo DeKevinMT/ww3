@@ -1,3 +1,4 @@
+import type { WorldContentV2 } from './content';
 import type { PlayerId } from './types';
 
 /**
@@ -36,16 +37,26 @@ export function strategicInterestScoreV2(attackerId: PlayerId, targetId: PlayerI
   return STRATEGIC_INTERESTS[attackerId]?.[targetId] ?? 0;
 }
 
-export function strategicAlignmentScoreV2(leftId: PlayerId, rightId: PlayerId): number {
+export function strategicAlignmentScoreV2(
+  leftId: PlayerId,
+  rightId: PlayerId,
+  content?: WorldContentV2,
+): number {
+  if (content && content.metadata?.geopoliticsProfile !== 'standard-2026') return 0;
   const direct = STRATEGIC_ALIGNMENTS[leftId]?.[rightId];
   if (direct !== undefined) return direct;
   return STRATEGIC_ALIGNMENTS[rightId]?.[leftId] ?? 0;
 }
 
 /** Target-score guidance combines directional interests with soft alliance friction. */
-export function geopoliticalTargetGuidanceV2(attackerId: PlayerId, targetId: PlayerId): number {
+export function geopoliticalTargetGuidanceV2(
+  attackerId: PlayerId,
+  targetId: PlayerId,
+  content?: WorldContentV2,
+): number {
+  if (content && content.metadata?.geopoliticsProfile !== 'standard-2026') return 0;
   const interest = strategicInterestScoreV2(attackerId, targetId);
-  const alignment = strategicAlignmentScoreV2(attackerId, targetId);
+  const alignment = strategicAlignmentScoreV2(attackerId, targetId, content);
   return interest - 2.0 * Math.max(0, alignment) + 0.40 * Math.max(0, -alignment);
 }
 

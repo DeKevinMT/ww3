@@ -27,6 +27,7 @@ import {
   NATIONAL_QUALITY_COMBAT_SPAN,
   NATIONAL_QUALITY_GDP_WEIGHT,
   NATIONAL_QUALITY_IQ_WEIGHT,
+  V2_CONTENT_VERSION,
   clamp,
   round,
 } from './balance';
@@ -113,7 +114,26 @@ export interface TerritoryContentV2 {
   connections: readonly TerritoryConnectionV2[];
 }
 
+export type ScenarioIdV2 = 'standard-2026' | 'random-world';
+export type OpeningProfileV2 = 'standard-2026' | 'none';
+export type GeopoliticsProfileV2 = 'standard-2026' | 'neutral';
+export type ReserveProfileV2 = 'reported-2026' | 'generated';
+
+/** Immutable campaign identity and policy; Random World saves rebuild from this identity. */
+export interface WorldScenarioMetadataV2 {
+  scenarioId: ScenarioIdV2;
+  scenarioVersion: number;
+  contentVersion: string;
+  generatedFromSeed?: number;
+  startYear: number;
+  openingProfile: OpeningProfileV2;
+  geopoliticsProfile: GeopoliticsProfileV2;
+  reserveProfile: ReserveProfileV2;
+}
+
 export interface WorldContentV2 {
+  /** Optional only for small test/custom worlds outside the scenario resolver. */
+  metadata?: Readonly<WorldScenarioMetadataV2>;
   nationIds: readonly PlayerId[];
   territoryIds: readonly TerritoryId[];
   nations: Readonly<Record<PlayerId, NationContentV2>>;
@@ -878,6 +898,15 @@ const territories = Object.fromEntries(TERRITORIES.map((territory) => {
 })) as Record<TerritoryId, TerritoryContentV2>;
 
 export const WORLD_CONTENT_V2: WorldContentV2 = {
+  metadata: Object.freeze({
+    scenarioId: 'standard-2026',
+    scenarioVersion: 1,
+    contentVersion: V2_CONTENT_VERSION,
+    startYear: 2026,
+    openingProfile: 'standard-2026',
+    geopoliticsProfile: 'standard-2026',
+    reserveProfile: 'reported-2026',
+  }),
   nationIds: COUNTRIES.map((country) => nationIdV2(country.id)),
   territoryIds: TERRITORIES.map((territory) => territoryIdV2(territory.id)),
   nations,

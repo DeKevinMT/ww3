@@ -467,7 +467,9 @@ describe('V2 country traits in the canonical war runtime', () => {
       captureState, WORLD_CONTENT_V2, activeCaptureWar, captureOperation,
     )!;
     expect(capture.conquered).toBe(true);
-    expect(capture.attackerLosses).toBeGreaterThan(0);
+    // The one-percent opening loss is paid and recorded when war is declared;
+    // a later unopposed capture must not charge that cost a second time.
+    expect(capture.attackerLosses).toBe(0);
     const captureAttackerCapacity = selectTotalManpowerV2(captureState, russia).capacity;
     expect(captureState.players[russia]!.warFatigue).toBeCloseTo(
       (0.5 + 0.08 + 4 * capture.attackerLosses / captureAttackerCapacity) * countryTraitFactorV2(

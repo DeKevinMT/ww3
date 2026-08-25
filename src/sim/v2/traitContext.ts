@@ -4,6 +4,7 @@ import type {
   TraitEvaluationContextV2,
   TraitWarRoleV2,
 } from './traits';
+import { humanCountryTraitMultiplierForContentVersionV2 } from './traits';
 import type {
   FrontOperationV2,
   PlayerId,
@@ -103,8 +104,12 @@ export function traitNationContextV2(
   const liveOperations = relevantWars.flatMap((war) => (
     playerWarOperationsV2(war, activePlayerId)
   ));
+  const humanControlled = isHumanPlayerV2(state, activePlayerId);
   return Object.freeze({
-    humanControlled: isHumanPlayerV2(state, activePlayerId),
+    humanControlled,
+    humanTraitMultiplier: humanControlled
+      ? humanCountryTraitMultiplierForContentVersionV2(activePlayerId, state.contentVersion)
+      : undefined,
     atWar: relevantWars.length > 0,
     treasury: player?.treasury,
     foodSecurity: player?.foodSecurity,

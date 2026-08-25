@@ -126,6 +126,17 @@ export interface ManualActionUsesV2 {
   propaganda: number;
 }
 
+/**
+ * The free human opening-force surplus. It is tracked separately from ordinary
+ * capacity so recruitment can never recreate it after losses or expiry.
+ */
+export interface OpeningArmyBonusStateV2 {
+  initialManpower: number;
+  remainingManpower: number;
+  startedTick: number;
+  expiresTick: number;
+}
+
 /** Exact canonical nation payload; identity and aggregates are derived. */
 export interface NationStateV2 {
   /** Empty until the player names the empire after its first conquest. */
@@ -149,6 +160,8 @@ export interface NationStateV2 {
   researchSurgeAvailableTick: number;
   propagandaAvailableTick: number;
   propagandaProgram: PropagandaProgramStateV2 | null;
+  /** Human-only free opening surplus, fading to zero over its fixed calendar. */
+  openingArmyBonus: OpeningArmyBonusStateV2 | null;
   warFatigue: number;
   capitalId: TerritoryId;
 }

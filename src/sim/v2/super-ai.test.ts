@@ -49,6 +49,7 @@ import {
   selectWeeklyFinanceBreakdownV2,
 } from './selectors';
 import { declareWarV2, warDeclarationStatusV2 } from './war';
+import { humanStartingArmyMultiplierV2 } from './traits';
 import { nationIdV2, territoryIdV2 } from './types';
 import { WorldEngineV2 } from './WorldEngineV2';
 
@@ -187,7 +188,7 @@ describe('V2 shared national AI', () => {
     expect(ready - strained).toBeGreaterThan(20);
   });
 
-  it('does not give the chosen country a hidden defensive combat advantage', () => {
+  it('shows the chosen country opening-force curve in the forecast without a hidden layer', () => {
     const ordinary = new WorldEngineV2(699);
     ordinary.stopClock();
     const defended = new WorldEngineV2(699);
@@ -197,13 +198,16 @@ describe('V2 shared national AI', () => {
     ordinary.chooseCountry(nationIdV2('usa'));
     defended.chooseCountry(ukraine);
 
+    const openingMultiplier = humanStartingArmyMultiplierV2(ukraine);
+    expect(openingMultiplier).toBeGreaterThan(1);
+    expect(openingMultiplier).toBeLessThan(1.1);
+    expect(defended.totalManpower(ukraine).deployed).toBeCloseTo(
+      ordinary.totalManpower(ukraine).deployed * openingMultiplier,
+      6,
+    );
     const ordinaryForecast = ordinary.warForecast(russia, ukraine);
     const defendedForecast = defended.warForecast(russia, ukraine);
-    expect(defendedForecast.winChance).toBe(ordinaryForecast.winChance);
-    expect(defendedForecast.estimatedWeeksMin).toBe(ordinaryForecast.estimatedWeeksMin);
-    expect(defendedForecast.estimatedWeeksMax).toBe(ordinaryForecast.estimatedWeeksMax);
-    expect(defendedForecast.projectedAttackerLosses)
-      .toBe(ordinaryForecast.projectedAttackerLosses);
+    expect(Math.abs(defendedForecast.winChance - ordinaryForecast.winChance)).toBeLessThan(1);
     expect(defendedForecast.projectedDefenderLosses)
       .toBe(ordinaryForecast.projectedDefenderLosses);
   });

@@ -4,7 +4,11 @@ import type {
   TerrainType,
   WarAccessV2,
 } from './types';
-import { OPENING_MILITARY_ORDER_2026_V2, WORLD_CONTENT_V2 } from './content';
+import {
+  OPENING_MILITARY_ORDER_2026_V2,
+  WORLD_CONTENT_V2,
+  type WorldContentV2,
+} from './content';
 
 /** Existing V2 outputs that a country trait is allowed to scale. */
 export const TRAIT_MODIFIER_KEYS_V2 = [
@@ -65,6 +69,8 @@ export type TraitWarRoleV2 = 'attacker' | 'defender';
 export interface TraitEvaluationContextV2 {
   /** Human seats amplify this same trait; they never add a second trait. */
   readonly humanControlled?: boolean;
+  /** Scenario-aware runtime override; omitted contexts retain Standard 2026 compatibility. */
+  readonly humanTraitMultiplier?: number;
   readonly atWar?: boolean;
   readonly role?: TraitWarRoleV2;
   readonly access?: WarAccessV2;
@@ -189,9 +195,76 @@ const openingMilitaryRankByPlayerIdV2 = Object.freeze(Object.fromEntries(
   OPENING_MILITARY_ORDER_V2.map((playerId, index) => [playerId, index + 1]),
 ) as Readonly<Record<string, number>>);
 
-export const HUMAN_TRAIT_MULTIPLIER_STRONGEST_V2 = 1.03;
-export const HUMAN_TRAIT_MULTIPLIER_WEAKEST_V2 = 20;
+export const HUMAN_TRAIT_MULTIPLIER_STRONGEST_V2 = 1;
+export const HUMAN_TRAIT_MULTIPLIER_WEAKEST_V2 = 2.5;
+export const HUMAN_STARTING_ARMY_MULTIPLIER_STRONGEST_V2 = 0.5;
+export const HUMAN_STARTING_ARMY_MULTIPLIER_WEAKEST_V2 = 12;
+export const HUMAN_MILITARY_RANK_CURVE_EXPONENT_V2 = 1;
 export const ABSOLUTE_UNDERDOG_ARMY_CAP_COUNT_V2 = 24;
+
+const HUMAN_STARTING_ARMY_CURVE_V2 = Object.freeze([
+  { rankShare: 0, multiplier: HUMAN_STARTING_ARMY_MULTIPLIER_STRONGEST_V2 },
+  { rankShare: 0.03, multiplier: 1 },
+  { rankShare: 0.25, multiplier: 1.10 },
+  { rankShare: 0.50, multiplier: 1.50 },
+  { rankShare: 0.55, multiplier: 2 },
+  { rankShare: 0.65, multiplier: 7.50 },
+  { rankShare: 0.75, multiplier: 9 },
+  { rankShare: 0.90, multiplier: 11 },
+  { rankShare: 1, multiplier: HUMAN_STARTING_ARMY_MULTIPLIER_WEAKEST_V2 },
+]);
+
+const openingMilitaryOrderCacheV2 = new WeakMap<WorldContentV2, readonly PlayerId[]>();
+const openingMilitaryRankRegistryV2 = new Map<string, ReadonlyMap<PlayerId, number>>();
+
+const rankMapForOrderV2 = (order: readonly PlayerId[]): ReadonlyMap<PlayerId, number> => (
+  new Map(order.map((playerId, index) => [playerId, index + 1]))
+);
+
+openingMilitaryRankRegistryV2.set(
+  WORLD_CONTENT_V2.metadata!.contentVersion,
+  rankMapForOrderV2(OPENING_MILITARY_ORDER_V2),
+);
+
+/** Standard keeps its authored ranking; generated scenarios rank their generated power. */
+export function openingMilitaryOrderForContentV2(content: WorldContentV2): readonly PlayerId[] {
+  if (content.metadata?.scenarioId === 'standard-2026') return OPENING_MILITARY_ORDER_V2;
+  const cached = openingMilitaryOrderCacheV2.get(content);
+  if (cached) return cached;
+  const order = Object.freeze([...content.nationIds].sort((left, right) => (
+    (content.nations[right]?.real.powerIndex ?? 0)
+      - (content.nations[left]?.real.powerIndex ?? 0)
+    || left.localeCompare(right)
+  )));
+  openingMilitaryOrderCacheV2.set(content, order);
+  return order;
+}
+
+export function openingMilitaryRankForContentV2(
+  content: WorldContentV2,
+  playerId: PlayerId | string,
+): number | undefined {
+  const id = String(playerId) as PlayerId;
+  const order = openingMilitaryOrderForContentV2(content);
+  const index = order.indexOf(id);
+  return index < 0 ? undefined : index + 1;
+}
+
+/** Registers only canonical scenario content, never ad-hoc fixture worlds. */
+export function registerTraitContentV2(content: WorldContentV2): void {
+  const version = content.metadata?.contentVersion;
+  if (!version) return;
+  const ranks = rankMapForOrderV2(openingMilitaryOrderForContentV2(content));
+  const existing = openingMilitaryRankRegistryV2.get(version);
+  if (existing) {
+    const order = content.nationIds;
+    if (order.some((id) => existing.get(id) !== ranks.get(id))) {
+      throw new Error(`Trait rank registry collision for content version ${version}.`);
+    }
+    return;
+  }
+  openingMilitaryRankRegistryV2.set(version, ranks);
+}
 
 const absoluteUnderdogArmyCapIdsV2 = new Set<PlayerId>(
   OPENING_MILITARY_ORDER_V2.slice(-ABSOLUTE_UNDERDOG_ARMY_CAP_COUNT_V2),
@@ -201,20 +274,89 @@ export const openingMilitaryRankV2 = (playerId: PlayerId | string): number | und
   openingMilitaryRankByPlayerIdV2[String(playerId)]
 );
 
+function humanMilitaryRankCurveV2(
+  playerId: PlayerId | string,
+  order: readonly PlayerId[],
+): number {
+  const index = order.indexOf(String(playerId) as PlayerId);
+  const rank = index < 0 ? undefined : index + 1;
+  if (!rank) return 0;
+  const span = Math.max(1, order.length - 1);
+  const normalizedRank = (rank - 1) / span;
+  // Trait and opening-army help use different endpoints, but share a linear
+  // rank factor. This separates the upper tiers early enough for countries
+  // such as the UK and Italy to differ visibly from the USA and China.
+  return normalizedRank ** HUMAN_MILITARY_RANK_CURVE_EXPONENT_V2;
+}
+
+function humanStartingArmyMultiplierFromRankFactorV2(rankFactor: number): number {
+  for (let index = 1; index < HUMAN_STARTING_ARMY_CURVE_V2.length; index += 1) {
+    const left = HUMAN_STARTING_ARMY_CURVE_V2[index - 1]!;
+    const right = HUMAN_STARTING_ARMY_CURVE_V2[index]!;
+    if (rankFactor > right.rankShare) continue;
+    const progress = Math.max(0, Math.min(1,
+      (rankFactor - left.rankShare) / Math.max(0.000001, right.rankShare - left.rankShare),
+    ));
+    const eased = progress * progress * (3 - 2 * progress);
+    return left.multiplier + (right.multiplier - left.multiplier) * eased;
+  }
+  return HUMAN_STARTING_ARMY_MULTIPLIER_WEAKEST_V2;
+}
+
 /**
  * Smooth, deterministic human boost based only on immutable opening military
  * rank. It scales each signed modifier away from neutral; it is never stored
  * as or combined with another country trait.
  */
 export function humanCountryTraitMultiplierV2(playerId: PlayerId | string): number {
-  const rank = openingMilitaryRankV2(playerId);
+  const smoothRank = humanMilitaryRankCurveV2(playerId, OPENING_MILITARY_ORDER_V2);
+  return HUMAN_TRAIT_MULTIPLIER_STRONGEST_V2
+    + (HUMAN_TRAIT_MULTIPLIER_WEAKEST_V2 - HUMAN_TRAIT_MULTIPLIER_STRONGEST_V2) * smoothRank;
+}
+
+/** Opening-only deployed-force help for a human seat; AI countries stay at 1x. */
+export function humanStartingArmyMultiplierV2(playerId: PlayerId | string): number {
+  const smoothRank = humanMilitaryRankCurveV2(playerId, OPENING_MILITARY_ORDER_V2);
+  return humanStartingArmyMultiplierFromRankFactorV2(smoothRank);
+}
+
+export function humanCountryTraitMultiplierForContentV2(
+  content: WorldContentV2,
+  playerId: PlayerId | string,
+): number {
+  const smoothRank = humanMilitaryRankCurveV2(
+    playerId,
+    openingMilitaryOrderForContentV2(content),
+  );
+  return HUMAN_TRAIT_MULTIPLIER_STRONGEST_V2
+    + (HUMAN_TRAIT_MULTIPLIER_WEAKEST_V2 - HUMAN_TRAIT_MULTIPLIER_STRONGEST_V2) * smoothRank;
+}
+
+export function humanStartingArmyMultiplierForContentV2(
+  content: WorldContentV2,
+  playerId: PlayerId | string,
+): number {
+  const smoothRank = humanMilitaryRankCurveV2(
+    playerId,
+    openingMilitaryOrderForContentV2(content),
+  );
+  return humanStartingArmyMultiplierFromRankFactorV2(smoothRank);
+}
+
+export function humanCountryTraitMultiplierForContentVersionV2(
+  playerId: PlayerId | string,
+  contentVersion: string,
+): number {
+  const ranks = openingMilitaryRankRegistryV2.get(contentVersion);
+  // Legacy saves predate scenario-specific rankings. Their country ids still
+  // use the authored Standard order, so falling back preserves their exact
+  // controller trait semantics while current Random worlds remain registered
+  // under their seed-bearing content identity.
+  if (!ranks) return humanCountryTraitMultiplierV2(playerId);
+  const rank = ranks.get(String(playerId) as PlayerId);
   if (!rank) return HUMAN_TRAIT_MULTIPLIER_STRONGEST_V2;
-  const span = Math.max(1, OPENING_MILITARY_ORDER_V2.length - 1);
-  const normalizedRank = (rank - 1) / span;
-  // Start slowly for majors, then rise progressively through the middle and
-  // weak tiers. The 2.35 curve reacts earlier than the former fourth-power tail
-  // without flattening the meaningful difference between majors and underdogs.
-  const smoothRank = normalizedRank ** 2.35;
+  const normalizedRank = (rank - 1) / Math.max(1, ranks.size - 1);
+  const smoothRank = normalizedRank ** HUMAN_MILITARY_RANK_CURVE_EXPONENT_V2;
   return HUMAN_TRAIT_MULTIPLIER_STRONGEST_V2
     + (HUMAN_TRAIT_MULTIPLIER_WEAKEST_V2 - HUMAN_TRAIT_MULTIPLIER_STRONGEST_V2) * smoothRank;
 }
@@ -705,7 +847,7 @@ interface EnglishTraitCopyV2 {
 
 /** Player-facing English identity copy; mechanics are rendered from modifiers. */
 const ENGLISH_TRAIT_COPY_V2: Readonly<Record<string, EnglishTraitCopyV2>> = Object.freeze({
-  usa: { name: 'Global Projection', description: 'Offsets the cost and supply burden of projecting the strongest opening military across oceans.' },
+  usa: { name: 'Global Projection', description: 'Offsets the cost and supply burden of projecting a globally deployable military across oceans.' },
   can: { name: 'Northern Supply Lines', description: 'Offsets long overseas routes with reliable supply and general defense.' },
   mex: { name: 'Federal Depth', description: 'Turns a large population into sustainable force capacity without over-amplifying a strong start.' },
   cub: { name: 'Island Mobilization', description: 'Offsets island isolation with portable defense, faster reserve deployment and cheaper naval operations.' },
@@ -784,7 +926,7 @@ const ENGLISH_TRAIT_COPY_V2: Readonly<Record<string, EnglishTraitCopyV2>> = Obje
   bwa: { name: 'Kalahari Mobilization', description: 'Turns a stable interior base into lasting force capacity, lower state costs and recovery.' },
   bfa: { name: 'Sahel Interior Line', description: 'Offsets limited active power with trained reserves, land supply and durable defense.' },
   bdi: { name: 'Compact Defensive Core', description: 'Offsets a small opening army by converting dense population into capacity, recruitment and defense.' },
-  caf: { name: 'Forest Redoubt', description: 'Offsets an extremely weak start with stronger survival and land-front supply.' },
+  caf: { name: 'Forest Redoubt', description: 'Offsets structural fragility with stronger survival and land-front supply.' },
   cog: { name: 'Green River Corridor', description: 'Offsets difficult rainforest expansion with supply, faster integration and recovery.' },
   cod: { name: 'Continental Rainforest Depth', description: 'Offsets administrative scale through defense, capacity and cheaper integration.' },
   dji: { name: 'Strait Junction', description: 'Offsets a minute army and remote targets with maximum naval reach and efficient taxation.' },
@@ -1486,6 +1628,17 @@ const clampFactor = (value: number, bounds: TraitFactorBoundsV2): number => (
   Math.min(bounds.maximum, Math.max(bounds.minimum, value))
 );
 
+function humanTraitMultiplierFromContextV2(
+  playerId: PlayerId | string,
+  context: TraitEvaluationContextV2,
+): number {
+  if (!context.humanControlled) return 1;
+  const override = context.humanTraitMultiplier;
+  return override !== undefined && Number.isFinite(override) && override >= 0
+    ? override
+    : humanCountryTraitMultiplierV2(playerId);
+}
+
 /**
  * Scales a fixed replacement away from its neutral source by the same human
  * multiplier as ordinary percentages. Callers that consume `replacement.to`
@@ -1498,7 +1651,7 @@ export function countryTraitReplacementValueV2(
 ): number | undefined {
   const replacement = entry.replacement;
   if (!replacement) return undefined;
-  const multiplier = context.humanControlled ? humanCountryTraitMultiplierV2(playerId) : 1;
+  const multiplier = humanTraitMultiplierFromContextV2(playerId, context);
   return Math.max(0, replacement.from
     + (replacement.to - replacement.from) * multiplier);
 }
@@ -1509,9 +1662,7 @@ export function countryTraitFactorV2(
   key: TraitModifierKeyV2,
   context: TraitEvaluationContextV2 = {},
 ): number {
-  const signedDistanceMultiplier = context.humanControlled
-    ? humanCountryTraitMultiplierV2(playerId)
-    : 1;
+  const signedDistanceMultiplier = humanTraitMultiplierFromContextV2(playerId, context);
   const factor = countryTraitModifiersV2(playerId, key)
     .filter((entry) => traitModifierAppliesV2(entry, context))
     .reduce((product, entry) => (

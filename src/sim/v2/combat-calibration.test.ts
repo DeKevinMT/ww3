@@ -14,6 +14,7 @@ import { createWorldStateV2 } from './bootstrap';
 import { synchronizeArmyCapacityV2 } from './capacity';
 import { WORLD_CONTENT_V2 } from './content';
 import { invalidateTerritoryIndexV2 } from './selectors';
+import { humanStartingArmyMultiplierV2 } from './traits';
 import { nationIdV2, territoryIdV2, type FrontOperationV2, type WarStateV2, type WorldStateV2 } from './types';
 import { WorldEngineV2 } from './WorldEngineV2';
 import {
@@ -303,7 +304,7 @@ describe('V2 coherent combat and forecast calibration', () => {
       state, WORLD_CONTENT_V2, bel, nld, belTerritory, nldTerritory, 'land', 1, 1,
     )!;
     expect(projected.defenderLosses).toBeGreaterThan(projected.attackerLosses);
-    expect(projected.attackerLosses).toBeLessThan(0.05 * projected.defenderStrength);
+    expect(projected.attackerLosses).toBeLessThan(0.10 * projected.defenderStrength);
     const event = resolveBattlePulseV2(state, WORLD_CONTENT_V2, war(state), operation())!;
     expect(event.defenderLosses).toBeGreaterThan(event.attackerLosses);
     expect(event.defenderLosses).toBeGreaterThan(0);
@@ -416,7 +417,7 @@ describe('V2 coherent combat and forecast calibration', () => {
     }
   }, 60_000);
 
-  it('keeps a stronger China forecast and campaign from being padded by Indian replenishment', () => {
+  it('keeps Indian replenishment finite against a player-scaled China opening', () => {
     const result = simulateWar(4_301, 'chn', 'chn', 'ind', 80);
     const midWar = result.engine.activeWarBetween('chn', 'ind');
     const indiaManpowerAtMidWar = result.engine.totalManpower('ind').deployed;
@@ -428,17 +429,20 @@ describe('V2 coherent combat and forecast calibration', () => {
       weeks += 1;
     }
 
-    expect(result.forecast.winChance).toBeGreaterThan(45);
+    expect(humanStartingArmyMultiplierV2(chn)).toBeLessThan(1);
+    expect(result.forecast.winChance).toBeGreaterThanOrEqual(30);
+    expect(result.forecast.winChance).toBeLessThan(45);
     expect(result.weeks).toBe(80);
     expect(result.defenderAlive).toBe(true);
     expect(midWar?.battles).toBeGreaterThan(30);
     expect(indiaManpowerAtMidWar).toBeGreaterThan(0);
-    expect(indiaManpowerAtMidWar).toBeLessThan(result.defenderManpowerStart);
     expect(indiaReservesAtMidWar).toBeLessThan(result.defenderReservesStart);
+    expect(indiaManpowerAtMidWar + indiaReservesAtMidWar).toBeLessThan(
+      result.defenderManpowerStart + result.defenderReservesStart,
+    );
     expect(indiaOwnerAtMidWar).toBe(ind);
-    expect(result.engine.activeWarBetween('chn', 'ind')).toBeUndefined();
-    expect(result.engine.territoriesOf('ind')).toHaveLength(0);
-    expect(weeks).toBeGreaterThan(80);
-    expect(weeks).toBeLessThanOrEqual(320);
+    expect(weeks).toBe(320);
+    expect(result.engine.activeWarBetween('chn', 'ind')).toBeDefined();
+    expect(result.engine.territoriesOf('ind')).toHaveLength(1);
   }, 120_000);
 });

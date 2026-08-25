@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { nationIdV2 } from '../sim/v2/types';
+import { normalizeScenarioConfigV2 } from '../sim/v2/scenarios';
 import { HostLobbyModel } from './lobbyModel';
 
 describe('Direct Connect lobby model', () => {
@@ -59,5 +60,39 @@ describe('Direct Connect lobby model', () => {
 
     expect(lobby.apply('host', { type: 'start' })).toEqual({ accepted: true });
     expect(lobby.snapshot()).toMatchObject({ started: true, revision: recovered.revision + 1 });
+  });
+
+  it('lets only the host change scenario and atomically clears every seat', () => {
+    const initial = normalizeScenarioConfigV2({ mode: 'standard-2026', seed: 101 });
+    const random = normalizeScenarioConfigV2({ mode: 'random-world', seed: 202 });
+    const lobby = new HostLobbyModel('host', 'Alice', initial);
+    lobby.connect('guest', 'Bob');
+    lobby.apply('host', { type: 'select-country', countryId: nationIdV2('bel') });
+    lobby.apply('guest', { type: 'select-country', countryId: nationIdV2('can') });
+    lobby.apply('host', { type: 'set-ready', ready: true });
+    lobby.apply('guest', { type: 'set-ready', ready: true });
+    const before = lobby.snapshot();
+
+    expect(lobby.apply('guest', { type: 'set-scenario', scenario: random }, before.revision).accepted).toBe(false);
+    expect(lobby.snapshot()).toEqual(before);
+    expect(lobby.apply('host', { type: 'set-scenario', scenario: random }, before.revision)).toEqual({ accepted: true });
+
+    const changed = lobby.snapshot();
+    expect(changed.scenario).toEqual(random);
+    expect(changed.revision).toBe(before.revision + 1);
+    expect(changed.players.every((player) => player.countryId === null && !player.ready)).toBe(true);
+  });
+
+  it('rejects stale revisioned actions without changing lobby state', () => {
+    const lobby = new HostLobbyModel('host', 'Alice');
+    lobby.connect('guest', 'Bob');
+    const revision = lobby.snapshot().revision;
+    expect(lobby.apply('guest', {
+      type: 'select-country', countryId: nationIdV2('can'),
+    }, revision)).toEqual({ accepted: true });
+    const current = lobby.snapshot();
+
+    expect(lobby.apply('guest', { type: 'set-ready', ready: true }, revision).accepted).toBe(false);
+    expect(lobby.snapshot()).toEqual(current);
   });
 });

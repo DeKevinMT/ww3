@@ -12,7 +12,12 @@ import { initialNationArmyCapacityBenchmarkV2 } from './capacity';
 import type { WorldContentV2 } from './content';
 import { calculateBlendedFiscalCapacityV2 } from './fiscal';
 import { initialTrainedReserveManpowerV2 } from './reserveForces';
-import { countryTraitFactorV2 } from './traits';
+import { OPENING_ARMY_BONUS_DURATION_TICKS_V2 } from './openingArmyBonus';
+import {
+  countryTraitFactorV2,
+  humanCountryTraitMultiplierForContentV2,
+  humanStartingArmyMultiplierForContentV2,
+} from './traits';
 import type { NationStateV2, PlayerId, WorldStateV2 } from './types';
 
 /** Canonical opening cash for one immutable 2026 identity and controller type. */
@@ -43,7 +48,12 @@ export function openingStartingTreasuryV2(
   );
   return round(
     Math.max(0.10, fiscalCapacity.weeklyTaxRevenue * startingCashWeeks)
-      * countryTraitFactorV2(id, 'starting-treasury', { humanControlled }),
+      * countryTraitFactorV2(id, 'starting-treasury', {
+        humanControlled,
+        humanTraitMultiplier: humanControlled
+          ? humanCountryTraitMultiplierForContentV2(content, id)
+          : undefined,
+      }),
     3,
   );
 }
@@ -69,10 +79,86 @@ export function synchronizeOpeningTreasuryHumanRosterV2(
     const humanFactor = countryTraitFactorV2(
       id,
       'starting-treasury',
-      { humanControlled: true },
+      {
+        humanControlled: true,
+        humanTraitMultiplier: humanCountryTraitMultiplierForContentV2(content, id),
+      },
     );
     if (Math.abs(ordinaryFactor - humanFactor) <= 0.000000001) continue;
     state.players[id]!.treasury = openingStartingTreasuryV2(id, content, next.has(id));
+  }
+}
+
+/**
+ * Applies the opening-only human army boost when tick-zero seats change.
+ * The old controller multiplier is removed before the new one is applied, so
+ * repeated lobby updates and country switches cannot stack the bonus. Only
+ * deployed manpower changes: capacity and trained reserves remain untouched,
+ * and an opening force may intentionally sit above its ordinary live cap.
+ * That surplus is free and non-replenishable: the normal recruitment pipeline
+ * sees no capacity gap until casualties have removed every soldier above cap.
+ */
+export function synchronizeOpeningArmyHumanRosterV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  previousHumanPlayerIds: readonly PlayerId[],
+  nextHumanPlayerIds: readonly PlayerId[],
+): void {
+  if (state.tick !== 0) return;
+  const previous = new Set(previousHumanPlayerIds);
+  const next = new Set(nextHumanPlayerIds);
+  const changed = new Set([...previous, ...next]);
+  for (const id of [...changed].sort((left, right) => left.localeCompare(right))) {
+    if (previous.has(id) === next.has(id) || !content.nations[id] || !state.players[id]) continue;
+    const before = previous.has(id) ? humanStartingArmyMultiplierForContentV2(content, id) : 1;
+    const after = next.has(id) ? humanStartingArmyMultiplierForContentV2(content, id) : 1;
+    if (Math.abs(before - after) <= 0.000000001) continue;
+    state.players[id]!.openingArmyBonus = null;
+    for (const territory of Object.values(state.territories)) {
+      if (territory.owner !== id) continue;
+      territory.army.manpower = round(territory.army.manpower / before * after, 9);
+    }
+    if (next.has(id) && after > 1.000000001) {
+      const deployed = round(Object.values(state.territories)
+        .filter((territory) => territory.owner === id)
+        .reduce((sum, territory) => sum + Math.max(0, territory.army.manpower), 0), 9);
+      const initialManpower = round(Math.max(0, deployed - deployed / after), 9);
+      if (initialManpower > 0.000000001) state.players[id]!.openingArmyBonus = {
+        initialManpower,
+        remainingManpower: initialManpower,
+        startedTick: state.tick,
+        expiresTick: state.tick + OPENING_ARMY_BONUS_DURATION_TICKS_V2,
+      };
+    }
+  }
+}
+
+/**
+ * Adds bookkeeping to an authenticated V2.61 tick-zero save whose manpower was
+ * already boosted. It deliberately does not rescale the army a second time.
+ */
+export function trackExistingOpeningArmyHumanRosterV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+): void {
+  if (state.tick !== 0) return;
+  const humans = new Set(state.humanPlayerIds);
+  for (const [id, nation] of Object.entries(state.players) as Array<[PlayerId, NationStateV2]>) {
+    nation.openingArmyBonus = null;
+    if (!humans.has(id)) continue;
+    const multiplier = humanStartingArmyMultiplierForContentV2(content, id);
+    if (multiplier <= 1.000000001) continue;
+    const deployed = round(Object.values(state.territories)
+      .filter((territory) => territory.owner === id)
+      .reduce((sum, territory) => sum + Math.max(0, territory.army.manpower), 0), 9);
+    const initialManpower = round(Math.max(0, deployed - deployed / multiplier), 9);
+    if (initialManpower <= 0.000000001) continue;
+    nation.openingArmyBonus = {
+      initialManpower,
+      remainingManpower: initialManpower,
+      startedTick: 0,
+      expiresTick: OPENING_ARMY_BONUS_DURATION_TICKS_V2,
+    };
   }
 }
 
@@ -97,7 +183,7 @@ export function createNationStateV2(
     // vulnerability still starts fragile systems with a smaller buffer and a
     // higher production/import burden below.
     foodSecurity: 1,
-    trainedReserves: initialTrainedReserveManpowerV2(String(id), initialArmyCapacity),
+    trainedReserves: initialTrainedReserveManpowerV2(String(id), initialArmyCapacity, content),
     budget: { ...DEFAULT_BUDGET_V2 },
     research: {
       allocations: { ...DEFAULT_RESEARCH_ALLOCATIONS_V2 },
@@ -111,6 +197,7 @@ export function createNationStateV2(
     researchSurgeAvailableTick: 0,
     propagandaAvailableTick: 0,
     propagandaProgram: null,
+    openingArmyBonus: null,
     warFatigue: 0,
     capitalId: definition.initialCapitalId,
   };

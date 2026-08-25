@@ -2,9 +2,10 @@ import { nextRandom, randomInt } from '../../game/random';
 import {
   BATTLE_INTERVAL_TICKS,
   ATTACKER_MILITARY_LOSS_MULTIPLIER,
+  ATTACKER_CONCENTRATION_EXPOSURE_MAX_BONUS,
+  ATTACKER_CONCENTRATION_EXPOSURE_MAX_RATIO,
+  ATTACKER_CONCENTRATION_EXPOSURE_START_RATIO,
   CAPTURE_MIN_CONTRIBUTION_SHARE,
-  QUICK_CONQUEST_MAX_WAR_AGE_TICKS,
-  QUICK_CONQUEST_MIN_ATTACKER_LOSS_SHARE,
   CEASEFIRE_PAYEE_WEEKLY_REVENUE_CAP_SHARE,
   CEASEFIRE_PAYMENT_WEEKS,
   CEASEFIRE_POST_PAYMENT_TRUCE_TICKS,
@@ -40,6 +41,7 @@ import {
   WAR_ACCESS_CASUALTY_MULTIPLIER,
   WAR_ACCESS_SUPPLY_MULTIPLIER,
   warAccessSupplyMultiplierV2,
+  WAR_DECLARATION_ATTACKER_LOSS_SHARE,
   WAR_MOBILIZATION_TICKS,
   WAR_REVENGE_WINDOW_TICKS,
   clamp,
@@ -61,6 +63,7 @@ import {
 import { addWorldEventV2 } from './events';
 import { isHumanPlayerV2 } from './humanPlayers';
 import { beginTerritoryIntegrationV2 } from './integration';
+import { consumeOpeningArmyBonusLossV2 } from './openingArmyBonus';
 import { resistanceCombatMultiplierV2 } from './resistance';
 import {
   composeTraitContextV2,
@@ -364,6 +367,53 @@ export function warDeclarationStatusV2(
   return status(true);
 }
 
+function applyWarDeclarationAttackerLossV2(
+  state: WorldStateV2,
+  attackerId: PlayerId,
+): number {
+  const armies = sortedTerritoryIdsV2(state)
+    .filter((territoryId) => state.territories[territoryId]?.owner === attackerId)
+    .map((territoryId) => state.territories[territoryId]!.army)
+    .filter((army) => army.manpower > 0);
+  const deployedBefore = round(
+    armies.reduce((sum, army) => sum + Math.max(0, army.manpower), 0),
+    9,
+  );
+  if (deployedBefore <= 0 || armies.length === 0) return 0;
+
+  // Keep every formation proportional at canonical manpower precision. The
+  // largest army absorbs only the sub-nanounit rounding remainder so the
+  // national loss remains exactly one percent and capacity never changes.
+  const anchor = armies.reduce((largest, army) => (
+    army.manpower > largest.manpower ? army : largest
+  ));
+  const deployedAfterTarget = round(
+    deployedBefore * (1 - WAR_DECLARATION_ATTACKER_LOSS_SHARE),
+    9,
+  );
+  let otherDeployedAfter = 0;
+  for (const army of armies) {
+    if (army === anchor) continue;
+    army.manpower = round(
+      Math.max(0, army.manpower * (1 - WAR_DECLARATION_ATTACKER_LOSS_SHARE)),
+      9,
+    );
+    otherDeployedAfter += army.manpower;
+  }
+  anchor.manpower = round(clamp(
+    deployedAfterTarget - otherDeployedAfter,
+    0,
+    anchor.manpower,
+  ), 9);
+  const deployedAfter = round(
+    armies.reduce((sum, army) => sum + Math.max(0, army.manpower), 0),
+    9,
+  );
+  const loss = round(Math.max(0, deployedBefore - deployedAfter), 9);
+  consumeOpeningArmyBonusLossV2(state, attackerId, loss);
+  return loss;
+}
+
 export function declareWarV2(
   state: WorldStateV2,
   content: WorldContentV2,
@@ -396,6 +446,10 @@ export function declareWarV2(
       (offer.fromId === newAttackerId && offer.toId === newDefenderId)
       || (offer.fromId === newDefenderId && offer.toId === newAttackerId)
     ));
+    const openingAttackerLosses = applyWarDeclarationAttackerLossV2(
+      state,
+      newAttackerId,
+    );
     state.wars.push({
       id: `war-${state.nextWarId++}`,
       attackerId: newAttackerId,
@@ -404,7 +458,7 @@ export function declareWarV2(
       lastBattleTick: state.tick,
       warScore: 0,
       battles: 0,
-      attackerLosses: 0,
+      attackerLosses: openingAttackerLosses,
       defenderLosses: 0,
       attackerCivilianLosses: 0,
       defenderCivilianLosses: 0,
@@ -511,6 +565,31 @@ function supportCountV2(state: WorldStateV2, content: WorldContentV2, sourceId: 
 }
 
 /**
+ * Large formations expose more troops to a still-functioning defender's
+ * counter-fire. Equal and ordinary fights are untouched; extreme local
+ * overmatch is smoothly capped so this can never invent damage by itself.
+ */
+export function attackerConcentrationExposureMultiplierV2(
+  attackerStrength: number,
+  defenderStrength: number,
+  nationalAttackerStrength = attackerStrength,
+  nationalDefenderStrength = defenderStrength,
+): number {
+  if (attackerStrength <= 0 || defenderStrength <= 0
+    || nationalAttackerStrength <= 0 || nationalDefenderStrength <= 0) return 1;
+  const localForceRatio = attackerStrength / defenderStrength;
+  const nationalForceRatio = nationalAttackerStrength / nationalDefenderStrength;
+  // A concentrated border army in an otherwise peer-level war is ordinary
+  // manoeuvre, not giant-vs-small-country overmatch. Both ratios must agree.
+  const exposureRatio = Math.min(localForceRatio, nationalForceRatio);
+  return 1 + ATTACKER_CONCENTRATION_EXPOSURE_MAX_BONUS * smoothstep(
+    ATTACKER_CONCENTRATION_EXPOSURE_START_RATIO,
+    ATTACKER_CONCENTRATION_EXPOSURE_MAX_RATIO,
+    exposureRatio,
+  );
+}
+
+/**
  * Canonical, side-effect-free projection for one combat pulse. Forecasts and
  * live resolution deliberately share this function so a displayed advantage
  * cannot turn into an inverted casualty percentage once the battle starts.
@@ -564,6 +643,16 @@ export function projectCombatExchangeV2(
   ) * countryTraitFactorV2(defenderId, 'defense', defenderTraitContext);
   const attackerStrength = selectArmyCombatManpowerV2(state, attackerId, source.army);
   const defenderStrength = selectArmyCombatManpowerV2(state, defenderId, target.army);
+  const localForceRatio = attackerStrength / Math.max(0.000001, defenderStrength);
+  const concentrationExposureMultiplier = localForceRatio
+    > ATTACKER_CONCENTRATION_EXPOSURE_START_RATIO
+    ? attackerConcentrationExposureMultiplierV2(
+      attackerStrength,
+      defenderStrength,
+      nationalCombatManpowerV2(state, attackerId),
+      nationalCombatManpowerV2(state, defenderId),
+    )
+    : 1;
 
   const attackPressure = attackerStrength * attackerAttack * (0.50 + 0.50 * source.condition)
     * attackerSupply * supportModifier * resistance.attacker * WAR_ACCESS_ASSAULT_MULTIPLIER[access];
@@ -598,7 +687,8 @@ export function projectCombatExchangeV2(
     : attackerStrength * COMBAT_DAMAGE_EFFECTIVENESS * Math.pow(
       Math.max(0, counterRatio), COMBAT_POWER_RATIO_EXPONENT,
     ) * varianceD * WAR_ACCESS_CASUALTY_MULTIPLIER[access]
-      * ATTACKER_MILITARY_LOSS_MULTIPLIER * attackerCasualtyModifier;
+      * ATTACKER_MILITARY_LOSS_MULTIPLIER * attackerCasualtyModifier
+      * concentrationExposureMultiplier;
   const defenderLosses = Math.min(target.army.manpower, Math.max(0, requestedDefenderDamage));
   const attackerLosses = Math.min(source.army.manpower, Math.max(0, requestedAttackerDamage));
   const defenderLossRate = defenderStrength > 0 ? defenderLosses / defenderStrength : 0;
@@ -1161,6 +1251,7 @@ function captureTerritoryV2(
     // A nation with no territory cannot keep training or retain a detached
     // reserve pool. A later 2026-sovereignty revolution rebuilds from zero.
     state.players[oldOwner]!.trainedReserves = 0;
+    state.players[oldOwner]!.openingArmyBonus = null;
     // Forecast and resolution share the same defeated-owner replacement path.
     const treasurySeizureShare = selectTreasurySeizureShareV2(state, oldOwner);
     treasurySeized = round(
@@ -1182,8 +1273,8 @@ function captureTerritoryV2(
 }
 
 function applyCombatCasualtiesV2(
-  _state: WorldStateV2,
-  _ownerId: PlayerId,
+  state: WorldStateV2,
+  ownerId: PlayerId,
   army: WorldStateV2['territories'][TerritoryId]['army'],
   requestedDamage: number,
 ): number {
@@ -1193,7 +1284,9 @@ function applyCombatCasualtiesV2(
   // Budget routing from the canonical state change at the same precision as
   // manpower. Six-decimal reporting could turn a real sub-millionth loss into
   // zero and incorrectly grant the routed tail a second full cap allowance.
-  return round(Math.max(0, manpowerBefore - army.manpower), 9);
+  const appliedLoss = round(Math.max(0, manpowerBefore - army.manpower), 9);
+  consumeOpeningArmyBonusLossV2(state, ownerId, appliedLoss);
+  return appliedLoss;
 }
 
 function nationalCombatManpowerV2(state: WorldStateV2, playerId: PlayerId): number {
@@ -1256,7 +1349,7 @@ export function resolveBattlePulseV2(
   const targetCapacity = Math.max(target.army.capacity, target.army.manpower);
   const damageToDefender = applyCombatCasualtiesV2(state, defenderId, target.army,
     projection.defenderLosses);
-  let damageToAttacker = applyCombatCasualtiesV2(state, attackerId, source.army,
+  const damageToAttacker = applyCombatCasualtiesV2(state, attackerId, source.army,
     projection.attackerLosses);
   const terrain = content.territories[operation.targetId]!.terrain;
   const civilianRisk = 1;
@@ -1342,7 +1435,9 @@ export function resolveBattlePulseV2(
     // The remaining formation lays down its arms; it is removed from active
     // manpower but is not rewritten as battle casualties. No ownership or
     // partial-control state changes before the decisive capture below.
+    const surrenderedManpower = Math.max(0, target.army.manpower);
     target.army.manpower = 0;
+    consumeOpeningArmyBonusLossV2(state, defenderId, surrenderedManpower);
     resetEmptyArmyBaseQualityV2(target.army, content, operation.targetId);
   }
   // Empty local land is decided in one real battle pulse. If the whole nation
@@ -1360,18 +1455,6 @@ export function resolveBattlePulseV2(
     earnedDecisiveClaim || earnedUnopposedClaim || decisiveSurrender,
   );
   const conquered = capture.conquered;
-  if (conquered && state.tick - war.startedTick <= QUICK_CONQUEST_MAX_WAR_AGE_TICKS) {
-    // Empty or instantly collapsing territory previously allowed a victorious
-    // force to annex land at literally zero military cost. Charge only the
-    // missing part of a bounded 1% floor, after ordinary combat casualties.
-    const quickAssaultFloor = sourceStrength * QUICK_CONQUEST_MIN_ATTACKER_LOSS_SHARE;
-    damageToAttacker = round(damageToAttacker + applyCombatCasualtiesV2(
-      state,
-      attackerId,
-      source.army,
-      Math.max(0, quickAssaultFloor - damageToAttacker),
-    ), 9);
-  }
   for (const territoryId of [operation.sourceId, operation.targetId]) {
     const battleTerritory = state.territories[territoryId]!;
     const army = battleTerritory.army;
