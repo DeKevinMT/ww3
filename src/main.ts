@@ -1,6 +1,6 @@
 import './styles.css';
 import { validateMap } from './game/data/worldMap';
-import { createPhaserGame } from './game/map/config';
+import { createWorldMapRenderer } from './game/map/createWorldMapRenderer';
 import { GuestGameSession, HostGameSession, type GameSessionEngineV2 } from './multiplayer/gameSession';
 import {
   localCountryFromLobby,
@@ -70,7 +70,7 @@ let unsubscribeSessionStatus: (() => void) | undefined;
 let activeControllerNames: ReadonlyMap<PlayerId, string> = new Map();
 let activeScenario = initialScenarioFromLocation();
 
-createPhaserGame();
+void createWorldMapRenderer();
 
 function worldEngineFromSession(engine: GameSessionEngineV2): WorldEngineV2 {
   if (!(engine instanceof WorldEngineV2)) throw new Error('The multiplayer snapshot did not create a WorldEngineV2 replica.');
