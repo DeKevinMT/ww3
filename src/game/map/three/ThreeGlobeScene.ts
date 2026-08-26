@@ -28,37 +28,33 @@ import {
   type GlobePickResult,
 } from './globeTexture';
 import {
+  countryAngularRadiusDegrees,
+  isMicrostatePickCandidate,
+  nearestMicrostateScreenPick,
+  type ProjectedMicrostatePickAnchor,
+} from './globePicking';
+import { groupGlobeLogisticsMovements } from './globeLogisticsPresentation';
+import { globeTerritoryReadinessPresentation } from './globeTerritoryPresentation';
+import {
   globeRotateSpeedForDistance,
   isFrontSideVisible,
   lonLatToUnitXyz,
   ndcToCssPoint,
   unitXyzToLonLat,
 } from './globeMath';
-import {
-  buildGlobeBorderPositions,
-  globeBorderOwnershipSignature,
-} from './globeBorders';
 
 const GLOBE_RADIUS = 5;
 const DEFAULT_CAMERA_DISTANCE = 14.5;
-const MIN_CAMERA_DISTANCE = 6.65;
-const MAX_CAMERA_DISTANCE = 19.5;
-const RENDER_INTERVAL_MS = 1000 / 40;
+const MIN_CAMERA_DISTANCE = 7.2;
+const MAX_CAMERA_DISTANCE = 16.75;
+const ACTIVE_RENDER_INTERVAL_MS = 1000 / 60;
+const IDLE_RENDER_INTERVAL_MS = 1000 / 20;
+const CAMERA_ACTIVITY_HOLD_MS = 280;
 const DRAG_THRESHOLD = 7;
 const FRONT_VISIBILITY_DOT = 0.045;
-const DEEP_VIEW_DISTANCE = 7.35;
-const MAX_DEEP_LABELS = 8;
-const BATTLE_IMPACT_INNER_RADIUS = 0.025;
-const BATTLE_IMPACT_OUTER_RADIUS = 0.05;
-const BATTLE_IMPACT_EXPANSION = 1.4;
-const BORDER_FADE_START_DISTANCE = 9.5;
-const BORDER_FULL_OPACITY_DISTANCE = 7.25;
-const BORDER_DEEP_OPACITY = 0.10;
-const DETAIL_FADE_START_DISTANCE = 8.15;
-const DETAIL_FULL_OPACITY_DISTANCE = 7.4;
-const DETAIL_LATITUDE_SPAN = 36;
-const DETAIL_BASE_LONGITUDE_SPAN = 52;
-const DETAIL_RECENTER_RADIANS = THREE.MathUtils.degToRad(8);
+const BATTLE_IMPACT_INNER_RADIUS = 0.034;
+const BATTLE_IMPACT_OUTER_RADIUS = 0.062;
+const BATTLE_IMPACT_SCALE = 2.15;
 
 type LabelKind = 'country' | 'sea' | 'access';
 type PolarRegion = 'arctic' | 'antarctica';
@@ -68,14 +64,19 @@ interface GlobeLabel {
   kind: LabelKind;
   longitude: number;
   latitude: number;
+  worldPosition: THREE.Vector3;
   element: HTMLDivElement;
+  detailElement?: HTMLElement;
   persistent: boolean;
   priority: number;
-  projectedSpan: number;
   width: number;
   height: number;
   className?: string;
   markup?: string;
+  displayed?: boolean;
+  detailDisplayed?: boolean;
+  selected?: boolean;
+  transform?: string;
 }
 
 interface CameraFlight {
@@ -89,7 +90,11 @@ interface CameraFlight {
 
 interface BattleEffect {
   group: THREE.Group;
-  projectile?: THREE.Mesh;
+  route: THREE.Line<THREE.BufferGeometry, THREE.LineDashedMaterial>;
+  projectile?: THREE.Group;
+  projectileMaterials: readonly THREE.MeshBasicMaterial[];
+  impactRing: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
+  impactFlash: THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasicMaterial>;
   path: readonly THREE.Vector3[];
   startedAt: number;
   duration: number;
@@ -99,6 +104,8 @@ interface AnimatedRouteMaterial {
   material: THREE.LineBasicMaterial | THREE.LineDashedMaterial;
   baseOpacity: number;
   phase: number;
+  flowSpeed?: number;
+  dashOffsetUniform?: { value: number };
 }
 
 interface ScreenProjection {
@@ -108,6 +115,27 @@ interface ScreenProjection {
   localY: number;
   ndcX: number;
   ndcY: number;
+}
+
+interface PointerSample {
+  clientX: number;
+  clientY: number;
+  pointerType: string;
+}
+
+interface MicrostatePickAnchor {
+  territoryId: string;
+  worldPosition: THREE.Vector3;
+  angularRadiusDegrees: number;
+}
+
+function globeSelectionStateSignature(selection: MapSelectionState): string {
+  return [
+    selection.targetId ?? '',
+    selection.sourceId ?? '',
+    selection.legalTargetIds.join(','),
+    (selection.hintTargetIds ?? []).join(','),
+  ].join('|');
 }
 
 const COUNTRY_BY_ID_MAP = new Map(COUNTRIES.map((country) => [country.id, country]));
@@ -175,6 +203,22 @@ function presentationAnchor(territoryId: string): readonly [number, number] | un
   );
   return [point.x, point.y] as const;
 }
+
+/**
+ * Build the small-country hit-proxy set once. Larger countries always use
+ * exact political-texture polygon picking.
+ */
+const MICROSTATE_PICK_ANCHORS: readonly MicrostatePickAnchor[] = COUNTRIES.flatMap((country) => {
+  const anchor = presentationAnchor(country.id);
+  if (!anchor) return [];
+  const angularRadiusDegrees = countryAngularRadiusDegrees(anchor, country.rings);
+  if (!isMicrostatePickCandidate(angularRadiusDegrees)) return [];
+  return [{
+    territoryId: country.id,
+    worldPosition: vectorFor(anchor[0], anchor[1], GLOBE_RADIUS * 1.025),
+    angularRadiusDegrees,
+  }];
+});
 
 /**
  * Focus the principal landmass instead of calibrating every country around a
@@ -275,7 +319,6 @@ export class ThreeGlobeScene implements MapSceneAdapter {
   private readonly controls: OrbitControls;
   private readonly globeGroup = new THREE.Group();
   private readonly routeGroup = new THREE.Group();
-  private readonly highlightGroup = new THREE.Group();
   private readonly polarGroup = new THREE.Group();
   private readonly labelLayer: HTMLDivElement;
   private readonly antarcticaCard: HTMLDivElement;
@@ -283,16 +326,17 @@ export class ThreeGlobeScene implements MapSceneAdapter {
   private readonly arcticAccessLabel: HTMLElement;
   private readonly globeTexture: GlobePoliticalTexture;
   private readonly politicalTexture: THREE.CanvasTexture;
-  private readonly politicalDetailTexture: THREE.CanvasTexture;
-  private readonly politicalDetailMaterial: THREE.ShaderMaterial;
-  private readonly politicalDetailGlobe: THREE.Mesh<THREE.SphereGeometry, THREE.ShaderMaterial>;
   private readonly globe: THREE.Mesh<THREE.SphereGeometry, THREE.MeshStandardMaterial>;
-  private readonly borderMaterial: THREE.LineBasicMaterial;
-  private readonly borderLines: THREE.LineSegments;
   private readonly raycaster = new THREE.Raycaster();
   private readonly pointer = new THREE.Vector2();
+  private readonly pickSphere = new THREE.Sphere(new THREE.Vector3(), GLOBE_RADIUS);
+  private readonly pickPoint = new THREE.Vector3();
+  private readonly projectionPoint = new THREE.Vector3();
   private readonly resizeObserver: ResizeObserver;
   private readonly reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  readonly firstFrameReady: Promise<void>;
+  private resolveFirstFrame?: () => void;
+  private readonly nextFrameResolvers = new Set<() => void>();
   private readonly labels = new Map<string, GlobeLabel>();
   private readonly animatedRouteMaterials: AnimatedRouteMaterial[] = [];
   private readonly polarMaterials: AnimatedRouteMaterial[] = [];
@@ -308,17 +352,36 @@ export class ThreeGlobeScene implements MapSceneAdapter {
   private pointerDownX = 0;
   private pointerDownY = 0;
   private pointerTravel = 0;
+  private pendingHoverSample?: PointerSample;
+  private hoverFrameRequest = 0;
   private cameraFlight?: CameraFlight;
+  private cameraActivityUntil = 0;
   private frameRequest = 0;
   private lastRenderAt = 0;
   private routeSignature = '';
   private countryLabelSignature = '';
-  private borderOwnershipSignature = globeBorderOwnershipSignature();
+  private selectionSignature = '';
   private polarHoverPosition?: { x: number; y: number };
-  private detailViewDirection?: THREE.Vector3;
+  private microstatePickProjectionCache?: {
+    cameraPosition: THREE.Vector3;
+    viewportLeft: number;
+    viewportTop: number;
+    viewportWidth: number;
+    viewportHeight: number;
+    anchors: readonly ProjectedMicrostatePickAnchor[];
+  };
+  private readonly lastLabelCameraPosition = new THREE.Vector3(1e9, 1e9, 1e9);
+  private labelsDirty = true;
+  private polarCardsDirty = true;
+  private renderWidth = 0;
+  private renderHeight = 0;
+  private renderPixelRatio = 0;
   private destroyed = false;
 
   constructor() {
+    this.firstFrameReady = new Promise<void>((resolve) => {
+      this.resolveFirstFrame = resolve;
+    });
     const host = document.querySelector<HTMLElement>('#game-canvas');
     if (!host) throw new Error('The map host #game-canvas is missing.');
     this.host = host;
@@ -370,7 +433,7 @@ export class ThreeGlobeScene implements MapSceneAdapter {
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
-    this.controls.dampingFactor = 0.065;
+    this.controls.dampingFactor = 0.11;
     this.controls.target.set(0, 0, 0);
     this.controls.enablePan = false;
     this.controls.minDistance = MIN_CAMERA_DISTANCE;
@@ -380,36 +443,28 @@ export class ThreeGlobeScene implements MapSceneAdapter {
       MIN_CAMERA_DISTANCE,
       MAX_CAMERA_DISTANCE,
     );
-    this.controls.zoomSpeed = 0.72;
+    this.controls.zoomSpeed = 0.9;
     this.controls.zoomToCursor = false;
     this.controls.autoRotate = false;
+    this.controls.addEventListener('change', this.onControlsChange);
     this.controls.update();
 
     let livePoliticalTexture: THREE.CanvasTexture | undefined;
-    let livePoliticalDetailTexture: THREE.CanvasTexture | undefined;
     this.globeTexture = new GlobePoliticalTexture(() => {
       if (livePoliticalTexture) livePoliticalTexture.needsUpdate = true;
-    }, () => {
-      if (livePoliticalDetailTexture) livePoliticalDetailTexture.needsUpdate = true;
-    });
+    }, this.renderer.capabilities.maxTextureSize);
     this.politicalTexture = livePoliticalTexture = new THREE.CanvasTexture(this.globeTexture.canvas);
+    this.host.dataset.globeAtlas = String(this.globeTexture.canvas.width)
+      + 'x' + String(this.globeTexture.canvas.height);
+    this.host.dataset.globeMaxTextureSize = String(this.renderer.capabilities.maxTextureSize);
     this.politicalTexture.colorSpace = THREE.SRGBColorSpace;
-    this.politicalTexture.anisotropy = Math.min(this.renderer.capabilities.getMaxAnisotropy(), 8);
-
-    this.politicalDetailTexture = livePoliticalDetailTexture = new THREE.CanvasTexture(
-      this.globeTexture.detailCanvas,
-    );
-    this.politicalDetailTexture.colorSpace = THREE.SRGBColorSpace;
-    // This atlas is only used on the near, camera-facing patch. A single
-    // linear level stays crisper and avoids regenerating a mip pyramid after
-    // each infrequent regional recenter.
-    this.politicalDetailTexture.minFilter = THREE.LinearFilter;
-    this.politicalDetailTexture.magFilter = THREE.LinearFilter;
-    this.politicalDetailTexture.generateMipmaps = false;
-    this.politicalDetailTexture.anisotropy = Math.min(
-      this.renderer.capabilities.getMaxAnisotropy(),
-      12,
-    );
+    // The fixed high-resolution atlas already contains all close-range detail.
+    // Linear filtering removes pixel stair-steps on flags and baked borders
+    // without switching textures or doing any extra work while zooming.
+    this.politicalTexture.magFilter = THREE.LinearFilter;
+    this.politicalTexture.minFilter = THREE.LinearFilter;
+    this.politicalTexture.generateMipmaps = false;
+    this.politicalTexture.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
 
     const globeMaterial = new THREE.MeshStandardMaterial({
       map: this.politicalTexture,
@@ -418,84 +473,13 @@ export class ThreeGlobeScene implements MapSceneAdapter {
       emissive: new THREE.Color(0x03121b),
       emissiveIntensity: 0.28,
     });
-    this.globe = new THREE.Mesh(new THREE.SphereGeometry(GLOBE_RADIUS, 192, 120), globeMaterial);
-    this.politicalDetailMaterial = new THREE.ShaderMaterial({
-      uniforms: {
-        detailMap: { value: this.politicalDetailTexture },
-        detailCenter: { value: new THREE.Vector2(0.5, 0.5) },
-        detailSpan: { value: new THREE.Vector2(1, 1) },
-        detailOpacity: { value: 0 },
-      },
-      vertexShader: `
-        varying vec2 vDetailUv;
-        varying vec3 vDetailNormal;
-        void main() {
-          vDetailUv = uv;
-          vDetailNormal = normalize(normalMatrix * normal);
-          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-        }
-      `,
-      fragmentShader: `
-        uniform sampler2D detailMap;
-        uniform vec2 detailCenter;
-        uniform vec2 detailSpan;
-        uniform float detailOpacity;
-        varying vec2 vDetailUv;
-        varying vec3 vDetailNormal;
-        #include <common>
-        void main() {
-          float wrappedU = mod(vDetailUv.x - detailCenter.x + 0.5, 1.0) - 0.5;
-          vec2 localUv = vec2(
-            wrappedU / detailSpan.x + 0.5,
-            (vDetailUv.y - detailCenter.y) / detailSpan.y + 0.5
-          );
-          if (localUv.x <= 0.0 || localUv.x >= 1.0 || localUv.y <= 0.0 || localUv.y >= 1.0) discard;
-          vec4 texel = sRGBTransferEOTF(texture2D(detailMap, localUv));
-          if (texel.a <= 0.01) discard;
-          vec2 edgeDistance = min(localUv, vec2(1.0) - localUv);
-          float edgeFeather = smoothstep(0.0, 0.065, min(edgeDistance.x, edgeDistance.y));
-          float cameraLight = 0.94 + 0.06 * max(vDetailNormal.z, 0.0);
-          gl_FragColor = vec4(texel.rgb * cameraLight, texel.a * detailOpacity * edgeFeather);
-          #include <tonemapping_fragment>
-          #include <colorspace_fragment>
-        }
-      `,
-      transparent: true,
-      depthTest: true,
-      depthWrite: false,
-      polygonOffset: true,
-      polygonOffsetFactor: -1,
-      polygonOffsetUnits: -1,
-      toneMapped: true,
-    });
-    this.politicalDetailGlobe = new THREE.Mesh(this.globe.geometry, this.politicalDetailMaterial);
-    this.politicalDetailGlobe.scale.setScalar(1.000015);
-    this.politicalDetailGlobe.visible = false;
-    this.politicalDetailGlobe.renderOrder = 1;
-    const borderGeometry = new THREE.BufferGeometry();
-    borderGeometry.setAttribute(
-      'position',
-      new THREE.BufferAttribute(buildGlobeBorderPositions(undefined, GLOBE_RADIUS), 3),
-    );
-    this.borderMaterial = new THREE.LineBasicMaterial({
-      // The political texture carries each country's secondary-terrain border
-      // colour. This faint neutral vector pass only keeps the spherical edge
-      // crisp at grazing angles without washing that colour back to cyan.
-      color: 0xf1f7f2,
-      linewidth: 1,
-      transparent: true,
-      opacity: 0,
-      depthWrite: false,
-    });
-    this.borderLines = new THREE.LineSegments(borderGeometry, this.borderMaterial);
-    this.borderLines.visible = false;
-    this.borderLines.renderOrder = 2;
+    // A moderately denser single sphere keeps coastlines stable at the fixed
+    // close-range camera limit. It remains one mesh and one draw call; no
+    // geometry, texture or material is swapped while zooming.
+    this.globe = new THREE.Mesh(new THREE.SphereGeometry(GLOBE_RADIUS, 256, 160), globeMaterial);
     this.globeGroup.add(
       this.globe,
-      this.politicalDetailGlobe,
-      this.borderLines,
       this.routeGroup,
-      this.highlightGroup,
       this.polarGroup,
     );
     this.scene.add(this.globeGroup);
@@ -521,7 +505,6 @@ export class ThreeGlobeScene implements MapSceneAdapter {
     this.updateArcticAccessCard(engine);
     this.globeTexture.sync(engine, this.selection);
     const labelSignature = this.buildCountryLabelSignature(engine);
-    this.rebuildGlobeBorders(engine);
     if (labelSignature !== this.countryLabelSignature) {
       this.countryLabelSignature = labelSignature;
       this.rebuildCountryLabels();
@@ -529,27 +512,15 @@ export class ThreeGlobeScene implements MapSceneAdapter {
     this.rebuildRoutes();
   }
 
-  private rebuildGlobeBorders(engine: WorldMapEngineContract): void {
-    const signature = globeBorderOwnershipSignature(engine);
-    if (signature === this.borderOwnershipSignature) return;
-    this.borderOwnershipSignature = signature;
-
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute(
-      'position',
-      new THREE.BufferAttribute(buildGlobeBorderPositions(engine, GLOBE_RADIUS), 3),
-    );
-    const previousGeometry = this.borderLines.geometry;
-    this.borderLines.geometry = geometry;
-    previousGeometry.dispose();
-  }
-
   setSelection(selection: MapSelectionState): void {
+    const signature = globeSelectionStateSignature(selection);
+    if (signature === this.selectionSignature) return;
+    this.selectionSignature = signature;
     this.selection = selection;
     this.focusedPolarRegion = undefined;
+    this.labelsDirty = true;
     if (this.engine) this.globeTexture.sync(this.engine, selection);
     else this.globeTexture.setSelection(selection);
-    this.rebuildHighlights();
   }
 
   setInputBlocked(blocked: boolean): void {
@@ -603,47 +574,85 @@ export class ThreeGlobeScene implements MapSceneAdapter {
     const group = new THREE.Group();
     const naval = isSeaConnection(result.sourceId, result.targetId);
     const color = result.conquered ? 0xffd36f : naval ? 0x62dfff : 0xff725f;
-    const line = new THREE.Line(
+    const routeMaterial = new THREE.LineDashedMaterial({
+      color,
+      transparent: true,
+      opacity: this.reducedMotion ? 0.72 : 0.46,
+      dashSize: naval ? 0.105 : 0.085,
+      gapSize: naval ? 0.065 : 0.052,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    const route = new THREE.Line(
       new THREE.BufferGeometry().setFromPoints(path),
-      new THREE.LineBasicMaterial({
+      routeMaterial,
+    );
+    route.computeLineDistances();
+    route.geometry.setDrawRange(0, this.reducedMotion ? path.length : 2);
+    group.add(route);
+
+    const projectileMaterials: THREE.MeshBasicMaterial[] = [];
+    let projectile: THREE.Group | undefined;
+    if (!this.reducedMotion) {
+      projectile = new THREE.Group();
+      const haloMaterial = new THREE.MeshBasicMaterial({
         color,
         transparent: true,
-        opacity: this.reducedMotion ? 0.78 : 0.54,
+        opacity: 0.24,
         blending: THREE.AdditiveBlending,
-      }),
-    );
-    group.add(line);
-
-    let projectile: THREE.Mesh | undefined;
-    if (!this.reducedMotion) {
-      projectile = new THREE.Mesh(
-        new THREE.SphereGeometry(0.038, 12, 8),
-        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 1 }),
+        depthWrite: false,
+      });
+      const coreMaterial = new THREE.MeshBasicMaterial({
+        color: result.conquered ? 0xfff0ad : 0xffffff,
+        transparent: true,
+        opacity: 0.96,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      });
+      projectileMaterials.push(haloMaterial, coreMaterial);
+      projectile.add(
+        new THREE.Mesh(new THREE.SphereGeometry(0.046, 10, 6), haloMaterial),
+        new THREE.Mesh(new THREE.SphereGeometry(0.019, 10, 6), coreMaterial),
       );
       projectile.position.copy(path[0]!);
       group.add(projectile);
     }
-    const impact = new THREE.Mesh(
+    const impactRing = new THREE.Mesh(
       new THREE.RingGeometry(BATTLE_IMPACT_INNER_RADIUS, BATTLE_IMPACT_OUTER_RADIUS, 24),
       new THREE.MeshBasicMaterial({
         color,
         transparent: true,
-        opacity: 0.9,
+        opacity: 0,
         side: THREE.DoubleSide,
         blending: THREE.AdditiveBlending,
         depthWrite: false,
       }),
     );
-    impact.position.copy(path[path.length - 1]!);
-    impact.lookAt(impact.position.clone().multiplyScalar(2));
-    group.add(impact);
+    impactRing.position.copy(path[path.length - 1]!);
+    impactRing.lookAt(impactRing.position.clone().multiplyScalar(2));
+    const impactFlash = new THREE.Mesh(
+      new THREE.SphereGeometry(0.031, 12, 7),
+      new THREE.MeshBasicMaterial({
+        color: result.conquered ? 0xffefae : color,
+        transparent: true,
+        opacity: 0,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      }),
+    );
+    impactFlash.position.copy(path[path.length - 1]!);
+    group.add(impactRing, impactFlash);
     this.globeGroup.add(group);
     this.battleEffects.push({
       group,
+      route,
       projectile,
+      projectileMaterials,
+      impactRing,
+      impactFlash,
       path,
       startedAt: performance.now(),
-      duration: this.reducedMotion ? 520 : 930,
+      duration: this.reducedMotion ? 560 : 980,
     });
   }
 
@@ -652,17 +661,32 @@ export class ThreeGlobeScene implements MapSceneAdapter {
     this.startCameraFlight(new THREE.Vector3(0.035, 0.085, 1).normalize(), DEFAULT_CAMERA_DISTANCE, 520);
   }
 
+  /** Resolves only after a subsequent WebGL frame has actually been drawn. */
+  waitForNextFrame(): Promise<void> {
+    if (this.destroyed) return Promise.resolve();
+    return new Promise<void>((resolve) => this.nextFrameResolvers.add(resolve));
+  }
+
+  /** Resolves when all relevant flags have settled into the baked map atlas. */
+  waitForMapReady(): Promise<void> {
+    if (this.destroyed) return Promise.resolve();
+    return this.globeTexture.waitForReady();
+  }
+
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
+    for (const resolve of this.nextFrameResolvers) resolve();
+    this.nextFrameResolvers.clear();
     window.cancelAnimationFrame(this.frameRequest);
+    window.cancelAnimationFrame(this.hoverFrameRequest);
     window.removeEventListener('beforeunload', this.onBeforeUnload);
     this.resizeObserver.disconnect();
+    this.controls.removeEventListener('change', this.onControlsChange);
     this.controls.dispose();
     this.unbindInput();
     disposeObject(this.scene);
     this.politicalTexture.dispose();
-    this.politicalDetailTexture.dispose();
     this.renderer.dispose();
     this.renderer.domElement.remove();
     this.labelLayer.remove();
@@ -763,10 +787,10 @@ export class ThreeGlobeScene implements MapSceneAdapter {
         kind: 'sea',
         longitude,
         latitude,
+        worldPosition: vectorFor(longitude, latitude, GLOBE_RADIUS * 1.025),
         element,
         persistent: true,
         priority: sea.kind === 'ocean' ? 80 : 90,
-        projectedSpan: 0,
         width: sea.kind === 'ocean' ? 190 : 120,
         height: 16,
       });
@@ -823,10 +847,10 @@ export class ThreeGlobeScene implements MapSceneAdapter {
         kind: 'access',
         longitude: anchor.longitude,
         latitude: anchor.latitude,
+        worldPosition: vectorFor(anchor.longitude, anchor.latitude, GLOBE_RADIUS * 1.025),
         element,
         persistent: true,
         priority: 20 + index,
-        projectedSpan: 0,
         width: 118,
         height: 34,
       });
@@ -921,7 +945,7 @@ export class ThreeGlobeScene implements MapSceneAdapter {
       const empireCapital = ownerLabelTerritory.get(owner.id) === country.id;
       const integrating = territory.coreOwnerId !== territory.ownerId && territory.integration < 0.999999;
       const opening = empireCapital ? state.openingMobilisations[owner.id] : undefined;
-      const persistent = integrating
+      const persistent = (integrating && owner.isHuman)
         || frontTerritories.has(country.id)
         || (empireCapital && (owner.isHuman || topTenOwners.has(owner.id) || warOwners.has(owner.id) || Boolean(opening)));
       const rank = rankByOwner.get(owner.id);
@@ -932,7 +956,7 @@ export class ThreeGlobeScene implements MapSceneAdapter {
       // Once integration is complete, the old nation ceases to exist on the
       // strategic map. The selected-land panel remains the source of local
       // territory detail, matching the established renderer.
-      if (absorbed) continue;
+      if (absorbed && owner.id !== state.humanPlayerId) continue;
       const name = integrating
         ? originalOwner?.name ?? country.englishName
         : empireCapital ? owner.name : country.englishName;
@@ -946,6 +970,16 @@ export class ThreeGlobeScene implements MapSceneAdapter {
       const openingText = opening
         ? `${opening.direction === 'boost' ? 'OPENING BOOST' : 'OPENING LIMIT'} · ${Math.round(opening.remainingRatio * 100)}% LEFT`
         : '';
+      const readiness = globeTerritoryReadinessPresentation(territory.army);
+      const readinessVisible = persistent
+        || owner.id === state.humanPlayerId
+        || warOwners.has(owner.id);
+      const readinessMarkup = [
+        `<div class="globe-map__territory-readiness is-${readiness.tone}" role="img" aria-label="Local force readiness">`,
+        `<i style="--readiness-fill:${Math.round(readiness.fillRatio * 1000) / 10}%"></i>`,
+        `<b style="--readiness-local:${Math.round(readiness.localCapacityRatio * 1000) / 10}%"></b>`,
+        '</div>',
+      ].join('');
       const key = `country:${country.id}`;
       const existingLabel = this.labels.get(key);
       const element = existingLabel?.kind === 'country'
@@ -957,11 +991,13 @@ export class ThreeGlobeScene implements MapSceneAdapter {
           : owner.isHuman ? 'is-human is-other-human' : '',
         integrating ? 'is-integrating' : '',
         warOwners.has(owner.id) || frontTerritories.has(country.id) ? 'is-active' : '',
+        readinessVisible ? 'has-readiness' : '',
         opening ? `has-opening is-opening-${opening.direction}` : '',
       ].filter(Boolean).join(' ');
       const markup = [
         `<strong>${compactCountryName(name).toUpperCase()}${empireCapital && rank ? ` <em>#${rank}</em>` : ''}</strong>`,
         `<span>${detail}</span>`,
+        readinessMarkup,
         openingText ? `<small>${openingText}</small>` : '',
       ].join('');
       if (existingLabel?.className !== className) element.className = className;
@@ -969,23 +1005,33 @@ export class ThreeGlobeScene implements MapSceneAdapter {
       if (!existingLabel || existingLabel.kind !== 'country') this.labelLayer.append(element);
       nextCountryLabelKeys.add(key);
       const anchor = presentationAnchor(country.id) ?? country.label;
+      const markupChanged = existingLabel?.markup !== markup;
       this.labels.set(key, {
         id: country.id,
         kind: 'country',
         longitude: anchor[0],
         latitude: anchor[1],
+        worldPosition: existingLabel?.kind === 'country'
+          ? existingLabel.worldPosition
+          : vectorFor(anchor[0], anchor[1], GLOBE_RADIUS * 1.025),
         element,
+        detailElement: markupChanged
+          ? element.querySelector<HTMLElement>('span') ?? undefined
+          : existingLabel?.detailElement,
         persistent,
         priority: integrating ? 2
           : frontTerritories.has(country.id) ? 3
             : owner.isHuman ? 4
               : topTenOwners.has(owner.id) ? 10 + (rank ?? 10)
                 : 55 + country.labelRank,
-        projectedSpan: absorbed ? 0 : Math.max(2, Math.sqrt(Math.max(0.001, country.population)) * 4),
         width: opening ? 154 : 122,
-        height: opening ? 52 : 36,
+        height: opening ? 58 : readinessVisible ? 43 : 36,
         className,
         markup,
+        displayed: existingLabel?.displayed,
+        detailDisplayed: markupChanged ? undefined : existingLabel?.detailDisplayed,
+        selected: existingLabel?.className === className ? existingLabel.selected : undefined,
+        transform: existingLabel?.transform,
       });
     }
 
@@ -994,21 +1040,43 @@ export class ThreeGlobeScene implements MapSceneAdapter {
       label.element.remove();
       this.labels.delete(key);
     }
+    this.labelsDirty = true;
   }
 
   private buildCountryLabelSignature(engine: WorldMapEngineContract): string {
     const territorySignature = COUNTRIES.map((country) => {
       const territory = engine.state.territories[country.id];
+      const readiness = territory
+        ? globeTerritoryReadinessPresentation(territory.army)
+        : undefined;
       return territory
-        ? `${territory.ownerId}:${territory.coreOwnerId}:${Math.round(territory.integration * 100)}:${Math.round(territory.army.power)}`
+        ? `${territory.ownerId}:${territory.coreOwnerId}:${Math.round(territory.integration * 100)}:${Math.round(readiness!.fillRatio * 20)}:${Math.round(readiness!.localCapacityRatio * 20)}`
         : '';
     }).join(',');
+    const powerByOwner = new Map<string, number>();
+    for (const territory of Object.values(engine.state.territories)) {
+      powerByOwner.set(
+        territory.ownerId,
+        (powerByOwner.get(territory.ownerId) ?? 0) + territory.army.power,
+      );
+    }
+    const powerSignature = [...powerByOwner]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([ownerId, power]) => `${ownerId}:${compactMapCombatPower(power)}`)
+      .join(',');
+    const controllerSignature = [...powerByOwner.keys()]
+      .sort((left, right) => left.localeCompare(right))
+      .map((ownerId) => {
+        const owner = engine.player(ownerId);
+        return `${ownerId}:${owner?.name ?? ''}:${owner?.isHuman ? 1 : 0}:${owner?.controllerName ?? ''}`;
+      })
+      .join(',');
     const openingSignature = Object.values(engine.state.openingMobilisations)
       .sort((left, right) => left.playerId.localeCompare(right.playerId))
       .map((phase) => `${phase.playerId}:${phase.direction}:${Math.round(phase.remainingRatio * 100)}`)
       .join(',');
     const rankingSignature = engine.globalRanking().slice(0, 10)
-      .map((entry) => `${entry.player.id}:${Math.round(entry.score)}`)
+      .map((entry) => entry.player.id)
       .join(',');
     const warSignature = engine.state.wars.map((war) => [
       war.id,
@@ -1017,7 +1085,7 @@ export class ThreeGlobeScene implements MapSceneAdapter {
       ...war.attackerOperations.flatMap((operation) => [operation.sourceId, operation.targetId]),
       ...war.defenderOperations.flatMap((operation) => [operation.sourceId, operation.targetId]),
     ].join(':')).join('|');
-    return `${territorySignature}|${openingSignature}|${rankingSignature}|${warSignature}`;
+    return `${territorySignature}|${powerSignature}|${controllerSignature}|${openingSignature}|${rankingSignature}|${warSignature}`;
   }
 
   private rebuildRoutes(): void {
@@ -1030,13 +1098,14 @@ export class ThreeGlobeScene implements MapSceneAdapter {
       || left.sourceId.localeCompare(right.sourceId)
       || left.targetId.localeCompare(right.targetId)
     ));
-    const logistics = this.engine.state.logisticsMovements
-      .filter((movement) => movement.playerId === this.engine!.state.humanPlayerId && movement.manpower > 0.000001)
-      .sort((left, right) => right.manpower - left.manpower)
-      .slice(0, 6);
+    const logistics = groupGlobeLogisticsMovements(
+      this.engine.state.logisticsMovements,
+      this.engine.state.humanPlayerId,
+      6,
+    );
     const signature = [
       ...operations.map((operation) => `${operation.commanderId}:${operation.sourceId}:${operation.targetId}:${operation.access ?? ''}:${Math.round(operation.momentum)}`),
-      ...logistics.map((movement) => `l:${movement.sourceId}:${movement.targetId}:${movement.manpower.toFixed(5)}`),
+      ...logistics.map((movement) => `l:${movement.sourceId}:${movement.targetId}`),
     ].join('|');
     if (signature === this.routeSignature) return;
     this.routeSignature = signature;
@@ -1080,46 +1149,38 @@ export class ThreeGlobeScene implements MapSceneAdapter {
       const path = routeBetween(movement.sourceId, movement.targetId, 0.065, movementAccess);
       if (!path) return;
       const material = new THREE.LineDashedMaterial({
-        color: 0x70ecff,
+        color: 0x86f0ff,
         transparent: true,
-        opacity: 0.46,
-        dashSize: 0.08,
-        gapSize: 0.09,
+        opacity: 0.54,
+        dashSize: 0.065,
+        gapSize: 0.075,
         depthWrite: false,
       });
+      const dashOffsetUniform = { value: 0 };
+      material.onBeforeCompile = (shader) => {
+        shader.uniforms.routeDashOffset = dashOffsetUniform;
+        shader.fragmentShader = shader.fragmentShader
+          .replace(
+            'uniform float totalSize;',
+            'uniform float totalSize;\nuniform float routeDashOffset;',
+          )
+          .replace(
+            'mod( vLineDistance, totalSize )',
+            'mod( vLineDistance + routeDashOffset, totalSize )',
+          );
+      };
+      material.customProgramCacheKey = () => 'ww3-flowing-route-dash-v1';
       const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(path), material);
       line.computeLineDistances();
       this.routeGroup.add(line);
-      this.animatedRouteMaterials.push({ material, baseOpacity: 0.46, phase: 1.2 + index });
+      this.animatedRouteMaterials.push({
+        material,
+        baseOpacity: 0.54,
+        phase: 1.2 + index,
+        flowSpeed: 0.24,
+        dashOffsetUniform,
+      });
     });
-  }
-
-  private rebuildHighlights(): void {
-    disposeObject(this.highlightGroup);
-    this.highlightGroup.clear();
-    const added = new Set<string>();
-    const add = (territoryId: string | undefined, color: number, opacity: number): void => {
-      if (!territoryId || added.has(territoryId)) return;
-      added.add(territoryId);
-      const country = COUNTRY_BY_ID_MAP.get(territoryId);
-      if (!country) return;
-      for (const ring of country.rings) {
-        if (ring.length < 3) continue;
-        const points = ring.map(([longitude, latitude]) => (
-          vectorFor(longitude, latitude, GLOBE_RADIUS * 1.008)
-        ));
-        points.push(points[0]!.clone());
-        this.highlightGroup.add(new THREE.Line(
-          new THREE.BufferGeometry().setFromPoints(points),
-          new THREE.LineBasicMaterial({ color, transparent: true, opacity, depthWrite: false }),
-        ));
-      }
-    };
-    add(this.selection.targetId, 0xffd477, 1);
-    add(this.selection.sourceId, 0x83f3ff, 0.98);
-    for (const targetId of this.selection.legalTargetIds) add(targetId, 0x6cefdc, 0.78);
-    for (const hintId of this.selection.hintTargetIds ?? []) add(hintId, 0x82b9ff, 0.42);
-    add(this.hoveredTerritoryId, 0xc3fbff, 1);
   }
 
   private bindInput(): void {
@@ -1157,19 +1218,33 @@ export class ThreeGlobeScene implements MapSceneAdapter {
       );
       if (this.pointerTravel > DRAG_THRESHOLD) {
         this.clearHover();
-        return;
       }
+      return;
     }
-    const pick = this.pickAtEvent(event)
-      ?? (this.camera.position.length() <= 8.2 ? this.nearestCountryPick(event) : undefined);
-    this.applyHover(pick, event.clientX, event.clientY);
+    this.pendingHoverSample = {
+      clientX: event.clientX,
+      clientY: event.clientY,
+      pointerType: event.pointerType,
+    };
+    if (!this.hoverFrameRequest) {
+      this.hoverFrameRequest = window.requestAnimationFrame(this.flushPendingHover);
+    }
+  };
+
+  private readonly flushPendingHover = (): void => {
+    this.hoverFrameRequest = 0;
+    const sample = this.pendingHoverSample;
+    this.pendingHoverSample = undefined;
+    if (!sample || this.inputBlocked || this.pointerDown) return;
+    const pick = this.pickAtPoint(sample, true);
+    this.applyHover(pick, sample.clientX, sample.clientY);
   };
 
   private readonly onPointerUp = (event: PointerEvent): void => {
     if (!this.pointerDown) return;
     this.pointerDown = false;
     if (this.inputBlocked || this.pointerTravel > DRAG_THRESHOLD) return;
-    const pick = this.pickAtEvent(event) ?? this.nearestCountryPick(event);
+    const pick = this.pickAtEvent(event);
     if (pick?.kind === 'country') {
       this.focusedPolarRegion = undefined;
       mapBridge.onTerritoryClick?.(pick.territoryId);
@@ -1181,15 +1256,29 @@ export class ThreeGlobeScene implements MapSceneAdapter {
 
   private readonly onPointerCancel = (): void => {
     this.pointerDown = false;
+    this.pendingHoverSample = undefined;
     this.clearHover();
   };
 
   private readonly onPointerLeave = (): void => {
     this.pointerDown = false;
+    this.pendingHoverSample = undefined;
     this.clearHover();
   };
 
   private pickAtEvent(event: PointerEvent): GlobePickResult {
+    return this.pickAtPoint(event, true);
+  }
+
+  private pickAtPoint(event: PointerSample, allowMicrostateHitProxy = false): GlobePickResult {
+    const uv = this.globeUvAtPoint(event);
+    if (!uv) return undefined;
+    const exactPick = this.globeTexture.pick(uv.x, uv.y);
+    if (exactPick || !allowMicrostateHitProxy) return exactPick;
+    return this.nearestMicrostateCountryPick(event);
+  }
+
+  private globeUvAtPoint(event: PointerSample): { x: number; y: number } | undefined {
     const rect = this.renderer.domElement.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return undefined;
     this.pointer.set(
@@ -1197,26 +1286,29 @@ export class ThreeGlobeScene implements MapSceneAdapter {
       -((event.clientY - rect.top) / rect.height) * 2 + 1,
     );
     this.raycaster.setFromCamera(this.pointer, this.camera);
-    const intersection = this.raycaster.intersectObject(this.globe, false)[0];
-    return intersection?.uv
-      ? this.globeTexture.pick(intersection.uv.x, intersection.uv.y)
-      : undefined;
+    const intersection = this.raycaster.ray.intersectSphere(this.pickSphere, this.pickPoint);
+    if (!intersection) return undefined;
+    const coordinates = unitXyzToLonLat(intersection);
+    return {
+      x: (coordinates.longitude + 180) / 360,
+      y: (coordinates.latitude + 90) / 180,
+    };
   }
 
-  private nearestCountryPick(event: PointerEvent): GlobePickResult {
-    const threshold = event.pointerType === 'touch' ? 32 : 23;
-    let bestId: string | undefined;
-    let bestDistance = threshold;
-    for (const country of COUNTRIES) {
-      const screen = this.territoryScreenPosition(country.id);
-      if (!screen) continue;
-      const distance = Math.hypot(screen.x - event.clientX, screen.y - event.clientY);
-      if (distance < bestDistance) {
-        bestDistance = distance;
-        bestId = country.id;
-      }
-    }
-    return bestId ? { kind: 'country', territoryId: bestId } : undefined;
+  private nearestMicrostateCountryPick(event: PointerSample): GlobePickResult {
+    const viewport = this.host.getBoundingClientRect();
+    const territoryId = nearestMicrostateScreenPick(
+      this.projectedMicrostatePickAnchors(viewport),
+      {
+        clientX: event.clientX,
+        clientY: event.clientY,
+        pointerType: event.pointerType,
+        cameraDistance: this.camera.position.length(),
+        viewportWidth: viewport.width,
+        viewportHeight: viewport.height,
+      },
+    );
+    return territoryId ? { kind: 'country', territoryId } : undefined;
   }
 
   private applyHover(pick: GlobePickResult, clientX: number, clientY: number): void {
@@ -1229,11 +1321,23 @@ export class ThreeGlobeScene implements MapSceneAdapter {
     this.hoveredPolarRegion = polarRegion;
     if (polarRegion) {
       const rect = this.host.getBoundingClientRect();
-      this.polarHoverPosition = { x: clientX - rect.left, y: clientY - rect.top };
-    } else this.polarHoverPosition = undefined;
-    if (changed) this.rebuildHighlights();
+      const x = clientX - rect.left;
+      const y = clientY - rect.top;
+      if (this.polarHoverPosition) {
+        this.polarHoverPosition.x = x;
+        this.polarHoverPosition.y = y;
+      } else this.polarHoverPosition = { x, y };
+      this.polarCardsDirty = true;
+    } else if (this.polarHoverPosition) {
+      this.polarHoverPosition = undefined;
+      this.polarCardsDirty = true;
+    }
+    if (changed) {
+      this.labelsDirty = true;
+      this.polarCardsDirty = true;
+    }
     if (territoryId) mapBridge.onTerritoryHover?.(territoryId, clientX, clientY);
-    else mapBridge.onTerritoryHover?.(undefined, 0, 0);
+    else if (changed) mapBridge.onTerritoryHover?.(undefined, 0, 0);
   }
 
   private clearHover(): void {
@@ -1241,7 +1345,8 @@ export class ThreeGlobeScene implements MapSceneAdapter {
     this.hoveredTerritoryId = undefined;
     this.hoveredPolarRegion = undefined;
     this.polarHoverPosition = undefined;
-    this.rebuildHighlights();
+    this.labelsDirty = true;
+    this.polarCardsDirty = true;
     mapBridge.onTerritoryHover?.(undefined, 0, 0);
   }
 
@@ -1264,14 +1369,57 @@ export class ThreeGlobeScene implements MapSceneAdapter {
     this.controls.enabled = false;
   }
 
+  private projectedMicrostatePickAnchors(
+    viewport: DOMRect,
+  ): readonly ProjectedMicrostatePickAnchor[] {
+    const cached = this.microstatePickProjectionCache;
+    if (cached
+      && cached.cameraPosition.distanceToSquared(this.camera.position) < 1e-8
+      && cached.viewportLeft === viewport.left
+      && cached.viewportTop === viewport.top
+      && cached.viewportWidth === viewport.width
+      && cached.viewportHeight === viewport.height) return cached.anchors;
+
+    const anchors: ProjectedMicrostatePickAnchor[] = [];
+    for (const anchor of MICROSTATE_PICK_ANCHORS) {
+      const screen = this.projectWorldPosition(anchor.worldPosition, viewport);
+      if (!screen) continue;
+      anchors.push({
+        territoryId: anchor.territoryId,
+        clientX: screen.clientX,
+        clientY: screen.clientY,
+        angularRadiusDegrees: anchor.angularRadiusDegrees,
+        frontFacing: true,
+      });
+    }
+    this.microstatePickProjectionCache = {
+      cameraPosition: this.camera.position.clone(),
+      viewportLeft: viewport.left,
+      viewportTop: viewport.top,
+      viewportWidth: viewport.width,
+      viewportHeight: viewport.height,
+      anchors,
+    };
+    return anchors;
+  }
+
   private projectCoordinates(
     longitude: number,
     latitude: number,
     viewport = this.host.getBoundingClientRect(),
   ): ScreenProjection | undefined {
-    const direction = vectorFor(longitude, latitude);
-    if (!isFrontSideVisible(direction, this.camera.position, FRONT_VISIBILITY_DOT)) return undefined;
-    const ndc = direction.multiplyScalar(GLOBE_RADIUS * 1.025).project(this.camera);
+    return this.projectWorldPosition(
+      vectorFor(longitude, latitude, GLOBE_RADIUS * 1.025),
+      viewport,
+    );
+  }
+
+  private projectWorldPosition(
+    worldPosition: THREE.Vector3,
+    viewport: DOMRect,
+  ): ScreenProjection | undefined {
+    if (!isFrontSideVisible(worldPosition, this.camera.position, FRONT_VISIBILITY_DOT)) return undefined;
+    const ndc = this.projectionPoint.copy(worldPosition).project(this.camera);
     if (ndc.z < -1 || ndc.z > 1 || Math.abs(ndc.x) > 1.08 || Math.abs(ndc.y) > 1.08) return undefined;
     const client = ndcToCssPoint(ndc, viewport);
     return {
@@ -1284,39 +1432,64 @@ export class ThreeGlobeScene implements MapSceneAdapter {
     };
   }
 
+  private setLabelDisplayed(label: GlobeLabel, displayed: boolean): void {
+    if (label.displayed === displayed) return;
+    label.displayed = displayed;
+    label.element.style.display = displayed ? 'block' : 'none';
+  }
+
+  private setLabelTransform(label: GlobeLabel, transform: string): void {
+    if (label.transform === transform) return;
+    label.transform = transform;
+    label.element.style.transform = transform;
+  }
+
   private updateLabels(): void {
-    const deepView = this.camera.position.length() <= DEEP_VIEW_DISTANCE;
+    const cameraChanged = this.camera.position.distanceToSquared(this.lastLabelCameraPosition) >= 1e-8;
+    if (!this.labelsDirty && !cameraChanged) {
+      if (!this.polarCardsDirty) return;
+      const viewport = this.host.getBoundingClientRect();
+      this.updatePolarCardPosition('antarctica', this.antarcticaCard, viewport);
+      this.updatePolarCardPosition('arctic', this.arcticCard, viewport);
+      this.polarCardsDirty = false;
+      return;
+    }
+    this.labelsDirty = false;
+    this.polarCardsDirty = false;
+    this.lastLabelCameraPosition.copy(this.camera.position);
     const viewport = this.host.getBoundingClientRect();
     const candidates: Array<{ label: GlobeLabel; screen: ScreenProjection; selected: boolean }> = [];
     for (const label of this.labels.values()) {
-      const screen = this.projectCoordinates(label.longitude, label.latitude, viewport);
+      const selected = label.kind === 'country' && (
+        label.id === this.selection.sourceId
+        || label.id === this.selection.targetId
+        || label.id === this.hoveredTerritoryId
+      );
+      if (label.kind === 'country' && !label.persistent && !selected) {
+        this.setLabelDisplayed(label, false);
+        continue;
+      }
+      const screen = this.projectWorldPosition(label.worldPosition, viewport);
       if (!screen) {
-        label.element.style.display = 'none';
+        this.setLabelDisplayed(label, false);
         continue;
       }
       if (label.kind === 'sea') {
         const visible = this.camera.position.length() >= 7.05
           && this.focusedPolarRegion !== 'antarctica';
-        label.element.style.display = visible ? 'block' : 'none';
+        this.setLabelDisplayed(label, visible);
         if (visible) {
-          label.element.style.transform = `translate3d(${screen.localX}px, ${screen.localY}px, 0) translate(-50%, -50%) rotate(var(--label-rotation, 0deg))`;
+          this.setLabelTransform(label, `translate3d(${screen.localX}px, ${screen.localY}px, 0) translate(-50%, -50%) rotate(var(--label-rotation, 0deg))`);
         }
         continue;
       }
       if (label.kind === 'access') {
         const visible = this.hoveredPolarRegion === 'antarctica'
           || this.focusedPolarRegion === 'antarctica';
-        label.element.style.display = visible ? 'block' : 'none';
+        this.setLabelDisplayed(label, visible);
         if (visible) {
-          label.element.style.transform = `translate3d(${screen.localX}px, ${screen.localY}px, 0) translate(-50%, -112%)`;
+          this.setLabelTransform(label, `translate3d(${screen.localX}px, ${screen.localY}px, 0) translate(-50%, -112%)`);
         }
-        continue;
-      }
-      const selected = label.id === this.selection.sourceId
-        || label.id === this.selection.targetId
-        || label.id === this.hoveredTerritoryId;
-      if (!label.persistent && !selected && !(deepView && label.projectedSpan >= 7)) {
-        label.element.style.display = 'none';
         continue;
       }
       candidates.push({ label, screen, selected });
@@ -1326,19 +1499,19 @@ export class ThreeGlobeScene implements MapSceneAdapter {
       Number(right.selected) - Number(left.selected)
       || left.label.priority - right.label.priority
     ));
-    let deepLabels = 0;
     const occupied: Array<{ left: number; right: number; top: number; bottom: number }> = [];
     for (const candidate of candidates) {
       const { label, screen, selected } = candidate;
-      const ordinaryDeep = !label.persistent && !selected;
-      if (ordinaryDeep && deepLabels >= MAX_DEEP_LABELS) {
-        label.element.style.display = 'none';
-        continue;
+      const detailDisplayed = selected || label.persistent;
+      if (label.detailElement && label.detailDisplayed !== detailDisplayed) {
+        label.detailDisplayed = detailDisplayed;
+        label.detailElement.style.display = detailDisplayed ? '' : 'none';
       }
-      const detail = label.element.querySelector('span');
-      if (detail) (detail as HTMLElement).style.display = selected || label.persistent ? '' : 'none';
-      label.element.classList.toggle('is-selected', selected);
-      label.element.style.display = 'block';
+      if (label.selected !== selected) {
+        label.selected = selected;
+        label.element.classList.toggle('is-selected', selected);
+      }
+      this.setLabelDisplayed(label, true);
       const width = label.width;
       const height = label.height;
       let localY = screen.localY;
@@ -1362,17 +1535,8 @@ export class ThreeGlobeScene implements MapSceneAdapter {
           bottom: localY + height / 2,
         };
       }
-      const collides = occupied.some((entry) => !(
-        rectangle.right + 4 < entry.left || rectangle.left - 4 > entry.right
-        || rectangle.bottom + 3 < entry.top || rectangle.top - 3 > entry.bottom
-      ));
-      if (collides && ordinaryDeep) {
-        label.element.style.display = 'none';
-        continue;
-      }
       occupied.push(rectangle);
-      if (ordinaryDeep) deepLabels += 1;
-      label.element.style.transform = `translate3d(${screen.localX}px, ${localY}px, 0) translate(-50%, -50%)`;
+      this.setLabelTransform(label, `translate3d(${screen.localX}px, ${localY}px, 0) translate(-50%, -50%)`);
     }
 
     this.updatePolarCardPosition('antarctica', this.antarcticaCard, viewport);
@@ -1423,6 +1587,11 @@ export class ThreeGlobeScene implements MapSceneAdapter {
     }
   }
 
+  private readonly onControlsChange = (): void => {
+    this.cameraActivityUntil = performance.now() + CAMERA_ACTIVITY_HOLD_MS;
+    this.labelsDirty = true;
+  };
+
   private updateBattleEffects(now: number): void {
     for (let index = this.battleEffects.length - 1; index >= 0; index -= 1) {
       const effect = this.battleEffects[index]!;
@@ -1433,8 +1602,16 @@ export class ThreeGlobeScene implements MapSceneAdapter {
         this.battleEffects.splice(index, 1);
         continue;
       }
+      const travelProgress = THREE.MathUtils.smoothstep(progress, 0, 0.68);
+      const visibleRoutePoints = Math.max(2, Math.ceil(
+        2 + travelProgress * Math.max(0, effect.path.length - 2),
+      ));
+      if (!this.reducedMotion) effect.route.geometry.setDrawRange(0, visibleRoutePoints);
+      const routeFade = 1 - THREE.MathUtils.smoothstep(progress, 0.68, 1);
+      effect.route.material.opacity = (this.reducedMotion ? 0.72 : 0.46) * routeFade;
+
       if (effect.projectile) {
-        const pathProgress = THREE.MathUtils.clamp(progress * 1.35, 0, 0.9999);
+        const pathProgress = THREE.MathUtils.clamp(travelProgress, 0, 0.9999);
         const scaled = pathProgress * (effect.path.length - 1);
         const pathIndex = Math.floor(scaled);
         const localProgress = scaled - pathIndex;
@@ -1443,14 +1620,22 @@ export class ThreeGlobeScene implements MapSceneAdapter {
           effect.path[Math.min(effect.path.length - 1, pathIndex + 1)]!,
           localProgress,
         );
+        const projectileFade = 1 - THREE.MathUtils.smoothstep(progress, 0.62, 0.76);
+        const pulse = 0.96 + Math.sin(progress * Math.PI * 8) * 0.07;
+        effect.projectile.scale.setScalar(pulse);
+        effect.projectile.visible = projectileFade > 0.01;
+        const [haloMaterial, coreMaterial] = effect.projectileMaterials;
+        if (haloMaterial) haloMaterial.opacity = 0.24 * projectileFade;
+        if (coreMaterial) coreMaterial.opacity = 0.96 * projectileFade;
       }
-      const impact = effect.group.children[effect.group.children.length - 1];
-      if (impact) {
-        const impactProgress = THREE.MathUtils.clamp((progress - 0.58) / 0.42, 0, 1);
-        impact.scale.setScalar(1 + impactProgress * BATTLE_IMPACT_EXPANSION);
-        const material = (impact as THREE.Mesh).material as THREE.MeshBasicMaterial;
-        material.opacity = (1 - impactProgress) * 0.9;
-      }
+
+      const impactProgress = THREE.MathUtils.clamp((progress - 0.62) / 0.38, 0, 1);
+      const impactEnvelope = Math.sin(impactProgress * Math.PI);
+      effect.impactRing.scale.setScalar(0.62 + impactProgress * BATTLE_IMPACT_SCALE);
+      effect.impactRing.material.opacity = impactEnvelope * 0.88;
+      effect.impactFlash.scale.setScalar(0.72 + impactProgress * 1.18);
+      effect.impactFlash.material.opacity = Math.min(1, impactProgress * 5)
+        * (1 - impactProgress) * 0.78;
     }
   }
 
@@ -1458,7 +1643,19 @@ export class ThreeGlobeScene implements MapSceneAdapter {
     if (this.reducedMotion) return;
     const seconds = now / 1000;
     for (const route of this.animatedRouteMaterials) {
-      route.material.opacity = route.baseOpacity * (0.82 + Math.sin(seconds * 2.1 + route.phase) * 0.18);
+      const pulseSpeed = route.flowSpeed ?? 2.1;
+      route.material.opacity = route.baseOpacity * (0.82 + Math.sin(seconds * pulseSpeed + route.phase) * 0.18);
+      if (route.flowSpeed && route.dashOffsetUniform
+        && route.material instanceof THREE.LineDashedMaterial) {
+        // Three's line distance grows from source to target. Moving the dash
+        // phase negatively therefore carries the visible flow in that same
+        // direction. Keep the value inside one dash cycle so long sessions do
+        // not accumulate a needlessly large floating-point offset.
+        const dashCycle = route.material.dashSize + route.material.gapSize;
+        route.dashOffsetUniform.value = -(
+          (seconds * route.flowSpeed + route.phase) % dashCycle
+        );
+      }
     }
     const polarActive = this.hoveredPolarRegion === 'antarctica'
       || this.focusedPolarRegion === 'antarctica';
@@ -1469,83 +1666,41 @@ export class ThreeGlobeScene implements MapSceneAdapter {
     }
   }
 
-  private updatePoliticalDetailLayer(): void {
-    const distance = this.camera.position.length();
-    const rawOpacity = THREE.MathUtils.clamp(
-      (DETAIL_FADE_START_DISTANCE - distance)
-        / (DETAIL_FADE_START_DISTANCE - DETAIL_FULL_OPACITY_DISTANCE),
-      0,
-      1,
-    );
-    const opacity = rawOpacity * rawOpacity * (3 - 2 * rawOpacity);
-    if (opacity <= 0.002) {
-      this.politicalDetailGlobe.visible = false;
-      if (this.detailViewDirection) {
-        this.detailViewDirection = undefined;
-        this.globeTexture.setDetailView(undefined);
-      }
-      return;
-    }
-
-    this.politicalDetailGlobe.visible = true;
-    this.politicalDetailMaterial.uniforms.detailOpacity!.value = opacity;
-    const cameraDirection = this.camera.position.clone().normalize();
-    if (this.detailViewDirection
-      && this.detailViewDirection.angleTo(cameraDirection) < DETAIL_RECENTER_RADIANS) return;
-
-    const coordinates = unitXyzToLonLat(cameraDirection);
-    const latitude = THREE.MathUtils.clamp(coordinates.latitude, -82, 82);
-    // Longitude degrees contract near the poles. Widen the atlas there so its
-    // physical ground coverage and pixel density remain stable around Greenland.
-    const longitudeSpan = THREE.MathUtils.clamp(
-      DETAIL_BASE_LONGITUDE_SPAN / Math.max(0.46, Math.cos(THREE.MathUtils.degToRad(latitude))),
-      DETAIL_BASE_LONGITUDE_SPAN,
-      112,
-    );
-    this.detailViewDirection = cameraDirection;
-    this.politicalDetailMaterial.uniforms.detailCenter!.value.set(
-      (coordinates.longitude + 180) / 360,
-      (latitude + 90) / 180,
-    );
-    this.politicalDetailMaterial.uniforms.detailSpan!.value.set(
-      longitudeSpan / 360,
-      DETAIL_LATITUDE_SPAN / 180,
-    );
-    this.globeTexture.setDetailView({
-      longitude: coordinates.longitude,
-      latitude,
-      longitudeSpan,
-      latitudeSpan: DETAIL_LATITUDE_SPAN,
-    });
-  }
-
-  private updateGlobeBorderVisibility(): void {
-    const distance = this.camera.position.length();
-    const rawFade = THREE.MathUtils.clamp(
-      (BORDER_FADE_START_DISTANCE - distance)
-        / (BORDER_FADE_START_DISTANCE - BORDER_FULL_OPACITY_DISTANCE),
-      0,
-      1,
-    );
-    const smoothFade = rawFade * rawFade * (3 - 2 * rawFade);
-    this.borderMaterial.opacity = BORDER_DEEP_OPACITY * smoothFade;
-    this.borderLines.visible = smoothFade > 0.002;
-  }
-
   private resize(): void {
     const width = Math.max(1, this.host.clientWidth);
     const height = Math.max(1, this.host.clientHeight);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
-    this.renderer.setSize(width, height, false);
-    this.camera.aspect = width / height;
-    this.camera.updateProjectionMatrix();
+    const pixelRatio = Math.min(window.devicePixelRatio || 1, 1.5);
+    const sizeChanged = width !== this.renderWidth || height !== this.renderHeight;
+    const pixelRatioChanged = pixelRatio !== this.renderPixelRatio;
+    if (!sizeChanged && !pixelRatioChanged) return;
+    this.renderWidth = width;
+    this.renderHeight = height;
+    this.renderPixelRatio = pixelRatio;
+    if (pixelRatioChanged) this.renderer.setPixelRatio(pixelRatio);
+    if (sizeChanged) {
+      this.renderer.setSize(width, height, false);
+      this.camera.aspect = width / height;
+      this.camera.updateProjectionMatrix();
+      this.labelsDirty = true;
+      this.polarCardsDirty = true;
+    }
   }
 
   private readonly renderFrame = (now: number): void => {
     if (this.destroyed) return;
     this.frameRequest = window.requestAnimationFrame(this.renderFrame);
-    if (document.hidden || now - this.lastRenderAt < RENDER_INTERVAL_MS) return;
-    this.lastRenderAt = now;
+    const cameraActive = Boolean(this.cameraFlight) || now < this.cameraActivityUntil;
+    const presentationActive = this.battleEffects.length > 0
+      || this.hoveredPolarRegion !== undefined
+      || this.focusedPolarRegion !== undefined;
+    const renderInterval = cameraActive || presentationActive
+      ? ACTIVE_RENDER_INTERVAL_MS
+      : IDLE_RENDER_INTERVAL_MS;
+    const elapsed = now - this.lastRenderAt;
+    if (document.hidden || elapsed < renderInterval) return;
+    // Preserve the fractional remainder so high-refresh displays average the
+    // requested cadence instead of dropping to an uneven divisor of 120/144Hz.
+    this.lastRenderAt = now - (elapsed % renderInterval);
     this.updateCameraFlight(now);
     this.controls.rotateSpeed = globeRotateSpeedForDistance(
       this.camera.position.length(),
@@ -1553,11 +1708,19 @@ export class ThreeGlobeScene implements MapSceneAdapter {
       MAX_CAMERA_DISTANCE,
     );
     if (!this.cameraFlight) this.controls.update();
-    this.updatePoliticalDetailLayer();
-    this.updateGlobeBorderVisibility();
     this.updateBattleEffects(now);
     this.animateRoutes(now);
     this.updateLabels();
     this.renderer.render(this.scene, this.camera);
+    if (this.nextFrameResolvers.size > 0) {
+      const resolvers = [...this.nextFrameResolvers];
+      this.nextFrameResolvers.clear();
+      for (const resolve of resolvers) resolve();
+    }
+    if (this.resolveFirstFrame) {
+      const resolve = this.resolveFirstFrame;
+      this.resolveFirstFrame = undefined;
+      resolve();
+    }
   };
 }

@@ -31,5 +31,7 @@ describe('responsive strategic topbar', () => {
     expect(worldUiSource).not.toContain('<span>APEX</span>');
     expect(worldUiSource).toContain('data-panel="research"');
     expect(worldUiSource).not.toContain('data-panel="progress"');
+    expect(worldUiSource).toContain('<span>TREASURY</span><strong>${treasuryTopbar.value}</strong>');
+    expect(worldUiSource).toContain('Cashflow ${signedCash(annual(displayedNet))}/yr');
   });
 });

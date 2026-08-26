@@ -20,18 +20,17 @@ import {
 
 export const GLOBE_TEXTURE_WIDTH = 3072;
 export const GLOBE_TEXTURE_HEIGHT = 1536;
-const HIGH_DETAIL_GLOBE_TEXTURE_WIDTH = 4096;
-const HIGH_DETAIL_GLOBE_TEXTURE_HEIGHT = 2048;
+// Desktop uses one fixed, higher-resolution atlas from lobby through maximum
+// zoom. This improves small-country coastlines without introducing a separate
+// close-zoom texture, redraw path or additional globe pass.
+const HIGH_DETAIL_GLOBE_TEXTURE_WIDTH = 7168;
+const HIGH_DETAIL_GLOBE_TEXTURE_HEIGHT = 3584;
 const HIGH_DETAIL_MIN_VIEWPORT_WIDTH = 900;
-const DETAIL_TEXTURE_WIDTH = 2048;
-const DETAIL_TEXTURE_HEIGHT = 1536;
-const DETAIL_FLAG_WIDTH = 1024;
-const DETAIL_FLAG_HEIGHT = 768;
-const DETAIL_FLAG_CACHE_LIMIT = 24;
 const PICK_TEXTURE_WIDTH = 2048;
 const PICK_TEXTURE_HEIGHT = 1024;
 const ANTARCTICA_PICK_ID = 0xff_ff_ff;
 const ARCTIC_PICK_ID = 0xff_ff_fe;
+const COUNTRY_PICK_COLOR_STEP = 0x9e_37_79;
 
 export type GlobePickResult =
   | { kind: 'country'; territoryId: string }
@@ -47,12 +46,17 @@ interface PreparedRing {
   maximumLongitude: number;
   minimumLatitude: number;
   maximumLatitude: number;
+  longitudeShifts: readonly number[];
+  visualArea: number;
 }
 
 interface PreparedCountry {
   country: CountryRecord;
   rings: readonly PreparedRing[];
+  flagRings: readonly PreparedRing[];
+  iceRings: readonly PreparedRing[];
   pickId: number;
+  terrainLayers: TerrainTextureLayerPresentation;
 }
 
 interface TextureSnapshot {
@@ -60,18 +64,49 @@ interface TextureSnapshot {
   selection: MapSelectionState;
 }
 
-export interface GlobeDetailView {
-  longitude: number;
-  latitude: number;
-  longitudeSpan: number;
-  latitudeSpan: number;
+export type GlobeFlagRingPolicy = 'all-non-ice' | 'principal-only';
+
+export function globeFlagRingPolicy(countryId: string): GlobeFlagRingPolicy {
+  return countryId === 'fra' || countryId === 'prt' || countryId === 'nld' || countryId === 'chl'
+    ? 'principal-only'
+    : 'all-non-ice';
 }
 
-interface DetailRenderWindow {
-  minimumLongitude: number;
-  maximumLongitude: number;
-  minimumLatitude: number;
-  maximumLatitude: number;
+export interface GlobeFlagTerritoryState {
+  readonly ownerId: string;
+  readonly coreOwnerId: string;
+  readonly integration: number;
+}
+
+export function globeTerritoryIsIntegrating(territory: GlobeFlagTerritoryState): boolean {
+  return territory.coreOwnerId !== territory.ownerId && territory.integration < 1;
+}
+
+export function globeTerritoryFlagOwnerId(territory: GlobeFlagTerritoryState): string {
+  return globeTerritoryIsIntegrating(territory) ? territory.coreOwnerId : territory.ownerId;
+}
+
+export function globeFlagProjectionKey(
+  territoryId: string,
+  territory: GlobeFlagTerritoryState,
+): string {
+  return globeTerritoryIsIntegrating(territory)
+    ? `integrating:${territoryId}`
+    : `realm:${territory.ownerId}`;
+}
+
+/**
+ * Widely spaced exact colours keep antialiased border pixels from decoding as
+ * a completely unrelated country. The odd multiplier permutes 24-bit colour
+ * space, so every practical country index receives a unique pick code.
+ */
+export function globeCountryPickId(index: number): number {
+  const pickId = (((Math.max(0, Math.floor(index)) + 1) * COUNTRY_PICK_COLOR_STEP) >>> 0)
+    & 0xff_ff_ff;
+  if (pickId === 0 || pickId === ANTARCTICA_PICK_ID || pickId === ARCTIC_PICK_ID) {
+    return pickId ^ 0x00_ff_00;
+  }
+  return pickId;
 }
 
 const colorCss = (color: number): string => `#${color.toString(16).padStart(6, '0')}`;
@@ -81,22 +116,6 @@ function colorMix(left: number, right: number, amount: number): number {
   const green = ((left >> 8) & 0xff) * (1 - amount) + ((right >> 8) & 0xff) * amount;
   const blue = (left & 0xff) * (1 - amount) + (right & 0xff) * amount;
   return (Math.round(red) << 16) | (Math.round(green) << 8) | Math.round(blue);
-}
-
-function drawDominantTerrainTint(
-  context: CanvasRenderingContext2D,
-  country: PreparedCountry,
-  terrainLayers: TerrainTextureLayerPresentation,
-  width: number,
-  height: number,
-  dimmed: boolean,
-): void {
-  context.save();
-  tracePreparedCountry(context, country, width, height);
-  context.fillStyle = colorCss(terrainLayers.tintColor);
-  context.globalAlpha = terrainLayers.tintAlpha * (dimmed ? 0.46 : 1);
-  context.fill('evenodd');
-  context.restore();
 }
 
 function unwrapRing(ring: readonly Coordinate[]): Coordinate[] {
@@ -119,23 +138,93 @@ function unwrapRing(ring: readonly Coordinate[]): Coordinate[] {
 function prepareRing(ring: readonly Coordinate[]): PreparedRing | undefined {
   const points = unwrapRing(ring);
   if (points.length < 3) return undefined;
+  const minimumLongitude = Math.min(...points.map(([longitude]) => longitude));
+  const maximumLongitude = Math.max(...points.map(([longitude]) => longitude));
+  const minimumLatitude = Math.min(...points.map(([, latitude]) => latitude));
+  const maximumLatitude = Math.max(...points.map(([, latitude]) => latitude));
+  let doubledArea = 0;
+  for (let index = 0; index < points.length; index += 1) {
+    const start = points[index]!;
+    const end = points[(index + 1) % points.length]!;
+    doubledArea += start[0] * end[1] - end[0] * start[1];
+  }
+  const middleLatitude = (minimumLatitude + maximumLatitude) * 0.5 * Math.PI / 180;
   return {
     points,
-    minimumLongitude: Math.min(...points.map(([longitude]) => longitude)),
-    maximumLongitude: Math.max(...points.map(([longitude]) => longitude)),
-    minimumLatitude: Math.min(...points.map(([, latitude]) => latitude)),
-    maximumLatitude: Math.max(...points.map(([, latitude]) => latitude)),
+    minimumLongitude,
+    maximumLongitude,
+    minimumLatitude,
+    maximumLatitude,
+    longitudeShifts: [-360, 0, 360].filter((shift) => (
+      maximumLongitude + shift >= -180 && minimumLongitude + shift <= 180
+    )),
+    visualArea: Math.abs(doubledArea) * 0.5 * Math.max(0.12, Math.cos(middleLatitude)),
   };
 }
 
-const PREPARED_COUNTRIES: readonly PreparedCountry[] = COUNTRIES.map((country, index) => ({
-  country,
-  pickId: index + 1,
-  rings: country.rings.flatMap((ring) => {
+function pointInPreparedRing(
+  longitude: number,
+  latitude: number,
+  ring: PreparedRing,
+  longitudeShift: number,
+): boolean {
+  if (longitude < ring.minimumLongitude + longitudeShift
+    || longitude > ring.maximumLongitude + longitudeShift
+    || latitude < ring.minimumLatitude
+    || latitude > ring.maximumLatitude) return false;
+  let inside = false;
+  for (let index = 0, previous = ring.points.length - 1; index < ring.points.length; previous = index, index += 1) {
+    const currentPoint = ring.points[index]!;
+    const previousPoint = ring.points[previous]!;
+    const currentX = currentPoint[0] + longitudeShift;
+    const previousX = previousPoint[0] + longitudeShift;
+    const currentY = currentPoint[1];
+    const previousY = previousPoint[1];
+    const crossesLatitude = (currentY > latitude) !== (previousY > latitude);
+    if (crossesLatitude
+      && longitude < ((previousX - currentX) * (latitude - currentY))
+        / (previousY - currentY) + currentX) inside = !inside;
+  }
+  return inside;
+}
+
+function preparedCountryContains(
+  country: PreparedCountry,
+  longitude: number,
+  latitude: number,
+): boolean {
+  let inside = false;
+  for (const ring of country.rings) {
+    for (const shift of ring.longitudeShifts) {
+      if (pointInPreparedRing(longitude, latitude, ring, shift)) inside = !inside;
+    }
+  }
+  return inside;
+}
+
+const PREPARED_COUNTRIES: readonly PreparedCountry[] = COUNTRIES.map((country, index) => {
+  const rings = country.rings.flatMap((ring) => {
     const prepared = prepareRing(ring);
     return prepared ? [prepared] : [];
-  }),
-}));
+  });
+  const byImportance = [...rings].sort((left, right) => right.visualArea - left.visualArea);
+  const principalRing = byImportance[0];
+  const iceRings = rings.filter((ring) => (
+    ring !== principalRing && ring.maximumLatitude >= 72
+  ));
+  const iceRingSet = new Set(iceRings);
+  const flagRings = globeFlagRingPolicy(country.id) === 'principal-only'
+    ? principalRing ? [principalRing] : []
+    : rings.filter((ring) => !iceRingSet.has(ring));
+  return {
+    country,
+    rings,
+    flagRings,
+    iceRings,
+    pickId: globeCountryPickId(index),
+    terrainLayers: terrainTextureLayerPresentation(terrainProfileForTerritory(country.id)),
+  };
+});
 
 function borderPointKey([longitude, latitude]: Coordinate): string {
   const wrappedLongitude = ((longitude + 180) % 360 + 360) % 360 - 180;
@@ -166,22 +255,8 @@ for (const country of COUNTRIES) {
 
 const COUNTRY_BY_PICK_ID = new Map(PREPARED_COUNTRIES.map((country) => [
   country.pickId,
-  country.country.id,
+  country,
 ]));
-
-function countryIntersectsWindow(
-  country: PreparedCountry,
-  window: DetailRenderWindow,
-): boolean {
-  return country.rings.some((ring) => {
-    if (ring.maximumLatitude < window.minimumLatitude
-      || ring.minimumLatitude > window.maximumLatitude) return false;
-    return [-360, 0, 360].some((shift) => (
-      ring.maximumLongitude + shift >= window.minimumLongitude
-        && ring.minimumLongitude + shift <= window.maximumLongitude
-    ));
-  });
-}
 
 /**
  * A globe's south pole collapses the full bottom edge of an equirectangular
@@ -272,9 +347,18 @@ function tracePreparedCountry(
   width: number,
   height: number,
 ): void {
+  tracePreparedRings(context, country.rings, width, height);
+}
+
+function tracePreparedRings(
+  context: CanvasRenderingContext2D,
+  rings: readonly PreparedRing[],
+  width: number,
+  height: number,
+): void {
   context.beginPath();
-  for (const ring of country.rings) {
-    for (const shift of [-360, 0, 360]) tracePreparedRing(context, ring, shift, width, height);
+  for (const ring of rings) {
+    for (const shift of ring.longitudeShifts) tracePreparedRing(context, ring, shift, width, height);
   }
 }
 
@@ -288,21 +372,30 @@ function traceCountryRealmBorder(
   const currentOwnerId = engine?.state.territories[country.country.id]?.ownerId;
   context.beginPath();
   for (const ring of country.rings) {
-    for (let index = 0; index < ring.points.length; index += 1) {
-      const start = ring.points[index];
-      const end = ring.points[(index + 1) % ring.points.length];
-      if (!start || !end || borderPointKey(start) === borderPointKey(end)) continue;
-      const neighbours = BORDER_EDGE_COUNTRIES.get(borderEdgeKey(start, end)) ?? [];
-      const internalRealmEdge = Boolean(currentOwnerId && neighbours.length > 1
-        && neighbours.every((territoryId) => (
-          engine?.state.territories[territoryId]?.ownerId === currentOwnerId
-        )));
-      if (internalRealmEdge) continue;
-      for (const shift of [-360, 0, 360]) {
+    for (const shift of ring.longitudeShifts) {
+      let tracingVisibleRun = false;
+      for (let index = 0; index < ring.points.length; index += 1) {
+        const start = ring.points[index];
+        const end = ring.points[(index + 1) % ring.points.length];
+        if (!start || !end || borderPointKey(start) === borderPointKey(end)) continue;
+        const neighbours = BORDER_EDGE_COUNTRIES.get(borderEdgeKey(start, end)) ?? [];
+        const internalRealmEdge = Boolean(currentOwnerId && neighbours.length > 1
+          && neighbours.every((territoryId) => (
+            engine?.state.territories[territoryId]?.ownerId === currentOwnerId
+          )));
+        if (internalRealmEdge) {
+          tracingVisibleRun = false;
+          continue;
+        }
         const [startX, startY] = texturePoint(start[0] + shift, start[1], width, height);
         const [endX, endY] = texturePoint(end[0] + shift, end[1], width, height);
-        context.moveTo(startX, startY);
+        // Keep consecutive Natural Earth edges in one canvas subpath. Drawing
+        // every source segment as a separate round-capped line made close-up
+        // borders look like a soft chain of overlapping dots even though the
+        // underlying 1:50m geometry was already detailed enough.
+        if (!tracingVisibleRun) context.moveTo(startX, startY);
         context.lineTo(endX, endY);
+        tracingVisibleRun = true;
       }
     }
   }
@@ -500,40 +593,128 @@ function drawAntarctica(
   context.stroke();
 }
 
-function drawFlagIntoRing(
+interface PreparedTextureBounds {
+  readonly left: number;
+  readonly right: number;
+  readonly top: number;
+  readonly bottom: number;
+}
+
+function preparedRingsTextureBounds(
+  rings: readonly PreparedRing[],
+  width: number,
+  height: number,
+): PreparedTextureBounds | undefined {
+  let left = width;
+  let right = 0;
+  let top = height;
+  let bottom = 0;
+  let hasVisibleRing = false;
+
+  for (const ring of rings) {
+    for (const shift of ring.longitudeShifts) {
+      const [ringLeft, ringTop] = texturePoint(
+        ring.minimumLongitude + shift,
+        ring.maximumLatitude,
+        width,
+        height,
+      );
+      const [ringRight, ringBottom] = texturePoint(
+        ring.maximumLongitude + shift,
+        ring.minimumLatitude,
+        width,
+        height,
+      );
+      const visibleLeft = Math.max(0, ringLeft);
+      const visibleRight = Math.min(width, ringRight);
+      if (visibleRight <= visibleLeft || ringBottom <= 0 || ringTop >= height) continue;
+      left = Math.min(left, visibleLeft);
+      right = Math.max(right, visibleRight);
+      top = Math.min(top, Math.max(0, ringTop));
+      bottom = Math.max(bottom, Math.min(height, ringBottom));
+      hasVisibleRing = true;
+    }
+  }
+  return hasVisibleRing ? { left, right, top, bottom } : undefined;
+}
+
+function drawFlagIntoProjection(
   context: CanvasRenderingContext2D,
-  ring: PreparedRing,
+  rings: readonly PreparedRing[],
   image: HTMLImageElement,
-  longitudeShift: number,
   width: number,
   height: number,
   alpha: number,
 ): void {
-  const [left, top] = texturePoint(
-    ring.minimumLongitude + longitudeShift,
-    ring.maximumLatitude,
-    width,
-    height,
-  );
-  const [right, bottom] = texturePoint(
-    ring.maximumLongitude + longitudeShift,
-    ring.minimumLatitude,
-    width,
-    height,
-  );
-  const drawWidth = Math.max(1, right - left);
-  const drawHeight = Math.max(1, bottom - top);
+  const bounds = preparedRingsTextureBounds(rings, width, height);
+  if (!bounds) return;
+
+  // Snap the single destination rectangle outwards to whole atlas pixels. The
+  // source remains the original SVG and high-quality interpolation stays on,
+  // but fractional destination edges no longer soften the complete flag.
+  const drawLeft = Math.floor(bounds.left);
+  const drawTop = Math.floor(bounds.top);
+  const drawRight = Math.ceil(bounds.right);
+  const drawBottom = Math.ceil(bounds.bottom);
+
   context.save();
   context.beginPath();
-  tracePreparedRing(context, ring, longitudeShift, width, height);
-  context.clip();
+  for (const ring of rings) {
+    for (const shift of ring.longitudeShifts) {
+      tracePreparedRing(context, ring, shift, width, height);
+    }
+  }
+  context.clip('evenodd');
   context.globalAlpha = alpha;
-  context.filter = 'brightness(1.13) saturate(0.88)';
-  context.drawImage(image, left, top, drawWidth, drawHeight);
+  context.drawImage(
+    image,
+    drawLeft,
+    drawTop,
+    Math.max(1, drawRight - drawLeft),
+    Math.max(1, drawBottom - drawTop),
+  );
   context.restore();
 }
 
-function stableSelectionSignature(selection: MapSelectionState): string {
+function drawIntegrationOverlay(
+  context: CanvasRenderingContext2D,
+  rings: readonly PreparedRing[],
+  width: number,
+  height: number,
+): void {
+  const bounds = preparedRingsTextureBounds(rings, width, height);
+  if (!bounds) return;
+
+  context.save();
+  tracePreparedRings(context, rings, width, height);
+  context.clip('evenodd');
+
+  const fade = context.createLinearGradient(bounds.left, bounds.top, bounds.right, bounds.bottom);
+  fade.addColorStop(0, 'rgba(255, 226, 154, 0.19)');
+  fade.addColorStop(0.55, 'rgba(244, 201, 106, 0.07)');
+  fade.addColorStop(1, 'rgba(219, 163, 65, 0.16)');
+  context.fillStyle = fade;
+  context.fillRect(
+    bounds.left,
+    bounds.top,
+    Math.max(1, bounds.right - bounds.left),
+    Math.max(1, bounds.bottom - bounds.top),
+  );
+
+  const diagonalSpan = Math.max(1, bounds.bottom - bounds.top);
+  const spacing = Math.max(8, width / 520);
+  context.beginPath();
+  for (let x = bounds.left - diagonalSpan; x <= bounds.right; x += spacing) {
+    context.moveTo(x, bounds.bottom);
+    context.lineTo(x + diagonalSpan, bounds.top);
+  }
+  context.strokeStyle = 'rgba(255, 225, 150, 0.26)';
+  context.lineWidth = Math.max(0.55, width / 9600);
+  context.stroke();
+  context.restore();
+}
+
+export function globeTextureSelectionSignature(selection: MapSelectionState): string {
   return [
     selection.sourceId ?? '',
     selection.targetId ?? '',
@@ -541,43 +722,145 @@ function stableSelectionSignature(selection: MapSelectionState): string {
   ].join('|');
 }
 
+export function globePoliticalStateSignature(engine: WorldMapEngineContract): string {
+  const territorySignature = COUNTRIES.map((country) => {
+    const territory = engine.state.territories[country.id];
+    return territory
+      ? `${territory.ownerId}:${territory.coreOwnerId}:${globeTerritoryIsIntegrating(territory) ? 'integrating' : 'core'}`
+      : '';
+  }).join(',');
+  const humanSignature = [...engine.state.humanPlayerIds].sort().join(',');
+  return `${humanSignature}|${territorySignature}`;
+}
+
+export interface GlobePoliticalPaintState {
+  readonly ownerId: string;
+  readonly coreOwnerId: string;
+  readonly integrating: boolean;
+  readonly flagOwnerId: string;
+}
+
+export interface GlobePoliticalPaintSnapshot {
+  readonly humanSignature: string;
+  readonly territories: Readonly<Record<string, GlobePoliticalPaintState>>;
+}
+
+export type GlobePoliticalAtlasUpdate =
+  | { readonly kind: 'none' }
+  | { readonly kind: 'full' }
+  | { readonly kind: 'capture'; readonly territoryIds: readonly string[] };
+
+export function captureGlobePoliticalPaintSnapshot(
+  engine: WorldMapEngineContract,
+): GlobePoliticalPaintSnapshot {
+  const territories: Record<string, GlobePoliticalPaintState> = {};
+  for (const country of COUNTRIES) {
+    const territory = engine.state.territories[country.id];
+    if (!territory) continue;
+    territories[country.id] = {
+      ownerId: territory.ownerId,
+      coreOwnerId: territory.coreOwnerId,
+      integrating: globeTerritoryIsIntegrating(territory),
+      flagOwnerId: globeTerritoryFlagOwnerId(territory),
+    };
+  }
+  return {
+    humanSignature: [...engine.state.humanPlayerIds].sort().join(','),
+    territories,
+  };
+}
+
+/**
+ * Only a fresh conquest can be repainted as one isolated territory. Realm
+ * merges, integration completion, revolutions and human-seat changes can alter
+ * shared projections or borders elsewhere and therefore retain the safe full
+ * atlas path.
+ */
+export function classifyGlobePoliticalAtlasUpdate(
+  previous: GlobePoliticalPaintSnapshot | undefined,
+  next: GlobePoliticalPaintSnapshot,
+): GlobePoliticalAtlasUpdate {
+  if (!previous || previous.humanSignature !== next.humanSignature) return { kind: 'full' };
+  const beforeIds = Object.keys(previous.territories);
+  const afterIds = Object.keys(next.territories);
+  if (beforeIds.length !== afterIds.length
+    || beforeIds.some((territoryId) => !(territoryId in next.territories))) {
+    return { kind: 'full' };
+  }
+
+  const capturedTerritoryIds: string[] = [];
+  for (const territoryId of afterIds) {
+    const before = previous.territories[territoryId];
+    const after = next.territories[territoryId];
+    if (!before || !after) return { kind: 'full' };
+    if (before.ownerId === after.ownerId
+      && before.coreOwnerId === after.coreOwnerId
+      && before.integrating === after.integrating
+      && before.flagOwnerId === after.flagOwnerId) continue;
+
+    const isIsolatedCapture = before.ownerId === before.coreOwnerId
+      && !before.integrating
+      && after.ownerId !== after.coreOwnerId
+      && after.integrating
+      && after.coreOwnerId === before.coreOwnerId
+      && before.flagOwnerId === before.coreOwnerId
+      && after.flagOwnerId === after.coreOwnerId;
+    if (!isIsolatedCapture) return { kind: 'full' };
+    capturedTerritoryIds.push(territoryId);
+  }
+
+  return capturedTerritoryIds.length > 0
+    ? { kind: 'capture', territoryIds: capturedTerritoryIds }
+    : { kind: 'none' };
+}
+
 /**
  * Dynamic political canvas and immutable colour-picking canvas for the globe.
- * The class only redraws when ownership, integration, humans or legal targets
- * change; weekly simulation snapshots therefore do not upload a new texture.
+ * The class only redraws when ownership, integration lifecycle or human-player
+ * state changes; weekly simulation and UI-selection snapshots do not upload it.
  */
 export class GlobePoliticalTexture {
   readonly canvas: HTMLCanvasElement;
-  /**
-   * A small camera-local atlas, rendered from the original SVG flags and 50m
-   * country vectors. It adds close-up detail without allocating an 8K texture
-   * for the entire planet.
-   */
-  readonly detailCanvas: HTMLCanvasElement;
   private readonly textureWidth: number;
   private readonly textureHeight: number;
   private readonly context: CanvasRenderingContext2D;
-  private readonly detailContext: CanvasRenderingContext2D;
   private readonly pickCanvas: HTMLCanvasElement;
   private readonly pickContext: CanvasRenderingContext2D;
+  private pickPixels = new Uint8ClampedArray();
   private readonly flagImages = new Map<string, HTMLImageElement>();
-  private readonly detailFlagImages = new Map<string, HTMLImageElement>();
-  private readonly detailFlagLoads = new Set<string>();
+  private readonly pendingFlagLoads = new Set<string>();
+  private mapReadyPromise: Promise<void> = Promise.resolve();
+  private resolveMapReady?: () => void;
   private snapshot: TextureSnapshot = { selection: { legalTargetIds: [] } };
-  private signature = '';
-  private selectionSignature = '';
+  private politicalSignature = '';
+  private paintedPoliticalState?: GlobePoliticalPaintSnapshot;
   private redrawTimer?: number;
-  private detailView?: GlobeDetailView;
 
   constructor(
     private readonly onTextureUpdated: () => void,
-    private readonly onDetailTextureUpdated: () => void = () => undefined,
+    maximumTextureSize = HIGH_DETAIL_GLOBE_TEXTURE_WIDTH,
   ) {
     const highDetail = window.innerWidth >= HIGH_DETAIL_MIN_VIEWPORT_WIDTH
       && typeof window.matchMedia === 'function'
       && window.matchMedia('(pointer: fine)').matches;
-    this.textureWidth = highDetail ? HIGH_DETAIL_GLOBE_TEXTURE_WIDTH : GLOBE_TEXTURE_WIDTH;
-    this.textureHeight = highDetail ? HIGH_DETAIL_GLOBE_TEXTURE_HEIGHT : GLOBE_TEXTURE_HEIGHT;
+    const preferredWidth = highDetail
+      ? HIGH_DETAIL_GLOBE_TEXTURE_WIDTH
+      : GLOBE_TEXTURE_WIDTH;
+    const preferredHeight = highDetail
+      ? HIGH_DETAIL_GLOBE_TEXTURE_HEIGHT
+      : GLOBE_TEXTURE_HEIGHT;
+    // Select one immutable atlas at construction time and keep it for every
+    // zoom level. Respecting the actual GPU cap here also prevents Three.js
+    // from silently resizing the canvas during upload, which would otherwise
+    // soften the political texture a second time.
+    this.textureWidth = Math.max(
+      1024,
+      Math.min(preferredWidth, Math.floor(maximumTextureSize / 2) * 2),
+    );
+    this.textureHeight = Math.min(
+      preferredHeight,
+      Math.floor(this.textureWidth / 2),
+    );
 
     this.canvas = document.createElement('canvas');
     this.canvas.width = this.textureWidth;
@@ -589,17 +872,6 @@ export class GlobePoliticalTexture {
     this.context.imageSmoothingQuality = 'high';
     this.context.lineJoin = 'round';
     this.context.lineCap = 'round';
-
-    this.detailCanvas = document.createElement('canvas');
-    this.detailCanvas.width = DETAIL_TEXTURE_WIDTH;
-    this.detailCanvas.height = DETAIL_TEXTURE_HEIGHT;
-    const detailContext = this.detailCanvas.getContext('2d', { alpha: true });
-    if (!detailContext) throw new Error('The globe detail texture could not be created.');
-    this.detailContext = detailContext;
-    this.detailContext.imageSmoothingEnabled = true;
-    this.detailContext.imageSmoothingQuality = 'high';
-    this.detailContext.lineJoin = 'round';
-    this.detailContext.lineCap = 'round';
 
     this.pickCanvas = document.createElement('canvas');
     this.pickCanvas.width = PICK_TEXTURE_WIDTH;
@@ -615,62 +887,63 @@ export class GlobePoliticalTexture {
     this.redraw();
   }
 
-  setDetailView(view?: GlobeDetailView): void {
-    if (!view) {
-      if (!this.detailView) return;
-      this.detailView = undefined;
-      this.detailContext.clearRect(0, 0, DETAIL_TEXTURE_WIDTH, DETAIL_TEXTURE_HEIGHT);
-      this.onDetailTextureUpdated();
-      return;
-    }
-    this.detailView = {
-      longitude: ((view.longitude + 180) % 360 + 360) % 360 - 180,
-      latitude: Math.max(-82, Math.min(82, view.latitude)),
-      longitudeSpan: Math.max(8, Math.min(120, view.longitudeSpan)),
-      latitudeSpan: Math.max(6, Math.min(90, view.latitudeSpan)),
-    };
-    this.ensureDetailFlags(this.detailView);
-    this.redrawDetail();
-  }
-
   sync(engine: WorldMapEngineContract, selection: MapSelectionState): void {
     this.snapshot = { engine, selection };
-    const territorySignature = COUNTRIES.map((country) => {
-      const territory = engine.state.territories[country.id];
-      return territory
-        ? `${territory.ownerId}:${territory.coreOwnerId}:${Math.round(territory.integration * 100)}`
-        : '';
-    }).join(',');
-    const humanSignature = [...engine.state.humanPlayerIds].sort().join(',');
-    this.selectionSignature = stableSelectionSignature(selection);
-    const signature = `${humanSignature}|${territorySignature}|${this.selectionSignature}`;
-    if (signature === this.signature) return;
-    this.signature = signature;
+    const nextPoliticalSignature = globePoliticalStateSignature(engine);
+    const politicalChanged = nextPoliticalSignature !== this.politicalSignature;
+    if (!politicalChanged) return;
+    this.politicalSignature = nextPoliticalSignature;
     this.ensureSnapshotFlags();
-    if (this.detailView) this.ensureDetailFlags(this.detailView);
-    this.redraw();
+    const nextPoliticalState = captureGlobePoliticalPaintSnapshot(engine);
+    const update = classifyGlobePoliticalAtlasUpdate(
+      this.paintedPoliticalState,
+      nextPoliticalState,
+    );
+    if (update.kind === 'none') {
+      this.paintedPoliticalState = nextPoliticalState;
+      return;
+    }
+    if (update.kind === 'capture'
+      && this.redrawTimer === undefined
+      && this.pendingFlagLoads.size === 0
+      && this.drawCapturedTerritories(update.territoryIds)) {
+      this.onTextureUpdated();
+      this.paintedPoliticalState = nextPoliticalState;
+      return;
+    }
+    // Preserve the immediate first map paint for the loading screen. Later
+    // complex political changes are batched so the outcome modal can paint
+    // before the expensive safe fallback upload.
+    if (!this.paintedPoliticalState) this.redraw();
+    else this.queueRedraw();
+  }
+
+  /** Resolves after every relevant flag has settled and its final batch was baked. */
+  waitForReady(): Promise<void> {
+    return this.mapReadyPromise;
   }
 
   setSelection(selection: MapSelectionState): void {
     this.snapshot = { ...this.snapshot, selection };
-    const nextSelection = stableSelectionSignature(selection);
-    if (nextSelection === this.selectionSignature) return;
-    this.selectionSignature = nextSelection;
-    // Full signature is recalculated by the next engine sync; force this
-    // presentation-only redraw immediately so target selection feels direct.
-    this.signature = '';
-    this.redraw();
   }
 
   pick(uvX: number, uvY: number): GlobePickResult {
     const x = Math.min(PICK_TEXTURE_WIDTH - 1, Math.max(0, Math.floor(uvX * PICK_TEXTURE_WIDTH)));
     const y = Math.min(PICK_TEXTURE_HEIGHT - 1, Math.max(0, Math.floor((1 - uvY) * PICK_TEXTURE_HEIGHT)));
-    const pixel = this.pickContext.getImageData(x, y, 1, 1).data;
-    const pickId = pixel[0]! + (pixel[1]! << 8) + (pixel[2]! << 16);
+    const pixelOffset = (y * PICK_TEXTURE_WIDTH + x) * 4;
+    if (this.pickPixels[pixelOffset + 3]! < 250) return undefined;
+    const pickId = this.pickPixels[pixelOffset]!
+      + (this.pickPixels[pixelOffset + 1]! << 8)
+      + (this.pickPixels[pixelOffset + 2]! << 16);
     if (pickId === ANTARCTICA_PICK_ID) return { kind: 'antarctica' };
     if (pickId === ARCTIC_PICK_ID) return { kind: 'arctic' };
-    const territoryId = COUNTRY_BY_PICK_ID.get(pickId);
-    return territoryId ? { kind: 'country', territoryId } : undefined;
+    const country = COUNTRY_BY_PICK_ID.get(pickId);
+    if (!country) return undefined;
+    const longitude = uvX * 360 - 180;
+    const latitude = uvY * 180 - 90;
+    return preparedCountryContains(country, longitude, latitude)
+      ? { kind: 'country', territoryId: country.country.id }
+      : undefined;
   }
 
   private drawPickTexture(): void {
@@ -689,6 +962,16 @@ export class GlobePoliticalTexture {
     traceAntarctica(this.pickContext, PICK_TEXTURE_WIDTH, PICK_TEXTURE_HEIGHT);
     this.pickContext.fillStyle = 'rgb(255, 255, 255)';
     this.pickContext.fill();
+    // Country geometry never changes. Reading the complete pick map once avoids
+    // a synchronous canvas readback on every pointer movement over the globe.
+    this.pickPixels = new Uint8ClampedArray(this.pickContext.getImageData(
+      0,
+      0,
+      PICK_TEXTURE_WIDTH,
+      PICK_TEXTURE_HEIGHT,
+    ).data);
+    this.pickCanvas.width = 1;
+    this.pickCanvas.height = 1;
   }
 
   private ensureSnapshotFlags(): void {
@@ -698,8 +981,10 @@ export class GlobePoliticalTexture {
     for (const country of COUNTRIES) {
       const territory = engine.state.territories[country.id];
       if (!territory) continue;
+      nationIds.add(globeTerritoryFlagOwnerId(territory));
+      // Preload the conquering owner's flag while integration is ongoing so
+      // the lifecycle-completion redraw can switch flags without a blank frame.
       nationIds.add(territory.ownerId);
-      if (territory.coreOwnerId !== territory.ownerId) nationIds.add(territory.coreOwnerId);
     }
     for (const nationId of nationIds) this.loadFlag(nationId);
   }
@@ -708,179 +993,244 @@ export class GlobePoliticalTexture {
     if (this.flagImages.has(nationId)) return;
     const url = countryFlagAssetUrl(nationId);
     if (!url) return;
+    this.markMapReadinessPending();
+    this.pendingFlagLoads.add(nationId);
     const image = new Image();
     image.decoding = 'async';
-    image.onload = () => this.queueRedraw();
+    image.onload = () => this.finishFlagLoad(nationId);
+    image.onerror = () => this.finishFlagLoad(nationId);
     image.src = url;
     this.flagImages.set(nationId, image);
   }
 
-  private ensureDetailFlags(view: GlobeDetailView): void {
-    const engine = this.snapshot.engine;
-    if (!engine) return;
-    const window: DetailRenderWindow = {
-      minimumLongitude: view.longitude - view.longitudeSpan / 2,
-      maximumLongitude: view.longitude + view.longitudeSpan / 2,
-      minimumLatitude: view.latitude - view.latitudeSpan / 2,
-      maximumLatitude: view.latitude + view.latitudeSpan / 2,
-    };
-    const nationIds = new Set<string>();
-    for (const prepared of PREPARED_COUNTRIES) {
-      if (!countryIntersectsWindow(prepared, window)) continue;
-      const territory = engine.state.territories[prepared.country.id];
-      if (!territory) continue;
-      nationIds.add(territory.ownerId);
-      if (territory.coreOwnerId !== territory.ownerId) nationIds.add(territory.coreOwnerId);
-    }
-    for (const nationId of nationIds) {
-      const cached = this.detailFlagImages.get(nationId);
-      if (cached) {
-        // Map insertion order doubles as a tiny LRU, keeping repeated regional
-        // exploration hot without retaining high-resolution flags worldwide.
-        this.detailFlagImages.delete(nationId);
-        this.detailFlagImages.set(nationId, cached);
-      } else this.loadDetailFlag(nationId);
-    }
+  private markMapReadinessPending(): void {
+    if (this.resolveMapReady) return;
+    this.mapReadyPromise = new Promise<void>((resolve) => {
+      this.resolveMapReady = resolve;
+    });
   }
 
-  private loadDetailFlag(nationId: string): void {
-    if (this.detailFlagLoads.has(nationId) || this.detailFlagImages.has(nationId)) return;
-    const url = countryFlagAssetUrl(nationId);
-    if (!url) return;
-    this.detailFlagLoads.add(nationId);
-    void fetch(url)
-      .then((response) => {
-        if (!response.ok) throw new Error(`Flag request failed with ${response.status}.`);
-        return response.text();
-      })
-      .then((source) => new Promise<HTMLImageElement>((resolve, reject) => {
-        const sizedSource = source.replace(
-          /<svg\b/,
-          `<svg width="${DETAIL_FLAG_WIDTH}" height="${DETAIL_FLAG_HEIGHT}"`,
-        );
-        const objectUrl = URL.createObjectURL(new Blob([sizedSource], { type: 'image/svg+xml' }));
-        const image = new Image();
-        image.decoding = 'async';
-        image.onload = () => {
-          URL.revokeObjectURL(objectUrl);
-          resolve(image);
-        };
-        image.onerror = () => {
-          URL.revokeObjectURL(objectUrl);
-          reject(new Error(`High-resolution flag decode failed for ${nationId}.`));
-        };
-        image.src = objectUrl;
-      }))
-      .then((image) => {
-        while (this.detailFlagImages.size >= DETAIL_FLAG_CACHE_LIMIT) {
-          const oldest = this.detailFlagImages.keys().next().value as string | undefined;
-          if (!oldest) break;
-          this.detailFlagImages.delete(oldest);
-        }
-        this.detailFlagImages.set(nationId, image);
-        if (this.detailView) this.redrawDetail();
-      })
-      .catch(() => undefined)
-      .finally(() => this.detailFlagLoads.delete(nationId));
+  private finishFlagLoad(nationId: string): void {
+    if (!this.pendingFlagLoads.delete(nationId)) return;
+    // Success and failure are both settled states. The final redraw either
+    // includes the decoded flag or deliberately preserves the fallback fill.
+    if (this.pendingFlagLoads.size === 0) this.queueRedraw();
+  }
+
+  private resolveMapReadinessAfterBatch(): void {
+    if (this.pendingFlagLoads.size > 0 || this.redrawTimer !== undefined) return;
+    const resolve = this.resolveMapReady;
+    if (!resolve) return;
+    this.resolveMapReady = undefined;
+    resolve();
   }
 
   private queueRedraw(): void {
     if (this.redrawTimer !== undefined) return;
-    // Flags arrive in a burst. Batch their decodes so a 3K political texture
+    // Flags arrive in a burst. Batch their decodes so the political texture
     // is not rebuilt once per SVG during the opening screen.
     this.redrawTimer = window.setTimeout(() => {
       this.redrawTimer = undefined;
-      this.redraw();
+      // A political sync can discover another relevant flag during this short
+      // debounce. Its completion will schedule the one final atlas batch.
+      if (this.pendingFlagLoads.size > 0) return;
+      try {
+        this.redraw();
+      } finally {
+        this.resolveMapReadinessAfterBatch();
+      }
     }, 90);
+  }
+
+  /** Repaints only newly captured polygons; all shared-realm changes use redraw(). */
+  private drawCapturedTerritories(territoryIds: readonly string[]): boolean {
+    const { engine } = this.snapshot;
+    if (!engine) return false;
+    const preparedTerritories: PreparedCountry[] = [];
+    for (const territoryId of territoryIds) {
+      const prepared = PREPARED_COUNTRIES.find(
+        (candidate) => candidate.country.id === territoryId,
+      );
+      const territory = engine.state.territories[territoryId];
+      if (!prepared || !territory || !globeTerritoryIsIntegrating(territory)) return false;
+      const flag = this.flagImages.get(globeTerritoryFlagOwnerId(territory));
+      if (!flag?.complete || flag.naturalWidth <= 0) return false;
+      preparedTerritories.push(prepared);
+    }
+
+    const context = this.context;
+    const width = this.textureWidth;
+    const height = this.textureHeight;
+    for (const prepared of preparedTerritories) {
+      const country = prepared.country;
+      const territory = engine.state.territories[country.id]!;
+      const owner = engine.player(territory.ownerId);
+      const terrainLayers = prepared.terrainLayers;
+      const regionalFill = COUNTRY_BY_ID[country.id]?.regionId === 'heartlands'
+        ? 0x466071 : 0x294959;
+      const ownerColor = owner?.color ?? regionalFill;
+      const politicalBase = colorMix(regionalFill, ownerColor, owner ? 0.30 : 0.08);
+      const politicalFill = colorMix(
+        politicalBase,
+        terrainLayers.tintColor,
+        terrainLayers.tintAlpha,
+      );
+
+      context.globalAlpha = 1;
+      tracePreparedCountry(context, prepared, width, height);
+      context.fillStyle = colorCss(politicalFill);
+      context.fill('evenodd');
+
+      const flagOwnerId = globeTerritoryFlagOwnerId(territory);
+      const flag = this.flagImages.get(flagOwnerId)!;
+      const flagOwner = engine.player(flagOwnerId);
+      drawFlagIntoProjection(
+        context,
+        prepared.flagRings,
+        flag,
+        width,
+        height,
+        flagOwner?.isHuman ? 1 : 0.97,
+      );
+
+      context.save();
+      tracePreparedRings(context, prepared.flagRings, width, height);
+      context.fillStyle = colorCss(terrainLayers.tintColor);
+      context.globalAlpha = terrainLayers.flagTintAlpha;
+      context.fill('evenodd');
+      context.restore();
+      drawIntegrationOverlay(context, prepared.flagRings, width, height);
+
+      context.fillStyle = 'rgba(218, 239, 242, 0.96)';
+      for (const ring of prepared.iceRings) {
+        for (const shift of ring.longitudeShifts) {
+          context.beginPath();
+          tracePreparedRing(context, ring, shift, width, height);
+          context.fill();
+        }
+      }
+
+      tracePreparedCountry(context, prepared, width, height);
+      context.strokeStyle = 'rgba(244, 201, 106, 0.96)';
+      context.globalAlpha = 0.94;
+      context.lineWidth = 1.7 * (width / GLOBE_TEXTURE_WIDTH);
+      context.stroke();
+      context.globalAlpha = 1;
+    }
+    return true;
   }
 
   private drawCountries(
     context: CanvasRenderingContext2D,
     width: number,
     height: number,
-    renderWindow?: DetailRenderWindow,
-    useDetailFlags = false,
   ): void {
-    const { engine, selection } = this.snapshot;
-    const legalTargets = new Set(selection.legalTargetIds);
-    const legalMode = legalTargets.size > 0;
+    const { engine } = this.snapshot;
 
+    // First bake the stable political/terrain base for every territory.
     for (const prepared of PREPARED_COUNTRIES) {
-      if (renderWindow && !countryIntersectsWindow(prepared, renderWindow)) continue;
       const country = prepared.country;
       const territory = engine?.state.territories[country.id];
       const owner = territory ? engine?.player(territory.ownerId) : undefined;
-      const terrainProfile = terrainProfileForTerritory(country.id);
-      const terrainLayers = terrainTextureLayerPresentation(terrainProfile);
+      const terrainLayers = prepared.terrainLayers;
       const regionalFill = COUNTRY_BY_ID[country.id]?.regionId === 'heartlands'
         ? 0x466071 : 0x294959;
       const ownerColor = owner?.color ?? regionalFill;
-      const politicalFill = colorMix(regionalFill, ownerColor, owner ? 0.30 : 0.08);
-      const selected = selection.sourceId === country.id || selection.targetId === country.id;
-      const legal = legalTargets.has(country.id);
-      const dimmed = legalMode && !selected && !legal;
-      const integrating = Boolean(territory
-        && territory.coreOwnerId !== territory.ownerId
-        && territory.integration < 0.999999);
+      const politicalBase = colorMix(regionalFill, ownerColor, owner ? 0.30 : 0.08);
+      const politicalFill = colorMix(
+        politicalBase,
+        terrainLayers.tintColor,
+        terrainLayers.tintAlpha,
+      );
 
       tracePreparedCountry(context, prepared, width, height);
       context.fillStyle = colorCss(politicalFill);
-      context.globalAlpha = dimmed ? 0.42 : 1;
       context.fill('evenodd');
-      context.globalAlpha = 1;
+    }
 
-      const flag = territory
-        ? (useDetailFlags ? this.detailFlagImages.get(territory.ownerId) : undefined)
-          ?? this.flagImages.get(territory.ownerId)
-        : undefined;
-      if (flag?.complete && flag.naturalWidth > 0) {
-        const flagAlpha = dimmed ? 0.20 : owner?.isHuman ? 0.72 : 0.47;
-        for (const ring of prepared.rings) {
-          for (const shift of [-360, 0, 360]) {
-            drawFlagIntoRing(
-              context,
-              ring,
-              flag,
-              shift,
-              width,
-              height,
-              flagAlpha,
-            );
-          }
+    // Completed territories of one owner share one clip and one continuous
+    // flag projection. Integrating territories deliberately keep a unique
+    // projection key because they still show their original/core flag.
+    const flagProjections = new Map<string, {
+      flagOwnerId: string;
+      rings: PreparedRing[];
+    }>();
+    if (engine) {
+      for (const prepared of PREPARED_COUNTRIES) {
+        const territory = engine.state.territories[prepared.country.id];
+        if (!territory) continue;
+        const projectionKey = globeFlagProjectionKey(prepared.country.id, territory);
+        const existing = flagProjections.get(projectionKey);
+        if (existing) existing.rings.push(...prepared.flagRings);
+        else {
+          flagProjections.set(projectionKey, {
+            flagOwnerId: globeTerritoryFlagOwnerId(territory),
+            rings: [...prepared.flagRings],
+          });
         }
       }
+    }
 
-      if (territory && integrating) {
-        const coreFlag = (useDetailFlags ? this.detailFlagImages.get(territory.coreOwnerId) : undefined)
-          ?? this.flagImages.get(territory.coreOwnerId);
-        if (coreFlag?.complete && coreFlag.naturalWidth > 0) {
-          const alpha = 0.50 * Math.max(0, 1 - territory.integration);
-          for (const ring of prepared.rings) {
-            for (const shift of [-360, 0, 360]) {
-              drawFlagIntoRing(
-                context,
-                ring,
-                coreFlag,
-                shift,
-                width,
-                height,
-                alpha,
-              );
-            }
-          }
-        }
-      }
-
-      drawDominantTerrainTint(
+    const paintedFlagProjections = new Set<string>();
+    for (const [projectionKey, projection] of flagProjections) {
+      const flag = this.flagImages.get(projection.flagOwnerId);
+      if (!flag?.complete || flag.naturalWidth <= 0) continue;
+      const flagOwner = engine?.player(projection.flagOwnerId);
+      // Terrain is composited explicitly after the flag. Keeping the flag
+      // itself opaque preserves its fine SVG edges instead of blending those
+      // edges with the muted regional fallback underneath.
+      const flagAlpha = flagOwner?.isHuman ? 1 : 0.97;
+      drawFlagIntoProjection(
         context,
-        prepared,
-        terrainLayers,
+        projection.rings,
+        flag,
         width,
         height,
-        dimmed,
+        flagAlpha,
       );
+      paintedFlagProjections.add(projectionKey);
+    }
 
-      if (integrating || selected || legal) {
+    // Terrain remains local to each territory even though completed realms
+    // share a single flag. Integration presentation is a fixed lifecycle cue,
+    // never a percentage-driven weekly animation or redraw.
+    for (const prepared of PREPARED_COUNTRIES) {
+      const territory = engine?.state.territories[prepared.country.id];
+      const projectionKey = territory
+        ? globeFlagProjectionKey(prepared.country.id, territory)
+        : undefined;
+      if (projectionKey && paintedFlagProjections.has(projectionKey)) {
+        context.save();
+        tracePreparedRings(context, prepared.flagRings, width, height);
+        context.fillStyle = colorCss(prepared.terrainLayers.tintColor);
+        context.globalAlpha = prepared.terrainLayers.flagTintAlpha;
+        context.fill('evenodd');
+        context.restore();
+      }
+
+      if (territory && globeTerritoryIsIntegrating(territory)) {
+        drawIntegrationOverlay(context, prepared.flagRings, width, height);
+      }
+
+      // Detached high-Arctic islands remain neutral ice after every country
+      // layer, so they never inherit flag or terrain colour fragments.
+      context.fillStyle = 'rgba(218, 239, 242, 0.96)';
+      for (const ring of prepared.iceRings) {
+        for (const shift of ring.longitudeShifts) {
+          context.beginPath();
+          tracePreparedRing(context, ring, shift, width, height);
+          context.fill();
+        }
+      }
+    }
+
+    // Finally bake one outer realm border per completed territory section.
+    // Shared owner edges are omitted; integrating territory edges stay gold.
+    for (const prepared of PREPARED_COUNTRIES) {
+      const territory = engine?.state.territories[prepared.country.id];
+      const owner = territory ? engine?.player(territory.ownerId) : undefined;
+      const integrating = Boolean(territory && globeTerritoryIsIntegrating(territory));
+      if (integrating) {
         tracePreparedCountry(context, prepared, width, height);
       } else {
         traceCountryRealmBorder(
@@ -891,49 +1241,18 @@ export class GlobePoliticalTexture {
           height,
         );
       }
-      const hasGameplayBorder = integrating || selected || legal;
       context.strokeStyle = integrating ? 'rgba(244, 201, 106, 0.96)'
-        : selected ? 'rgba(255, 226, 145, 1)'
-          : legal ? 'rgba(108, 239, 221, 0.96)'
-            : colorCss(terrainLayers.borderColor);
-      context.globalAlpha = dimmed ? 0.34
-        : hasGameplayBorder ? 0.88
-          : terrainLayers.borderAlpha;
-      context.lineWidth = integrating || selected ? 3.4 : legal ? 2.8 : owner?.isHuman ? 2.2 : 1.25;
+        : colorCss(prepared.terrainLayers.borderColor);
+      const borderScale = width / GLOBE_TEXTURE_WIDTH;
+      const terrainBorderWidth = (integrating ? 0.88 : owner?.isHuman ? 0.9 : 0.72)
+        * borderScale;
+      context.globalAlpha = integrating
+        ? 0.94
+        : Math.min(0.94, prepared.terrainLayers.borderAlpha * 1.14);
+      context.lineWidth = terrainBorderWidth;
       context.stroke();
       context.globalAlpha = 1;
     }
-  }
-
-  private redrawDetail(): void {
-    const view = this.detailView;
-    this.detailContext.clearRect(0, 0, DETAIL_TEXTURE_WIDTH, DETAIL_TEXTURE_HEIGHT);
-    if (!view) {
-      this.onDetailTextureUpdated();
-      return;
-    }
-
-    const window: DetailRenderWindow = {
-      minimumLongitude: view.longitude - view.longitudeSpan / 2,
-      maximumLongitude: view.longitude + view.longitudeSpan / 2,
-      minimumLatitude: view.latitude - view.latitudeSpan / 2,
-      maximumLatitude: view.latitude + view.latitudeSpan / 2,
-    };
-    const virtualWidth = DETAIL_TEXTURE_WIDTH * 360 / view.longitudeSpan;
-    const virtualHeight = DETAIL_TEXTURE_HEIGHT * 180 / view.latitudeSpan;
-    const translateX = -((window.minimumLongitude + 180) / 360) * virtualWidth;
-    const translateY = -((90 - window.maximumLatitude) / 180) * virtualHeight;
-
-    this.detailContext.save();
-    // Transparent padding plus the shader edge feather prevents a hard atlas
-    // seam while the camera moves inside the cached high-detail window.
-    this.detailContext.beginPath();
-    this.detailContext.rect(3, 3, DETAIL_TEXTURE_WIDTH - 6, DETAIL_TEXTURE_HEIGHT - 6);
-    this.detailContext.clip();
-    this.detailContext.translate(translateX, translateY);
-    this.drawCountries(this.detailContext, virtualWidth, virtualHeight, window, true);
-    this.detailContext.restore();
-    this.onDetailTextureUpdated();
   }
 
   private redraw(): void {
@@ -945,6 +1264,7 @@ export class GlobePoliticalTexture {
 
     drawAntarctica(this.context, this.textureWidth, this.textureHeight);
     this.onTextureUpdated();
-    if (this.detailView) this.redrawDetail();
+    const { engine } = this.snapshot;
+    if (engine) this.paintedPoliticalState = captureGlobePoliticalPaintSnapshot(engine);
   }
 }

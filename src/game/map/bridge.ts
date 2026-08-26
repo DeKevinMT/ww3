@@ -5,6 +5,12 @@
 export interface MapArmyState {
   manpower: number;
   capacity: number;
+  /**
+   * Effective local deployment ceiling, including the bounded share of empire
+   * support available to this territory. Falls back to capacity for legacy
+   * snapshots and non-V2 render adapters.
+   */
+  deploymentCapacity?: number;
   /** Deployed soldiers available to the local force, in millions. */
   combatStrength: number;
   /** Exact local Combat Power, including condition and per-soldier quality. */

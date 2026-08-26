@@ -7,6 +7,7 @@ import {
   INTEGRATED_FOREIGN_TERRITORY_EMPIRE_COMBAT_CAP_SHARE_V2,
   ORIGINAL_HOMELAND_EMPIRE_COMBAT_CAP_SHARE_V2,
   foreignTerritoryEmpireCombatCapShareV2,
+  nationalArmyCapacityAtOneXOpeningV2,
   nationalArmyCapacityTargetV2,
   stateTerritoryArmyCapacityTargetV2,
   stateTerritoryArmySupportCeilingV2,
@@ -161,6 +162,9 @@ describe('population and research army cap', () => {
     synchronizeArmyCapacityV2(state, WORLD_CONTENT_V2);
 
     const nationalCap = nationalArmyCapacityTargetV2(state, WORLD_CONTENT_V2, bel);
+    const nationalCapAtOneXOpening = nationalArmyCapacityAtOneXOpeningV2(
+      state, WORLD_CONTENT_V2, bel,
+    );
     const occupiedLocalCap = stateTerritoryArmyCapacityTargetV2(
       state, WORLD_CONTENT_V2, capturedId, bel,
     );
@@ -168,21 +172,21 @@ describe('population and research army cap', () => {
     expect(stateTerritoryArmySupportCeilingV2(state, WORLD_CONTENT_V2, capturedId, bel))
       .toBeCloseTo(
         occupiedLocalCap
-          + nationalCap * CONQUERED_TERRITORY_EMPIRE_COMBAT_CAP_SHARE_V2,
+          + nationalCapAtOneXOpening * CONQUERED_TERRITORY_EMPIRE_COMBAT_CAP_SHARE_V2,
         8,
       );
     expect(selectTotalManpowerV2(state, bel).capacity).toBe(visibleArmyCap);
 
     captured.integration = 0.55;
     synchronizeArmyCapacityV2(state, WORLD_CONTENT_V2);
-    const midpointNationalCap = nationalArmyCapacityTargetV2(
+    const midpointNationalCapAtOneXOpening = nationalArmyCapacityAtOneXOpeningV2(
       state, WORLD_CONTENT_V2, bel,
     );
     const midpointLocalCap = stateTerritoryArmyCapacityTargetV2(
       state, WORLD_CONTENT_V2, capturedId, bel,
     );
     expect(stateTerritoryArmySupportCeilingV2(state, WORLD_CONTENT_V2, capturedId, bel))
-      .toBeCloseTo(midpointLocalCap + midpointNationalCap * 0.075, 8);
+      .toBeCloseTo(midpointLocalCap + midpointNationalCapAtOneXOpening * 0.075, 8);
 
     captured.integration = 1;
     captured.coreOwner = bel;
@@ -191,13 +195,16 @@ describe('population and research army cap', () => {
     const integratedNationalCap = nationalArmyCapacityTargetV2(
       state, WORLD_CONTENT_V2, bel,
     );
+    const integratedNationalCapAtOneXOpening = nationalArmyCapacityAtOneXOpeningV2(
+      state, WORLD_CONTENT_V2, bel,
+    );
     const integratedLocalCap = stateTerritoryArmyCapacityTargetV2(
       state, WORLD_CONTENT_V2, capturedId, bel,
     );
     expect(stateTerritoryArmySupportCeilingV2(state, WORLD_CONTENT_V2, capturedId, bel))
       .toBeCloseTo(
         integratedLocalCap
-          + integratedNationalCap
+          + integratedNationalCapAtOneXOpening
             * INTEGRATED_FOREIGN_TERRITORY_EMPIRE_COMBAT_CAP_SHARE_V2,
         8,
       );

@@ -79,8 +79,9 @@ describe('opening mobilisation on the map', () => {
     expect(worldUiSource).toContain('OPENING MOBILISATION · ${openingDirectionLabel}');
     expect(worldUiSource).toContain('${openingRemainingPercent}% REMAINING');
     expect(worldUiSource).toContain('width:${openingRemainingPercent}%');
-    expect(worldUiSource).toContain('temporary extra Army + cap');
-    expect(worldUiSource).toContain('temporary reduced Army + cap');
+    expect(worldUiSource).toContain('temporary extra homeland Army + cap');
+    expect(worldUiSource).toContain('temporary reduced homeland Army + cap');
+    expect(worldUiSource).toContain('HOMELAND CAP');
     expect(worldUiSource).toContain('years until permanent ×1');
   });
 });

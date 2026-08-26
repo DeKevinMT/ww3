@@ -1,7 +1,8 @@
 import type { TerrainProfileEntry } from '../../data/terrainProfiles';
 import { terrainPresentation } from '../../terrainPresentation';
 
-const TERRAIN_TINT_SHARE_ALPHA = 0.18;
+const TERRAIN_TINT_SHARE_ALPHA = 0.27;
+const TERRAIN_FLAG_TINT_SHARE_ALPHA = 0.50;
 const TERRAIN_BORDER_BASE_ALPHA = 0.18;
 const TERRAIN_BORDER_SHARE_ALPHA = 1.35;
 const TERRAIN_BORDER_MAX_ALPHA = 0.82;
@@ -9,6 +10,7 @@ const TERRAIN_BORDER_MAX_ALPHA = 0.82;
 export interface TerrainTextureLayerPresentation {
   readonly tintColor: number;
   readonly tintAlpha: number;
+  readonly flagTintAlpha: number;
   readonly borderColor: number;
   readonly borderAlpha: number;
 }
@@ -32,6 +34,7 @@ export function terrainTextureLayerPresentation(
   return {
     tintColor: terrainPresentation(dominant.terrain).color,
     tintAlpha: boundedShare(dominant.share) * TERRAIN_TINT_SHARE_ALPHA,
+    flagTintAlpha: boundedShare(dominant.share) * TERRAIN_FLAG_TINT_SHARE_ALPHA,
     borderColor: terrainPresentation(secondary.terrain).color,
     borderAlpha: Math.min(
       TERRAIN_BORDER_MAX_ALPHA,

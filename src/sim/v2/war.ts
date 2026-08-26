@@ -63,6 +63,7 @@ import {
   type WorldContentV2,
 } from './content';
 import {
+  nationalArmyCapacityAtOneXOpeningV2,
   nationalArmyCapacityTargetV2,
   stateTerritoryArmyCapacityTargetV2,
   stateTerritoryArmySupportCeilingV2,
@@ -2194,6 +2195,12 @@ export function redistributeArmiesV2(state: WorldStateV2, content: WorldContentV
     // this redistribution pass, so compute the world scan once per owner and
     // feed the result into every local ceiling query below.
     const empireArmyCapacity = nationalArmyCapacityTargetV2(state, content, playerId);
+    const empireArmyCapacityAtOneXOpening = nationalArmyCapacityAtOneXOpeningV2(
+      state,
+      content,
+      playerId,
+      ownedIds,
+    );
     const hostile = new Set(selectWarsOfV2(state, playerId).map((war) => war.attackerId === playerId ? war.defenderId : war.attackerId));
     const ownOperationSources = new Set<TerritoryId>();
     const threatenedTargets = new Set<TerritoryId>();
@@ -2234,6 +2241,7 @@ export function redistributeArmiesV2(state: WorldStateV2, content: WorldContentV
           id,
           playerId,
           empireArmyCapacity,
+          empireArmyCapacityAtOneXOpening,
         );
         const edges = content.territories[id]?.connections ?? [];
         const adjacentOwners = edges.map((edge) => state.territories[edge.targetId]?.owner).filter(Boolean) as PlayerId[];

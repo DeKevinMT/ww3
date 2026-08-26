@@ -54,12 +54,28 @@ export function processResearchV2(
     const nation = state.players[playerId]!;
     const finance = financePlans?.get(playerId)
       ?? selectWeeklyFinanceBreakdownV2(state, content, playerId, powerSnapshot);
-    const catchUp = selectResearchCatchUpFactorV2(state, content, playerId, powerSnapshot);
+    // Research uses one stable national trait view throughout this nation's
+    // weekly projection. Rebuilding it per branch repeatedly rescanned wars.
+    const nationTraitContext = traitNationContextV2(state, playerId);
+    const catchUp = selectResearchCatchUpFactorV2(
+      state,
+      content,
+      playerId,
+      powerSnapshot,
+      nationTraitContext,
+    );
     // The simulation only needs each branch's funded progress. Building the
     // complete UI portfolio (effect cards, following costs and tooltips) for
     // every country every week was identical mathematically but needlessly
     // expensive in late-game worlds.
-    const poolOutput = selectResearchOutputV2(state, content, playerId, finance, catchUp);
+    const poolOutput = selectResearchOutputV2(
+      state,
+      content,
+      playerId,
+      finance,
+      catchUp,
+      nationTraitContext,
+    );
     const fundingShares = selectResearchFundingSharesV2(state, content, playerId);
     const lastFundedIndex = RESEARCH_BRANCHES.reduce((last, branch, index) => (
       fundingShares[branch] > 0 ? index : last
@@ -77,7 +93,7 @@ export function processResearchV2(
         playerId,
         branch,
         outputShare,
-        traitNationContextV2(state, playerId),
+        nationTraitContext,
       );
       nation.research.progress[branch] = round(
         nation.research.progress[branch] + weeklyProgress,

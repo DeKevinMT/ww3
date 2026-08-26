@@ -202,6 +202,8 @@ export const HUMAN_STARTING_ARMY_MULTIPLIER_WEAKEST_V2 = 15;
 export const HUMAN_MILITARY_RANK_CURVE_EXPONENT_V2 = 1;
 export const ABSOLUTE_UNDERDOG_ARMY_CAP_COUNT_V2 = 24;
 const LEGACY_V261_HUMAN_MILITARY_RANK_CURVE_EXPONENT_V2 = 1;
+const HUMAN_BONUS_ACCELERATION_START_RANK_V2 = 15;
+const HUMAN_BONUS_TAIL_EXPONENT_V2 = 0.78;
 
 const HUMAN_STARTING_ARMY_CURVE_V2 = Object.freeze([
   { rankShare: 0, multiplier: HUMAN_STARTING_ARMY_MULTIPLIER_STRONGEST_V2 },
@@ -300,16 +302,26 @@ function humanMilitaryRankCurveV2(
   playerId: PlayerId | string,
   order: readonly PlayerId[],
   exponent = HUMAN_MILITARY_RANK_CURVE_EXPONENT_V2,
+  accelerateAfterTopFifteen = true,
 ): number {
   const index = order.indexOf(String(playerId) as PlayerId);
   const rank = index < 0 ? undefined : index + 1;
   if (!rank) return 0;
   const span = Math.max(1, order.length - 1);
   const normalizedRank = (rank - 1) / span;
-  // Trait and opening-army help use different endpoints, but share a linear
-  // rank factor. This separates the upper tiers early enough for countries
-  // such as the UK and Italy to differ visibly from the USA and China.
-  return normalizedRank ** exponent;
+  const baseFactor = normalizedRank ** exponent;
+  if (!accelerateAfterTopFifteen || rank <= HUMAN_BONUS_ACCELERATION_START_RANK_V2) {
+    return baseFactor;
+  }
+  // Preserve the exact top-15 great-power curve, then raise both human-only
+  // bonuses more quickly from rank 16 onward. The remapped tail is continuous
+  // at rank 15 and still lands on the authored weakest-country endpoints.
+  const accelerationStart = Math.min(HUMAN_BONUS_ACCELERATION_START_RANK_V2, order.length);
+  const threshold = ((accelerationStart - 1) / span) ** exponent;
+  const tailProgress = Math.max(0, Math.min(1,
+    (baseFactor - threshold) / Math.max(0.000001, 1 - threshold),
+  ));
+  return threshold + (1 - threshold) * tailProgress ** HUMAN_BONUS_TAIL_EXPONENT_V2;
 }
 
 function humanStartingArmyMultiplierFromRankFactorV2(
@@ -379,6 +391,7 @@ export function legacyV261HumanStartingArmyMultiplierForContentV2(
     playerId,
     openingMilitaryOrderForContentV2(content),
     LEGACY_V261_HUMAN_MILITARY_RANK_CURVE_EXPONENT_V2,
+    false,
   );
   return humanStartingArmyMultiplierFromRankFactorV2(
     smoothRank,
@@ -398,8 +411,10 @@ export function humanCountryTraitMultiplierForContentVersionV2(
   if (!ranks) return humanCountryTraitMultiplierV2(playerId);
   const rank = ranks.get(String(playerId) as PlayerId);
   if (!rank) return HUMAN_TRAIT_MULTIPLIER_STRONGEST_V2;
-  const normalizedRank = (rank - 1) / Math.max(1, ranks.size - 1);
-  const smoothRank = normalizedRank ** HUMAN_MILITARY_RANK_CURVE_EXPONENT_V2;
+  const orderedRanks = [...ranks.entries()]
+    .sort((left, right) => left[1] - right[1])
+    .map(([id]) => id);
+  const smoothRank = humanMilitaryRankCurveV2(playerId, orderedRanks);
   return HUMAN_TRAIT_MULTIPLIER_STRONGEST_V2
     + (HUMAN_TRAIT_MULTIPLIER_WEAKEST_V2 - HUMAN_TRAIT_MULTIPLIER_STRONGEST_V2) * smoothRank;
 }

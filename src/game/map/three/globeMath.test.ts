@@ -18,21 +18,22 @@ const expectVectorClose = (
 };
 
 describe('globe math', () => {
-  it('slows close globe dragging without sacrificing overview rotation', () => {
-    const minimumDistance = 6.65;
-    const maximumDistance = 19.5;
+  it('keeps close globe dragging responsive without sacrificing overview control', () => {
+    const minimumDistance = 7.2;
+    const maximumDistance = 16.75;
 
     expect(globeRotateSpeedForDistance(minimumDistance, minimumDistance, maximumDistance))
-      .toBeCloseTo(0.022, 6);
-    expect(globeRotateSpeedForDistance(7.35, minimumDistance, maximumDistance)).toBeLessThan(0.03);
-    expect(globeRotateSpeedForDistance(14.5, minimumDistance, maximumDistance)).toBeGreaterThan(0.35);
+      .toBeCloseTo(0.06, 6);
+    expect(globeRotateSpeedForDistance(7.35, minimumDistance, maximumDistance)).toBeGreaterThan(0.06);
+    expect(globeRotateSpeedForDistance(7.35, minimumDistance, maximumDistance)).toBeLessThan(0.07);
+    expect(globeRotateSpeedForDistance(14.5, minimumDistance, maximumDistance)).toBeGreaterThan(0.43);
     expect(globeRotateSpeedForDistance(maximumDistance, minimumDistance, maximumDistance))
-      .toBeCloseTo(0.56, 6);
+      .toBeCloseTo(0.52, 6);
   });
 
   it('clamps globe drag sensitivity beyond the supported zoom range', () => {
-    expect(globeRotateSpeedForDistance(0, 6.65, 19.5)).toBeCloseTo(0.022, 6);
-    expect(globeRotateSpeedForDistance(100, 6.65, 19.5)).toBeCloseTo(0.56, 6);
+    expect(globeRotateSpeedForDistance(0, 7.2, 16.75)).toBeCloseTo(0.06, 6);
+    expect(globeRotateSpeedForDistance(100, 7.2, 16.75)).toBeCloseTo(0.52, 6);
   });
 
   it('uses a Three.js-compatible Y-up unit sphere convention', () => {

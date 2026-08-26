@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createWorldStateV2 } from './bootstrap';
 import { synchronizeArmyCapacityV2 } from './capacity';
-import { WORLD_CONTENT_V2 } from './content';
+import { normalOpeningManpowerMultiplierV2, WORLD_CONTENT_V2 } from './content';
 import { synchronizeOpeningArmyHumanRosterV2 } from './nationState';
 import { OPENING_ARMY_BONUS_DURATION_TICKS_V2 } from './openingArmyBonus';
 import { resolveScenarioV2 } from './scenarios';
@@ -26,6 +26,11 @@ function deployedV2(state: WorldStateV2, playerId: PlayerId): number {
 }
 
 describe('scenario-aware human trait and opening-force curve', () => {
+  it('gives Belgium a modest ordinary opening roster lift for AI and human seats alike', () => {
+    expect(normalOpeningManpowerMultiplierV2('bel')).toBe(1.20);
+    expect(normalOpeningManpowerMultiplierV2('nld')).toBe(1);
+  });
+
   it('keeps Standard ranking and exact 1x–2.5x / 0.10x–15x endpoints', () => {
     const order = openingMilitaryOrderForContentV2(WORLD_CONTENT_V2);
     const strongest = order[0]!;
@@ -59,15 +64,14 @@ describe('scenario-aware human trait and opening-force curve', () => {
     expect(italyTrait).toBeCloseTo(1.081818, 6);
   });
 
-  it('keeps army reductions to the strongest 10%, lifts Belgium-tier starts, and accelerates in the weak tail', () => {
+  it('keeps the top-15 great-power restraint, then accelerates player help through the underdog ranks', () => {
     const order = openingMilitaryOrderForContentV2(WORLD_CONTENT_V2);
     const armyMultiplier = (playerId: PlayerId) => (
       humanStartingArmyMultiplierForContentV2(WORLD_CONTENT_V2, playerId)
     );
     const multipliers = order.map(armyMultiplier);
-    const reducedCount = Math.ceil((order.length - 1) * 0.10);
     expect(order.filter((playerId) => armyMultiplier(playerId) < 1))
-      .toEqual(order.slice(0, reducedCount));
+      .toEqual(order.slice(0, 15));
     expect(armyMultiplier('usa' as PlayerId)).toBe(0.1);
     expect(armyMultiplier('chn' as PlayerId)).toBeGreaterThan(0.1);
     expect(armyMultiplier('chn' as PlayerId)).toBeLessThan(1);
@@ -76,17 +80,30 @@ describe('scenario-aware human trait and opening-force curve', () => {
     for (let index = 1; index < multipliers.length; index += 1) {
       expect(multipliers[index]).toBeGreaterThanOrEqual(multipliers[index - 1]!);
     }
-    expect(armyMultiplier(order[Math.floor((order.length - 1) * 0.25)]!))
-      .toBeCloseTo(1.1, 2);
+    expect(armyMultiplier(order[14]!)).toBeLessThan(1);
+    expect(armyMultiplier(order[15]!)).toBeGreaterThanOrEqual(1);
     expect(openingMilitaryRankForContentV2(WORLD_CONTENT_V2, 'bel')).toBe(61);
-    expect(armyMultiplier('bel' as PlayerId)).toBeCloseTo(1.626051, 6);
+    expect(armyMultiplier('bel' as PlayerId)).toBeCloseTo(1.796652, 6);
     expect(armyMultiplier(order[Math.floor((order.length - 1) / 2)]!))
-      .toBeCloseTo(1.9, 2);
-    expect(armyMultiplier('lux' as PlayerId)).toBeGreaterThan(7.4);
-    expect(armyMultiplier('lux' as PlayerId)).toBeLessThan(7.7);
+      .toBeGreaterThan(3);
+    expect(armyMultiplier('lux' as PlayerId)).toBeGreaterThan(8);
+    expect(armyMultiplier('lux' as PlayerId)).toBeLessThan(10);
     expect(armyMultiplier(order[Math.floor((order.length - 1) * 0.75)]!))
-      .toBeCloseTo(9, 1);
+      .toBeCloseTo(9.4, 1);
     expect(armyMultiplier(order.at(-1)!)).toBe(15);
+  });
+
+  it('raises both player trait and army help faster immediately after rank 15', () => {
+    const order = openingMilitaryOrderForContentV2(WORLD_CONTENT_V2);
+    const rank15 = order[14]!;
+    const rank16 = order[15]!;
+    const linearRank16Trait = 1 + 1.5 * 15 / (order.length - 1);
+    expect(humanCountryTraitMultiplierForContentV2(WORLD_CONTENT_V2, rank15))
+      .toBeCloseTo(1 + 1.5 * 14 / (order.length - 1), 12);
+    expect(humanCountryTraitMultiplierForContentV2(WORLD_CONTENT_V2, rank16))
+      .toBeGreaterThan(linearRank16Trait);
+    expect(humanStartingArmyMultiplierForContentV2(WORLD_CONTENT_V2, rank15)).toBeLessThan(1);
+    expect(humanStartingArmyMultiplierForContentV2(WORLD_CONTENT_V2, rank16)).toBeGreaterThan(1);
   });
 
   it('grants the opening surplus without treasury or reserves and scales capacity with it', () => {

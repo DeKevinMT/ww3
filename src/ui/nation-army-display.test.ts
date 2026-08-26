@@ -24,14 +24,14 @@ describe('nation army display', () => {
 
   it('presents current treasury separately from its weekly forecast', () => {
     expect(treasuryTopbarPresentationV2(4.25, -0.125)).toEqual({
-      className: 'top-metric--treasury',
+      className: 'top-metric--treasury is-positive',
       value: '$4.25B',
       trend: '−$125.00M/wk',
       trendClassName: 'is-negative',
       ariaLabel: 'Current empire treasury $4.25B; projected recurring net −$125.00M per week',
     });
     expect(treasuryTopbarPresentationV2(-0.5, 0.05)).toMatchObject({
-      className: 'top-metric--treasury is-debt',
+      className: 'top-metric--treasury is-debt is-negative',
       value: '−$500.00M',
       trend: '+$50.00M/wk',
       trendClassName: 'is-positive',

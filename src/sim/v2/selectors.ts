@@ -173,6 +173,7 @@ import { calculateBlendedFiscalCapacityV2 } from './fiscal';
 import { localArmyBaseQualityV2, mixArmyBaseQualityV2, nationArmyBaseQualityV2 } from './armyQuality';
 import {
   initialNationArmyCapacityBenchmarkV2,
+  nationalArmyCapacityAtOneXOpeningV2,
   nationalArmyCapacityTargetV2,
   openingArmyCapacityMultiplierV2,
   stateArmyCapacityTargetsV2,
@@ -960,6 +961,7 @@ export function selectResearchCatchUpFactorV2(
   _content: WorldContentV2,
   playerId: PlayerId,
   powerSnapshot: PowerSnapshotV2 = createPowerSnapshotV2(state, _content),
+  nationContextOverride?: TraitEvaluationContextV2,
 ): number {
   const nation = state.players[playerId];
   if (!nation) return 1;
@@ -971,7 +973,7 @@ export function selectResearchCatchUpFactorV2(
   return round(1 + catchUpBonus * countryTraitFactorV2(
     playerId,
     'research-catch-up-bonus',
-    traitNationContextV2(state, playerId),
+    nationContextOverride ?? traitNationContextV2(state, playerId),
   ));
 }
 
@@ -1848,6 +1850,7 @@ export function selectResearchOutputV2(
   playerId: PlayerId,
   finance = selectWeeklyFinanceBreakdownV2(state, content, playerId),
   catchUpOverride?: number,
+  nationContextOverride?: TraitEvaluationContextV2,
 ): number {
   const nation = state.players[playerId];
   if (!nation || RESEARCH_BRANCHES.every((branch) => (
@@ -1869,7 +1872,7 @@ export function selectResearchOutputV2(
   return round(output * countryTraitFactorV2(
     playerId,
     'research-output',
-    traitNationContextV2(state, playerId),
+    nationContextOverride ?? traitNationContextV2(state, playerId),
   ));
 }
 
@@ -2158,6 +2161,10 @@ export function selectWeeklyFinanceBreakdownV2(
 ): WeeklyFinanceBreakdownV2 {
   const nation = state.players[playerId];
   if (!nation) throw new Error(`Unknown nation ${playerId}.`);
+  // A finance projection evaluates several independent trait channels against
+  // the same immutable national inputs. Resolve that context once for this
+  // projection instead of rescanning every active war for every channel.
+  const nationTraitContext = traitNationContextV2(state, playerId);
   const budget = { ...(budgetOverride ?? nation.budget) };
   const economy = selectNationalEconomyV2(state, content, playerId);
   const army = selectTotalManpowerV2(state, playerId);
@@ -2171,14 +2178,19 @@ export function selectWeeklyFinanceBreakdownV2(
     playerId,
   );
   const paidCapacity = openingCapacityMultiplier > 1
-    ? round(army.capacity / openingCapacityMultiplier)
+    ? nationalArmyCapacityAtOneXOpeningV2(
+      state,
+      content,
+      playerId,
+      territoryIndexV2(state).owned.get(playerId) ?? [],
+    )
     : army.capacity;
   // Temporary opening capacity is operationally recruitable. Keep the
   // underlying paid capacity separately for standing-cap upkeep so the free
   // opening envelope itself does not acquire a hidden maintenance bill.
   const recruitableArmyGap = Math.max(0, army.capacity - army.deployed);
-  const activeWars = selectWarsOfV2(state, playerId).length;
   const warPressure = selectWarPressureV2(state, playerId);
+  const activeWars = warPressure.fronts;
   const atWar = activeWars > 0;
   const territories = selectTerritoriesOfV2(state, playerId);
   const baseFoodDemand = Math.max(0.01, selectFoodDemandV2(state, playerId));
@@ -2192,7 +2204,7 @@ export function selectWeeklyFinanceBreakdownV2(
   const foodExportIncomeTraitFactor = countryTraitFactorV2(
     playerId,
     'food-export-income',
-    traitNationContextV2(state, playerId),
+    nationTraitContext,
   );
   const iq = selectNationalIqViewV2(state, content, playerId);
   const populationTrend = selectPopulationDynamicsV2(
@@ -2361,7 +2373,7 @@ export function selectWeeklyFinanceBreakdownV2(
     * countryTraitFactorV2(
       playerId,
       'war-fatigue-operation-surcharge',
-      traitNationContextV2(state, playerId),
+      nationTraitContext,
     );
   const warOperations = atWar ? frontLoad * (
     economy.weeklyRevenue * WAR_OPERATION_REVENUE_SHARE
@@ -2380,7 +2392,7 @@ export function selectWeeklyFinanceBreakdownV2(
     * countryTraitFactorV2(
       playerId,
       'army-upkeep',
-      traitNationContextV2(state, playerId),
+      nationTraitContext,
     );
   // Ordinary revenue uses the persisted budget exactly. A GDP-scale cash
   // surplus may supplement only real military needs before its remainder is
@@ -2417,7 +2429,7 @@ export function selectWeeklyFinanceBreakdownV2(
       * countryTraitFactorV2(
         playerId,
         'accelerated-recruitment',
-        traitNationContextV2(state, playerId),
+        nationTraitContext,
       ),
   );
   const recruitmentRequest = acceleratedRecruitmentRequest * recruitmentUnitCost * accelerationCostMultiplier;
@@ -2446,7 +2458,7 @@ export function selectWeeklyFinanceBreakdownV2(
     * countryTraitFactorV2(
       playerId,
       'reserve-deployment-throughput',
-      traitNationContextV2(state, playerId),
+      nationTraitContext,
     );
   const passiveRecruitment = atWar ? 0 : fundedPassiveCapacity;
   const acceleratedRecruitment = atWar ? 0 : affordableAcceleratedRecruitment;
@@ -2490,7 +2502,7 @@ export function selectWeeklyFinanceBreakdownV2(
       * countryTraitFactorV2(
         playerId,
         'reserve-training',
-        traitNationContextV2(state, playerId),
+        nationTraitContext,
       )
     : 0;
   const reserveTrainingCostPerUnit = recruitmentUnitCost * TRAINED_RESERVE_TRAINING_COST_MULTIPLIER;
@@ -2580,7 +2592,7 @@ export function selectWeeklyFinanceBreakdownV2(
         - army.capacity * EXTREME_CRISIS_HOME_GUARD_CAPACITY_SHARE),
     ), 9) : 0;
   const demobilizationCost = 0;
-  const conditionRequest = selectTerritoriesOfV2(state, playerId)
+  const conditionRequest = territories
     .reduce((sum, territory) => sum + (1 - territory.condition) * 0.20, 0);
   const productiveDevelopment = development;
   const condition = Math.min(productiveDevelopment, conditionRequest);

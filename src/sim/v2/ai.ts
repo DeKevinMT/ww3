@@ -291,9 +291,9 @@ export function aiExpansionDeclarationChanceV2({
     1,
   );
   const worldLoad = clamp(globalWarLoad, 0, 1);
-  const unbrakedChance = clamp(0.10 + 0.10 * Math.max(0, ratio - 1)
-    + 0.65 * expansionChance
-    + (regionalEscalation ? 0.04 : 0), 0.07, regionalEscalation ? 0.40 : 0.34);
+  const unbrakedChance = clamp(0.08 + 0.10 * Math.max(0, ratio - 1)
+    + 0.58 * expansionChance
+    + (regionalEscalation ? 0.03 : 0), 0.055, regionalEscalation ? 0.36 : 0.30);
   // Existing world conflict suppresses optional AI-vs-AI escalation. A
   // A critically strained land neighbour removes most, but never all, of that
   // caution so the intended anti-overreach response remains clearly visible.
@@ -305,8 +305,8 @@ export function aiExpansionDeclarationChanceV2({
   }
   return clamp(
     baseChance + 0.18 * strainPressure,
-    0.05,
-    regionalEscalation ? 0.58 : 0.56,
+    0.04,
+    regionalEscalation ? 0.50 : 0.48,
   );
 }
 
@@ -321,7 +321,7 @@ export function aiConcurrentWarLimitV2(majorPowerDrive: number, tick: number): n
  * defender retains its wider but still bounded coalition window.
  */
 export function aiTargetWarLimitV2(regionalEscalation: boolean, defensiveAid: boolean): number {
-  return defensiveAid ? 4 : regionalEscalation ? 2 : 1;
+  return defensiveAid ? 3 : regionalEscalation ? 2 : 1;
 }
 
 type AiWarAccessIndexV2 = ReadonlyMap<
@@ -491,17 +491,17 @@ export function selectDefensiveAidAssessmentV2(
     war,
     powerSnapshot,
   );
-  const minimumCombinedRatio = access === 'land' ? 0.72 : 0.80;
+  const minimumCombinedRatio = access === 'land' ? 0.76 : 0.84;
   const neighboursDefender = selectWarAccessTypeV2(
     state,
     content,
     supporterId,
     war.defenderId,
   ) === 'land';
-  if (!neighboursDefender || interventionPressure < 0.10
+  if (!neighboursDefender || interventionPressure < 0.16
     || aggressorRatio < AI_DEFENSIVE_AID_AGGRESSOR_RATIO
     || combinedEstimate.estimatedCombinedPowerRatio < minimumCombinedRatio
-    || alignmentEdge < -2) return undefined;
+    || alignmentEdge < -1) return undefined;
   const jointViability = clamp(
     (combinedEstimate.estimatedCombinedPowerRatio - minimumCombinedRatio)
       / (1.30 - minimumCombinedRatio),
@@ -516,15 +516,15 @@ export function selectDefensiveAidAssessmentV2(
     + 22 * jointViability
     + 12 * interventionPressure
     - (access === 'naval' ? 2 : 0);
-  const rawInterventionChance = 0.16
-    + Math.min(0.16, Math.max(0, alignmentEdge) * 0.015)
-    + Math.min(0.16, Math.max(0, aggressorRatio - AI_DEFENSIVE_AID_AGGRESSOR_RATIO) * 0.08)
-    + 0.16 * jointViability
-    + (access === 'land' ? 0.06 : 0);
+  const rawInterventionChance = 0.11
+    + Math.min(0.12, Math.max(0, alignmentEdge) * 0.012)
+    + Math.min(0.12, Math.max(0, aggressorRatio - AI_DEFENSIVE_AID_AGGRESSOR_RATIO) * 0.06)
+    + 0.12 * jointViability
+    + (access === 'land' ? 0.04 : 0);
   const interventionChance = clamp(
     rawInterventionChance * (0.60 + 0.40 * interventionPressure),
-    0.08,
-    0.48,
+    0.05,
+    0.34,
   );
   return { linkedWarId: war.id, priority, interventionChance, ...combinedEstimate };
 }
@@ -966,8 +966,11 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
   // dogpile, but the opportunity no longer waits behind rotating initiative.
   const counterattackSupporters = new Set<PlayerId>();
   for (const targetId of living) {
-    if (counterattackRiskForWarStrainV2(expansionThreatScoreFor(targetId), true).level !== 'high'
-      && counterattackRiskForWarStrainV2(expansionThreatScoreFor(targetId), true).level !== 'critical') continue;
+    const counterattackRisk = counterattackRiskForWarStrainV2(
+      expansionThreatScoreFor(targetId),
+      true,
+    );
+    if (counterattackRisk.level !== 'high' && counterattackRisk.level !== 'critical') continue;
     for (const supporterId of living) {
       if (humanPlayerIds.has(supporterId) || supporterId === targetId) continue;
       if (warAccessIndex.get(supporterId)?.get(targetId) === 'land') {
@@ -1010,16 +1013,25 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
     // cash windfall into a sudden army or research spike.
     const army = planningView.army;
     const wars = planningView.activeWars;
-    const dynamicAggressiveness = selectNationalAggressivenessV2(
-      state,
-      content,
-      playerId,
-      powerSnapshot,
-    ) / 100;
-    if (!humanPlayerIds.has(playerId)) {
+    // Aggressiveness is a pure but broad strategic selector. Most countries do
+    // not reach a peace or expansion decision on a given review, so defer it
+    // until a branch actually consumes the value and reuse it thereafter.
+    let dynamicAggressivenessValue: number | undefined;
+    const dynamicAggressiveness = (): number => {
+      dynamicAggressivenessValue ??= selectNationalAggressivenessV2(
+        state,
+        content,
+        playerId,
+        powerSnapshot,
+      ) / 100;
+      return dynamicAggressivenessValue;
+    };
+    const humanControlled = humanPlayerIds.has(playerId);
+    let offensivelyExhausted = false;
+    if (!humanControlled) {
       const attackingWars = wars.filter((war) => war.attackerId === playerId)
         .sort((left, right) => left.id.localeCompare(right.id));
-      const offensivelyExhausted = aiAttackerIsOffensivelyExhaustedV2(
+      offensivelyExhausted = aiAttackerIsOffensivelyExhaustedV2(
         state,
         playerId,
       );
@@ -1056,7 +1068,7 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
         const settlementGenerosity = settlementValue
           / Math.max(0.01, planningView.economy.weeklyRevenue * 52);
         const acceptChance = aiPeaceOfferAcceptanceChanceV2({
-          aggressiveness: dynamicAggressiveness,
+          aggressiveness: dynamicAggressiveness(),
           warFatigue: player.warFatigue / 100,
           armyFillRatio: army.fillRatio,
           activeWarCount: wars.length,
@@ -1087,7 +1099,7 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
           || left.war.id.localeCompare(right.war.id))[0];
       if (peaceCandidate) {
         const pressure = aiPeaceRequestChanceV2({
-          aggressiveness: dynamicAggressiveness,
+          aggressiveness: dynamicAggressiveness(),
           warAge: state.tick - peaceCandidate.war.startedTick,
           warFatigue: player.warFatigue / 100,
           armyFillRatio: army.fillRatio,
@@ -1102,8 +1114,8 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
         }
       }
     }
-    if (humanPlayerIds.has(playerId)) continue;
-    if (aiAttackerIsOffensivelyExhaustedV2(state, playerId)
+    if (humanControlled) continue;
+    if (offensivelyExhausted
       || wars.some((war) => war.attackerId === playerId
         && aiAttackerMustStandDownV2(state, war))) continue;
     // Emergency neighbours review aid independently of the rotating expansion
@@ -1116,9 +1128,9 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
     const federation = isDefensiveFederationV2(state, playerId);
     const nation = content.nations[playerId]!;
     const warDiscipline = aiWarDisciplineV2(effectiveIq);
-    const expansionAmbition = dynamicAggressiveness;
+    const expansionAmbition = dynamicAggressiveness();
     const majorPowerDrive = clamp((nation.real.powerIndex - 35) / 65, 0, 1);
-    const ownWars = selectWarsOfV2(state, playerId);
+    const ownWars = wars;
     const ownWarLimit = aiConcurrentWarLimitV2(majorPowerDrive, state.tick);
     const weeksSinceGlobalStart = state.tick - state.aiEscalation.lastWarStartTick;
     const normalWindowOpen = state.wars.length < activeWarCap
@@ -1379,9 +1391,9 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
     const baseChance = defensiveAid
       ? clamp(
         candidate.regionalEscalation!.interventionChance
-          + 0.18 * candidate.counterattackPressure,
+          + 0.08 * candidate.counterattackPressure,
         0,
-        0.78,
+        0.42,
       )
       : aiExpansionDeclarationChanceV2({
         ratio: candidate.ratio,

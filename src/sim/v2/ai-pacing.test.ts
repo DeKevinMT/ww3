@@ -19,9 +19,9 @@ import {
 describe('quiet but active AI war pacing', () => {
   it('uses one ordinary expansion roll and long global cooldowns', () => {
     expect(AI_EXPANSION_ROLLS_PER_DECISION).toBe(1);
-    expect(AI_GLOBAL_WAR_COOLDOWN).toBe(78);
+    expect(AI_GLOBAL_WAR_COOLDOWN).toBe(91);
     expect(AI_REGIONAL_ESCALATION_COOLDOWN).toBe(104);
-    expect(AI_DEFENSIVE_AID_COOLDOWN).toBe(52);
+    expect(AI_DEFENSIVE_AID_COOLDOWN).toBe(78);
   });
 
   it('keeps the commitment roll modest and sharply discourages opportunistic dogpiles', () => {
@@ -44,8 +44,8 @@ describe('quiet but active AI war pacing', () => {
       rivalInvaderCount: 1,
     });
 
-    expect(ordinary).toBeCloseTo(0.172, 6);
-    expect(regional).toBeCloseTo(0.212, 6);
+    expect(ordinary).toBeCloseTo(0.1464, 6);
+    expect(regional).toBeCloseTo(0.1764, 6);
     expect(dogpile).toBeLessThanOrEqual(0.05);
   });
 
@@ -142,7 +142,7 @@ describe('quiet but active AI war pacing', () => {
   it('reserves dogpiles for explicit intervention and keeps the world cap small', () => {
     expect(aiTargetWarLimitV2(false, false)).toBe(1);
     expect(aiTargetWarLimitV2(true, false)).toBe(2);
-    expect(aiTargetWarLimitV2(true, true)).toBe(4);
+    expect(aiTargetWarLimitV2(true, true)).toBe(3);
     expect(aiActiveWarCapV2(235, 0)).toBe(3);
     expect(aiActiveWarCapV2(235, 520)).toBe(4);
     expect(aiActiveWarCapV2(70, 0)).toBe(2);

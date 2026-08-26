@@ -31,6 +31,83 @@ body { user-select: none; }
 button, input { font: inherit; }
 button { color: inherit; }
 
+#startup-loader {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-content: center;
+  gap: 18px;
+  background: radial-gradient(circle at 50% 42%, #102b3c 0%, #071522 42%, #030a12 100%);
+  opacity: 1;
+  transition: opacity 220ms ease;
+}
+
+#startup-loader.is-hidden { display: none; }
+#startup-loader.is-ready { opacity: 0; pointer-events: none; }
+
+.startup-loader__identity {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  color: #dffaff;
+}
+
+.startup-loader__identity > span {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(107, 221, 242, 0.62);
+  border-radius: 9px;
+  background: rgba(107, 221, 242, 0.09);
+  color: #a7effb;
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 1px;
+}
+
+.startup-loader__identity div { display: grid; gap: 3px; }
+.startup-loader__identity strong { font-size: 14px; letter-spacing: 2.2px; }
+.startup-loader__identity small { color: #7397a9; font-size: 9px; letter-spacing: 1.45px; }
+
+.startup-loader__track {
+  width: min(310px, 72vw);
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(126, 190, 207, 0.13);
+}
+
+.startup-loader__track i {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #5bbed1, #9df1ff);
+  box-shadow: 0 0 14px rgba(107, 221, 242, 0.45);
+  transform: scaleX(0.16);
+  transform-origin: left;
+  animation: startup-map-progress 2.4s cubic-bezier(.18, .74, .28, 1) forwards;
+}
+
+#startup-loader.is-ready .startup-loader__track i {
+  animation: none;
+  transform: scaleX(1);
+  transition: transform 120ms ease-out;
+}
+
+@keyframes startup-map-progress {
+  0% { transform: scaleX(0.08); }
+  55% { transform: scaleX(0.64); }
+  100% { transform: scaleX(0.88); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #startup-loader { transition-duration: 1ms; }
+  .startup-loader__track i { animation: none; transform: scaleX(0.88); }
+}
+
 #game-canvas {
   position: absolute;
   inset: 0;
@@ -3346,12 +3423,66 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
   padding: 5px 8px 5px;
   border: 1px solid rgba(133, 203, 218, 0.42);
   border-radius: 7px;
-  background: linear-gradient(145deg, rgba(4, 15, 26, 0.91), rgba(8, 29, 43, 0.80));
+  background: linear-gradient(145deg, rgba(4, 15, 26, 0.97), rgba(8, 29, 43, 0.93));
   box-shadow: 0 5px 20px rgba(0, 0, 0, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.035);
   color: #eefbfe;
   text-align: center;
   line-height: 1.08;
-  backdrop-filter: blur(5px);
+}
+
+/* Release identity stays visible without occupying the playfield. Licensed
+   audio attribution lives inside Help/About instead of this corner. */
+.game-version-badge {
+  position: fixed;
+  right: 12px;
+  bottom: 9px;
+  z-index: 38;
+  padding: 3px 6px;
+  border: 1px solid rgba(121, 202, 220, 0.13);
+  border-radius: 5px;
+  background: rgba(3, 13, 22, 0.54);
+  color: rgba(185, 218, 226, 0.52);
+  font: 750 8px/1.1 Inter, system-ui, sans-serif;
+  letter-spacing: 0.65px;
+  pointer-events: none;
+  user-select: none;
+  backdrop-filter: blur(4px);
+}
+
+.world-ui-v2 .world-help__credits {
+  margin-top: 12px;
+  padding-top: 11px;
+  border-top: 1px solid rgba(112, 206, 225, 0.16);
+}
+
+.world-ui-v2 .world-help__credits > h3 {
+  margin: 0 0 7px;
+  color: #a6e7f1;
+  font-size: 10px;
+  letter-spacing: 0.65px;
+}
+
+.world-ui-v2 .world-help__credits > ul {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.world-ui-v2 .world-help__credits li {
+  color: #98aeb5;
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.world-ui-v2 .world-help__credits a {
+  color: #83d9e8;
+  text-underline-offset: 2px;
+}
+
+@media (max-width: 680px) {
+  .game-version-badge { right: 7px; bottom: 6px; font-size: 7px; }
 }
 
 .globe-map__country-label strong {
@@ -3392,6 +3523,48 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
   letter-spacing: 0.48px;
   white-space: nowrap;
 }
+
+.globe-map__territory-readiness {
+  --readiness-color: #79e7b5;
+  position: relative;
+  display: none;
+  height: 4px;
+  margin: 4px 1px 0;
+  overflow: hidden;
+  border: 1px solid rgba(174, 225, 234, 0.18);
+  border-radius: 99px;
+  background: rgba(2, 10, 17, 0.78);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.48);
+}
+
+.globe-map__country-label.has-readiness .globe-map__territory-readiness,
+.globe-map__country-label.is-selected .globe-map__territory-readiness {
+  display: block;
+}
+
+.globe-map__territory-readiness i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--readiness-fill, 0%);
+  border-radius: inherit;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--readiness-color) 72%, #153440), var(--readiness-color));
+  box-shadow: 0 0 7px color-mix(in srgb, var(--readiness-color) 48%, transparent);
+}
+
+.globe-map__territory-readiness b {
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  left: var(--readiness-local, 100%);
+  width: 1px;
+  background: rgba(240, 250, 252, 0.72);
+  box-shadow: 0 0 3px rgba(3, 11, 18, 0.78);
+  transform: translateX(-50%);
+}
+
+.globe-map__territory-readiness.is-critical { --readiness-color: #ff736d; }
+.globe-map__territory-readiness.is-strained { --readiness-color: #efbd68; }
+.globe-map__territory-readiness.is-ready { --readiness-color: #74e4b0; }
 
 .globe-map__country-label.is-human {
   border-color: rgba(102, 229, 248, 0.76);
@@ -5627,6 +5800,8 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
 }
 .world-ui-v2 .topbar-status .top-metric--economy { --metric-accent: #67d7eb; }
 .world-ui-v2 .topbar-status .top-metric--treasury { --metric-accent: #f0bd68; }
+.world-ui-v2 .topbar-status .top-metric--treasury.is-positive > strong { color: #72e2a9; }
+.world-ui-v2 .topbar-status .top-metric--treasury.is-negative > strong { color: #ff9189; }
 .world-ui-v2 .topbar-status .top-metric--military { --metric-accent: #ff8179; }
 .world-ui-v2 .topbar-status .top-metric--people { --metric-accent: #b59cff; }
 .world-ui-v2 .topbar-status .top-metric--food { --metric-accent: #69e3a2; }

@@ -97,9 +97,12 @@ export function synchronizeOpeningTreasuryHumanRosterV2(
  * manpower changes here; capacity is synchronized by the caller onto the same
  * temporary curve. A sub-1x opening also scales the tick-zero reserve cadre by
  * the same factor; removing that human seat restores the exact 1x cadre. A
- * positive opening boost never creates free reserves. Extra deployed soldiers
- * are free and non-replenishable, and the fading capacity entitlement gates
- * future recruitment without deleting paid soldiers that already exist.
+ * positive opening boost normally never creates free reserves. Belgium is the
+ * one explicit scenario exception: its 35% opening reserve must remain 35% of
+ * its temporary player capacity as well as its ordinary AI capacity. Extra
+ * deployed soldiers are free and non-replenishable, and the fading capacity
+ * entitlement gates future recruitment without deleting paid soldiers that
+ * already exist.
  */
 export function synchronizeOpeningArmyHumanRosterV2(
   state: WorldStateV2,
@@ -117,8 +120,8 @@ export function synchronizeOpeningArmyHumanRosterV2(
     const after = next.has(id) ? humanStartingArmyMultiplierForContentV2(content, id) : 1;
     if (Math.abs(before - after) <= 0.000000001) continue;
     state.players[id]!.openingArmyBonus = null;
-    const reserveBeforeFactor = Math.min(1, before);
-    const reserveAfterFactor = Math.min(1, after);
+    const reserveBeforeFactor = id === 'bel' ? before : Math.min(1, before);
+    const reserveAfterFactor = id === 'bel' ? after : Math.min(1, after);
     if (Math.abs(reserveBeforeFactor - reserveAfterFactor) > 0.000000001) {
       state.players[id]!.trainedReserves = round(
         state.players[id]!.trainedReserves / reserveBeforeFactor * reserveAfterFactor,

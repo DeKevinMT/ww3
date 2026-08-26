@@ -23,6 +23,7 @@ export {
   initialTerritoryArmyCapacityV2,
   CONQUERED_TERRITORY_EMPIRE_COMBAT_CAP_SHARE_V2,
   INTEGRATED_CORE_EMPIRE_COMBAT_CAP_SHARE_V2,
+  nationalArmyCapacityAtOneXOpeningV2,
   nationalArmyCapacityTargetV2,
   stateArmyCapacityTargetsV2,
   stateTerritoryArmyDeploymentLimitV2,

@@ -1,0 +1,65 @@
+import { readFileSync } from 'node:fs';
+import { describe, expect, it } from 'vitest';
+import globeSceneSource from '../game/map/three/ThreeGlobeScene.ts?raw';
+import mainSource from '../main.ts?raw';
+import worldUiSource from './WorldUIV2.ts?raw';
+
+const indexSource = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
+
+describe('post-selection map loader', () => {
+  it('starts hidden so it never covers the country picker', () => {
+    expect(indexSource.match(/id="startup-loader"/g)).toHaveLength(1);
+    expect(indexSource).toContain('id="startup-loader" class="is-hidden"');
+    expect(indexSource).toContain('aria-hidden="true"');
+    expect(mainSource).toContain("document.querySelector<HTMLElement>('#startup-loader')");
+    expect(mainSource).not.toContain('await renderer.firstFrameReady;');
+  });
+
+  it('activates only after an accepted country confirmation', () => {
+    const chooseCountryBody = worldUiSource.slice(
+      worldUiSource.indexOf("case 'choose-country':"),
+      worldUiSource.indexOf("case 'open-multiplayer':"),
+    );
+    expect(chooseCountryBody.indexOf('this.options.onCountryConfirmed?.(countryId);'))
+      .toBeGreaterThan(chooseCountryBody.indexOf('if (!commandAccepted(result))'));
+    expect(mainSource).toContain('onCountryConfirmed: showStartupLoader');
+    expect(mainSource).toContain("startupLoaderState: 'idle' | 'active' | 'complete' = 'idle'");
+    expect(mainSource).toContain("startupLoader.classList.remove('is-hidden', 'is-ready')");
+  });
+
+  it('waits for the synchronized political map to be drawn and presented', () => {
+    expect(worldUiSource).toContain('this.initialMapLoaderPaintPending = true;');
+    expect(worldUiSource).toContain('&& this.initialMapLoaderPaintPending');
+    expect(worldUiSource).toContain('queueFrame();');
+    expect(worldUiSource).toContain('if (didSyncMap) mapBridge.sync();');
+    expect(worldUiSource).toContain('this.options.onInitialMapSynchronized?.();');
+    expect(mainSource).toContain('await renderer.waitForMapReady();');
+    expect(mainSource).toContain('await renderer.waitForNextFrame();');
+    expect(mainSource).toContain('window.requestAnimationFrame(() => resolve())');
+    expect(mainSource.indexOf('await renderer.waitForMapReady();'))
+      .toBeLessThan(mainSource.indexOf('await renderer.waitForNextFrame();'));
+    expect(globeSceneSource).toContain('return this.globeTexture.waitForReady();');
+    expect(globeSceneSource.indexOf('for (const resolve of resolvers) resolve();'))
+      .toBeGreaterThan(globeSceneSource.indexOf('this.renderer.render(this.scene, this.camera);'));
+  });
+
+  it('keeps the timeout fallback valid while asynchronous flags settle', () => {
+    expect(mainSource).toContain('startupLoaderFallbackTimer = window.setTimeout(');
+    expect(mainSource).toContain("if (startupLoaderState !== 'active') return;");
+    expect(mainSource).toContain('} finally {\n    dismissStartupLoader();');
+  });
+
+  it('is reusable for a later country choice and is not driven by normal gameplay updates', () => {
+    expect(mainSource.match(/createWorldMapRenderer\(/g)).toHaveLength(1);
+    expect(mainSource).toContain("if (startupLoaderState !== 'idle'");
+    expect(mainSource).toContain("startupLoaderState = 'complete'");
+    expect(mainSource).toContain("startupLoader.classList.add('is-hidden')");
+    expect(mainSource).toContain("startupLoaderState = 'idle'");
+    expect(mainSource).not.toContain('startupLoader.remove()');
+    const scenarioBody = mainSource.slice(
+      mainSource.indexOf('function launchSoloScenario('),
+      mainSource.indexOf('function attachHostStatus('),
+    );
+    expect(scenarioBody).not.toContain('startupLoader');
+  });
+});

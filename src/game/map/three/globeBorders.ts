@@ -1,9 +1,14 @@
-import { COUNTRIES } from '../../data/worldMap';
+import {
+  COUNTRIES,
+  terrainProfileForTerritory,
+} from '../../data/worldMap';
 import type { WorldMapEngineContract } from '../bridge';
 import { lonLatToUnitXyz } from './globeMath';
+import { terrainTextureLayerPresentation } from './terrainTexturePresentation';
 
 type Coordinate = readonly [number, number];
 type UnitPosition = readonly [number, number, number];
+type UnitColor = readonly [number, number, number];
 
 interface MutableBorderEdge {
   start: Coordinate;
@@ -14,6 +19,12 @@ interface MutableBorderEdge {
 interface PreparedBorderEdge {
   points: readonly UnitPosition[];
   territoryIds: readonly string[];
+  color: UnitColor;
+}
+
+export interface GlobeBorderBuffer {
+  readonly positions: Float32Array;
+  readonly colors: Float32Array;
 }
 
 /**
@@ -30,6 +41,44 @@ const BORDER_RADIUS_SCALE = 1.00008;
  * keeping the cached buffer compact enough for a single border draw call.
  */
 const MAX_BORDER_ARC_RADIANS = 0.22 * Math.PI / 180;
+
+/**
+ * LineBasicMaterial has one opacity for the complete draw call. Premultiply
+ * each terrain hue by its percentage-derived border alpha instead, so the RGB
+ * attribute carries both hue and intensity without another material or pass.
+ */
+const TERRAIN_BORDER_COLOR_BY_TERRITORY = new Map<string, UnitColor>(
+  COUNTRIES.map((country) => {
+    const presentation = terrainTextureLayerPresentation(
+      terrainProfileForTerritory(country.id),
+    );
+    const red = (presentation.borderColor >> 16) & 0xff;
+    const green = (presentation.borderColor >> 8) & 0xff;
+    const blue = presentation.borderColor & 0xff;
+    return [country.id, [
+      red / 255 * presentation.borderAlpha,
+      green / 255 * presentation.borderAlpha,
+      blue / 255 * presentation.borderAlpha,
+    ] as const];
+  }),
+);
+
+function terrainBorderColor(territoryIds: readonly string[]): UnitColor {
+  let red = 0;
+  let green = 0;
+  let blue = 0;
+  let count = 0;
+  for (const territoryId of territoryIds) {
+    const color = TERRAIN_BORDER_COLOR_BY_TERRITORY.get(territoryId);
+    if (!color) continue;
+    red += color[0];
+    green += color[1];
+    blue += color[2];
+    count += 1;
+  }
+  if (count === 0) return [0, 0, 0];
+  return [red / count, green / count, blue / count];
+}
 
 function pointKey([longitude, latitude]: Coordinate): string {
   // +180 and -180 are the same point on the globe and must share one seam key.
@@ -106,10 +155,14 @@ const PREPARED_BORDER_EDGES: readonly PreparedBorderEdge[] = (() => {
     }
   }
 
-  return [...edgesByKey.values()].map((edge) => ({
-    points: sphericalArcPoints(edge.start, edge.end),
-    territoryIds: [...edge.territoryIds],
-  }));
+  return [...edgesByKey.values()].map((edge) => {
+    const territoryIds = [...edge.territoryIds];
+    return {
+      points: sphericalArcPoints(edge.start, edge.end),
+      territoryIds,
+      color: terrainBorderColor(territoryIds),
+    };
+  });
 })();
 
 function isHiddenInternalBorder(
@@ -138,20 +191,23 @@ export function globeBorderOwnershipSignature(engine?: WorldMapEngineContract): 
 }
 
 /**
- * Build a LineSegments-compatible position buffer. Shared borders disappear
- * only when every canonical territory touching that exact edge has one owner;
- * coastlines, incomplete snapshots and the canonical no-engine view remain.
+ * Build the two attributes for one merged LineSegments geometry. Shared borders
+ * disappear only when every canonical territory touching that exact edge has
+ * one owner; coastlines, incomplete snapshots and the canonical no-engine view
+ * remain. Every segment endpoint receives the same statically prepared terrain
+ * color, averaged across the territories on a shared edge.
  */
-export function buildGlobeBorderPositions(
+export function buildGlobeBorderBuffer(
   engine: WorldMapEngineContract | undefined,
   radius: number,
-): Float32Array {
+): GlobeBorderBuffer {
   let visibleSegmentCount = 0;
   for (const edge of PREPARED_BORDER_EDGES) {
     if (!isHiddenInternalBorder(edge, engine)) visibleSegmentCount += edge.points.length - 1;
   }
 
   const positions = new Float32Array(visibleSegmentCount * 6);
+  const colors = new Float32Array(visibleSegmentCount * 6);
   const lineRadius = radius * BORDER_RADIUS_SCALE;
   let offset = 0;
   for (const edge of PREPARED_BORDER_EDGES) {
@@ -165,8 +221,22 @@ export function buildGlobeBorderPositions(
       positions[offset + 3] = end[0] * lineRadius;
       positions[offset + 4] = end[1] * lineRadius;
       positions[offset + 5] = end[2] * lineRadius;
+      colors[offset] = edge.color[0];
+      colors[offset + 1] = edge.color[1];
+      colors[offset + 2] = edge.color[2];
+      colors[offset + 3] = edge.color[0];
+      colors[offset + 4] = edge.color[1];
+      colors[offset + 5] = edge.color[2];
       offset += 6;
     }
   }
-  return positions;
+  return { positions, colors };
+}
+
+/** Compatibility helper for callers that only need the position attribute. */
+export function buildGlobeBorderPositions(
+  engine: WorldMapEngineContract | undefined,
+  radius: number,
+): Float32Array {
+  return buildGlobeBorderBuffer(engine, radius).positions;
 }

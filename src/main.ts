@@ -9,6 +9,7 @@ import {
 } from './multiplayer/orchestration';
 import type { PlayerId } from './sim/v2/types';
 import { WorldEngineV2 } from './sim/v2/WorldEngineV2';
+import { V2_RULES_VERSION } from './sim/v2/balance';
 import {
   normalizeScenarioConfigV2,
   resolveScenarioV2,
@@ -70,7 +71,60 @@ let unsubscribeSessionStatus: (() => void) | undefined;
 let activeControllerNames: ReadonlyMap<PlayerId, string> = new Map();
 let activeScenario = initialScenarioFromLocation();
 
-void createWorldMapRenderer();
+const startupLoader = document.querySelector<HTMLElement>('#startup-loader');
+const gameVersionBadge = document.createElement('aside');
+const compactGameVersion = V2_RULES_VERSION.match(/v\d+(?:\.\d+)*/i)?.[0] ?? V2_RULES_VERSION;
+gameVersionBadge.className = 'game-version-badge';
+gameVersionBadge.textContent = compactGameVersion.toUpperCase();
+gameVersionBadge.setAttribute('aria-label', 'Frontier Command ' + compactGameVersion);
+document.body.append(gameVersionBadge);
+const worldMapRenderer = createWorldMapRenderer();
+let startupLoaderState: 'idle' | 'active' | 'complete' = 'idle';
+let startupLoaderFallbackTimer: number | undefined;
+
+function showStartupLoader(): void {
+  if (startupLoaderState !== 'idle' || !startupLoader?.isConnected) return;
+  startupLoaderState = 'active';
+  startupLoader.classList.remove('is-hidden', 'is-ready');
+  startupLoader.setAttribute('aria-hidden', 'false');
+  // A failed renderer must never leave the confirmed game permanently covered.
+  startupLoaderFallbackTimer = window.setTimeout(dismissStartupLoader, 12_000);
+}
+
+function dismissStartupLoader(): void {
+  if (startupLoaderState !== 'active' || !startupLoader?.isConnected) return;
+  startupLoaderState = 'complete';
+  if (startupLoaderFallbackTimer !== undefined) {
+    window.clearTimeout(startupLoaderFallbackTimer);
+    startupLoaderFallbackTimer = undefined;
+  }
+  startupLoader.classList.add('is-ready');
+  startupLoader.setAttribute('aria-hidden', 'true');
+  window.setTimeout(() => {
+    if (!startupLoader.isConnected) return;
+    startupLoader.classList.add('is-hidden');
+    startupLoader.classList.remove('is-ready');
+    startupLoaderState = 'idle';
+  }, 260);
+}
+
+async function dismissStartupLoaderAfterMapFrame(): Promise<void> {
+  if (startupLoaderState !== 'active') return;
+  try {
+    const renderer = await worldMapRenderer;
+    // The political sync initially paints the base immediately, while SVG
+    // flags settle asynchronously into one batched atlas redraw. Do not expose
+    // that intermediate map underneath the loader.
+    await renderer.waitForMapReady();
+    if (startupLoaderState !== 'active') return;
+    // The subsequent WebGL frame uploads and draws the completed atlas.
+    await renderer.waitForNextFrame();
+    // Let the browser present that framebuffer before fading the cover away.
+    await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+  } finally {
+    dismissStartupLoader();
+  }
+}
 
 function worldEngineFromSession(engine: GameSessionEngineV2): WorldEngineV2 {
   if (!(engine instanceof WorldEngineV2)) throw new Error('The multiplayer snapshot did not create a WorldEngineV2 replica.');
@@ -105,6 +159,8 @@ function mountWorldUi(
     ? { introOpen: false, multiplayer: true, controllerNames }
     : {
       initialPreviewCountryId,
+      onCountryConfirmed: showStartupLoader,
+      onInitialMapSynchronized: () => { void dismissStartupLoaderAfterMapFrame(); },
       onMultiplayerRequested: openMultiplayerLobby,
       scenarioConfig: scenarioConfigFromEngineV2(engine),
       onScenarioModeRequested: (mode) => launchSoloScenario({ mode, seed: randomSeed() }),
@@ -251,6 +307,11 @@ function openMultiplayerLobby(preferredCountryId?: PlayerId): void {
 }
 
 launchSoloScenario(activeScenario);
+
+void worldMapRenderer.catch((error: unknown) => {
+  dismissStartupLoader();
+  window.setTimeout(() => { throw error; });
+});
 
 window.addEventListener('beforeunload', () => {
   activeLobby?.destroy();

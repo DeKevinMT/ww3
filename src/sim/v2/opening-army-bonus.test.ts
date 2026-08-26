@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { round } from './balance';
 import {
   openingArmyCapacityMultiplierV2,
+  stateTerritoryArmyCapacityTargetV2,
+  stateTerritoryArmySupportCeilingV2,
   synchronizeArmyCapacityV2,
 } from './capacity';
 import { WORLD_CONTENT_V2 } from './content';
@@ -27,7 +29,7 @@ import {
   humanStartingArmyMultiplierForContentV2,
   legacyV261HumanStartingArmyMultiplierForContentV2,
 } from './traits';
-import { nationIdV2, type PlayerId, type WorldStateV2 } from './types';
+import { nationIdV2, territoryIdV2, type PlayerId, type WorldStateV2 } from './types';
 import { WorldEngineV2 } from './WorldEngineV2';
 
 const grl = nationIdV2('grl');
@@ -194,6 +196,52 @@ describe('temporary human opening-army bonus', () => {
     expect(selectTotalManpowerV2(strongEngine.state, usa).capacity)
       .toBeCloseTo(strongOneXCapacity * strongMultiplier, 6);
     expect(strongEngine.state.players[usa]!.openingArmyBonus).toBeNull();
+  });
+
+  it('limits the temporary opening-cap multiplier to original homeland', () => {
+    const engine = createOpeningEngineV2(86_012);
+    const state = engine.state;
+    const homelandId = territoryIdV2('grl');
+    const capturedId = territoryIdV2('isl');
+    const captured = state.territories[capturedId]!;
+    captured.owner = grl;
+    const multiplier = openingArmyCapacityMultiplierV2(state, WORLD_CONTENT_V2, grl);
+
+    for (const integration of [0.10, 1]) {
+      captured.integration = integration;
+      captured.coreOwner = integration === 1 ? grl : nationIdV2('isl');
+      delete captured.integrationProgram;
+      synchronizeArmyCapacityV2(state, WORLD_CONTENT_V2);
+
+      const oneXState = structuredClone(state);
+      oneXState.tick = OPENING_ARMY_BONUS_DURATION_TICKS_V2;
+      synchronizeArmyCapacityV2(oneXState, WORLD_CONTENT_V2);
+
+      expect(stateTerritoryArmyCapacityTargetV2(
+        state, WORLD_CONTENT_V2, homelandId, grl,
+      )).toBeCloseTo(
+        stateTerritoryArmyCapacityTargetV2(
+          oneXState, WORLD_CONTENT_V2, homelandId, grl,
+        ) * multiplier,
+        4,
+      );
+      expect(stateTerritoryArmyCapacityTargetV2(
+        state, WORLD_CONTENT_V2, capturedId, grl,
+      )).toBeCloseTo(
+        stateTerritoryArmyCapacityTargetV2(
+          oneXState, WORLD_CONTENT_V2, capturedId, grl,
+        ),
+        8,
+      );
+      expect(stateTerritoryArmySupportCeilingV2(
+        state, WORLD_CONTENT_V2, capturedId, grl,
+      )).toBeCloseTo(
+        stateTerritoryArmySupportCeilingV2(
+          oneXState, WORLD_CONTENT_V2, capturedId, grl,
+        ),
+        8,
+      );
+    }
   });
 
   it('fades deployed surplus and capacity linearly: halfway at week 520, 1x at week 1040', () => {

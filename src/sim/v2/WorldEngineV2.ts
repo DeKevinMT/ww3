@@ -255,7 +255,10 @@ interface HumanNationBaselineV2 {
 }
 
 const BUDGET_DOMAINS: readonly BudgetDomainV2[] = ['military', 'research', 'development'];
-const PRODUCTION_FULL_INVARIANT_INTERVAL_TICKS = 8;
+// Production retains a periodic full-world diagnostic without clustering it
+// onto the eight-week AI review. Development and tests still validate every
+// tick through `import.meta.env.DEV`; terminal paths always force a check.
+const PRODUCTION_FULL_INVARIANT_INTERVAL_TICKS = 52;
 
 function validBudgetV2(budget: BudgetPolicyV2): boolean {
   return BUDGET_DOMAINS.every((domain) => Number.isInteger(budget[domain]) && budget[domain] >= 5 && budget[domain] <= 90)
@@ -931,8 +934,16 @@ export class WorldEngineV2 {
   }
 
   /** Ordered ten-program view. Weekly funding sums to the one committed Research pot. */
-  researchPortfolio(playerId: string): ResearchPortfolioV2 {
-    return selectResearchPortfolioV2(this.state, this.content, nationIdV2(playerId));
+  researchPortfolio(
+    playerId: string,
+    finance?: WeeklyFinanceBreakdownV2,
+  ): ResearchPortfolioV2 {
+    return selectResearchPortfolioV2(
+      this.state,
+      this.content,
+      nationIdV2(playerId),
+      finance,
+    );
   }
 
   researchSurgeTerms(playerId: string, targetBranch: ResearchBranchV2): ResearchSurgeTermsV2 {

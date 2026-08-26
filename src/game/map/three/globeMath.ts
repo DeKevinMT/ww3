@@ -30,7 +30,7 @@ const clamp = (value: number, minimum: number, maximum: number): number => (
   Math.min(maximum, Math.max(minimum, value))
 );
 
-/** Distance-aware pointer rotation: close views need a deliberately flat curve. */
+/** Distance-aware pointer rotation that remains controllable without feeling stuck up close. */
 export const globeRotateSpeedForDistance = (
   distance: number,
   minimumDistance: number,
@@ -39,7 +39,7 @@ export const globeRotateSpeedForDistance = (
   const distanceRange = Math.max(Number.EPSILON, maximumDistance - minimumDistance);
   const zoomRatio = clamp((distance - minimumDistance) / distanceRange, 0, 1);
   const easedRatio = zoomRatio * zoomRatio * (3 - 2 * zoomRatio);
-  return 0.022 + (0.56 - 0.022) * easedRatio;
+  return 0.06 + (0.52 - 0.06) * easedRatio;
 };
 
 /**

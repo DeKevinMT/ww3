@@ -35,15 +35,34 @@ export function openingArmyCapacityMultiplierV2(
   return round(1 + (openingMultiplier - 1) * remainingShare, 12);
 }
 
-const armyCapacityFactorV2 = (
+interface ArmyCapacityFactorsV2 {
+  readonly trait: number;
+  readonly homelandOpening: number;
+}
+
+const armyCapacityFactorsV2 = (
   state: WorldStateV2,
   content: WorldContentV2,
   ownerId: PlayerId,
-): number => countryTraitFactorV2(
-  ownerId,
-  'army-capacity',
-  traitNationContextV2(state, ownerId),
-) * openingArmyCapacityMultiplierV2(state, content, ownerId);
+): ArmyCapacityFactorsV2 => ({
+  trait: countryTraitFactorV2(
+    ownerId,
+    'army-capacity',
+    traitNationContextV2(state, ownerId),
+  ),
+  homelandOpening: openingArmyCapacityMultiplierV2(state, content, ownerId),
+});
+
+const territoryArmyCapacityFactorV2 = (
+  content: WorldContentV2,
+  territoryId: TerritoryId,
+  ownerId: PlayerId,
+  factors: ArmyCapacityFactorsV2,
+): number => factors.trait * (
+  content.territories[territoryId]?.initialOwnerId === ownerId
+    ? factors.homelandOpening
+    : 1
+);
 
 const liveTerritoryArmyCapacityTargetV2 = (
   state: WorldStateV2,
@@ -170,16 +189,49 @@ export function nationalArmyCapacityTargetV2(
   playerId: PlayerId,
   ownedTerritoryIds: readonly TerritoryId[] = content.territoryIds,
 ): number {
-  const factor = armyCapacityFactorV2(state, content, playerId);
+  const factors = armyCapacityFactorsV2(state, content, playerId);
+  return nationalArmyCapacityTargetWithFactorsV2(
+    state,
+    content,
+    playerId,
+    ownedTerritoryIds,
+    factors,
+  );
+}
+
+const nationalArmyCapacityTargetWithFactorsV2 = (
+  state: WorldStateV2,
+  content: WorldContentV2,
+  playerId: PlayerId,
+  ownedTerritoryIds: readonly TerritoryId[],
+  factors: ArmyCapacityFactorsV2,
+): number => {
   return round(ownedTerritoryIds.reduce((sum, territoryId) => {
     return sum + liveTerritoryArmyCapacityTargetV2(
       state,
       content,
       territoryId,
       playerId,
-      factor,
+      territoryArmyCapacityFactorV2(content, territoryId, playerId, factors),
     );
   }, 0));
+};
+
+/** National capacity with the temporary player-opening modifier held at 1×. */
+export function nationalArmyCapacityAtOneXOpeningV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  playerId: PlayerId,
+  ownedTerritoryIds: readonly TerritoryId[] = content.territoryIds,
+): number {
+  const factors = armyCapacityFactorsV2(state, content, playerId);
+  return nationalArmyCapacityTargetWithFactorsV2(
+    state,
+    content,
+    playerId,
+    ownedTerritoryIds,
+    { ...factors, homelandOpening: 1 },
+  );
 }
 
 /** Local population shares of the same national rule. */
@@ -189,7 +241,7 @@ export function stateArmyCapacityTargetsV2(
   ownerId: PlayerId,
   ownedTerritoryIds: readonly TerritoryId[] = content.territoryIds,
 ): ReadonlyMap<TerritoryId, number> {
-  const factor = armyCapacityFactorV2(state, content, ownerId);
+  const factors = armyCapacityFactorsV2(state, content, ownerId);
   return new Map(ownedTerritoryIds.flatMap((id) => {
     const territory = state.territories[id];
     return territory?.owner === ownerId ? [[id, liveTerritoryArmyCapacityTargetV2(
@@ -197,7 +249,7 @@ export function stateArmyCapacityTargetsV2(
       content,
       id,
       ownerId,
-      factor,
+      territoryArmyCapacityFactorV2(content, id, ownerId, factors),
     )] as const] : [];
   }));
 }
@@ -215,7 +267,12 @@ export function stateTerritoryArmyCapacityTargetV2(
     content,
     territoryId,
     ownerId,
-    armyCapacityFactorV2(state, content, ownerId),
+    territoryArmyCapacityFactorV2(
+      content,
+      territoryId,
+      ownerId,
+      armyCapacityFactorsV2(state, content, ownerId),
+    ),
   );
 }
 
@@ -230,6 +287,7 @@ export function stateTerritoryArmySupportCeilingV2(
   territoryId: TerritoryId,
   ownerId: PlayerId,
   empireArmyCapacityOverride?: number,
+  empireArmyCapacityAtOneXOpeningOverride?: number,
 ): number {
   const localCapacity = stateTerritoryArmyCapacityTargetV2(
     state,
@@ -245,9 +303,13 @@ export function stateTerritoryArmySupportCeilingV2(
     : isOriginalHomeland
       ? ORIGINAL_HOMELAND_EMPIRE_COMBAT_CAP_SHARE_V2
       : foreignTerritoryEmpireCombatCapShareV2(territory.integration);
+  const empireSupportCapacity = isOriginalHomeland
+    ? (empireArmyCapacityOverride
+      ?? nationalArmyCapacityTargetV2(state, content, ownerId))
+    : (empireArmyCapacityAtOneXOpeningOverride
+      ?? nationalArmyCapacityAtOneXOpeningV2(state, content, ownerId));
   const empireSupport = empireSupportShare <= 0 ? 0
-    : (empireArmyCapacityOverride
-      ?? nationalArmyCapacityTargetV2(state, content, ownerId)) * empireSupportShare;
+    : empireSupportCapacity * empireSupportShare;
   return round(
     localCapacity + empireSupport,
     9,
@@ -279,14 +341,28 @@ export function stateTerritoryArmyDeploymentLimitV2(
  * future recruitment; recalculation never deletes trained personnel.
  */
 export function synchronizeArmyCapacityV2(state: WorldStateV2, content: WorldContentV2): void {
+  // The national multiplier is invariant throughout this pass. Large empires
+  // should not rebuild the same war/trait context once for every territory.
+  const factorsByOwner = new Map<PlayerId, ArmyCapacityFactorsV2>();
   for (const territoryId of content.territoryIds) {
     const territory = state.territories[territoryId];
     if (!territory) continue;
-    territory.army.capacity = stateTerritoryArmyCapacityTargetV2(
+    let factors = factorsByOwner.get(territory.owner);
+    if (factors === undefined) {
+      factors = armyCapacityFactorsV2(state, content, territory.owner);
+      factorsByOwner.set(territory.owner, factors);
+    }
+    territory.army.capacity = liveTerritoryArmyCapacityTargetV2(
       state,
       content,
       territoryId,
       territory.owner,
+      territoryArmyCapacityFactorV2(
+        content,
+        territoryId,
+        territory.owner,
+        factors,
+      ),
     );
     territory.army.manpower = round(Math.max(0, territory.army.manpower), 9);
     resetEmptyArmyBaseQualityV2(territory.army, content, territoryId);

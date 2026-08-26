@@ -18,6 +18,7 @@ import {
   createPowerSnapshotV2,
   projectFinanceManpowerPhaseV2,
   selectFoodDomesticCapacityTargetV2,
+  selectIsEliminatedV2,
   selectPopulationDynamicsV2,
   selectTerritoriesOfV2,
   selectWarsOfV2,
@@ -27,8 +28,8 @@ import {
 } from './selectors';
 import {
   composeTraitContextV2,
-  traitContextForTerritoryOwnerV2,
   traitNationContextV2,
+  traitTerritoryContextV2,
   traitTerritoryFrontAccessV2,
 } from './traitContext';
 import { countryTraitFactorV2 } from './traits';
@@ -55,7 +56,7 @@ export function createFinancePlansV2(
     // Defeated identities stay referenced while their old cores integrate, but
     // they own no economy and every commit phase already skips them. Avoid a
     // full finance projection for these dormant records in long campaigns.
-    .filter((id) => selectTerritoriesOfV2(state, id).length > 0)
+    .filter((id) => !selectIsEliminatedV2(state, id))
     .map((id) => [id, selectWeeklyFinanceBreakdownV2(state, content, id, powerSnapshot)]));
 }
 
@@ -67,6 +68,7 @@ function processMilitaryAndCondition(
 ): void {
   const atWar = selectWarsOfV2(state, playerId).length > 0;
   const territories = selectTerritoriesOfV2(state, playerId);
+  const nationTraitContext = traitNationContextV2(state, playerId);
   const projectedArmy = projectFinanceManpowerPhaseV2(state, content, playerId, finance);
   state.players[playerId]!.trainedReserves = projectedArmy.trainedReservesAfter;
   const projectedByTerritory = new Map(projectedArmy.territories.map((army) => [army.id, army]));
@@ -85,14 +87,15 @@ function processMilitaryAndCondition(
     const reconstructionReadiness = isConquered
       ? 0.18 + 0.82 * clamp(territory.integration, 0, 1)
       : 1;
-    const traitOwner = traitContextForTerritoryOwnerV2(state, content, view.id);
-    const conditionRecoveryFactor = traitOwner?.playerId === playerId
+    const conditionRecoveryFactor = territory.owner === playerId
       ? countryTraitFactorV2(
         playerId,
         'condition-recovery',
-        composeTraitContextV2(traitOwner.context, {
-          access: traitTerritoryFrontAccessV2(state, playerId, view.id),
-        }),
+        composeTraitContextV2(
+          nationTraitContext,
+          traitTerritoryContextV2(state, content, playerId, view.id),
+          { access: traitTerritoryFrontAccessV2(state, playerId, view.id) },
+        ),
       )
       : 1;
     const conditionGain = 0.006 * finance.conditionFundingRatio * finance.aiEfficiency
@@ -146,13 +149,18 @@ export function processFinanceMilitaryV2(
   // Snapshot every target before nation finance mutates stocks, armies and
   // conditions. Capacity then takes one slow step after the current week's
   // domestic/import mix has already been funded.
-  const domesticCapacityTargets = new Map(sortedNationIdsV2(state).flatMap((playerId) => (
-    selectTerritoriesOfV2(state, playerId).length > 0
-      ? [[playerId, selectFoodDomesticCapacityTargetV2(state, content, playerId)] as const]
+  const playerIds = sortedNationIdsV2(state);
+  const domesticCapacityTargets = new Map(playerIds.flatMap((playerId) => (
+    !selectIsEliminatedV2(state, playerId)
+      // The already-frozen finance plan was built from this exact pre-commit
+      // state and exposes the canonical land-capacity target. Keep the fallback
+      // for callers that intentionally provide a partial plan map.
+      ? [[playerId, financePlans.get(playerId)?.foodLandCapacity
+        ?? selectFoodDomesticCapacityTargetV2(state, content, playerId)] as const]
       : []
   )));
-  for (const playerId of sortedNationIdsV2(state)) {
-    if (selectTerritoriesOfV2(state, playerId).length === 0) continue;
+  for (const playerId of playerIds) {
+    if (selectIsEliminatedV2(state, playerId)) continue;
     const nation = state.players[playerId]!;
     const finance = financePlans.get(playerId) ?? selectWeeklyFinanceBreakdownV2(state, content, playerId);
     nation.treasury = round(finance.closingTreasury);
@@ -186,8 +194,8 @@ export function processFinanceMilitaryV2(
   }
   state.ceasefireObligations = state.ceasefireObligations
     .filter((obligation) => obligation.expiresTick > state.tick
-      && selectTerritoriesOfV2(state, obligation.payerId).length > 0
-      && selectTerritoriesOfV2(state, obligation.payeeId).length > 0);
+      && !selectIsEliminatedV2(state, obligation.payerId)
+      && !selectIsEliminatedV2(state, obligation.payeeId));
   // Complete fusion after this week's precomputed finance has been committed.
   // Otherwise the old plan would overwrite reserves or national stores that
   // have just transferred from the retired country.
@@ -202,7 +210,7 @@ export function processDevelopmentPhaseV2(
   financePlans: FinancePlansV2,
 ): void {
   for (const playerId of sortedNationIdsV2(state)) {
-    if (selectTerritoriesOfV2(state, playerId).length === 0) continue;
+    if (selectIsEliminatedV2(state, playerId)) continue;
     const finance = financePlans.get(playerId) ?? selectWeeklyFinanceBreakdownV2(state, content, playerId);
     processDevelopment(state, content, playerId, finance);
   }

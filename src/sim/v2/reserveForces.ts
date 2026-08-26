@@ -121,6 +121,7 @@ export const INITIAL_RESERVE_CADRE_CAPACITY_SHARE_V2 = 0.02;
  * trained personnel; the rest remains outside the game's short war horizon.
  */
 export const INITIAL_REPORTED_RESERVE_READY_SHARE_V2 = 0.55;
+export const BELGIUM_OPENING_RESERVE_CAPACITY_SHARE_V2 = 0.35;
 
 /** Real-world anchor, fitted into the shared 1x active-cap reserve rule. */
 export function initialTrainedReserveManpowerV2(
@@ -143,6 +144,9 @@ export function initialTrainedReserveManpowerV2(
       0.64,
     );
     return round(capacity * reserveShare, 9);
+  }
+  if (countryId === 'bel') {
+    return round(capacity * BELGIUM_OPENING_RESERVE_CAPACITY_SHARE_V2, 9);
   }
   const reportedReady = Math.max(0, REPORTED_TRAINED_RESERVES_MILLIONS[countryId] ?? 0)
     * INITIAL_REPORTED_RESERVE_READY_SHARE_V2;

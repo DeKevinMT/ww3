@@ -454,7 +454,7 @@ export const AI_DECISION_INTERVAL = 8;
 /** Existing crises get time to develop before the wider 2026 order starts fracturing. */
 export const AI_FIRST_WAR_TICK = 78;
 /** New expansion wars are meaningful events, not something the world opens every few weeks. */
-export const AI_GLOBAL_WAR_COOLDOWN = 78;
+export const AI_GLOBAL_WAR_COOLDOWN = 91;
 /** Established great powers strongly prefer proxy/regional expansion over a
  * direct peer war during the first fifty campaign years. It is an aversion,
  * not a hard diplomatic lock. */
@@ -465,11 +465,11 @@ export const AI_REGIONAL_ESCALATION_MIN_AGE = 52;
 export const AI_REGIONAL_ESCALATION_MIN_BATTLES = 8;
 export const AI_REGIONAL_ESCALATION_EXTRA_WAR_CAP = 0;
 /** A threatened player must fight alone long enough for neighbours to assess the invasion. */
-export const AI_DEFENSIVE_AID_MIN_AGE = 26;
-export const AI_DEFENSIVE_AID_MIN_BATTLES = 5;
-export const AI_DEFENSIVE_AID_AGGRESSOR_RATIO = 1.60;
+export const AI_DEFENSIVE_AID_MIN_AGE = 39;
+export const AI_DEFENSIVE_AID_MIN_BATTLES = 6;
+export const AI_DEFENSIVE_AID_AGGRESSOR_RATIO = 1.75;
 /** Defensive intervention stays more responsive than optional expansion. */
-export const AI_DEFENSIVE_AID_COOLDOWN = 52;
+export const AI_DEFENSIVE_AID_COOLDOWN = 78;
 
 /**
  * The world is a self-running conflict sandbox. Capacity rises as the campaign

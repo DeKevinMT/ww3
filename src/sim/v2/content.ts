@@ -447,6 +447,11 @@ export const OPENING_MILITARY_ORDER_2026_V2: readonly PlayerId[] = Object.freeze
     .map((country) => country.id),
 ] as unknown as readonly PlayerId[]);
 
+/** Small Standard-opening roster adjustments shared by AI and human seats. */
+export function normalOpeningManpowerMultiplierV2(countryId: string): number {
+  return countryId === 'bel' ? 1.20 : 1;
+}
+
 /**
  * Combat-deployable force calibration in millions. Russia is deliberately
  * represented at its broader 2026 wartime establishment (1.50M), above
@@ -899,11 +904,15 @@ function makeNationContent(country: (typeof COUNTRIES)[number]): NationContentV2
   const minimumManpowerForRatingCap = targetOpeningPower
     * Math.max(qualityFoundation.attack, qualityFoundation.defense)
     / Math.max(0.0001, effectiveFoundation * maximumOpeningRating);
-  const initialManpower = round(Math.max(
+  const calibratedInitialManpower = Math.max(
     0.0001,
     Math.sqrt(sourceManpower * targetManpower),
     minimumManpowerForRatingCap,
-  ), 9);
+  );
+  const initialManpower = round(
+    calibratedInitialManpower * normalOpeningManpowerMultiplierV2(country.id),
+    9,
+  );
   const openingCapacity = Math.max(
     0.0001,
     country.population * ARMY_CAPACITY_STRUCTURAL_POPULATION_SHARE,

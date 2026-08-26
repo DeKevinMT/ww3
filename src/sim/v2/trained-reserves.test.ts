@@ -11,6 +11,7 @@ import { WORLD_CONTENT_V2, type WorldContentV2 } from './content';
 import { createFinancePlansV2, processFinanceMilitaryV2 } from './economy';
 import { synchronizeOpeningArmyHumanRosterV2 } from './nationState';
 import {
+  BELGIUM_OPENING_RESERVE_CAPACITY_SHARE_V2,
   INITIAL_RESERVE_CADRE_CAPACITY_SHARE_V2,
   INITIAL_REPORTED_RESERVE_READY_SHARE_V2,
   initialTrainedReserveManpowerV2,
@@ -96,6 +97,7 @@ describe('finite trained reserves', () => {
     const india = nationIdV2('ind');
     const china = nationIdV2('chn');
     const albania = nationIdV2('alb');
+    const belgiumCapacity = selectTrainedReserveCapacityV2(state, belgium);
 
     expect(state.players[finland]!.trainedReserves).toBe(
       initialTrainedReserveManpowerV2('fin', selectTrainedReserveCapacityV2(state, finland)),
@@ -118,6 +120,11 @@ describe('finite trained reserves', () => {
       selectTrainedReserveCapacityV2(state, albania) * INITIAL_RESERVE_CADRE_CAPACITY_SHARE_V2,
       9,
     );
+    expect(state.players[belgium]!.trainedReserves).toBeCloseTo(Math.min(
+      belgiumCapacity,
+      belgiumCapacity * BELGIUM_OPENING_RESERVE_CAPACITY_SHARE_V2,
+    ), 6);
+    expect(state.players[belgium]!.trainedReserves / belgiumCapacity).toBeCloseTo(0.35, 5);
     expect(initialTrainedReserveManpowerV2('unreported-fixture', 1)).toBe(
       INITIAL_RESERVE_CADRE_CAPACITY_SHARE_V2,
     );

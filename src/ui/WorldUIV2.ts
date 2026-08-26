@@ -3,6 +3,7 @@ import {
   terrainProfileDisplayPercentages,
   type TerrainProfileEntry,
 } from '../game/data/worldMap';
+import { battleScreenFocus, GAME_AUDIO_CREDITS, worldGameAudio } from '../audio/gameAudio';
 import {
   mapBridge,
   type MapOpeningMobilisationState,
@@ -202,7 +203,10 @@ export interface WorldEngineV2UIContract {
   conventionalPower(playerId: string): number;
   strategicScore(playerId: string): number;
   nuclearPower(playerId: string): NuclearPowerViewV2;
-  researchPortfolio(playerId: string): readonly ResearchBranchProgressV2[];
+  researchPortfolio(
+    playerId: string,
+    finance?: WeeklyFinanceBreakdownV2,
+  ): readonly ResearchBranchProgressV2[];
   activeWarBetween(leftId: string, rightId: string): WarStateV2 | undefined;
   warAccessType(attackerId: string, defenderId: string): WarAccessV2;
   conquestForecast(attackerId: string, targetId: string): ConquestForecastV2;
@@ -233,6 +237,8 @@ export interface WorldUIV2Options {
   onScenarioModeRequested?: (mode: GameModeV2) => void;
   onScenarioRerollRequested?: (preferredCountryId: PlayerId) => void;
   onNewGameRequested?: () => void;
+  onCountryConfirmed?: (countryId: PlayerId) => void;
+  onInitialMapSynchronized?: () => void;
 }
 
 type PanelMode = 'war' | 'nation' | 'research' | 'economy' | 'ranking';
@@ -486,8 +492,9 @@ export function treasuryTopbarPresentationV2(
   weeklyNet: number,
 ): TreasuryTopbarPresentationV2 {
   const debt = treasury < 0;
+  const balanceTone = debt ? ' is-debt is-negative' : treasury > 0 ? ' is-positive' : '';
   return Object.freeze({
-    className: `top-metric--treasury${debt ? ' is-debt' : ''}`,
+    className: `top-metric--treasury${balanceTone}`,
     value: cash(treasury),
     trend: `${signedCash(weeklyNet)}/wk`,
     trendClassName: weeklyNet >= 0 ? 'is-positive' : 'is-negative',
@@ -855,6 +862,25 @@ export interface NationPickerRenderOptionsV2 {
   scenarioEditable?: boolean;
 }
 
+function projectSupportedMapArmyV2(
+  engine: WorldEngineV2UIContract,
+  territoryId: TerritoryId,
+  territory: TerritoryStateV2,
+  militaryBaseSnapshot: MilitaryBaseSnapshotV2 | undefined,
+  empireArmyCapacity: number,
+): MapTerritoryState['army'] {
+  return {
+    ...projectMapArmyV2(engine, territoryId, territory, militaryBaseSnapshot),
+    deploymentCapacity: stateTerritoryArmySupportCeilingV2(
+      engine.state,
+      engine.content,
+      territoryId,
+      territory.owner,
+      empireArmyCapacity,
+    ),
+  };
+}
+
 function terrainProfileHighlights(profile: readonly TerrainProfileEntry[]): readonly TerrainProfileEntry[] {
   const firstThree = profile.slice(0, 3);
   const coastal = profile.find((entry) => entry.terrain === 'coastal');
@@ -1205,11 +1231,19 @@ export function createMapSnapshot(engine: WorldEngineV2UIContract): WorldMapEngi
   const territoryEntries = Object.entries(canonical);
   const sortedWars = [...source.wars].sort((left, right) => left.id.localeCompare(right.id));
   const territories: Record<string, MapTerritoryState> = {};
+  const capacityByOwner = new Map<PlayerId, number>();
   for (const [id, territory] of territoryEntries) {
+    let empireArmyCapacity = capacityByOwner.get(territory.owner);
+    if (empireArmyCapacity === undefined) {
+      empireArmyCapacity = engine.armyStrength(territory.owner).capacity;
+      capacityByOwner.set(territory.owner, empireArmyCapacity);
+    }
     territories[id] = mapTerritory(
       id,
       territory,
-      projectMapArmyV2(engine, id as TerritoryId, territory, militaryBaseSnapshot),
+      projectSupportedMapArmyV2(
+        engine, id as TerritoryId, territory, militaryBaseSnapshot, empireArmyCapacity,
+      ),
     );
   }
   return {
@@ -1270,10 +1304,18 @@ export function createMapEngineAdapter(
     ));
     const militaryBaseSnapshot = refreshEntries.length > 0
       ? engine.militaryBaseSnapshot() : undefined;
+    const capacityByOwner = new Map<PlayerId, number>();
     for (const [id, territory] of refreshEntries) {
+      let empireArmyCapacity = capacityByOwner.get(territory.owner);
+      if (empireArmyCapacity === undefined) {
+        empireArmyCapacity = engine.armyStrength(territory.owner).capacity;
+        capacityByOwner.set(territory.owner, empireArmyCapacity);
+      }
       armyByTerritory.set(
         id,
-        projectMapArmyV2(engine, id as TerritoryId, territory, militaryBaseSnapshot),
+        projectSupportedMapArmyV2(
+          engine, id as TerritoryId, territory, militaryBaseSnapshot, empireArmyCapacity,
+        ),
       );
     }
     const territories: Record<string, MapTerritoryState> = {};
@@ -1405,10 +1447,43 @@ function mapOpeningMobilisationsV2(
   return Object.freeze(phases);
 }
 
+export interface TerritoryTooltipCacheResultV2<T> {
+  readonly signature: number;
+  readonly content: T;
+}
+
+/** Lazily rebuilds each territory tooltip once per notified game-state revision. */
+export class TerritoryTooltipContentCacheV2<T> {
+  private signature = 0;
+  private readonly entries = new Map<TerritoryId, TerritoryTooltipCacheResultV2<T>>();
+
+  resolve(territoryId: TerritoryId, create: () => T): TerritoryTooltipCacheResultV2<T> {
+    const cached = this.entries.get(territoryId);
+    if (cached?.signature === this.signature) return cached;
+    const next = Object.freeze({ signature: this.signature, content: create() });
+    this.entries.set(territoryId, next);
+    return next;
+  }
+
+  invalidate(): void {
+    this.signature += 1;
+  }
+}
+
+interface TerritoryTooltipContentV2 {
+  readonly html: string;
+  readonly hasOpeningMobilisation: boolean;
+}
+
 export class WorldUIV2 {
   private readonly hud: HTMLElement;
   private readonly tooltip: HTMLElement;
   private readonly toastLayer: HTMLElement;
+  private readonly tooltipContentCache = new TerritoryTooltipContentCacheV2<TerritoryTooltipContentV2 | undefined>();
+  private visibleTooltip?: TerritoryTooltipContentV2 & {
+    signature: number;
+    territoryId: TerritoryId;
+  };
   private selectedTerritoryId?: TerritoryId;
   private panelMode: PanelMode = 'war';
   private introOpen: boolean;
@@ -1446,6 +1521,8 @@ export class WorldUIV2 {
   private renderTimer?: number;
   private renderFrame?: number;
   private pendingMapSync = false;
+  private initialMapLoaderPaintPending = false;
+  private awaitingInitialMapSynchronization = false;
   private introSearchTimer?: number;
   private readonly warOutcomeQueue: WarOutcomeV2[] = [];
   private warOutcomeResumeSpeed?: WorldSpeedV2;
@@ -1549,8 +1626,7 @@ export class WorldUIV2 {
     if (this.renderTimer !== undefined) window.clearTimeout(this.renderTimer);
     if (this.renderFrame !== undefined) window.cancelAnimationFrame(this.renderFrame);
     if (this.introSearchTimer !== undefined) window.clearTimeout(this.introSearchTimer);
-    for (const timer of this.conquestTransferTimers) window.clearTimeout(timer);
-    this.conquestTransferTimers.clear();
+    this.clearConquestTransferEffects();
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('pointerup', this.onWindowPointerRelease, true);
     window.removeEventListener('pointercancel', this.onWindowPointerRelease, true);
@@ -1617,7 +1693,24 @@ export class WorldUIV2 {
   };
 
   private onStateChange(change: WorldChangeV2): void {
+    this.tooltipContentCache.invalidate();
+    const audioBasePresentation = {
+      viewerPlayerId: this.viewerPlayerId(),
+      humanPlayerIds: [...this.engine.state.humanPlayerIds],
+    };
+    const audioPresentation = change.battle ? {
+      ...audioBasePresentation,
+      battleFocus: battleScreenFocus([
+        mapBridge.scene?.territoryScreenPosition?.(change.battle.targetId),
+        mapBridge.scene?.territoryScreenPosition?.(change.battle.sourceId),
+      ], window.innerWidth, window.innerHeight),
+    } : audioBasePresentation;
+    void worldGameAudio.handleWorldChange(change, audioPresentation);
     if (change.warOutcome) {
+      // A concluded war replaces the tactical HUD with the outcome report. Any
+      // delayed conquest chips would animate behind that modal while also forcing
+      // layout reads during the heaviest political-map update. Drop them here.
+      this.clearConquestTransferEffects();
       const outcome = change.warOutcome;
       if (enqueueWarOutcomeV2(this.warOutcomeQueue, outcome)) {
         if (!this.options.multiplayer) {
@@ -1704,9 +1797,25 @@ export class WorldUIV2 {
           this.renderTimer = window.setTimeout(queueFrame, Math.min(200, scrollSettleDelay + 18));
           return;
         }
-        if (this.pendingMapSync) mapBridge.sync();
+        // Country confirmation makes the loader visible during the click task.
+        // Defer the expensive first political-atlas sync by one frame so the
+        // browser can actually present that loader before doing the map work.
+        if (this.awaitingInitialMapSynchronization
+          && this.initialMapLoaderPaintPending
+          && this.pendingMapSync) {
+          this.initialMapLoaderPaintPending = false;
+          queueFrame();
+          return;
+        }
+        const didSyncMap = this.pendingMapSync;
+        if (didSyncMap) mapBridge.sync();
         this.pendingMapSync = false;
         this.render();
+        if (didSyncMap && this.awaitingInitialMapSynchronization) {
+          this.awaitingInitialMapSynchronization = false;
+          this.initialMapLoaderPaintPending = false;
+          this.options.onInitialMapSynchronized?.();
+        }
       });
     };
     if (delay <= 0) {
@@ -1807,6 +1916,25 @@ export class WorldUIV2 {
       this.tooltip.classList.remove('is-visible');
       return;
     }
+    const cached = this.tooltipContentCache.resolve(
+      territoryId,
+      () => this.buildTerritoryTooltipContent(territoryId),
+    );
+    const content = cached.content;
+    if (!content) {
+      this.tooltip.classList.remove('is-visible');
+      return;
+    }
+    if (this.visibleTooltip?.territoryId !== territoryId
+      || this.visibleTooltip.signature !== cached.signature) {
+      if (this.visibleTooltip?.html !== content.html) this.tooltip.innerHTML = content.html;
+      this.visibleTooltip = { territoryId, signature: cached.signature, ...content };
+    }
+    this.positionTooltip(x, y, content.hasOpeningMobilisation);
+    this.tooltip.classList.add('is-visible');
+  }
+
+  private buildTerritoryTooltipContent(territoryId: TerritoryId): TerritoryTooltipContentV2 | undefined {
     const territory = this.engine.state.territories[territoryId];
     const definition = this.engine.content.territories[territoryId];
     const owner = territory ? this.engine.player(territory.owner) : undefined;
@@ -1815,16 +1943,18 @@ export class WorldUIV2 {
     const integrationStatus = integrating
       ? `INTEGRATING ${format(territory.integration * 100)}%` : 'CORE TERRITORY';
     const localHuman = owner.id === this.viewerPlayerId();
-    const openingMobilisation = mapOpeningMobilisationStateV2(
-      this.engine.state,
-      this.engine.content,
-      owner.id,
-    );
+    const openingMobilisation = definition.initialOwnerId === owner.id
+      ? mapOpeningMobilisationStateV2(
+        this.engine.state,
+        this.engine.content,
+        owner.id,
+      )
+      : undefined;
     const openingRemainingPercent = openingMobilisation
       ? Math.round(openingMobilisation.remainingRatio * 100) : 0;
     const openingDirectionLabel = openingMobilisation?.direction === 'boost' ? 'BOOST' : 'LIMIT';
     const openingEffectLabel = openingMobilisation?.direction === 'boost'
-      ? 'temporary extra Army + cap' : 'temporary reduced Army + cap';
+      ? 'temporary extra homeland Army + cap' : 'temporary reduced homeland Army + cap';
     const openingMobilisationHtml = openingMobilisation ? `
       <div class="tooltip__opening-mobilisation tooltip__opening-mobilisation--${openingMobilisation.direction}">
         <div><span>OPENING MOBILISATION · ${openingDirectionLabel}</span><strong>${openingRemainingPercent}% REMAINING</strong></div>
@@ -1847,17 +1977,22 @@ export class WorldUIV2 {
     const localPower = this.engine.territoryPower(territoryId);
     const attack = this.engine.effectiveAttack(owner.id, territory.army);
     const defense = this.engine.effectiveDefense(owner.id, territory.army);
-    this.tooltip.innerHTML = `
+    return {
+      html: `
       <div class="tooltip__eyebrow"><span>${escapeHtml(REGION_BY_ID[definition.regionId]?.name ?? definition.regionId)}</span>${terrainProfileBadges(terrainProfile)}</div>
       <div class="tooltip__identity" style="--owner:${owner.cssColor}"><i class="country-flag">${countryFlagHtml(owner.id, owner.sigil)}</i><div><strong>${escapeHtml(definition.name)}</strong><span>${escapeHtml(owner.name)}</span></div>${controller}</div>
       <div class="tooltip__terrain" style="--terrain:${terrainStyle.cssColor}">${terrainEffectMetrics(terrainEffects)}</div>
       ${openingMobilisationHtml}
       <div class="tooltip__grid"><article><span>ACTIVE ARMY</span><strong>${people(territory.army.manpower)}</strong><small>${people(localArmyCapacity)} local cap</small></article><article><span>LOCAL POWER</span><strong>${compactNumber(localPower)}</strong><small>${armyCondition(territory.army, territory.condition)}</small></article><article><span>COMBAT</span><strong>ATK ${format(attack, 1)} · DEF ${format(defense, 1)}</strong><small>${people(deploymentCeiling)} deployment max</small></article></div>
       <div class="tooltip__footer"><b class="${integrating ? 'is-integrating' : ''}">${integrationStatus}</b><span>Click for full intelligence</span></div>
-    `;
+    `,
+      hasOpeningMobilisation: Boolean(openingMobilisation),
+    };
+  }
+
+  private positionTooltip(x: number, y: number, hasOpeningMobilisation: boolean): void {
     this.tooltip.style.left = `${Math.max(10, Math.min(window.innerWidth - 334, x + 16))}px`;
-    this.tooltip.style.top = `${Math.max(10, Math.min(window.innerHeight - (openingMobilisation ? 278 : 224), y + 14))}px`;
-    this.tooltip.classList.add('is-visible');
+    this.tooltip.style.top = `${Math.max(10, Math.min(window.innerHeight - (hasOpeningMobilisation ? 278 : 224), y + 14))}px`;
   }
 
   private toast(message: string, tone: 'default' | 'war' | 'conquest' = 'default'): void {
@@ -1926,6 +2061,15 @@ export class WorldUIV2 {
         };
       }, index * 135);
       this.conquestTransferTimers.add(timer);
+    });
+  }
+
+  private clearConquestTransferEffects(): void {
+    for (const timer of this.conquestTransferTimers) window.clearTimeout(timer);
+    this.conquestTransferTimers.clear();
+    document.querySelectorAll<HTMLElement>('.conquest-transfer-chip').forEach((chip) => chip.remove());
+    this.hud.querySelectorAll<HTMLElement>('.is-receiving-gain').forEach((target) => {
+      target.classList.remove('is-receiving-gain');
     });
   }
 
@@ -2007,7 +2151,7 @@ export class WorldUIV2 {
         </div>
         <nav class="strategic-metrics v2-metrics simple-metrics topbar-status" style="display:grid;grid-template-columns:repeat(6,minmax(88px,1fr));gap:4px;overflow-x:auto" aria-label="National status shortcuts">
           <button type="button" class="top-metric top-metric--economy" data-action="panel" data-panel="economy" data-stat-target="economy" aria-label="Open Economy. Output ${cash(economy.controlledOutput)}; annual growth ${signed(finance.annualEconomyGrowthRate * 100, 2)} percent"><span>ECONOMY</span><strong>${cash(economy.controlledOutput)}</strong><small class="weekly-delta ${finance.annualEconomyGrowthRate >= 0 ? 'is-positive' : 'is-negative'}">${signed(finance.annualEconomyGrowthRate * 100, 2)}% / year</small></button>
-          <button type="button" class="top-metric ${treasuryTopbar.className}" data-action="panel" data-panel="economy" data-stat-target="cash" aria-label="Open Economy. ${escapeHtml(treasuryTopbar.ariaLabel)}"><span>CASHFLOW</span><strong class="${displayedNet >= 0 ? 'is-positive' : 'is-negative'}">${signedCash(annual(displayedNet))}/yr</strong><small>${treasuryTopbar.value} treasury</small></button>
+          <button type="button" class="top-metric ${treasuryTopbar.className}" data-action="panel" data-panel="economy" data-stat-target="cash" aria-label="Open Economy. ${escapeHtml(treasuryTopbar.ariaLabel)}"><span>TREASURY</span><strong>${treasuryTopbar.value}</strong><small class="weekly-delta ${displayedNet >= 0 ? 'is-positive' : 'is-negative'}">Cashflow ${signedCash(annual(displayedNet))}/yr</small></button>
           <button type="button" class="top-metric top-metric--military" data-action="panel" data-panel="war" data-stat-target="army" aria-label="Open War. Army ${people(army.deployed)} of ${people(army.capacity)} capacity; combat power ${compactNumber(combatPower)}"><span>MILITARY</span><strong>${format(army.fillRatio * 100)}% ready</strong><small>${compactNumber(combatPower)} power</small></button>
           <button type="button" class="top-metric top-metric--people" data-action="panel" data-panel="nation" data-stat-target="people" aria-label="Open Nation. Integrated population ${format(integratedPopulation, 2)} million; annual population change ${signed(populationDynamics.annualNetRate * 100, 2)} percent"><span>PEOPLE</span><strong>${population(integratedPopulation)}</strong><small class="weekly-delta ${populationDynamics.annualNetRate >= 0 ? 'is-positive' : 'is-negative'}">${signed(populationDynamics.annualNetRate * 100, 2)}% / year</small></button>
           <button type="button" class="top-metric top-metric--food" data-action="panel" data-panel="nation" data-stat-target="food" aria-label="Open Nation. Food coverage ${format(finance.foodCoverage * 100, 1)} percent; stock ${people(human.foodStock)} of ${people(finance.foodStorageCapacity)}"><span>FOOD</span><strong class="${finance.foodCoverage >= 0.98 ? 'is-positive' : 'is-negative'}">${format(finance.foodCoverage * 100, 1)}% supplied</strong><small>${people(human.foodStock)} / ${people(finance.foodStorageCapacity)} stored</small></button>
@@ -2029,7 +2173,7 @@ export class WorldUIV2 {
 
       ${wars.length || human.warFatigue > 0 || this.engine.globalResistance().threat > 0
         ? this.renderWarStrainMeter(human, wars, army, finance, true) : ''}
-      ${wars.length ? this.renderWarTracker(wars) : ''}
+      ${wars.length ? this.renderWarTracker(wars, finance) : ''}
       ${this.contextPanelOpen && !spectating ? this.renderContextPanel(human, economy, finance, populationDynamics) : ''}
       ${activeOffer ? this.renderOfferBanner(activeOffer)
         : activeAllianceOffer ? this.renderAllianceOfferBanner(activeAllianceOffer) : ''}
@@ -2071,14 +2215,16 @@ export class WorldUIV2 {
     populationDynamics: PopulationDynamicsV2,
   ): string {
     const territory = this.selectedTerritoryId ? this.engine.state.territories[this.selectedTerritoryId] : undefined;
-    if (territory && this.selectedTerritoryId) return this.renderTerritoryPanel(this.selectedTerritoryId, territory);
+    if (territory && this.selectedTerritoryId) {
+      return this.renderTerritoryPanel(this.selectedTerritoryId, territory, economy, finance);
+    }
     if (this.panelMode === 'ranking') return this.renderRankingPanel();
     if (this.panelMode === 'economy') return this.renderEconomyPanel(human, economy, finance);
-    if (this.panelMode === 'research') return this.renderResearchPanel();
+    if (this.panelMode === 'research') return this.renderResearchPanel(human, finance);
     if (this.panelMode === 'nation') {
       return this.renderNationPanel(human, economy, finance, populationDynamics);
     }
-    return this.renderWarPanel();
+    return this.renderWarPanel(human, economy, finance);
   }
 
   private renderNationPanel(
@@ -2270,7 +2416,7 @@ export class WorldUIV2 {
       <aside class="world-panel command-drawer glass-panel economy-command economy-command--simple command-drawer--unified" data-scroll-session="${drawerScrollSessionId('economy')}">
         <button class="panel-close" data-action="close-panel" aria-label="Close economy">×</button>
         <div class="panel-kicker">ECONOMY · FINANCE</div>
-        <div class="drawer-heading drawer-heading--compact economy-heading"><div><h2>${cash(human.treasury)}</h2><span>TREASURY · ${escapeHtml(finance.aiMode.toUpperCase())} BUDGET</span></div><strong class="${finance.net >= 0 ? 'is-positive' : 'is-negative'}">${signedCash(annual(finance.net))} / YEAR</strong></div>
+        <div class="drawer-heading drawer-heading--compact economy-heading"><div><h2>FINANCIAL OVERVIEW</h2><span>${escapeHtml(finance.aiMode.toUpperCase())} BUDGET</span></div><strong class="${finance.net >= 0 ? 'is-positive' : 'is-negative'}">${signedCash(annual(finance.net))} / YEAR</strong></div>
 
         <section class="finance-flow-summary" aria-label="Annual cashflow">
           <article class="is-income"><span>TOTAL INCOME</span><strong>+${cash(annual(totalIncome))}</strong><small>/ year</small></article>
@@ -2283,7 +2429,7 @@ export class WorldUIV2 {
         <section class="finance-context-grid unified-stat-grid" aria-label="Financial overview">
           <article><span>NATIONAL ECONOMY</span><strong>${cash(economy.controlledOutput)}</strong><small class="${growth >= 0 ? 'is-positive' : 'is-negative'}">${signed(growth * 100, 2)}% real growth / year</small></article>
           <article><span>TAX RATE</span><strong>${format(economy.taxRate * 100, 1)}%</strong><small>${cash(annual(finance.revenue))} revenue / year</small></article>
-          <article class="${human.treasury >= 0 ? 'is-good' : 'is-warn'}"><span>TREASURY</span><strong>${cash(human.treasury)}</strong><small>${human.treasury >= 0 ? 'Available national cash balance' : 'Outstanding treasury deficit'}</small></article>
+          <article class="${human.treasury > 0 ? 'is-good' : human.treasury < 0 ? 'is-danger' : ''}"><span>TREASURY</span><strong class="${human.treasury > 0 ? 'is-positive' : human.treasury < 0 ? 'is-negative' : ''}">${cash(human.treasury)}</strong><small>${human.treasury >= 0 ? 'Available national cash balance' : 'Outstanding treasury deficit'}</small></article>
           <article class="${reserveCoverage >= 1 ? 'is-good' : 'is-warn'}"><span>RESERVE TARGET</span><strong>${cash(finance.reserveTarget)}</strong><small>${format(Math.max(0, reserveCoverage) * 100, 1)}% funded</small></article>
         </section>
         ${finance.newBorrowing > 0 || human.treasury < 0 ? `<div class="simple-panel-alert is-debt"><b>DEBT FINANCING</b><span>${cash(finance.newBorrowing)} new borrowing this week · ${cash(annual(finance.debtPremium))}/year debt premium</span></div>` : ''}
@@ -2304,8 +2450,10 @@ export class WorldUIV2 {
       </aside>
     `;
   }
-  private renderResearchPanel(): string {
-    const human = this.engine.player(this.viewerPlayerId())!;
+  private renderResearchPanel(
+    human: NationViewV2,
+    finance: WeeklyFinanceBreakdownV2,
+  ): string {
     const militarySnapshot = this.engine.militaryBaseSnapshot();
     const armyStrength = this.engine.armyStrength(human.id);
     const nationalArmy = nationalArmyState(this.engine, human.id, armyStrength, militarySnapshot);
@@ -2317,8 +2465,7 @@ export class WorldUIV2 {
       combinedMultiplier: nationalQuality?.combinedMultiplier ?? 1,
       iqResearchBonus: liveIq.researchBonus,
     };
-    const finance = this.engine.weeklyFinanceBreakdown(human.id);
-    const portfolio = this.engine.researchPortfolio(human.id);
+    const portfolio = this.engine.researchPortfolio(human.id, finance);
     const deterrence = this.engine.nuclearPower(human.id);
     const next = nextResearchMilestone(portfolio);
     const completed = portfolio.reduce((sum, branch) => sum + branch.breakthroughs, 0);
@@ -2419,9 +2566,9 @@ export class WorldUIV2 {
     const openingForce = Math.max(0, openingBonus?.remainingManpower ?? 0);
     const openingStatus = Math.abs(openingMultiplier - 1) <= 0.0005 ? '' : `
       <div class="military-opening-status ${openingMultiplier > 1 ? 'is-boost' : 'is-limit'}">
-        <div><span>${openingMultiplier > 1 ? 'PLAYER OPENING FORCE' : 'OPENING BALANCE LIMIT'}</span><strong>×${format(openingMultiplier, 2)} CURRENT CAP</strong></div>
+        <div><span>${openingMultiplier > 1 ? 'PLAYER OPENING FORCE' : 'OPENING BALANCE LIMIT'}</span><strong>×${format(openingMultiplier, 2)} HOMELAND CAP</strong></div>
         <b>${openingMultiplier > 1 ? `${people(openingForce)} free troops left` : 'TEMPORARILY REDUCED'}</b>
-        <small>${format(openingWeeks / 52, 1)} years remaining · returns to ×1 · ${openingMultiplier > 1 ? 'free contingent never refills · paid recruits can use cap' : 'cap restriction only'}</small>
+        <small>${format(openingWeeks / 52, 1)} years remaining · returns to ×1 · ${openingMultiplier > 1 ? 'free contingent never refills · paid homeland recruits can use cap' : 'homeland cap restriction only'}</small>
       </div>`;
     const readinessRow = (
       label: string,
@@ -2470,10 +2617,11 @@ export class WorldUIV2 {
     return `<article class="war-diplomacy-row" style="--enemy:${enemy.cssColor}"><i class="country-flag">${countryFlagHtml(enemy.id, enemy.sigil)}</i><div><span>TREATY CHANNEL</span><strong>${escapeHtml(enemy.shortName)}</strong><small>War score ${signed(score)} · campaign details remain in War Command</small></div><div>${terms.allowed ? `<button class="secondary-button" data-action="peace-settlement" data-player="${enemy.id}" data-settlement="${suggested}">REPARATIONS</button>` : ''}<button class="ghost-button" data-action="request-ceasefire" data-war="${war.id}" ${ceasefire.allowed ? '' : 'disabled'} title="${escapeHtml(ceasefire.reason ?? 'Peace requests use a retry cooldown.')}">${escapeHtml(peaceButton)}</button></div></article>`;
   }
 
-  private renderWarPanel(): string {
-    const human = this.engine.player(this.viewerPlayerId())!;
-    const economy = this.engine.nationalEconomy(human.id);
-    const finance = this.engine.weeklyFinanceBreakdown(human.id);
+  private renderWarPanel(
+    human: NationViewV2,
+    economy: NationalEconomyV2,
+    finance: WeeklyFinanceBreakdownV2,
+  ): string {
     const army = this.engine.armyStrength(human.id);
     const wars = this.humanWars();
     const resistance = this.engine.globalResistance();
@@ -2611,7 +2759,12 @@ export class WorldUIV2 {
     return `<article style="--enemy:${from.cssColor}"><div><i class="country-flag">${countryFlagHtml(from.id, from.sigil)}</i><div><strong>${escapeHtml(from.name)} offers peace</strong><small>${escapeHtml(detail)} · ${responseWeeks}w to decide</small>${offer.settlement === 'ceasefire' ? '<small>Conquered territory remains with its current owner.</small>' : ''}</div></div><div class="territory-actions" style="position:static;margin:8px 0 0;padding:0;background:none;display:grid;grid-template-columns:1fr 1fr;gap:6px"><button class="ghost-button" data-action="respond-offer" data-offer="${offer.id}" data-accept="false">Continue war</button><button class="primary-button" data-action="respond-offer" data-offer="${offer.id}" data-accept="true">Accept treaty</button></div></article>`;
   }
 
-  private renderTerritoryPanel(territoryId: TerritoryId, territory: TerritoryStateV2): string {
+  private renderTerritoryPanel(
+    territoryId: TerritoryId,
+    territory: TerritoryStateV2,
+    viewerEconomy: NationalEconomyV2,
+    viewerFinance: WeeklyFinanceBreakdownV2,
+  ): string {
     const definition = this.engine.content.territories[territoryId]!;
     const owner = this.engine.player(territory.owner)!;
     const terrainProfile = territoryTerrainProfileV2(this.engine.content, territoryId);
@@ -2620,8 +2773,10 @@ export class WorldUIV2 {
     const isOwnTerritory = owner.id === humanId;
     const ownerHumanControlled = this.engine.state.humanPlayerIds.includes(owner.id);
     const empireTerritories = this.engine.territoriesOf(owner.id);
-    const economy = this.engine.nationalEconomy(owner.id);
-    const finance = this.engine.weeklyFinanceBreakdown(owner.id);
+    const economy = isOwnTerritory
+      ? viewerEconomy : this.engine.nationalEconomy(owner.id);
+    const finance = isOwnTerritory
+      ? viewerFinance : this.engine.weeklyFinanceBreakdown(owner.id);
     const iq = selectNationalIqViewV2(this.engine.state, this.engine.content, owner.id);
     const army = this.engine.armyStrength(owner.id);
     const militarySnapshot = this.engine.militaryBaseSnapshot();
@@ -2728,9 +2883,12 @@ export class WorldUIV2 {
     return this.engine.warForecast(attackerId, defenderId).winChance;
   }
 
-  private renderWarTracker(wars: WarStateV2[]): string {
+  private renderWarTracker(
+    wars: WarStateV2[],
+    finance: WeeklyFinanceBreakdownV2,
+  ): string {
     const humanId = this.viewerPlayerId();
-    const finance = this.engine.weeklyFinanceBreakdown(humanId);
+    const own = this.totalCombatStrength(humanId);
     const activeFronts = wars.reduce((sum, war) => sum + allWarOperations(war).length, 0);
     const status = `${wars.length} WAR${wars.length === 1 ? '' : 'S'} · ${activeFronts} FRONT${activeFronts === 1 ? '' : 'S'} · ${cash(annual(finance.warOperations))}/YR`;
     return `<aside class="war-tracker war-tracker--compact war-command-overlay glass-panel" aria-label="Active war command">
@@ -2738,7 +2896,6 @@ export class WorldUIV2 {
       <div class="war-tracker__wars war-command-campaigns" data-scroll-session="tracker:wars">${wars.map((war) => {
       const enemyId = war.attackerId === humanId ? war.defenderId : war.attackerId;
       const enemy = this.engine.player(enemyId)!;
-      const own = this.totalCombatStrength(humanId);
       const hostile = this.totalCombatStrength(enemyId);
       const operations = warOperationsFor(war, humanId);
       const operation = operations[0];
@@ -2926,7 +3083,8 @@ export class WorldUIV2 {
   }
 
   private renderHelp(): string {
-    return `<div class="modal-backdrop"><section class="modal-card world-help" data-scroll-session="modal:help"><button class="modal-close" data-action="help">×</button><div class="panel-kicker">FRONTIER COMMAND · NATIONAL AI</div><h2>You choose conquest. APEX runs the nation.</h2><div class="help-grid world-help-grid"><article><span>⚔</span><h3>War</h3><p>Choose targets, compare the forecast and decide when to stop.</p></article><article><span>AI</span><h3>Nation</h3><p>Every country uses the same AI for cash, food, research and recruitment. IQ modestly affects its speed and efficiency.</p></article><article><span>↗</span><h3>Development</h3><p>APEX adjusts investment and research gradually as national needs change.</p></article></div><p class="help-tip"><b>World reaction:</b> fast conquest raises suspicion and can trigger defensive coalitions.</p></section></div>`;
+    const audioCredits = GAME_AUDIO_CREDITS.map((source) => `<li><a href="${escapeHtml(source.sourceUrl)}" target="_blank" rel="noreferrer">“${escapeHtml(source.title)}”</a> by ${escapeHtml(source.author)} · <a href="${escapeHtml(source.licenseUrl)}" target="_blank" rel="noreferrer">${escapeHtml(source.licenseLabel)}</a></li>`).join('');
+    return `<div class="modal-backdrop"><section class="modal-card world-help" data-scroll-session="modal:help"><button class="modal-close" data-action="help">×</button><div class="panel-kicker">FRONTIER COMMAND · NATIONAL AI</div><h2>You choose conquest. APEX runs the nation.</h2><div class="help-grid world-help-grid"><article><span>⚔</span><h3>War</h3><p>Choose targets, compare the forecast and decide when to stop.</p></article><article><span>AI</span><h3>Nation</h3><p>Every country uses the same AI for cash, food, research and recruitment. IQ modestly affects its speed and efficiency.</p></article><article><span>↗</span><h3>Development</h3><p>APEX adjusts investment and research gradually as national needs change.</p></article></div><p class="help-tip"><b>World reaction:</b> fast conquest raises suspicion and can trigger defensive coalitions.</p><section class="world-help__credits"><h3>AUDIO CREDITS</h3><ul>${audioCredits}</ul></section></section></div>`;
   }
 
   private renderInbox(): string {
@@ -3216,6 +3374,9 @@ export class WorldUIV2 {
               this.toast(commandReason(result) ?? 'This country cannot be selected now.');
               break;
             }
+            this.awaitingInitialMapSynchronization = true;
+            this.initialMapLoaderPaintPending = true;
+            this.options.onCountryConfirmed?.(countryId);
             this.engine.startClock();
             this.introOpen = false;
             this.selectedTerritoryId = undefined;
@@ -3306,8 +3467,18 @@ export class WorldUIV2 {
             break;
           case 'declare-war': {
             if (!this.confirmWarTargetId) break;
-            const result = this.engine.declareWar(this.viewerPlayerId(), this.confirmWarTargetId);
-            if (!commandAccepted(result)) this.toast(commandReason(result) ?? 'War cannot be declared.');
+            const attackerId = this.viewerPlayerId();
+            const defenderId = this.confirmWarTargetId;
+            const result = this.engine.declareWar(attackerId, defenderId);
+            if (!commandAccepted(result)) {
+              this.toast(commandReason(result) ?? 'War cannot be declared.');
+            } else {
+              void worldGameAudio.handlePlayerWarPrepared(
+                attackerId,
+                defenderId,
+                `${attackerId}:${defenderId}:${this.engine.state.tick}:${this.engine.state.actionSequence}`,
+              );
+            }
             this.confirmWarTargetId = undefined;
             this.updateMapSelection();
             this.render();

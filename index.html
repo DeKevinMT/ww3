@@ -13,6 +13,13 @@
   </head>
   <body>
     <div id="app">
+      <div id="startup-loader" class="is-hidden" role="status" aria-live="polite" aria-hidden="true" aria-label="Loading Frontier Command">
+        <div class="startup-loader__identity" aria-hidden="true">
+          <span>FC</span>
+          <div><strong>FRONTIER COMMAND</strong><small>DEPLOYING COMMAND MAP</small></div>
+        </div>
+        <div class="startup-loader__track" aria-hidden="true"><i></i></div>
+      </div>
       <div id="game-canvas" aria-label="Interactive world war map"></div>
       <div id="hud" aria-live="polite"></div>
       <div id="tooltip" role="tooltip"></div>

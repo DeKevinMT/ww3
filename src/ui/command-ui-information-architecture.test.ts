@@ -56,7 +56,11 @@ describe('command UI information architecture', () => {
     expect(economy).toContain('finance.revenue + finance.foodExportIncome + finance.ceasefireIncome');
     expect(economy).toContain('const totalExpenses = finance.expenses');
     expect(economy).toContain("weekly: Math.max(0, finance.foodProduction)");
-    expect(economy).toContain('<span>TREASURY</span><strong>${cash(human.treasury)}</strong>');
+    expect(economy).toContain('<span>TREASURY</span><strong class=');
+    expect(economy).toContain('${cash(human.treasury)}</strong>');
+    expect(economy).toContain("human.treasury > 0 ? 'is-positive' : human.treasury < 0 ? 'is-negative'");
+    expect(economy).toContain('<h2>FINANCIAL OVERVIEW</h2>');
+    expect(economy).not.toContain('<h2>${cash(human.treasury)}</h2>');
     expect(economy).not.toContain('<span>NEXT WEEK</span>');
     expect(economy).not.toContain('INTEGRATED PEOPLE');
     expect(economy).not.toContain('FOOD SECURITY');

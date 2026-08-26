@@ -35,7 +35,7 @@ function activeWar(
     id,
     attackerId,
     defenderId,
-    startedTick: state.tick - 30,
+    startedTick: state.tick - 45,
     lastBattleTick: state.tick,
     warScore: 8,
     battles: 12,
