@@ -20,10 +20,12 @@
   },
   "dependencies": {
     "flag-icons": "^7.5.0",
-    "phaser": "^3.90.0"
+    "phaser": "^3.90.0",
+    "three": "^0.185.1"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20260823.1",
+    "@types/three": "^0.185.4",
     "typescript": "^5.9.2",
     "vite": "^7.1.2",
     "vitest": "^3.2.4",
