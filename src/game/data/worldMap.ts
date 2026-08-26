@@ -478,7 +478,8 @@ function navalRouteCrossesThirdPartyLand(
   return false;
 }
 
-function worldPointCoordinates(point: CombatRoutePoint): readonly [number, number] {
+/** Inverse of projectWorldPoint, shared with curved globe route presentation. */
+export function worldPointCoordinates(point: CombatRoutePoint): readonly [number, number] {
   return [
     point.x / MAP_WIDTH * 360 - 180,
     WORLD_MAX_LATITUDE - (point.y - WORLD_TOP) / (WORLD_BOTTOM - WORLD_TOP)
