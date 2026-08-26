@@ -14,7 +14,11 @@ import {
   ANTARCTICA_COASTLINE,
   ANTARCTICA_ICE_SHELF,
   ANTARCTICA_MAP_SILHOUETTE,
+  ARCTIC_ICE_COASTLINE,
+  ARCTIC_RESEARCH_ACCESS_TERRITORY_IDS,
+  ARCTIC_RESEARCH_ZONE_ID,
   SEA_MAP_LABELS,
+  arcticResearchAccessTerritoriesForEmpire,
   seaLabelZoomPresentation,
 } from './mapGeographyPresentation';
 
@@ -87,6 +91,55 @@ describe('map geography presentation', () => {
     expect(ANTARCTICA_ACCESS_ANCHORS.some((anchor) => (
       TERRITORIES.some((territory) => territory.id === anchor.id)
     ))).toBe(false);
+  });
+
+  it('keeps the Arctic Research Zone outside canonical countries and territories', () => {
+    expect(COUNTRIES.some((country) => country.id === ARCTIC_RESEARCH_ZONE_ID)).toBe(false);
+    expect(TERRITORIES.some((territory) => territory.id === ARCTIC_RESEARCH_ZONE_ID)).toBe(false);
+  });
+
+  it('defines a natural closed Arctic ice edge entirely at high northern latitudes', () => {
+    expect(ARCTIC_ICE_COASTLINE.length).toBeGreaterThan(40);
+    expect(ARCTIC_ICE_COASTLINE[0]).toEqual([-180, 82.1]);
+    expect(ARCTIC_ICE_COASTLINE.at(-1)).toEqual([180, 82.1]);
+    const latitudes = ARCTIC_ICE_COASTLINE.map(([, latitude]) => latitude);
+    expect(Math.min(...latitudes)).toBeGreaterThanOrEqual(81);
+    expect(Math.max(...latitudes)).toBeLessThan(90);
+    expect(Math.max(...latitudes)).toBeGreaterThan(86);
+    expect(Math.max(...latitudes) - Math.min(...latitudes)).toBeGreaterThan(5);
+    for (let index = 1; index < ARCTIC_ICE_COASTLINE.length; index += 1) {
+      expect(ARCTIC_ICE_COASTLINE[index]![0])
+        .toBeGreaterThan(ARCTIC_ICE_COASTLINE[index - 1]![0]);
+    }
+  });
+
+  it('uses all eight canonical Arctic countries as research gateways', () => {
+    expect(ARCTIC_RESEARCH_ACCESS_TERRITORY_IDS).toEqual([
+      'can', 'fin', 'grl', 'isl', 'nor', 'rus', 'swe', 'usa',
+    ]);
+    expect(new Set(ARCTIC_RESEARCH_ACCESS_TERRITORY_IDS).size)
+      .toBe(ARCTIC_RESEARCH_ACCESS_TERRITORY_IDS.length);
+    expect(ARCTIC_RESEARCH_ACCESS_TERRITORY_IDS.every((id) => (
+      TERRITORIES.some((territory) => territory.id === id)
+    ))).toBe(true);
+  });
+
+  it('grants immediate Arctic access through a conquered live-owner border', () => {
+    const territories: Record<string, { ownerId: string; integration: number }> = {
+      can: { ownerId: 'can', integration: 1 },
+      fin: { ownerId: 'fin', integration: 1 },
+      grl: { ownerId: 'grl', integration: 1 },
+      isl: { ownerId: 'isl', integration: 1 },
+      nor: { ownerId: 'nor', integration: 1 },
+      rus: { ownerId: 'rus', integration: 1 },
+      swe: { ownerId: 'swe', integration: 1 },
+      usa: { ownerId: 'usa', integration: 1 },
+    };
+    expect(arcticResearchAccessTerritoriesForEmpire(territories, 'bel')).toEqual([]);
+
+    territories.can = { ownerId: 'bel', integration: 0 };
+    expect(arcticResearchAccessTerritoriesForEmpire(territories, 'bel')).toEqual(['can']);
+    expect(arcticResearchAccessTerritoriesForEmpire(territories, 'can')).toEqual([]);
   });
 
   it('wires sea labels below gameplay and fills FIT letterbox bands with ocean', () => {

@@ -143,3 +143,60 @@ export const ANTARCTICA_ACCESS_ANCHORS: readonly AntarcticaAccessAnchor[] = [
   { id: 'south-africa-corridor', corridor: 'south-africa', longitude: 20, latitude: -70, mapPosition: projectAntarcticaMapPoint(20, -70), active: false },
   { id: 'australia-new-zealand-corridor', corridor: 'australia-new-zealand', longitude: 145, latitude: -68, mapPosition: projectAntarcticaMapPoint(145, -68), active: false },
 ] as const;
+
+/**
+ * A renderer-only identity for the neutral polar research site. It deliberately
+ * is not a country or territory ID, so it cannot enter ownership, war, victory
+ * or integration state before the future Arctic Secrets system exists.
+ */
+export const ARCTIC_RESEARCH_ZONE_ID = 'arctic-research-zone' as const;
+
+/**
+ * A restrained, authored summer ice edge. The first and last points are the
+ * same physical point on the -180/+180 seam, making the path a closed polar
+ * ring on the globe without introducing a playable landmass.
+ */
+export const ARCTIC_ICE_COASTLINE: readonly (readonly [number, number])[] = [
+  [-180, 82.1], [-175, 82.5], [-170, 83.0], [-165, 82.7], [-160, 83.4],
+  [-155, 84.1], [-150, 83.7], [-145, 84.5], [-140, 85.2], [-135, 84.8],
+  [-130, 85.6], [-125, 85.1], [-120, 85.9], [-115, 86.4], [-110, 85.8],
+  [-105, 86.1], [-100, 85.4], [-95, 84.9], [-90, 85.3], [-85, 84.6],
+  [-80, 84.1], [-75, 84.5], [-70, 83.9], [-65, 84.3], [-60, 83.6],
+  [-55, 84.0], [-50, 83.3], [-45, 83.8], [-40, 84.4], [-35, 84.0],
+  [-30, 84.7], [-25, 84.2], [-20, 83.6], [-15, 84.0], [-10, 83.2],
+  [-5, 82.7], [0, 83.1], [5, 82.4], [10, 81.9], [15, 82.3],
+  [20, 81.6], [25, 81.3], [30, 81.8], [35, 81.2], [40, 81.6],
+  [45, 81.1], [50, 81.5], [55, 82.0], [60, 81.7], [65, 82.3],
+  [70, 81.9], [75, 82.5], [80, 82.1], [85, 82.8], [90, 82.4],
+  [95, 83.0], [100, 82.6], [105, 83.2], [110, 82.8], [115, 83.5],
+  [120, 83.1], [125, 83.8], [130, 83.4], [135, 84.0], [140, 83.5],
+  [145, 83.1], [150, 82.7], [155, 83.2], [160, 82.6], [165, 82.9],
+  [170, 82.4], [175, 82.0], [180, 82.1],
+] as const;
+
+/** Arctic countries from which an empire can support neutral polar research. */
+export const ARCTIC_RESEARCH_ACCESS_TERRITORY_IDS = [
+  'can', 'fin', 'grl', 'isl', 'nor', 'rus', 'swe', 'usa',
+] as const;
+
+export type ArcticResearchAccessTerritoryId =
+  (typeof ARCTIC_RESEARCH_ACCESS_TERRITORY_IDS)[number];
+
+export interface ArcticResearchTerritoryOwnership {
+  readonly ownerId: string;
+}
+
+/**
+ * Returns the currently owned Arctic countries that grant an empire polar
+ * access. Integration is intentionally irrelevant: conquest transfers access
+ * as soon as the territory's live owner changes.
+ */
+export function arcticResearchAccessTerritoriesForEmpire(
+  territories: Readonly<Record<string, ArcticResearchTerritoryOwnership | undefined>>,
+  playerId: string,
+): readonly ArcticResearchAccessTerritoryId[] {
+  if (!playerId) return [];
+  return ARCTIC_RESEARCH_ACCESS_TERRITORY_IDS.filter((territoryId) => (
+    territories[territoryId]?.ownerId === playerId
+  ));
+}
