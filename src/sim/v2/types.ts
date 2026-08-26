@@ -403,6 +403,8 @@ export interface WorldStateV2 {
   humanPlayerId: PlayerId;
   /** Sorted active countries whose war and peace choices belong to people. */
   humanPlayerIds: PlayerId[];
+  /** Human country identities that consumed their one half-cost first conquest integration. */
+  firstIntegrationDiscountUsedBy: PlayerId[];
   players: Record<PlayerId, NationStateV2>;
   territories: Record<TerritoryId, TerritoryStateV2>;
   wars: WarStateV2[];

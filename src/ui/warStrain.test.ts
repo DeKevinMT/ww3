@@ -20,9 +20,9 @@ describe('war strain HUD summary', () => {
       armyFillRatio: 0.45,
       reserveFillRatio: 0.05,
     });
-    expect(summary.score).toBeGreaterThanOrEqual(75);
-    expect(summary.level).toBe('critical');
-    expect(summary.guidance).toMatch(/exhaustion|recovery/i);
+    expect(summary.score).toBeGreaterThanOrEqual(65);
+    expect(summary.level).toBe('overextended');
+    expect(summary.guidance).toMatch(/losses|consolidate|peace/i);
   });
 
   it('uses diminishing strain for simultaneous fronts inside one war', () => {
@@ -46,7 +46,7 @@ describe('war strain HUD summary', () => {
       warFatigue: 0,
       armyFillRatio: 0.8,
       reserveFillRatio: 0,
-    })).toMatchObject({ score: 13, level: 'sustainable' });
+    })).toMatchObject({ score: 12, level: 'sustainable' });
   });
 
   it('builds much more strain with time than at declaration', () => {
@@ -60,8 +60,9 @@ describe('war strain HUD summary', () => {
     }).score;
 
     expect(scoreAt(0)).toBe(5);
-    expect(scoreAt(26)).toBeGreaterThanOrEqual(12);
-    expect(scoreAt(104)).toBeGreaterThanOrEqual(22);
+    expect(scoreAt(26)).toBeGreaterThanOrEqual(10);
+    expect(scoreAt(104)).toBeGreaterThanOrEqual(18);
+    expect(scoreAt(104) - scoreAt(26)).toBeGreaterThanOrEqual(8);
   });
 
   it('penalizes separate simultaneous wars more sharply than extra fronts in one war', () => {
@@ -80,25 +81,17 @@ describe('war strain HUD summary', () => {
       reserveFillRatio: 1,
     }).score;
 
-    expect(threeWars - singleWar).toBeGreaterThanOrEqual(20);
+    expect(threeWars - singleWar).toBeGreaterThanOrEqual(18);
   });
 
-  it('adds a temporary conquest aftershock that fades to zero', () => {
-    const baseline = summarizeWarStrainV2({
-      activeWars: 1,
-      activeFronts: 1,
-      warFatigue: 0,
-      armyFillRatio: 1,
-      reserveFillRatio: 1,
-    }).score;
+  it('shows no recovery pressure after peace once fatigue is clear', () => {
     expect(summarizeWarStrainV2({
-      activeWars: 1,
-      activeFronts: 1,
-      conquestAftershock: 8,
+      activeWars: 0,
+      activeFronts: 0,
       warFatigue: 0,
       armyFillRatio: 1,
       reserveFillRatio: 1,
-    }).score).toBe(baseline + 8);
+    })).toMatchObject({ score: 0, level: 'sustainable' });
   });
 
   it('counts naval routes as lighter theatre strain than the same number of land fronts', () => {
@@ -120,7 +113,7 @@ describe('war strain HUD summary', () => {
     });
 
     expect(naval.score).toBeLessThan(land.score);
-    expect(land.score - naval.score).toBeGreaterThanOrEqual(6);
+    expect(land.score - naval.score).toBeGreaterThanOrEqual(4);
   });
 
   it('uses the same meter after peace to explain the fading recovery tail', () => {
@@ -130,7 +123,7 @@ describe('war strain HUD summary', () => {
       warFatigue: 40,
       armyFillRatio: 0.2,
       reserveFillRatio: 0,
-    })).toMatchObject({ score: 26, level: 'recovering', label: 'RECOVERING' });
+    })).toMatchObject({ score: 22, level: 'recovering', label: 'RECOVERING' });
   });
 
   it('sanitizes invalid ratios without exceeding the meter range', () => {

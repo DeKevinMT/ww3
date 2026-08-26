@@ -7,20 +7,43 @@ import {
 } from './balance';
 import { resetEmptyArmyBaseQualityV2 } from './armyQuality';
 import type { WorldContentV2 } from './content';
+import { isHumanPlayerV2 } from './humanPlayers';
+import { OPENING_ARMY_BONUS_DURATION_TICKS_V2 } from './openingArmyBonus';
 import { traitNationContextV2 } from './traitContext';
-import { countryTraitFactorV2 } from './traits';
+import {
+  countryTraitFactorV2,
+  humanStartingArmyMultiplierForContentV2,
+} from './traits';
 import type { PlayerId, TerritoryId, WorldStateV2 } from './types';
 
 const initialNationCapacityCache = new WeakMap<WorldContentV2, Map<PlayerId, number>>();
 
-const armyCapacityTraitFactorV2 = (
+export function openingArmyCapacityMultiplierV2(
   state: WorldStateV2,
+  content: WorldContentV2,
+  ownerId: PlayerId,
+): number {
+  if (!isHumanPlayerV2(state, ownerId)
+    || state.tick >= OPENING_ARMY_BONUS_DURATION_TICKS_V2) return 1;
+  const openingMultiplier = humanStartingArmyMultiplierForContentV2(content, ownerId);
+  const remainingShare = clamp(
+    (OPENING_ARMY_BONUS_DURATION_TICKS_V2 - state.tick)
+      / OPENING_ARMY_BONUS_DURATION_TICKS_V2,
+    0,
+    1,
+  );
+  return round(1 + (openingMultiplier - 1) * remainingShare, 12);
+}
+
+const armyCapacityFactorV2 = (
+  state: WorldStateV2,
+  content: WorldContentV2,
   ownerId: PlayerId,
 ): number => countryTraitFactorV2(
   ownerId,
   'army-capacity',
   traitNationContextV2(state, ownerId),
-);
+) * openingArmyCapacityMultiplierV2(state, content, ownerId);
 
 const liveTerritoryArmyCapacityTargetV2 = (
   state: WorldStateV2,
@@ -147,7 +170,7 @@ export function nationalArmyCapacityTargetV2(
   playerId: PlayerId,
   ownedTerritoryIds: readonly TerritoryId[] = content.territoryIds,
 ): number {
-  const factor = armyCapacityTraitFactorV2(state, playerId);
+  const factor = armyCapacityFactorV2(state, content, playerId);
   return round(ownedTerritoryIds.reduce((sum, territoryId) => {
     return sum + liveTerritoryArmyCapacityTargetV2(
       state,
@@ -166,7 +189,7 @@ export function stateArmyCapacityTargetsV2(
   ownerId: PlayerId,
   ownedTerritoryIds: readonly TerritoryId[] = content.territoryIds,
 ): ReadonlyMap<TerritoryId, number> {
-  const factor = armyCapacityTraitFactorV2(state, ownerId);
+  const factor = armyCapacityFactorV2(state, content, ownerId);
   return new Map(ownedTerritoryIds.flatMap((id) => {
     const territory = state.territories[id];
     return territory?.owner === ownerId ? [[id, liveTerritoryArmyCapacityTargetV2(
@@ -192,7 +215,7 @@ export function stateTerritoryArmyCapacityTargetV2(
     content,
     territoryId,
     ownerId,
-    armyCapacityTraitFactorV2(state, ownerId),
+    armyCapacityFactorV2(state, content, ownerId),
   );
 }
 

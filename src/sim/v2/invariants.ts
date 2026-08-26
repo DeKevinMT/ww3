@@ -124,6 +124,14 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
     || humanPlayerIds.join('|') !== [...humanPlayerIds].sort((left, right) => left.localeCompare(right)).join('|')) {
     errors.push('Human player roster is invalid.');
   }
+  const firstIntegrationDiscountUsedBy = state.firstIntegrationDiscountUsedBy;
+  if (!Array.isArray(firstIntegrationDiscountUsedBy)
+    || new Set(firstIntegrationDiscountUsedBy).size !== firstIntegrationDiscountUsedBy.length
+    || firstIntegrationDiscountUsedBy.some((id) => !humanPlayerIds.includes(id))
+    || firstIntegrationDiscountUsedBy.join('|') !== [...firstIntegrationDiscountUsedBy]
+      .sort((left, right) => left.localeCompare(right)).join('|')) {
+    errors.push('First player integration discount ledger is invalid.');
+  }
   if (!exactKeys(state.aiEscalation, AI_ESCALATION_KEYS)
     || ![0, 1, 2].includes(state.aiEscalation.resistanceLevel)
     || ![state.aiEscalation.lastWarStartTick, state.aiEscalation.lastFederationTick, state.aiEscalation.globalThreat, state.aiEscalation.lastHumanPower, state.aiEscalation.lastHumanTerritoryCount].every(Number.isFinite)

@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { createWorldStateV2 } from './bootstrap';
-import { WORLD_CONTENT_V2 } from './content';
+import {
+  WORLD_CONTENT_V2,
+  territoryTerrainFoodProductionMultiplierV2,
+} from './content';
 import {
   invalidateTerritoryIndexV2,
   selectFoodDemandV2,
@@ -55,15 +58,21 @@ describe('V2 FAOSTAT food self-sufficiency calibration', () => {
       const demand = selectFoodDemandV2(state, playerId);
       const capacity = selectFoodLandCapacityV2(state, WORLD_CONTENT_V2, playerId);
       // FAOSTAT remains the immutable calibration anchor; the active country's
-      // own food-production trait is a visible multiplier on live capacity.
+      // terrain profile and food-production trait are visible multipliers on
+      // live capacity.
+      const terrainFactor = territoryTerrainFoodProductionMultiplierV2(
+        WORLD_CONTENT_V2,
+        territoryIdV2(countryId),
+      );
       const traitFactor = countryTraitFactorV2(
         playerId,
         'food-production',
         traitNationContextV2(state, playerId),
       );
-      expect(capacity / demand, countryId).toBeCloseTo(reference * traitFactor, 5);
+      const expected = reference * terrainFactor * traitFactor;
+      expect(capacity / demand, countryId).toBeCloseTo(expected, 5);
       expect(state.players[playerId]!.domesticFoodCapacity / demand, countryId)
-        .toBeCloseTo(reference * traitFactor, 5);
+        .toBeCloseTo(expected, 5);
     }
     expect(countryTraitFactorV2(nationIdV2('arg'), 'food-production')).toBeGreaterThan(1);
     expect(state.players[nationIdV2('sgp')]!.domesticFoodCapacity
@@ -82,11 +91,25 @@ describe('V2 FAOSTAT food self-sufficiency calibration', () => {
     const dutchTerritory = state.territories[netherlandsTerritory]!;
     const belgianPopulation = belgianTerritory.population * belgianTerritory.integration;
     const dutchPopulation = dutchTerritory.population * dutchTerritory.integration;
+    const belgianTerrainFactor = territoryTerrainFoodProductionMultiplierV2(
+      WORLD_CONTENT_V2,
+      territoryIdV2('bel'),
+    );
+    const dutchTerrainFactor = territoryTerrainFoodProductionMultiplierV2(
+      WORLD_CONTENT_V2,
+      netherlandsTerritory,
+    );
+    const ownerTraitFactor = countryTraitFactorV2(
+      belgium,
+      'food-production',
+      traitNationContextV2(state, belgium),
+    );
     const expected = (
       belgianPopulation * WORLD_CONTENT_V2.nations[belgium]!.real.foodSelfSufficiencyRatio
+        * belgianTerrainFactor
       + dutchPopulation * WORLD_CONTENT_V2.nations[nationIdV2('nld')]!
-        .real.foodSelfSufficiencyRatio
-    ) / (belgianPopulation + dutchPopulation);
+        .real.foodSelfSufficiencyRatio * dutchTerrainFactor
+    ) / (belgianPopulation + dutchPopulation) * ownerTraitFactor;
     const actual = selectFoodLandCapacityV2(state, WORLD_CONTENT_V2, belgium)
       / selectFoodDemandV2(state, belgium);
     expect(actual).toBeCloseTo(expected, 5);

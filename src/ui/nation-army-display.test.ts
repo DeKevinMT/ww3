@@ -5,6 +5,7 @@ import {
   armyCapacityLabel,
   baseOperatingCostLabel,
   globalRankingDetail,
+  suspicionRiskPresentationV2,
   taxIncomeBasisLabel,
   toastVisibilityDuration,
   treasuryTopbarPresentationV2,
@@ -35,6 +36,21 @@ describe('nation army display', () => {
       trend: '+$50.00M/wk',
       trendClassName: 'is-positive',
     });
+  });
+
+  it('turns political suspicion into an explicit progressive AI-war risk scale', () => {
+    expect(suspicionRiskPresentationV2(0)).toMatchObject({
+      score: 0,
+      level: 'clear',
+      label: 'NO THREAT',
+      guidance: expect.stringContaining('0% chance'),
+    });
+    expect(suspicionRiskPresentationV2(1)).toMatchObject({ level: 'minimal' });
+    expect(suspicionRiskPresentationV2(20)).toMatchObject({ level: 'watched' });
+    expect(suspicionRiskPresentationV2(40)).toMatchObject({ level: 'exposed' });
+    expect(suspicionRiskPresentationV2(60)).toMatchObject({ level: 'danger' });
+    expect(suspicionRiskPresentationV2(80)).toMatchObject({ level: 'critical' });
+    expect(suspicionRiskPresentationV2(500)).toMatchObject({ score: 100, level: 'critical' });
   });
 
   it('reports live world population and mapped land-area control', () => {

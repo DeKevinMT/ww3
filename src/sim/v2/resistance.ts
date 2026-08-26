@@ -29,6 +29,63 @@ const COALITION_RECRUITMENT_MIN_TICK = 156;
 const COALITION_RECRUITMENT_INTERVAL = 52;
 const FEDERATION_FORMATION_INTERVAL = 104;
 const AI_FEDERATION_FORMATION_MIN_TICK = 832;
+export const SUSPICION_OFFENSIVE_WAR_CLUSTER_WINDOW_TICKS_V2 = 26;
+/** A peaceful reputation heals by roughly 1.3 Suspicion points per year. */
+export const SUSPICION_PEACEFUL_DECAY_PER_WEEK_V2 = 0.025;
+/** Modest shared acceleration for every positive source of political Suspicion. */
+export const POLITICAL_SUSPICION_GAIN_MULTIPLIER_V2 = 1.15;
+
+export function scalePoliticalSuspicionGainV2(rawGain: number): number {
+  if (!Number.isFinite(rawGain) || rawGain <= 0) return 0;
+  return round(rawGain * POLITICAL_SUSPICION_GAIN_MULTIPLIER_V2, 9);
+}
+
+export interface HumanOffensiveWarSuspicionPressureV2 {
+  activeWars: number;
+  weeklyGain: number;
+  declarationSpike: number;
+}
+
+/**
+ * One controlled offensive adds only a modest weekly signal. Extra simultaneous
+ * wars compound nonlinearly, while a second or third declaration inside six
+ * months creates a one-time diplomatic shock. `startedTick` is sufficient, so
+ * this remains save-stable without another persisted cooldown or ledger.
+ */
+export function humanOffensiveWarSuspicionPressureV2(
+  state: WorldStateV2,
+  playerId: PlayerId = state.humanPlayerId,
+): HumanOffensiveWarSuspicionPressureV2 {
+  const offensiveWars = state.wars
+    .filter((war) => war.attackerId === playerId)
+    .sort((left, right) => left.startedTick - right.startedTick
+      || left.id.localeCompare(right.id));
+  const activeWars = offensiveWars.length;
+  const weeklyGain = activeWars <= 0 ? 0 : round(
+    0.04 * activeWars + 0.16 * Math.pow(Math.max(0, activeWars - 1), 1.55),
+    9,
+  );
+  let declarationSpike = 0;
+  for (let index = 0; index < offensiveWars.length; index += 1) {
+    const war = offensiveWars[index]!;
+    const age = state.tick - war.startedTick;
+    // Declarations are applied before the canonical weekly tick increments;
+    // age one is therefore their single post-start resistance update.
+    if (age !== 1) continue;
+    const clusteredEarlierWars = offensiveWars.slice(0, index).filter((earlier) => (
+      war.startedTick - earlier.startedTick
+        <= SUSPICION_OFFENSIVE_WAR_CLUSTER_WINDOW_TICKS_V2
+    )).length;
+    if (clusteredEarlierWars > 0) {
+      declarationSpike += Math.pow(clusteredEarlierWars, 1.35);
+    }
+  }
+  return {
+    activeWars,
+    weeklyGain,
+    declarationSpike: round(declarationSpike, 9),
+  };
+}
 
 export function coalitionWillingnessV2(aggressivenessPercent: number): number {
   return round((1 - clamp(aggressivenessPercent / 100, 0, 1)) ** 1.8);
@@ -123,12 +180,20 @@ function updateThreatV2(state: WorldStateV2, content: WorldContentV2, powers: Po
   const power = powers.byNation.get(state.humanPlayerId) ?? 0;
   const powerGrowth = state.aiEscalation.lastHumanPower > 0
     ? Math.max(0, power / Math.max(1, state.aiEscalation.lastHumanPower) - 1) : 0;
-  const offensiveWars = state.wars.filter((war) => war.attackerId === state.humanPlayerId).length;
-  let threat = state.aiEscalation.globalThreat
-    + conquestThreat * aggressorScale
-    + Math.min(0.60, powerGrowth * 6) * aggressorScale
-    + offensiveWars * 0.05 * aggressorScale;
-  if (territoryGain === 0 && offensiveWars === 0) threat -= 0.12;
+  const offensivePressure = humanOffensiveWarSuspicionPressureV2(
+    state,
+    state.humanPlayerId,
+  );
+  const positiveSuspicionGain = scalePoliticalSuspicionGainV2(
+    conquestThreat * aggressorScale
+      + Math.min(0.60, powerGrowth * 6) * aggressorScale
+      + (offensivePressure.weeklyGain + offensivePressure.declarationSpike)
+        * aggressorScale,
+  );
+  let threat = state.aiEscalation.globalThreat + positiveSuspicionGain;
+  if (territoryGain === 0 && offensivePressure.activeWars === 0) {
+    threat -= SUSPICION_PEACEFUL_DECAY_PER_WEEK_V2;
+  }
   state.aiEscalation.globalThreat = round(clamp(threat, 0, 100));
   state.aiEscalation.lastHumanTerritoryCount = territoryCount;
   state.aiEscalation.lastHumanPower = power;

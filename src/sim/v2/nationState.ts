@@ -17,6 +17,7 @@ import {
   countryTraitFactorV2,
   humanCountryTraitMultiplierForContentV2,
   humanStartingArmyMultiplierForContentV2,
+  legacyV261HumanStartingArmyMultiplierForContentV2,
 } from './traits';
 import type { NationStateV2, PlayerId, WorldStateV2 } from './types';
 
@@ -92,11 +93,13 @@ export function synchronizeOpeningTreasuryHumanRosterV2(
 /**
  * Applies the opening-only human army boost when tick-zero seats change.
  * The old controller multiplier is removed before the new one is applied, so
- * repeated lobby updates and country switches cannot stack the bonus. Only
- * deployed manpower changes: capacity and trained reserves remain untouched,
- * and an opening force may intentionally sit above its ordinary live cap.
- * That surplus is free and non-replenishable: the normal recruitment pipeline
- * sees no capacity gap until casualties have removed every soldier above cap.
+ * repeated lobby updates and country switches cannot stack the bonus. Deployed
+ * manpower changes here; capacity is synchronized by the caller onto the same
+ * temporary curve. A sub-1x opening also scales the tick-zero reserve cadre by
+ * the same factor; removing that human seat restores the exact 1x cadre. A
+ * positive opening boost never creates free reserves. Extra deployed soldiers
+ * are free and non-replenishable, and the fading capacity entitlement gates
+ * future recruitment without deleting paid soldiers that already exist.
  */
 export function synchronizeOpeningArmyHumanRosterV2(
   state: WorldStateV2,
@@ -114,6 +117,14 @@ export function synchronizeOpeningArmyHumanRosterV2(
     const after = next.has(id) ? humanStartingArmyMultiplierForContentV2(content, id) : 1;
     if (Math.abs(before - after) <= 0.000000001) continue;
     state.players[id]!.openingArmyBonus = null;
+    const reserveBeforeFactor = Math.min(1, before);
+    const reserveAfterFactor = Math.min(1, after);
+    if (Math.abs(reserveBeforeFactor - reserveAfterFactor) > 0.000000001) {
+      state.players[id]!.trainedReserves = round(
+        state.players[id]!.trainedReserves / reserveBeforeFactor * reserveAfterFactor,
+        9,
+      );
+    }
     for (const territory of Object.values(state.territories)) {
       if (territory.owner !== id) continue;
       territory.army.manpower = round(territory.army.manpower / before * after, 9);
@@ -146,7 +157,7 @@ export function trackExistingOpeningArmyHumanRosterV2(
   for (const [id, nation] of Object.entries(state.players) as Array<[PlayerId, NationStateV2]>) {
     nation.openingArmyBonus = null;
     if (!humans.has(id)) continue;
-    const multiplier = humanStartingArmyMultiplierForContentV2(content, id);
+    const multiplier = legacyV261HumanStartingArmyMultiplierForContentV2(content, id);
     if (multiplier <= 1.000000001) continue;
     const deployed = round(Object.values(state.territories)
       .filter((territory) => territory.owner === id)

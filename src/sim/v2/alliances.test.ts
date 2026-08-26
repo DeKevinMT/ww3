@@ -18,11 +18,13 @@ describe('V2 human multiplayer alliances', () => {
   const france = nationIdV2('fra');
 
   function multiplayerState() {
-    const state = createWorldStateV2(72_001, WORLD_CONTENT_V2);
-    state.humanPlayerId = belgium;
-    state.humanPlayerIds = [belgium, canada, france]
+    const engine = new WorldEngineV2(72_001, WORLD_CONTENT_V2);
+    const roster = [belgium, canada, france]
       .sort((left, right) => left.localeCompare(right));
-    return state;
+    if (!engine.configureHumanPlayers(roster, belgium).accepted) {
+      throw new Error('Unable to configure the multiplayer alliance fixture.');
+    }
+    return engine.state;
   }
 
   it('permits only one directed invitation between living human countries', () => {

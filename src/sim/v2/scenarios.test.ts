@@ -12,8 +12,8 @@ import {
 } from './scenarios';
 import { nationIdV2 } from './types';
 
-describe('scenario resolution and Random World policies', () => {
-  it('resolves Standard compatibly and Random World deterministically', () => {
+describe('scenario resolution and Alternative Universe policies', () => {
+  it('resolves Standard compatibly and Alternative Universe deterministically', () => {
     const standard = resolveScenarioV2({ mode: 'standard-2026', seed: 73_001 });
     expect(standard.content.metadata?.contentVersion).toBe(V2_CONTENT_VERSION);
 
@@ -22,7 +22,7 @@ describe('scenario resolution and Random World policies', () => {
     expect(repeated.content).toEqual(first.content);
     expect(first.content.metadata).toMatchObject({
       scenarioId: 'random-world',
-      scenarioVersion: 1,
+      scenarioVersion: 2,
       generatedFromSeed: 73_001,
       openingProfile: 'none',
       geopoliticsProfile: 'neutral',
@@ -30,7 +30,7 @@ describe('scenario resolution and Random World policies', () => {
     });
   });
 
-  it('starts Random World without real opening crises, conflicts or geopolitics', () => {
+  it('starts Alternative Universe without real opening crises, conflicts or geopolitics', () => {
     const { content } = resolveScenarioV2({ mode: 'random-world', seed: 73_002 });
     const state = createWorldStateV2(73_002, content);
     expect(openingConflictScheduleV2(state.seed, content)).toEqual([]);
@@ -42,7 +42,7 @@ describe('scenario resolution and Random World policies', () => {
     expect(invariantErrorsV2(state, content)).toEqual([]);
   });
 
-  it('rebuilds Random World from a schema-22 save header and rejects mismatched content', () => {
+  it('rebuilds Alternative Universe from a schema-22 save header and rejects mismatched content', () => {
     const resolved = resolveScenarioV2({ mode: 'random-world', seed: 73_003 });
     const engine = new WorldEngineV2(73_003, resolved.content);
     const serialized = engine.save();

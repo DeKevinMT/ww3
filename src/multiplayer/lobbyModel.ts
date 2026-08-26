@@ -95,10 +95,18 @@ export class HostLobbyModel {
         if (resolved.config.mode === this.scenario.mode
           && resolved.config.version === this.scenario.version
           && resolved.config.seed === this.scenario.seed) return { accepted: true };
+        const preserveCountryChoices = resolved.config.mode === this.scenario.mode;
         this.scenario = resolved.config;
         this.content = resolved.content;
         for (const [candidatePeerId, candidate] of this.players) {
-          this.players.set(candidatePeerId, { ...candidate, countryId: null, ready: false });
+          this.players.set(candidatePeerId, {
+            ...candidate,
+            countryId: preserveCountryChoices
+              && candidate.countryId && this.content.nations[candidate.countryId]
+              ? candidate.countryId
+              : null,
+            ready: false,
+          });
         }
         this.revision += 1;
         return { accepted: true };

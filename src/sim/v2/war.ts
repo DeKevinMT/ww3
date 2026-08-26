@@ -1,6 +1,8 @@
 import { nextRandom, randomInt } from '../../game/random';
 import {
   BATTLE_INTERVAL_TICKS,
+  battleDamageMeanV2,
+  battleDamageVarianceV2,
   ATTACKER_MILITARY_LOSS_MULTIPLIER,
   ATTACKER_CONCENTRATION_EXPOSURE_MAX_BONUS,
   ATTACKER_CONCENTRATION_EXPOSURE_MAX_RATIO,
@@ -14,6 +16,10 @@ import {
   COMBAT_DAMAGE_EFFECTIVENESS,
   COMBAT_POWER_RATIO_EXPONENT,
   COMBAT_ROUTE_STRENGTH_RATIO,
+  combatDefenseEffectV2,
+  CONQUEST_WAR_FATIGUE_FULL_SCALE_SHARE,
+  CONQUEST_WAR_FATIGUE_MAX,
+  CONQUEST_WAR_FATIGUE_MIN,
   CONQUEST_CAPTURE_GUARD_MAX_TRANSFER_SHARE,
   CONQUEST_CAPTURE_GUARD_TICKS,
   CONQUEST_GUARD_MIN_TRANSFER_SHARE,
@@ -25,6 +31,8 @@ import {
   ATTACKER_CIVILIAN_LOSS_DEFENDER_SHARE,
   ATTACKER_CIVILIAN_LOSS_INTENSITY,
   ATTACKER_CIVILIAN_LOSS_POPULATION_CAP,
+  AI_EXHAUSTION_CEASEFIRE_COST_MULTIPLIER,
+  AI_OFFENSIVE_EXHAUSTION_ARMY_FILL_RATIO,
   DEFENDER_CIVILIAN_LOSS_INTENSITY,
   DEFENDER_CIVILIAN_LOSS_POPULATION_CAP,
   DEFENDER_COUNTERFIRE_MULTIPLIER,
@@ -35,7 +43,6 @@ import {
   POST_WAR_TRANSITION_FATIGUE,
   NAVAL_BATTLE_FATIGUE_MULTIPLIER,
   STALE_WAR_TICKS,
-  TERRAIN_DEFENSE_MODIFIER,
   TRUCE_TICKS,
   WAR_ACCESS_ASSAULT_MULTIPLIER,
   WAR_ACCESS_CASUALTY_MULTIPLIER,
@@ -50,7 +57,11 @@ import {
   smoothstep,
 } from './balance';
 import { areAlliedV2 } from './alliances';
-import type { WorldContentV2 } from './content';
+import {
+  territoryTerrainDefenseMultiplierV2,
+  territoryTerrainSupplyMultiplierV2,
+  type WorldContentV2,
+} from './content';
 import {
   nationalArmyCapacityTargetV2,
   stateTerritoryArmyCapacityTargetV2,
@@ -192,6 +203,24 @@ function addWarFatigueGainV2(
   ));
 }
 
+/**
+ * The durable fatigue shock created by administering a conquered population.
+ * It scales with the captured share of the resulting empire and is bounded so
+ * a single victory creates years of recovery without permanent lockout.
+ */
+export function conquestWarFatigueShockV2(
+  capturedPopulation: number,
+  attackerPopulationBefore: number,
+): number {
+  const captured = Math.max(0, Number.isFinite(capturedPopulation) ? capturedPopulation : 0);
+  const prior = Math.max(0, Number.isFinite(attackerPopulationBefore) ? attackerPopulationBefore : 0);
+  if (captured <= 0) return 0;
+  const resultingShare = captured / Math.max(0.000001, captured + prior);
+  return round(CONQUEST_WAR_FATIGUE_MIN
+    + (CONQUEST_WAR_FATIGUE_MAX - CONQUEST_WAR_FATIGUE_MIN)
+      * smoothstep(0, CONQUEST_WAR_FATIGUE_FULL_SCALE_SHARE, resultingShare));
+}
+
 export interface CombatExchangeProjectionV2 {
   attackerStrength: number;
   defenderStrength: number;
@@ -256,6 +285,68 @@ function activeCeasefireObligationWeeksV2(state: WorldStateV2, leftId: PlayerId,
   ), 0);
 }
 
+/** The authoritative national readiness gate used by declarations and live fronts. */
+export function aiAttackerIsOffensivelyExhaustedV2(
+  state: WorldStateV2,
+  attackerId: PlayerId,
+): boolean {
+  if (isHumanPlayerV2(state, attackerId)) return false;
+  const army = selectTerritoriesOfV2(state, attackerId).reduce((total, territory) => ({
+    deployed: total.deployed + Math.max(0, territory.army.manpower),
+    capacity: total.capacity + Math.max(0, territory.army.capacity),
+  }), { deployed: 0, capacity: 0 });
+  const fillRatio = army.capacity > 0 ? army.deployed / army.capacity : 0;
+  return fillRatio <= AI_OFFENSIVE_EXHAUSTION_ARMY_FILL_RATIO;
+}
+
+/** An AI surrender request keeps its offensive stood down until the offer is resolved. */
+export function aiAttackerMustStandDownV2(
+  state: WorldStateV2,
+  war: WarStateV2,
+): boolean {
+  if (isHumanPlayerV2(state, war.attackerId)) return false;
+  return aiAttackerIsOffensivelyExhaustedV2(state, war.attackerId)
+    || state.offers.some((offer) => (
+      offer.warId === war.id
+        && offer.fromId === war.attackerId
+        && offer.settlement === 'ceasefire'
+        && offer.status === 'pending'
+        && offer.expiresTick > state.tick
+    ));
+}
+
+/** Countries currently defending themselves against the proposed target are
+ * beneficiaries of a counterattack, not co-belligerents. The new attacker
+ * fights the aggressor in a separate bilateral war and never inherits a war
+ * against those protected defenders. */
+function defensiveInterventionProtectedIdsV2(
+  state: WorldStateV2,
+  attackerId: PlayerId,
+  defenderId: PlayerId,
+): PlayerId[] {
+  return [...new Set(state.wars
+    .filter((war) => war.attackerId === defenderId
+      && war.defenderId !== attackerId
+      && !selectIsEliminatedV2(state, war.defenderId))
+    .map((war) => war.defenderId))]
+    .sort((left, right) => left.localeCompare(right));
+}
+
+function defensiveInterventionLinkedWarV2(
+  state: WorldStateV2,
+  attackerId: PlayerId,
+  defenderId: PlayerId,
+  escalatedFromWarId?: string,
+): WarStateV2 | undefined {
+  const explicit = escalatedFromWarId
+    ? state.wars.find((war) => war.id === escalatedFromWarId) : undefined;
+  if (explicit?.attackerId === defenderId && explicit.defenderId !== attackerId) return explicit;
+  return state.wars.filter((war) => war.attackerId === defenderId
+    && war.defenderId !== attackerId)
+    .sort((left, right) => left.startedTick - right.startedTick
+      || left.id.localeCompare(right.id))[0];
+}
+
 /** Other powers already attacking the same target become theatre rivals. A
  * linked regional intervention may name one existing belligerent as the side
  * being helped; that ally is intentionally excluded. */
@@ -271,7 +362,9 @@ function competingInvaderIdsV2(
     ? (linkedWar.attackerId === defenderId ? linkedWar.defenderId : linkedWar.attackerId)
     : undefined;
   return [...new Set(selectWarsOfV2(state, defenderId)
-    .map((war) => war.attackerId === defenderId ? war.defenderId : war.attackerId)
+    // Only another country attacking this target is a theatre rival. A country
+    // being attacked by the target is exactly the side this declaration aids.
+    .flatMap((war) => war.defenderId === defenderId ? [war.attackerId] : [])
     .filter((id) => id !== attackerId && id !== alliedId
       && !selectIsEliminatedV2(state, id)
       && !areAlliedV2(state, attackerId, id)
@@ -344,13 +437,25 @@ export function warDeclarationStatusV2(
   const rivalryWarning = rivalInvaders.length > 0
     ? `Contested invasion: entering also opens ${rivalInvaders.length} rival war${rivalInvaders.length === 1 ? '' : 's'} against the other invader${rivalInvaders.length === 1 ? '' : 's'}.`
     : undefined;
-  const warning = [rivalryWarning, frontWarning, armyWarning].filter(Boolean).join(' ') || undefined;
+  const protectedDefenders = defensiveInterventionProtectedIdsV2(
+    state,
+    attackerId,
+    defenderId,
+  );
+  const interventionWarning = protectedDefenders.length > 0
+    ? `Defensive intervention: you fight ${content.nations[defenderId]?.shortName ?? defenderId} only; ${protectedDefenders.map((id) => content.nations[id]?.shortName ?? id).join(', ')} remain outside this war.`
+    : undefined;
+  const warning = [interventionWarning, rivalryWarning, frontWarning, armyWarning]
+    .filter(Boolean).join(' ') || undefined;
   const status = (allowed: boolean, reason?: string): WarDeclarationStatusV2 => ({
     allowed, reason, warning, access, mobilizationCost,
   });
   const attacker = state.players[attackerId];
   if (!attacker || !state.players[defenderId] || attackerId === defenderId) return status(false, 'Invalid nation pair.');
   if (selectIsEliminatedV2(state, attackerId) || selectIsEliminatedV2(state, defenderId)) return status(false, 'An eliminated nation cannot fight.');
+  if (aiAttackerIsOffensivelyExhaustedV2(state, attackerId)) {
+    return status(false, `AI offensive readiness is at or below ${Math.round(AI_OFFENSIVE_EXHAUSTION_ARMY_FILL_RATIO * 100)}% of current army capacity.`);
+  }
   if (attacker.treasury < 0) return status(false, 'Repay national debt before declaring a new war.');
   if (selectActiveWarBetweenV2(state, attackerId, defenderId)) return status(false, 'These nations are already at war.');
   if (areAlliedV2(state, attackerId, defenderId)) return status(false, 'Player allies cannot declare war on each other.');
@@ -423,6 +528,12 @@ export function declareWarV2(
 ): CommandResultV2 {
   const linkedWar = escalatedFromWarId
     ? state.wars.find((war) => war.id === escalatedFromWarId) : undefined;
+  const defensiveInterventionWar = defensiveInterventionLinkedWarV2(
+    state,
+    attackerId,
+    defenderId,
+    escalatedFromWarId,
+  );
   const declaration = warDeclarationStatusV2(
     state,
     content,
@@ -474,10 +585,94 @@ export function declareWarV2(
   const rivalryMessage = rivalInvaders.length > 0
     ? ` The contested invasion also opened war with ${rivalInvaders.map((id) => content.nations[id]?.shortName ?? id).join(', ')}.`
     : '';
-  const message = (linkedWar
-    ? `The war between ${content.nations[linkedWar.attackerId]?.shortName ?? linkedWar.attackerId} and ${content.nations[linkedWar.defenderId]?.shortName ?? linkedWar.defenderId} escalated as ${content.nations[attackerId]?.name ?? attackerId} intervened against ${content.nations[defenderId]?.name ?? defenderId}.`
+  const message = (defensiveInterventionWar
+    ? `${content.nations[attackerId]?.name ?? attackerId} opened an independent defensive intervention against ${content.nations[defenderId]?.name ?? defenderId}, supporting ${content.nations[defensiveInterventionWar.defenderId]?.name ?? defensiveInterventionWar.defenderId} without entering a war against them.`
+    : linkedWar
+      ? `The war between ${content.nations[linkedWar.attackerId]?.shortName ?? linkedWar.attackerId} and ${content.nations[linkedWar.defenderId]?.shortName ?? linkedWar.defenderId} escalated as ${content.nations[attackerId]?.name ?? attackerId} intervened against ${content.nations[defenderId]?.name ?? defenderId}.`
     : `${content.nations[attackerId]?.name ?? attackerId} declared war on ${content.nations[defenderId]?.name ?? defenderId}.`) + rivalryMessage;
   addWorldEventV2(state, 'war', 'critical', message, undefined, attackerId);
+  return { accepted: true };
+}
+
+function clearIndependenceWarBilateralStateV2(
+  state: WorldStateV2,
+  restoredOwnerId: PlayerId,
+  displacedOwnerId: PlayerId,
+): void {
+  const matchesPair = (leftId: PlayerId, rightId: PlayerId): boolean => (
+    (leftId === restoredOwnerId && rightId === displacedOwnerId)
+      || (leftId === displacedOwnerId && rightId === restoredOwnerId)
+  );
+  state.truces = state.truces.filter((truce) => !matchesPair(truce.leftId, truce.rightId));
+  state.ceasefireObligations = state.ceasefireObligations.filter((obligation) => (
+    !matchesPair(obligation.payerId, obligation.payeeId)
+  ));
+  state.offers = state.offers.filter((offer) => !matchesPair(offer.fromId, offer.toId));
+  state.alliances = state.alliances.filter((alliance) => (
+    !matchesPair(alliance.leftId, alliance.rightId)
+  ));
+  state.allianceOffers = state.allianceOffers.filter((offer) => (
+    !matchesPair(offer.fromId, offer.toId)
+  ));
+}
+
+/**
+ * A restored country is already sovereign and armed when this is called. Its
+ * independence war bypasses route, cash, truce and ordinary AI-readiness gates,
+ * but otherwise starts as a normal bilateral war. The standard one-percent
+ * attacker opening loss is therefore visible in cumulative war casualties.
+ */
+export function beginIndependenceWarV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  restoredOwnerId: PlayerId,
+  displacedOwnerId: PlayerId,
+): CommandResultV2 {
+  if (restoredOwnerId === displacedOwnerId
+    || !state.players[restoredOwnerId]
+    || !state.players[displacedOwnerId]
+    || selectIsEliminatedV2(state, restoredOwnerId)
+    || selectIsEliminatedV2(state, displacedOwnerId)) {
+    return { accepted: false, reason: 'Both sovereign countries must retain land.' };
+  }
+  clearIndependenceWarBilateralStateV2(
+    state,
+    restoredOwnerId,
+    displacedOwnerId,
+  );
+  if (selectActiveWarBetweenV2(state, restoredOwnerId, displacedOwnerId)) {
+    return { accepted: true };
+  }
+  const openingAttackerLosses = applyWarDeclarationAttackerLossV2(
+    state,
+    restoredOwnerId,
+  );
+  state.wars.push({
+    id: `war-${state.nextWarId++}`,
+    attackerId: restoredOwnerId,
+    defenderId: displacedOwnerId,
+    startedTick: state.tick,
+    lastBattleTick: state.tick,
+    warScore: 0,
+    battles: 0,
+    attackerLosses: openingAttackerLosses,
+    defenderLosses: 0,
+    attackerCivilianLosses: 0,
+    defenderCivilianLosses: 0,
+    lastPeaceOfferTick: -1_000_000,
+    revenge: null,
+    attackerOperations: [],
+    defenderOperations: [],
+  });
+  state.aiEscalation.lastWarStartTick = state.tick;
+  addWorldEventV2(
+    state,
+    'war',
+    'critical',
+    `${content.nations[restoredOwnerId]?.name ?? restoredOwnerId} began an independence war against ${content.nations[displacedOwnerId]?.name ?? displacedOwnerId}.`,
+    undefined,
+    restoredOwnerId,
+  );
   return { accepted: true };
 }
 
@@ -547,9 +742,20 @@ export function supplyFactorV2(
         * navalDistancePressureFactor
     : rawAccessLogistics;
   const frontSupplyFactor = countryTraitFactorV2(playerId, 'front-supply', traitContext);
-  return clamp((1 - landHopPressure) * (0.60 + 0.40 * territory.condition)
-    * (route.connected ? 1 : 0.55) * accessLogistics
-    * supplyResearch * frontSupplyFactor, 0.25, 1);
+  const terrainSupplyFactor = territoryTerrainSupplyMultiplierV2(
+    content,
+    targetId ?? sourceId,
+  );
+  // Resolve the physical route first, then layer access pressure on top. If
+  // naval access is included inside the canonical clamp, strong research or
+  // favourable terrain can push both land and naval routes to 1 and silently
+  // erase the sea/distance penalty. Keeping access outside routeCapacity makes
+  // that strategic difference observable without changing the bounded land
+  // logistics model.
+  const routeCapacity = clamp((1 - landHopPressure) * (0.60 + 0.40 * territory.condition)
+    * (route.connected ? 1 : 0.55)
+    * supplyResearch * frontSupplyFactor * terrainSupplyFactor, 0.25, 1);
+  return clamp(routeCapacity * accessLogistics, 0.25, 1);
 }
 
 function supportCountV2(state: WorldStateV2, content: WorldContentV2, sourceId: TerritoryId, owner: PlayerId): number {
@@ -610,6 +816,7 @@ export function projectCombatExchangeV2(
   const target = state.territories[targetId];
   const terrain = content.territories[targetId]?.terrain;
   if (!source || !target || !terrain || source.owner !== attackerId || target.owner !== defenderId) return undefined;
+  const terrainDefenseMultiplier = territoryTerrainDefenseMultiplierV2(content, targetId);
 
   const attackerTraitContext = combatSideTraitContextV2(
     state, content, attackerId, sourceId, 'attacker', access,
@@ -641,6 +848,8 @@ export function projectCombatExchangeV2(
   const defenderDefense = selectEffectiveDefenseV2(
     state, content, defenderId, target.army, militaryBaseSnapshot,
   ) * countryTraitFactorV2(defenderId, 'defense', defenderTraitContext);
+  const attackerCombatDefense = combatDefenseEffectV2(attackerDefense, defenderAttack);
+  const defenderCombatDefense = combatDefenseEffectV2(defenderDefense, attackerAttack);
   const attackerStrength = selectArmyCombatManpowerV2(state, attackerId, source.army);
   const defenderStrength = selectArmyCombatManpowerV2(state, defenderId, target.army);
   const localForceRatio = attackerStrength / Math.max(0.000001, defenderStrength);
@@ -656,13 +865,13 @@ export function projectCombatExchangeV2(
 
   const attackPressure = attackerStrength * attackerAttack * (0.50 + 0.50 * source.condition)
     * attackerSupply * supportModifier * resistance.attacker * WAR_ACCESS_ASSAULT_MULTIPLIER[access];
-  const defenseShield = defenderStrength * defenderDefense * DEFENDER_POSITION_MULTIPLIER
-    * TERRAIN_DEFENSE_MODIFIER[terrain] * (0.65 + 0.35 * target.condition)
+  const defenseShield = defenderStrength * defenderCombatDefense * DEFENDER_POSITION_MULTIPLIER
+    * terrainDefenseMultiplier * (0.65 + 0.35 * target.condition)
     * defenderSupply * resistance.defender * defensiveCoordination.coordination;
   const counterPressure = defenderStrength <= 0 ? 0 : defenderStrength * defenderAttack
     * (0.50 + 0.50 * target.condition) * defenderSupply * defensiveCoordination.counterattack
     * DEFENDER_COUNTERFIRE_MULTIPLIER;
-  const attackerShield = attackerStrength * attackerDefense
+  const attackerShield = attackerStrength * attackerCombatDefense
     * (0.65 + 0.35 * source.condition) * attackerSupply;
   const attackRatio = attackerStrength <= 0 ? 0
     : attackPressure / Math.max(0.000001, defenseShield);
@@ -859,10 +1068,10 @@ export function forecastWarV2(
   const projection = projectCombatExchangeV2(
     state, content, attackerId, defenderId,
     candidate.sourceId, candidate.targetId, candidate.access,
-    1, 1, militaryBaseSnapshot,
+    battleDamageMeanV2(0), battleDamageMeanV2(0), militaryBaseSnapshot,
   );
   if (!projection) return fallback(0);
-  const terrainDefenseMultiplier = TERRAIN_DEFENSE_MODIFIER[terrain];
+  const terrainDefenseMultiplier = territoryTerrainDefenseMultiplierV2(content, candidate.targetId);
   const attritionEdge = projection.attackerLossRate <= 0
     ? (projection.defenderLossRate > 0 ? 20 : 1)
     : projection.defenderLossRate / projection.attackerLossRate;
@@ -967,6 +1176,11 @@ export function estimateLiveWarV2(
       || right.lastBattleTick - left.lastBattleTick
       || left.commanderId.localeCompare(right.commanderId));
   const operation = operations[0];
+  const escalatedWarAge = Math.max(
+    0,
+    state.tick - war.startedTick - WAR_MOBILIZATION_TICKS,
+  );
+  const expectedDamage = battleDamageMeanV2(escalatedWarAge);
   const projection = operation ? projectCombatExchangeV2(
     state,
     content,
@@ -975,6 +1189,8 @@ export function estimateLiveWarV2(
     operation.sourceId,
     operation.targetId,
     operation.access,
+    expectedDamage,
+    expectedDamage,
   ) : undefined;
   const fallback = forecastWarV2(state, content, viewerId, enemyId);
   const nextOwnLosses = projection
@@ -1135,8 +1351,11 @@ function chooseInitiativeOperationsV2(
   content: WorldContentV2,
   war: WarStateV2,
 ): FrontOperationV2[] {
-  const attackerOperations = ensureOperationsV2(state, content, war, war.attackerId);
   const defenderOperations = ensureOperationsV2(state, content, war, war.defenderId);
+  // The defender keeps every counteroffensive route. Only the exhausted formal
+  // AI attacker stands down, including while its surrender offer is pending.
+  if (aiAttackerMustStandDownV2(state, war)) return defenderOperations;
+  const attackerOperations = ensureOperationsV2(state, content, war, war.attackerId);
   if (war.revenge && war.revenge.expiresTick > state.tick) {
     const claimantOperations = war.revenge.claimantId === war.attackerId
       ? attackerOperations : defenderOperations;
@@ -1201,6 +1420,8 @@ function captureTerritoryV2(
   const defenderTraitContext = combatSideTraitContextV2(
     state, content, oldOwner, targetId, 'defender', access,
   );
+  const attackerPopulationBefore = selectTerritoriesOfV2(state, newOwner)
+    .reduce((sum, territory) => sum + Math.max(0, territory.population), 0);
   // A decisive conquest transfers ownership immediately. The attacker keeps
   // its field army on the original side of the border; the new territory must
   // subsequently be reinforced through the deliberately slow logistics net.
@@ -1245,7 +1466,12 @@ function captureTerritoryV2(
   resetEmptyArmyBaseQualityV2(source.army, content, sourceId);
   moveCapitalAfterLossV2(state, oldOwner, targetId);
   addWarFatigueGainV2(state, oldOwner, 2, defenderTraitContext);
-  addWarFatigueGainV2(state, newOwner, 0.5, attackerTraitContext);
+  addWarFatigueGainV2(
+    state,
+    newOwner,
+    conquestWarFatigueShockV2(target.population, attackerPopulationBefore),
+    attackerTraitContext,
+  );
   let treasurySeized = 0;
   if (selectIsEliminatedV2(state, oldOwner)) {
     // A nation with no territory cannot keep training or retain a detached
@@ -1310,6 +1536,38 @@ export function civilianPopulationExposureV2(populationMillions: number): number
   return clamp(1 / Math.sqrt(1 + Math.max(0, populationMillions) / 120), 0.30, 1);
 }
 
+export interface BattleWarScoreSwingInputV2 {
+  attackerLosses: number;
+  defenderLosses: number;
+  attackerStrength: number;
+  defenderStrength: number;
+  /** Immediate battlefield pressure from the local attacker's perspective. */
+  momentum: number;
+  conquered: boolean;
+}
+
+/**
+ * Converts one exchange into a scale-independent campaign score. Comparing
+ * losses as shares of the armies involved prevents a million-person army from
+ * earning points merely because every absolute number is large. Momentum
+ * makes a clearly one-sided sequence visible within a few pulses, while a
+ * territorial conquest remains the unmistakable strategic swing.
+ */
+export function battleWarScoreSwingV2(input: BattleWarScoreSwingInputV2): number {
+  const attackerLossRate = Math.max(0, input.attackerLosses)
+    / Math.max(0.000000001, input.attackerStrength);
+  const defenderLossRate = Math.max(0, input.defenderLosses)
+    / Math.max(0.000000001, input.defenderStrength);
+  const totalLossRate = attackerLossRate + defenderLossRate;
+  const relativeLossEdge = totalLossRate <= 0.000000001 ? 0
+    : (defenderLossRate - attackerLossRate) / totalLossRate;
+  const battleIntensity = clamp(totalLossRate / 0.08, 0.35, 1);
+  const exchangeSwing = 6.5 * relativeLossEdge * (0.45 + 0.55 * battleIntensity);
+  const momentumSwing = 3 * clamp(input.momentum, -1, 1);
+  const battlefieldSwing = clamp(exchangeSwing + momentumSwing, -7, 7);
+  return round(battlefieldSwing + (input.conquered ? 20 : 0), 3);
+}
+
 export function resolveBattlePulseV2(
   state: WorldStateV2,
   content: WorldContentV2,
@@ -1328,8 +1586,12 @@ export function resolveBattlePulseV2(
   const defenderTraitContext = traitOperationContextV2(
     state, content, war, operation, defenderId,
   );
-  const varianceA = 0.94 + nextRandom(state) * 0.12;
-  const varianceD = 0.94 + nextRandom(state) * 0.12;
+  const escalatedWarAge = Math.max(
+    0,
+    state.tick - war.startedTick - WAR_MOBILIZATION_TICKS,
+  );
+  const varianceA = battleDamageVarianceV2(nextRandom(state), escalatedWarAge);
+  const varianceD = battleDamageVarianceV2(nextRandom(state), escalatedWarAge);
   const projection = projectCombatExchangeV2(
     state, content, attackerId, defenderId,
     operation.sourceId, operation.targetId, operation.access,
@@ -1491,6 +1753,14 @@ export function resolveBattlePulseV2(
   war.lastBattleTick = state.tick;
   operation.lastBattleTick = state.tick;
   operation.momentum = round(clamp(operation.momentum * 0.7 + pressure * 0.3, -1, 1));
+  const localAttackerScoreSwing = battleWarScoreSwingV2({
+    attackerLosses: damageToAttacker,
+    defenderLosses: damageToDefender,
+    attackerStrength: sourceStrength,
+    defenderStrength: targetStrength,
+    momentum: pressure,
+    conquered,
+  });
   if (attackerFormal) {
     war.attackerLosses = round(war.attackerLosses + damageToAttacker);
     war.defenderLosses = round(war.defenderLosses + damageToDefender);
@@ -1500,7 +1770,7 @@ export function resolveBattlePulseV2(
     war.defenderCivilianLosses = round(
       (war.defenderCivilianLosses ?? 0) + defenderPopulationLoss,
     );
-    war.warScore = round(war.warScore + damageToDefender - damageToAttacker + (conquered ? 15 : 0));
+    war.warScore = round(war.warScore + localAttackerScoreSwing);
   } else {
     war.defenderLosses = round(war.defenderLosses + damageToAttacker);
     war.attackerLosses = round(war.attackerLosses + damageToDefender);
@@ -1510,7 +1780,7 @@ export function resolveBattlePulseV2(
     war.attackerCivilianLosses = round(
       (war.attackerCivilianLosses ?? 0) + defenderPopulationLoss,
     );
-    war.warScore = round(war.warScore - (damageToDefender - damageToAttacker + (conquered ? 15 : 0)));
+    war.warScore = round(war.warScore - localAttackerScoreSwing);
   }
   const attackerCapacity = selectTotalManpowerV2(state, attackerId).capacity;
   const defenderCapacity = selectTotalManpowerV2(state, defenderId).capacity;
@@ -1657,6 +1927,37 @@ function endWarV2(
   );
 }
 
+interface CeasefirePaymentTermsInternalV2 {
+  weeklyCost: number;
+  totalCost: number;
+  repeatMultiplier: number;
+}
+
+function ceasefirePaymentTermsV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  requesterId: PlayerId,
+  opponentId: PlayerId,
+  costMultiplier = 1,
+): CeasefirePaymentTermsInternalV2 {
+  const weeklyRevenue = selectNationalEconomyV2(state, content, requesterId).weeklyRevenue;
+  const opponentRevenue = selectNationalEconomyV2(state, content, opponentId).weeklyRevenue;
+  const repeatMultiplier = CEASEFIRE_REPEAT_COST_MULTIPLIER
+    ** state.players[requesterId]!.ceasefiresRequested;
+  const balancedBase = Math.min(
+    weeklyRevenue * CEASEFIRE_PAYER_WEEKLY_REVENUE_SHARE,
+    opponentRevenue * CEASEFIRE_PAYEE_WEEKLY_REVENUE_CAP_SHARE,
+  );
+  // Multiply the canonical rounded instalment so 1.5x is exact and testable.
+  const ordinaryWeeklyCost = round(Math.max(0.001, balancedBase * repeatMultiplier));
+  const weeklyCost = round(ordinaryWeeklyCost * costMultiplier);
+  return {
+    weeklyCost,
+    totalCost: round(weeklyCost * CEASEFIRE_PAYMENT_WEEKS),
+    repeatMultiplier: round(repeatMultiplier),
+  };
+}
+
 export function ceasefireTermsV2(
   state: WorldStateV2,
   content: WorldContentV2,
@@ -1705,24 +2006,61 @@ export function ceasefireTermsV2(
       cooldownRemaining,
     };
   }
-  const weeklyRevenue = selectNationalEconomyV2(state, content, requesterId).weeklyRevenue;
-  const opponentRevenue = selectNationalEconomyV2(state, content, opponentId).weeklyRevenue;
-  const repeatMultiplier = CEASEFIRE_REPEAT_COST_MULTIPLIER
-    ** state.players[requesterId]!.ceasefiresRequested;
-  const balancedBase = Math.min(
-    weeklyRevenue * CEASEFIRE_PAYER_WEEKLY_REVENUE_SHARE,
-    opponentRevenue * CEASEFIRE_PAYEE_WEEKLY_REVENUE_CAP_SHARE,
-  );
-  const weeklyCost = round(Math.max(0.001,
-    balancedBase * repeatMultiplier));
+  const payment = ceasefirePaymentTermsV2(state, content, requesterId, opponentId);
   return {
     ...base,
     allowed: true,
     warId,
     opponentId,
-    weeklyCost,
-    totalCost: round(weeklyCost * CEASEFIRE_PAYMENT_WEEKS),
-    repeatMultiplier: round(repeatMultiplier),
+    ...payment,
+  };
+}
+
+/**
+ * Emergency AI surrender terms bypass the ordinary request window and retry
+ * cooldown. The defender still decides through the existing peace offer, but
+ * receives 1.5x the otherwise identical weekly compensation.
+ */
+export function aiExhaustionCeasefireTermsV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  warId: string,
+  requesterId: PlayerId,
+): CeasefireTermsV2 {
+  const war = state.wars.find((candidate) => candidate.id === warId);
+  const base = {
+    requesterId,
+    weeklyCost: 0,
+    paymentWeeks: CEASEFIRE_PAYMENT_WEEKS,
+    totalCost: 0,
+    repeatMultiplier: 1,
+    cooldownRemaining: 0,
+    truceTicks: CEASEFIRE_PAYMENT_WEEKS + CEASEFIRE_POST_PAYMENT_TRUCE_TICKS,
+    postPaymentTruceTicks: CEASEFIRE_POST_PAYMENT_TRUCE_TICKS,
+  };
+  if (!war || war.attackerId !== requesterId || isHumanPlayerV2(state, requesterId)) {
+    return { ...base, allowed: false, reason: 'Only an exhausted AI attacker can use these terms.' };
+  }
+  const opponentId = war.defenderId;
+  if (!aiAttackerIsOffensivelyExhaustedV2(state, requesterId)) {
+    return { ...base, allowed: false, reason: 'The AI attacker is not offensively exhausted.', warId, opponentId };
+  }
+  if (state.offers.some((offer) => offer.warId === war.id
+    && offer.status === 'pending' && offer.expiresTick > state.tick)) {
+    return { ...base, allowed: false, reason: 'A peace offer is already pending.', warId, opponentId };
+  }
+  return {
+    ...base,
+    allowed: true,
+    warId,
+    opponentId,
+    ...ceasefirePaymentTermsV2(
+      state,
+      content,
+      requesterId,
+      opponentId,
+      AI_EXHAUSTION_CEASEFIRE_COST_MULTIPLIER,
+    ),
   };
 }
 
@@ -1732,9 +2070,13 @@ export function requestCeasefireV2(
   warId: string,
   requesterId: PlayerId,
 ): CommandResultV2 {
-  const terms = ceasefireTermsV2(state, content, warId, requesterId);
+  const war = state.wars.find((candidate) => candidate.id === warId);
+  const terms = war?.attackerId === requesterId
+    && aiAttackerIsOffensivelyExhaustedV2(state, requesterId)
+    ? aiExhaustionCeasefireTermsV2(state, content, warId, requesterId)
+    : ceasefireTermsV2(state, content, warId, requesterId);
   if (!terms.allowed || !terms.opponentId) return { accepted: false, reason: terms.reason };
-  const war = state.wars.find((candidate) => candidate.id === warId)!;
+  const activeWar = state.wars.find((candidate) => candidate.id === warId)!;
   state.offers.push({
     id: `offer-${state.nextOfferId++}`,
     fromId: requesterId,
@@ -1747,7 +2089,7 @@ export function requestCeasefireV2(
     weeklyCost: terms.weeklyCost,
     paymentWeeks: terms.paymentWeeks,
   });
-  war.lastPeaceOfferTick = state.tick;
+  activeWar.lastPeaceOfferTick = state.tick;
   return { accepted: true };
 }
 
@@ -2040,7 +2382,11 @@ export function processWarsV2(
   if (logisticsMovements) logisticsMovements.push(...weeklyMovements);
   const battles: BattleEventV2[] = [];
   const usedSourceIds = new Set<TerritoryId>();
-  for (const war of [...state.wars].sort((a, b) => a.id.localeCompare(b.id))) {
+  // A source army can fight only once per tick. Give the war that has waited
+  // longest first claim, otherwise the lexicographically earliest war ID can
+  // monopolise a shared border forever and force later wars into stale peace.
+  for (const war of [...state.wars].sort((a, b) => a.lastBattleTick - b.lastBattleTick
+    || a.id.localeCompare(b.id))) {
     if (!state.wars.some((candidate) => candidate.id === war.id)) continue;
     if (selectIsEliminatedV2(state, war.attackerId)) {
       endWarsForEliminatedNationV2(state, war.attackerId, 'War ended after national elimination.', endedWars);

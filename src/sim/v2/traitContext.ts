@@ -1,4 +1,4 @@
-import type { WorldContentV2 } from './content';
+import { territoryTerrainTypesV2, type WorldContentV2 } from './content';
 import { isHumanPlayerV2 } from './humanPlayers';
 import type {
   TraitEvaluationContextV2,
@@ -129,6 +129,7 @@ export function traitTerritoryContextV2(
 ): TraitEvaluationContextV2 {
   return Object.freeze({
     terrain: content.territories[territoryId]?.terrain,
+    terrains: Object.freeze([...territoryTerrainTypesV2(content, territoryId)]),
     condition: state.territories[territoryId]?.condition,
     homeland: isTraitHomelandV2(content, activePlayerId, territoryId),
   });

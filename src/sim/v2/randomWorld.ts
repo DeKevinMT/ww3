@@ -2,6 +2,8 @@ import { nextRandom, normalizeSeed } from '../../game/random';
 import {
   ARMY_CAPACITY_INITIAL_FORCE_FLOOR,
   ARMY_CAPACITY_STRUCTURAL_POPULATION_SHARE,
+  NATIONAL_IQ_SCORE_MAX,
+  NATIONAL_IQ_SCORE_MIN,
   V2_CONTENT_VERSION,
   clamp,
   round,
@@ -23,7 +25,34 @@ import type { PlayerId, TerritoryId } from './types';
  * Saves and multiplayer lobbies can pair this value with the seed to rebuild
  * exactly the same immutable opening content.
  */
-export const RANDOM_WORLD_GENERATOR_VERSION_V2 = 1;
+export const RANDOM_WORLD_GENERATOR_VERSION_V2 = 2;
+export const LEGACY_RANDOM_WORLD_GENERATOR_VERSION_V2 = 1;
+
+type RandomWorldSpecializationLaneV2 =
+  | 'population'
+  | 'wealth'
+  | 'science'
+  | 'governance'
+  | 'food'
+  | 'military'
+  | 'demography'
+  | 'doctrine';
+
+type RandomWorldSpecializationV2 = Record<RandomWorldSpecializationLaneV2, number>;
+
+const RANDOM_WORLD_SPECIALIZATION_LANES_V2: readonly RandomWorldSpecializationLaneV2[] = [
+  'population',
+  'wealth',
+  'science',
+  'governance',
+  'food',
+  'military',
+  'demography',
+  'doctrine',
+];
+const RANDOM_WORLD_EXTREME_SPECIALISTS_PER_LANE_V2 = 4;
+const RANDOM_WORLD_SPECIALIZATION_WEAKNESS_FACTOR_V2 = 0.70;
+const RANDOM_WORLD_DOCTRINE_TILT_MAX_V2 = 0.30;
 
 export function randomWorldContentVersionV2(
   seedInput: number,
@@ -40,6 +69,7 @@ interface RandomWorldLatentProfileV2 {
   militarism: number;
   demographyNoise: number;
   foodNoise: number;
+  specialization: RandomWorldSpecializationV2;
 }
 
 interface RandomWorldDraftV2 {
@@ -80,6 +110,57 @@ function boundedBellV2(random: RandomStateV2): number {
     + nextRandom(random)
     - 2
   ) / 2;
+}
+
+function emptySpecializationV2(): RandomWorldSpecializationV2 {
+  return {
+    population: 0,
+    wealth: 0,
+    science: 0,
+    governance: 0,
+    food: 0,
+    military: 0,
+    demography: 0,
+    doctrine: 0,
+  };
+}
+
+/**
+ * Gives every country one independent strength and one different weakness.
+ * A balanced deck guarantees four rare extreme specialists in every lane,
+ * while the existing global normalizers keep total population, GDP, research
+ * and opening military power unchanged.
+ */
+function randomWorldSpecializationsV2(
+  random: RandomStateV2,
+  ids: readonly PlayerId[],
+): Map<PlayerId, RandomWorldSpecializationV2> {
+  const shuffled = [...ids];
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(nextRandom(random) * (index + 1));
+    [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex]!, shuffled[index]!];
+  }
+  const extremeCount = RANDOM_WORLD_SPECIALIZATION_LANES_V2.length
+    * RANDOM_WORLD_EXTREME_SPECIALISTS_PER_LANE_V2;
+  const result = new Map<PlayerId, RandomWorldSpecializationV2>();
+  for (let index = 0; index < shuffled.length; index += 1) {
+    const primaryIndex = index % RANDOM_WORLD_SPECIALIZATION_LANES_V2.length;
+    const weaknessOffset = 1 + Math.floor(
+      nextRandom(random) * (RANDOM_WORLD_SPECIALIZATION_LANES_V2.length - 1),
+    );
+    const weaknessIndex = (
+      primaryIndex + weaknessOffset
+    ) % RANDOM_WORLD_SPECIALIZATION_LANES_V2.length;
+    const intensity = index < extremeCount
+      ? 0.85 + 0.15 * nextRandom(random)
+      : 0.25 + 0.35 * nextRandom(random);
+    const specialization = emptySpecializationV2();
+    specialization[RANDOM_WORLD_SPECIALIZATION_LANES_V2[primaryIndex]!] = intensity;
+    specialization[RANDOM_WORLD_SPECIALIZATION_LANES_V2[weaknessIndex]!]
+      = -RANDOM_WORLD_SPECIALIZATION_WEAKNESS_FACTOR_V2 * intensity;
+    result.set(shuffled[index]!, specialization);
+  }
+  return result;
 }
 
 function totalV2(values: Iterable<number>): number {
@@ -133,7 +214,10 @@ function normalizeWeightsV2(
   return result;
 }
 
-function randomLatentProfilesV2(random: RandomStateV2): Map<PlayerId, RandomWorldLatentProfileV2> {
+function randomLatentProfilesV2(
+  random: RandomStateV2,
+  generatorVersion: number,
+): Map<PlayerId, RandomWorldLatentProfileV2> {
   const result = new Map<PlayerId, RandomWorldLatentProfileV2>();
   const ids = [...WORLD_CONTENT_V2.nationIds].sort((left, right) => left.localeCompare(right));
   for (const id of ids) {
@@ -174,7 +258,18 @@ function randomLatentProfilesV2(random: RandomStateV2): Map<PlayerId, RandomWorl
       ),
       demographyNoise: boundedBellV2(random),
       foodNoise: boundedBellV2(random),
+      specialization: emptySpecializationV2(),
     });
+  }
+  if (generatorVersion >= 2) {
+    const specializations = randomWorldSpecializationsV2(random, ids);
+    for (const id of ids) {
+      const profile = result.get(id)!;
+      profile.specialization = specializations.get(id)!;
+      profile.populationWeight *= Math.exp(
+        0.75 * profile.specialization.population,
+      );
+    }
   }
   return result;
 }
@@ -235,14 +330,18 @@ function calibratedOpeningMilitaryV2(draft: RandomWorldDraftV2): {
     draft.iqScore,
     draft.gdp,
   );
+  const doctrineTilt = RANDOM_WORLD_DOCTRINE_TILT_MAX_V2
+    * draft.profile.specialization.doctrine;
+  const foundationAttack = foundation.attack * (1 + doctrineTilt);
+  const foundationDefense = foundation.defense * (1 - doctrineTilt);
   const deterrenceAttackBonus = draft.nuclearPowerLevel * 0.04;
-  const effectiveFoundation = 0.55 * foundation.attack * (1 + deterrenceAttackBonus)
-    + 0.45 * foundation.defense;
+  const effectiveFoundation = 0.55 * foundationAttack * (1 + deterrenceAttackBonus)
+    + 0.45 * foundationDefense;
   const targetOpeningPower = draft.powerIndex / 10;
   const targetManpower = targetOpeningPower / Math.max(0.0001, effectiveFoundation);
   const maximumOpeningRating = 18.5;
   const minimumManpowerForRatingCap = targetOpeningPower
-    * Math.max(foundation.attack, foundation.defense)
+    * Math.max(foundationAttack, foundationDefense)
     / Math.max(0.0001, effectiveFoundation * maximumOpeningRating);
   const initialManpower = round(Math.max(
     0.0001,
@@ -263,26 +362,30 @@ function calibratedOpeningMilitaryV2(draft: RandomWorldDraftV2): {
     draft.iqScore,
     draft.gdp,
   );
-  const effectiveRatings = 0.55 * ratings.attack * (1 + deterrenceAttackBonus)
-    + 0.45 * ratings.defense;
+  const tiltedAttack = ratings.attack * (1 + doctrineTilt);
+  const tiltedDefense = ratings.defense * (1 - doctrineTilt);
+  const effectiveRatings = 0.55 * tiltedAttack * (1 + deterrenceAttackBonus)
+    + 0.45 * tiltedDefense;
   const readinessCalibration = targetOpeningPower
     / Math.max(0.0001, openingDeployedManpower * effectiveRatings);
   return {
     initialManpower,
-    attack: round(ratings.attack * readinessCalibration, 9),
-    defense: round(ratings.defense * readinessCalibration, 9),
+    attack: round(tiltedAttack * readinessCalibration, 9),
+    defense: round(tiltedDefense * readinessCalibration, 9),
   };
 }
 
 function createRandomNationV2(draft: RandomWorldDraftV2): NationContentV2 {
   const profile = draft.profile;
+  const specialization = profile.specialization;
   const gdpPerCapita = draft.gdp / Math.max(0.000001, draft.population) * 1_000;
   const military = calibratedOpeningMilitaryV2(draft);
-  const foodInsecurityRate = round(clamp(
-    0.19
+  const baseFoodInsecurityRate = 0.19
       - 0.105 * profile.development
       - 0.075 * profile.institutions
-      + 0.025 * profile.foodNoise,
+      + 0.025 * profile.foodNoise;
+  const foodInsecurityRate = round(clamp(
+    baseFoodInsecurityRate - 0.04 * specialization.food,
     0.005,
     0.24,
   ), 9);
@@ -297,7 +400,8 @@ function createRandomNationV2(draft: RandomWorldDraftV2): NationContentV2 {
     populationGrowthRate: round(clamp(
       2.45
         - 2.35 * profile.development
-        + 0.35 * profile.demographyNoise,
+        + 0.35 * profile.demographyNoise
+        + 0.90 * specialization.demography,
       -0.75,
       3.25,
     ), 9),
@@ -314,14 +418,16 @@ function createRandomNationV2(draft: RandomWorldDraftV2): NationContentV2 {
       0.38
         + 1.25 * profile.agriculture
         + 0.70 * lowDensityBenefit
-        + 0.08 * profile.foodNoise,
+        + 0.08 * profile.foodNoise
+        + 0.65 * specialization.food,
       0.30,
       2.60,
     ), 9),
     landArea: draft.base.real.landArea,
     gdp: round(draft.gdp, 9),
     taxRevenueShare: round(clamp(
-      0.12 + 0.22 * profile.institutions + 0.03 * profile.development,
+      0.12 + 0.22 * profile.institutions + 0.03 * profile.development
+        + 0.08 * specialization.governance,
       0.10,
       0.38,
     ), 9),
@@ -348,7 +454,8 @@ function createRandomNationV2(draft: RandomWorldDraftV2): NationContentV2 {
     militaryDefenseRating: military.defense,
     nuclearPowerLevel: draft.nuclearPowerLevel,
     ambition: round(clamp(
-      0.20 + 0.58 * profile.militarism + 0.08 * (1 - profile.institutions),
+      0.20 + 0.58 * profile.militarism + 0.08 * (1 - profile.institutions)
+        + 0.10 * specialization.military - 0.04 * specialization.governance,
       0.20,
       0.86,
     ), 9),
@@ -357,9 +464,12 @@ function createRandomNationV2(draft: RandomWorldDraftV2): NationContentV2 {
   });
 }
 
-function createRandomDraftsV2(random: RandomStateV2): RandomWorldDraftV2[] {
+function createRandomDraftsV2(
+  random: RandomStateV2,
+  generatorVersion: number,
+): RandomWorldDraftV2[] {
   const ids = [...WORLD_CONTENT_V2.nationIds].sort((left, right) => left.localeCompare(right));
-  const profiles = randomLatentProfilesV2(random);
+  const profiles = randomLatentProfilesV2(random, generatorVersion);
   const populationTarget = totalV2(
     WORLD_CONTENT_V2.nationIds.map((id) => WORLD_CONTENT_V2.nations[id]!.real.population),
   );
@@ -377,7 +487,8 @@ function createRandomDraftsV2(random: RandomStateV2): RandomWorldDraftV2[] {
     const perCapita = Math.exp(
       Math.log(800)
         + profile.development * (Math.log(110_000) - Math.log(800))
-        + 0.30 * boundedBellV2(random),
+        + 0.30 * boundedBellV2(random)
+        + 1.10 * profile.specialization.wealth,
     );
     return [id, populations.get(id)! * perCapita / 1_000] as const;
   }));
@@ -401,7 +512,10 @@ function createRandomDraftsV2(random: RandomStateV2): RandomWorldDraftV2[] {
       + 2.7 * Math.log10(gdp + 1)
       + 7.5 * profile.institutions
       + 3.0 * clamp(Math.log10(Math.max(800, gdpPerCapita) / 800), 0, 2.3);
-    return [id, Math.max(0.2, value)] as const;
+    return [
+      id,
+      Math.max(0.2, value) * Math.exp(1.25 * profile.specialization.science),
+    ] as const;
   }));
   const researchTarget = totalV2(
     WORLD_CONTENT_V2.nationIds.map((id) => WORLD_CONTENT_V2.nations[id]!.real.researchCapacity),
@@ -421,21 +535,30 @@ function createRandomDraftsV2(random: RandomStateV2): RandomWorldDraftV2[] {
     const gdp = gdps.get(id)!;
     const gdpPerCapita = gdp / Math.max(0.000001, population) * 1_000;
     const researchCapacity = research.get(id)!;
-    const iqScore = calibratedNationalIqScoreV2(gdpPerCapita, researchCapacity);
+    const baseIqScore = calibratedNationalIqScoreV2(gdpPerCapita, researchCapacity);
+    const iqScore = profile.specialization.science === 0
+      ? baseIqScore
+      : round(clamp(
+        baseIqScore + 7 * profile.specialization.science,
+        NATIONAL_IQ_SCORE_MIN,
+        NATIONAL_IQ_SCORE_MAX,
+      ), 1);
     const militaryQuality = round(clamp(
       0.75 + 1.55 * nationalQualityIndexV2(gdpPerCapita, iqScore),
       0.75,
       2.30,
     ), 9);
     const militaryBurden = clamp(
-      0.008 + 0.060 * profile.militarism ** 1.55 + 0.008 * (1 - profile.institutions),
+      (0.008 + 0.060 * profile.militarism ** 1.55 + 0.008 * (1 - profile.institutions))
+        * Math.exp(0.95 * profile.specialization.military),
       0.008,
       0.08,
     );
     const defenceSpending = Math.max(0.000001, gdp * militaryBurden);
     const professionalForceShare = clamp(
-      0.00045
-        + 0.0065 * profile.militarism ** 1.35 * (0.75 + 0.50 * profile.institutions),
+      (0.00045
+        + 0.0065 * profile.militarism ** 1.35 * (0.75 + 0.50 * profile.institutions))
+        * Math.exp(0.80 * profile.specialization.military),
       0.00035,
       0.012,
     );
@@ -471,13 +594,14 @@ export function createRandomWorldContentV2(
   seedInput: number,
   generatorVersion = RANDOM_WORLD_GENERATOR_VERSION_V2,
 ): WorldContentV2 {
-  if (generatorVersion !== RANDOM_WORLD_GENERATOR_VERSION_V2) {
-    throw new Error(`Unsupported Random World generator version ${generatorVersion}.`);
+  if (generatorVersion !== LEGACY_RANDOM_WORLD_GENERATOR_VERSION_V2
+    && generatorVersion !== RANDOM_WORLD_GENERATOR_VERSION_V2) {
+    throw new Error(`Unsupported Alternative Universe generator version ${generatorVersion}.`);
   }
   const random: RandomStateV2 = {
     rngState: mixedGeneratorSeedV2(seedInput, generatorVersion),
   };
-  const drafts = createRandomDraftsV2(random);
+  const drafts = createRandomDraftsV2(random, generatorVersion);
   const nations = Object.fromEntries(drafts.map((draft) => [
     draft.id,
     createRandomNationV2(draft),
@@ -485,7 +609,7 @@ export function createRandomWorldContentV2(
   const territories = Object.fromEntries(WORLD_CONTENT_V2.territoryIds.map((id) => {
     const base = WORLD_CONTENT_V2.territories[id]!;
     const owner = nations[base.initialOwnerId];
-    if (!owner) throw new Error(`Random World is missing initial owner ${base.initialOwnerId}.`);
+    if (!owner) throw new Error(`Alternative Universe is missing initial owner ${base.initialOwnerId}.`);
     const value: TerritoryContentV2 = Object.freeze({
       ...base,
       baseline: Object.freeze({ ...owner.real }),

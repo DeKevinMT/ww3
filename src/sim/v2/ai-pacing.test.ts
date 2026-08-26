@@ -2,14 +2,13 @@ import { describe, expect, it } from 'vitest';
 import {
   AI_DEFENSIVE_AID_COOLDOWN,
   AI_GLOBAL_WAR_COOLDOWN,
-  AI_HUMAN_ATTACK_SAFETY_END_TICK,
   AI_REGIONAL_ESCALATION_COOLDOWN,
   aiActiveWarCapV2,
-  aiHumanAttackSafetyActiveV2,
 } from './balance';
 import {
   AI_EXPANSION_ROLLS_PER_DECISION,
   aiExpansionDeclarationChanceV2,
+  aiHumanAttackSuspicionFactorV2,
   aiHumanWarStrainOpportunityV2,
   aiConcurrentWarLimitV2,
   aiTargetWarLimitV2,
@@ -50,11 +49,14 @@ describe('quiet but active AI war pacing', () => {
     expect(dogpile).toBeLessThanOrEqual(0.05);
   });
 
-  it('protects human countries from AI declarations until the 2030 calendar boundary', () => {
-    expect(AI_HUMAN_ATTACK_SAFETY_END_TICK).toBe(176);
-    expect(aiHumanAttackSafetyActiveV2(0)).toBe(true);
-    expect(aiHumanAttackSafetyActiveV2(175)).toBe(true);
-    expect(aiHumanAttackSafetyActiveV2(176)).toBe(false);
+  it('uses suspicion instead of a fixed calendar shield for human countries', () => {
+    expect(aiHumanAttackSuspicionFactorV2(0)).toBe(0);
+    expect(aiHumanAttackSuspicionFactorV2(5)).toBeLessThan(0.005);
+    expect(aiHumanAttackSuspicionFactorV2(10)).toBeLessThan(0.015);
+    expect(aiHumanAttackSuspicionFactorV2(25)).toBeLessThan(0.08);
+    expect(aiHumanAttackSuspicionFactorV2(50)).toBeGreaterThan(0.28);
+    expect(aiHumanAttackSuspicionFactorV2(80)).toBeGreaterThan(0.80);
+    expect(aiHumanAttackSuspicionFactorV2(100)).toBe(1.35);
   });
 
   it('brakes optional AI wars as the world fills while retaining the human-strain opening', () => {
@@ -85,10 +87,11 @@ describe('quiet but active AI war pacing', () => {
     expect(strainedHuman).toBeGreaterThan(quietWorld * 1.8);
   });
 
-  it('opens a bounded opportunistic window only for very high human war strain', () => {
-    const ordinary = aiHumanWarStrainOpportunityV2(65);
-    const critical = aiHumanWarStrainOpportunityV2(75);
-    const extreme = aiHumanWarStrainOpportunityV2(85);
+  it('opens a bounded, progressive opportunistic window above controlled war strain', () => {
+    const controlled = aiHumanWarStrainOpportunityV2(39);
+    const guarded = aiHumanWarStrainOpportunityV2(50);
+    const high = aiHumanWarStrainOpportunityV2(70);
+    const critical = aiHumanWarStrainOpportunityV2(90);
     const ordinaryDogpile = aiExpansionDeclarationChanceV2({
       ratio: 1.2,
       expansionChance: 0.08,
@@ -100,14 +103,17 @@ describe('quiet but active AI war pacing', () => {
       expansionChance: 0.08,
       regionalEscalation: false,
       rivalInvaderCount: 1,
-      humanWarStrainPressure: extreme.pressure,
+      neighborCounterattackPressure: critical.pressure,
     });
 
-    expect(ordinary).toMatchObject({ pressure: 0, targetWarLimit: 1 });
-    expect(critical.pressure).toBeCloseTo(0.5, 8);
-    expect(critical.targetWarLimit).toBe(2);
-    expect(extreme).toMatchObject({ pressure: 1, targetWarLimit: 3 });
-    expect(extreme.rivalCautionMultiplier).toBeCloseTo(0.35, 8);
+    expect(controlled).toMatchObject({ pressure: 0, targetWarLimit: 1, level: 'none' });
+    expect(guarded).toMatchObject({ targetWarLimit: 1, level: 'guarded' });
+    expect(high).toMatchObject({ targetWarLimit: 2, level: 'high' });
+    expect(critical).toMatchObject({ targetWarLimit: 3, level: 'critical' });
+    expect(controlled.pressure).toBeLessThan(guarded.pressure);
+    expect(guarded.pressure).toBeLessThan(high.pressure);
+    expect(high.pressure).toBeLessThan(critical.pressure);
+    expect(critical.rivalCautionMultiplier).toBeGreaterThanOrEqual(0.35);
     expect(strainedDogpile).toBeGreaterThan(ordinaryDogpile * 3);
     expect(strainedDogpile).toBeLessThanOrEqual(0.30);
   });

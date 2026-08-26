@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { selectAiResearchAllocationsV2 } from './ai';
 import { createWorldStateV2 } from './bootstrap';
+import { synchronizeArmyCapacityV2 } from './capacity';
 import { WORLD_CONTENT_V2 } from './content';
+import { synchronizeOpeningArmyHumanRosterV2 } from './nationState';
 import { optimizeNationalAiPlanV2 } from './nationalAi';
 import {
   createPowerSnapshotV2,
@@ -72,6 +74,16 @@ describe('V2 authoritative manpower projection', () => {
   it('keeps recruiting a solvent post-war country even when already at 99% capacity', () => {
     for (const fillRatio of [0.80, 0.95, 0.99]) {
       const state = createWorldStateV2(2_397_1);
+      const previousHumanPlayerIds = [...state.humanPlayerIds];
+      state.humanPlayerId = nigeria;
+      state.humanPlayerIds = [nigeria];
+      synchronizeOpeningArmyHumanRosterV2(
+        state,
+        WORLD_CONTENT_V2,
+        previousHumanPlayerIds,
+        [nigeria],
+      );
+      synchronizeArmyCapacityV2(state, WORLD_CONTENT_V2);
       state.wars = [];
       const army = state.territories[territoryIdV2('bel')]!.army;
       army.manpower = army.capacity * fillRatio;

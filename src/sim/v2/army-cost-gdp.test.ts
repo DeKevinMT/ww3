@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { WAR_OPERATION_COST_PER_MILLION, WAR_OPERATION_REVENUE_SHARE } from './balance';
 import { createWorldStateV2 } from './bootstrap';
-import { WORLD_CONTENT_V2 } from './content';
+import {
+  WORLD_CONTENT_V2,
+  territoryTerrainOperationCostMultiplierV2,
+} from './content';
 import {
   armyCostOfLivingFactorFromWealthV2,
   selectArmyCostOfLivingFactorV2,
@@ -9,7 +12,7 @@ import {
   selectTotalManpowerV2,
   selectWeeklyFinanceBreakdownV2,
 } from './selectors';
-import { nationIdV2 } from './types';
+import { nationIdV2, territoryIdV2 } from './types';
 import { declareWarV2 } from './war';
 
 describe('GDP-per-capita military costs', () => {
@@ -57,10 +60,14 @@ describe('GDP-per-capita military costs', () => {
     const factor = selectArmyCostOfLivingFactorV2(state, WORLD_CONTENT_V2, northKorea);
     const deployed = selectTotalManpowerV2(state, northKorea).deployed;
     const finance = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, northKorea);
+    const targetTerrainCost = territoryTerrainOperationCostMultiplierV2(
+      WORLD_CONTENT_V2,
+      territoryIdV2('kor'),
+    );
     const expectedOneLandFrontCost = finance.revenue * WAR_OPERATION_REVENUE_SHARE
       + deployed * WAR_OPERATION_COST_PER_MILLION * factor;
 
     expect(finance.warOperations).toBeGreaterThan(0);
-    expect(finance.warOperations).toBeCloseTo(expectedOneLandFrontCost, 5);
+    expect(finance.warOperations).toBeCloseTo(expectedOneLandFrontCost * targetTerrainCost, 5);
   });
 });

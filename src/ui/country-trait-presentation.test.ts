@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createWorldStateV2 } from '../sim/v2/bootstrap';
-import { WORLD_CONTENT_V2 } from '../sim/v2/content';
+import { territoryTerrainTypesV2, WORLD_CONTENT_V2 } from '../sim/v2/content';
 import {
   quoteTerritoryIntegrationV2,
   territoryIntegrationAnnualCostV2,
@@ -21,6 +21,12 @@ import {
   renderCountryTraitPresentationV2,
   renderNationPickerV2,
 } from './WorldUIV2';
+
+function renderedOpeningReserve(html: string): number {
+  const match = html.match(/data-player-opening-reserve="([^"]+)"/);
+  if (!match) throw new Error('Picker did not expose its rendered player opening reserve.');
+  return Number(match[1]);
+}
 
 describe('country trait presentation', () => {
   it('shows the selected country trait name, exact effect and identity in the shared picker', () => {
@@ -54,6 +60,7 @@ describe('country trait presentation', () => {
     const engine = new WorldEngineV2(42_005);
     const opening = new IntroOpeningMetricsCacheV2().read(engine);
     const greenland = nationIdV2('grl');
+    const ordinaryReserve = opening.byNation.get(greenland)!.player.trainedReserves;
     const rendered = renderNationPickerV2(opening, {
       previewCountryId: greenland,
       searchQuery: '',
@@ -71,14 +78,26 @@ describe('country trait presentation', () => {
       trait.modifiers,
       humanCountryTraitMultiplierV2(greenland),
     ));
-    expect(rendered.html).toContain('FREE BONUS');
-    expect(rendered.html).toContain('FADES OVER 10 YEARS');
+    expect(rendered.html).toContain('PLAYER START ARMY · ×15.00');
+    expect(rendered.html).toContain('FULLY FREE');
+    expect(rendered.html).toContain('NO FOOD');
+    expect(rendered.html).toContain('FADES OVER 20 YEARS');
+    expect(rendered.html).toContain('never refill');
+    expect(rendered.html).toContain('stat-player-army--boost');
+    expect(rendered.html).toContain('trained reserves remain at their normal 1× opening level');
+    expect(renderedOpeningReserve(rendered.html)).toBeCloseTo(ordinaryReserve, 9);
+    expect(engine.chooseCountry(greenland)).toEqual({ accepted: true });
+    expect(renderedOpeningReserve(rendered.html)).toBeCloseTo(
+      engine.state.players[greenland]!.trainedReserves,
+      9,
+    );
   });
 
-  it('does not label the strongest-country opening reduction as a free bonus', () => {
+  it('previews the strongest-country reserve reduction as an unlocking opening limit', () => {
     const engine = new WorldEngineV2(42_006);
     const opening = new IntroOpeningMetricsCacheV2().read(engine);
     const usa = nationIdV2('usa');
+    const ordinaryReserve = opening.byNation.get(usa)!.player.trainedReserves;
     const rendered = renderNationPickerV2(opening, {
       previewCountryId: usa,
       searchQuery: '',
@@ -87,8 +106,17 @@ describe('country trait presentation', () => {
       context: 'campaign',
     });
 
-    expect(rendered.html).toContain('PLAYER START ARMY · ×0.50');
-    expect(rendered.html).not.toContain('FREE BONUS');
+    expect(rendered.html).toContain('PLAYER START ARMY · ×0.10');
+    expect(rendered.html).toContain('stat-player-army--limit');
+    expect(rendered.html).toContain('OPENING LIMIT');
+    expect(rendered.html).toContain('FORCE CAPS UNLOCK TO 1× OVER 20 YEARS');
+    expect(rendered.html).toContain('deployed Army and trained Reserve start at ×0.10');
+    expect(rendered.html).not.toContain('FULLY FREE');
+    expect(rendered.html).not.toContain('FADES OVER 20 YEARS');
+    expect(engine.chooseCountry(usa)).toEqual({ accepted: true });
+    const actualPlayerReserve = engine.state.players[usa]!.trainedReserves;
+    expect(actualPlayerReserve).toBeLessThan(ordinaryReserve);
+    expect(renderedOpeningReserve(rendered.html)).toBeCloseTo(actualPlayerReserve, 9);
   });
 
   it('renders one compact player-applied nation trait without fusion bloat', () => {
@@ -102,12 +130,14 @@ describe('country trait presentation', () => {
       humanCountryTraitMultiplierV2(france),
     );
 
-    expect(nationPanelTrait).toContain('NATIONAL TRAIT');
+    expect(nationPanelTrait).toContain('NATIONAL IDENTITY');
+    expect(nationPanelTrait).toContain(`PLAYER ×${humanCountryTraitMultiplierV2(france).toFixed(2)}`);
+    expect(nationPanelTrait).toContain('ACTIVE MODIFIERS');
     expect(nationPanelTrait).toContain(activeTrait.name);
     expect(nationPanelTrait).toContain(appliedEffect);
     expect(nationPanelTrait).not.toContain('Fused or conquered');
     expect(nationPanelTrait).not.toContain('This amplifies');
-    expect(nationPanelTrait).not.toContain(activeTrait.description);
+    expect(nationPanelTrait).toContain(activeTrait.description);
     expect(nationPanelTrait).not.toContain(absorbedTrait.name);
     expect(nationPanelTrait).not.toContain(absorbedTrait.effect);
   });
@@ -190,7 +220,7 @@ describe('war confirmation integration preview', () => {
     const state = createWorldStateV2(42_002);
     const albania = nationIdV2('alb');
     const coastalTargets = WORLD_CONTENT_V2.territoryIds.filter((territoryId) => (
-      WORLD_CONTENT_V2.territories[territoryId]?.terrain === 'coastal'
+      territoryTerrainTypesV2(WORLD_CONTENT_V2, territoryId).includes('coastal')
         && state.territories[territoryId]?.owner !== albania
     )).slice(0, 2);
     expect(coastalTargets).toHaveLength(2);

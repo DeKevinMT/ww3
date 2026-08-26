@@ -111,7 +111,7 @@ describe('multiplayer protocol', () => {
       type: 'lobby-action',
       revision: 4,
       action: { type: 'set-scenario', scenario: { ...randomScenario, version: 999 } },
-    })).toThrow(/unsupported random-world scenario version/i);
+    })).toThrow(/unsupported alternative universe scenario version/i);
     expect(() => validateProtocolMessage({
       type: 'lobby-state',
       revision: 4,

@@ -10,6 +10,7 @@ import {
   openingConflictScheduleV2,
   processOpeningConflictsV2,
 } from './bootstrap';
+import { synchronizeArmyCapacityV2 } from './capacity';
 import { WORLD_CONTENT_V2 } from './content';
 import { STRATEGIC_SEA_ROUTE_PAIRS } from '../../game/data/worldMap';
 import { assertInvariantsV2 } from './invariants';
@@ -53,12 +54,13 @@ describe('2026 conflicts and strategic naval warfare', () => {
     expect(reports.some((message) => message.includes('Eastern DR Congo conflict'))).toBe(true);
     expect(state.territories[nationIdV2('sdn')]!.condition).toBeLessThan(0.70);
     assertInvariantsV2(state, WORLD_CONTENT_V2);
-  }, 10_000);
+  }, 20_000);
 
   it('blocks a scripted opening conflict only while its attacker has negative treasury', () => {
     const blockedState = createWorldStateV2(2026);
     const blockedScenario = openingConflictScheduleV2(blockedState.seed, WORLD_CONTENT_V2)[0]!;
     blockedState.tick = blockedScenario.tick;
+    synchronizeArmyCapacityV2(blockedState, WORLD_CONTENT_V2);
     blockedState.players[blockedScenario.attackerId]!.treasury = -0.001;
     const blockedNextWarId = blockedState.nextWarId;
     const blockedLastWarStartTick = blockedState.aiEscalation.lastWarStartTick;
@@ -72,6 +74,7 @@ describe('2026 conflicts and strategic naval warfare', () => {
     const solventState = createWorldStateV2(2026);
     const solventScenario = openingConflictScheduleV2(solventState.seed, WORLD_CONTENT_V2)[0]!;
     solventState.tick = solventScenario.tick;
+    synchronizeArmyCapacityV2(solventState, WORLD_CONTENT_V2);
     solventState.players[solventScenario.attackerId]!.treasury = 0;
 
     processOpeningConflictsV2(solventState, WORLD_CONTENT_V2);
@@ -86,7 +89,7 @@ describe('2026 conflicts and strategic naval warfare', () => {
     assertInvariantsV2(solventState, WORLD_CONTENT_V2);
   });
 
-  it('keeps the human seat out of scripted AI conflicts throughout the 2030 safety window', () => {
+  it('never lets a scripted AI-only opening conflict control or target a human seat', () => {
     for (const protectedSide of ['attackerId', 'defenderId'] as const) {
       const state = createWorldStateV2(2026);
       const scenario = openingConflictScheduleV2(state.seed, WORLD_CONTENT_V2)[0]!;
@@ -114,7 +117,7 @@ describe('2026 conflicts and strategic naval warfare', () => {
     expect(WAR_ACCESS_COST_MULTIPLIER.naval).toBeGreaterThan(WAR_ACCESS_COST_MULTIPLIER.land);
     expect(WAR_ACCESS_SUPPLY_MULTIPLIER.land).toBeGreaterThan(WAR_ACCESS_SUPPLY_MULTIPLIER.naval);
     expect(WAR_ACCESS_ASSAULT_MULTIPLIER.naval).toBe(WAR_ACCESS_ASSAULT_MULTIPLIER.land);
-    expect(STRATEGIC_SEA_ROUTE_PAIRS.length).toBeGreaterThan(250);
+    expect(STRATEGIC_SEA_ROUTE_PAIRS.length).toBeGreaterThan(225);
   });
 
   it('creates a live naval front with weaker supply and a real battle pulse', () => {

@@ -3,12 +3,11 @@ import {
   COUNTRIES,
   COUNTRY_BY_ID,
   LANDLOCKED_COUNTRY_IDS,
-  MINIMUM_ISLAND_NAVAL_ROUTES,
-  MINIMUM_NAVAL_ROUTES,
   STRATEGIC_SEA_ROUTE_PAIRS,
   TERRITORIES,
   TERRITORY_BY_ID,
   isSeaConnection,
+  isValidSeaRoute,
   validateMap,
 } from '../game/data/worldMap';
 import { BUDGET_PRESETS, DEFENSIVE_POSITION_BONUS, WorldEngine, worldInvariantErrors } from './WorldEngine';
@@ -370,20 +369,18 @@ describe('strategic world simulation', () => {
     expect(engine.canDeclareWar('bel', 'gbr')).toBe(true);
   });
 
-  it('guarantees every naval country enough routes while keeping landlocked countries on land', () => {
-    expect(STRATEGIC_SEA_ROUTE_PAIRS.length).toBeGreaterThan(500);
+  it('keeps naval routes land-clear without inventing access for landlocked countries', () => {
+    expect(STRATEGIC_SEA_ROUTE_PAIRS.length).toBeGreaterThan(225);
     for (const territory of TERRITORIES) {
       if (LANDLOCKED_COUNTRY_IDS.has(territory.id)) {
         expect(territory.seaNeighbors, territory.id).toEqual([]);
-        continue;
       }
-      const minimum = territory.neighbors.length === territory.seaNeighbors.length
-        ? MINIMUM_ISLAND_NAVAL_ROUTES
-        : MINIMUM_NAVAL_ROUTES;
-      expect(territory.seaNeighbors.length, territory.id).toBeGreaterThanOrEqual(minimum);
     }
-    expect(TERRITORY_BY_ID.grl!.seaNeighbors.length).toBeGreaterThanOrEqual(12);
-    expect(TERRITORY_BY_ID.isl!.seaNeighbors.length).toBeGreaterThanOrEqual(12);
+    for (const [leftId, rightId] of STRATEGIC_SEA_ROUTE_PAIRS) {
+      expect(isValidSeaRoute(leftId, rightId), `${leftId}:${rightId}`).toBe(true);
+    }
+    expect(TERRITORY_BY_ID.bel!.seaNeighbors).toEqual(expect.arrayContaining(['dnk', 'gbr', 'nor']));
+    expect(TERRITORY_BY_ID.bel!.seaNeighbors).not.toContain('slv');
   });
 
   it('maakt een maritieme oorlog aantoonbaar duurder dan een landoorlog', () => {
@@ -393,13 +390,13 @@ describe('strategic world simulation', () => {
     expect(engine.warMobilizationCost('bel', 'gbr')).toBeGreaterThan(engine.warMobilizationCost('bel', 'nld') * 1.65);
   });
 
-  it('maakt een oorlog tegen een grootmacht veel duurder dan tegen een klein eiland', () => {
+  it('maakt een oorlog tegen een groot land veel duurder dan tegen een klein eiland', () => {
     const engine = new WorldEngine(2036);
     const icelandCost = engine.warMobilizationCost('gbr', 'isl');
-    const unitedStatesCost = engine.warMobilizationCost('gbr', 'usa');
+    const canadaCost = engine.warMobilizationCost('gbr', 'can');
     expect(Number.isFinite(icelandCost)).toBe(true);
-    expect(Number.isFinite(unitedStatesCost)).toBe(true);
-    expect(unitedStatesCost).toBeGreaterThan(icelandCost * 2);
+    expect(Number.isFinite(canadaCost)).toBe(true);
+    expect(canadaCost).toBeGreaterThan(icelandCost * 2);
   });
 
   it('laat een verklaarde maritieme oorlog werkelijk vechten in plaats van eindeloos mobiliseren', () => {

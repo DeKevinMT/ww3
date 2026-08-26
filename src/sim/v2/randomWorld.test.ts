@@ -30,7 +30,7 @@ function correlationV2(left: readonly number[], right: readonly number[]): numbe
   return covariance / Math.sqrt(leftVariance * rightVariance);
 }
 
-describe('Random World content generation', () => {
+describe('Alternative Universe content generation', () => {
   it('is deterministic by seed and generator version while different seeds diverge', () => {
     const first = createRandomWorldContentV2(81_337, RANDOM_WORLD_GENERATOR_VERSION_V2);
     const repeated = createRandomWorldContentV2(81_337, RANDOM_WORLD_GENERATOR_VERSION_V2);
@@ -41,7 +41,7 @@ describe('Random World content generation', () => {
     expect(different.nationIds.map((id) => different.nations[id]!.real.population))
       .not.toEqual(first.nationIds.map((id) => first.nations[id]!.real.population));
     expect(() => createRandomWorldContentV2(1, RANDOM_WORLD_GENERATOR_VERSION_V2 + 1))
-      .toThrow(/Unsupported Random World generator version/);
+      .toThrow(/Unsupported Alternative Universe generator version/);
   });
 
   it('retains map and visual identity without mutating or sharing mutable base records', () => {

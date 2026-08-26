@@ -7,14 +7,18 @@ import {
   clamp,
   round,
 } from './balance';
-import { synchronizeArmyCapacityV2 } from './capacity';
-import type { WorldContentV2 } from './content';
+import {
+  stateTerritoryArmyCapacityTargetV2,
+  synchronizeArmyCapacityV2,
+} from './capacity';
+import { territoryTerrainTypesV2, type WorldContentV2 } from './content';
 import { addWorldEventV2 } from './events';
 import { isHumanPlayerV2, selectHumanPlayerIdsV2 } from './humanPlayers';
 import { createNationStateV2 } from './nationState';
 import { invalidateNationIndexV2, invalidateTerritoryIndexV2 } from './selectors';
 import { composeTraitContextV2, traitNationContextV2 } from './traitContext';
 import { countryTraitFactorV2, type TraitEvaluationContextV2 } from './traits';
+import { selectWarStrainSummaryV2 } from './warStrain';
 import {
   territoryIdV2,
   type IntegrationProgramStateV2,
@@ -46,6 +50,20 @@ export const TERRITORY_INTEGRATION_REVOLUTION_CHANCE_V2 = 0.02;
 /** A destined revolution occurs away from both capture and completion edges. */
 export const TERRITORY_INTEGRATION_REVOLUTION_WINDOW_START_V2 = 0.20;
 export const TERRITORY_INTEGRATION_REVOLUTION_WINDOW_END_V2 = 0.80;
+/** Critical overreach adds one bounded, deterministic chance per conquest. */
+export const TERRITORY_INTEGRATION_PRESSURE_REVOLUTION_MIN_CHANCE_V2 = 0.10;
+export const TERRITORY_INTEGRATION_PRESSURE_REVOLUTION_MAX_CHANCE_V2 = 0.35;
+export const TERRITORY_INTEGRATION_PRESSURE_REVOLUTION_MIN_SCORE_V2 = 75;
+
+export type TerritoryIntegrationRevolutionRiskLevelV2
+  = 'none' | 'elevated' | 'high' | 'critical';
+
+export interface TerritoryIntegrationWarPressureRevolutionRiskV2 {
+  exposedTerritories: number;
+  bonusChance: number;
+  level: TerritoryIntegrationRevolutionRiskLevelV2;
+  label: string;
+}
 
 function integrationRevolutionHashV2(seed: number, key: string, salt: number): number {
   let value = (seed ^ Math.imul(salt + 1, 0x9e3779b1)) >>> 0;
@@ -57,19 +75,11 @@ function integrationRevolutionHashV2(seed: number, key: string, salt: number): n
   return value >>> 0;
 }
 
-/**
- * Derives a single optional revolution tick without consuming the campaign RNG.
- * Saving, loading and iteration order therefore cannot change either the event
- * or any unrelated future battle, research or AI draw.
- */
-export function territoryIntegrationRevolutionTickV2(
-  state: Pick<WorldStateV2, 'seed'>,
+function integrationRevolutionKeyV2(
   territoryId: TerritoryId,
   program: IntegrationProgramStateV2,
-): number | undefined {
-  const duration = program.completesTick - program.startedTick;
-  if (!Number.isInteger(duration) || duration < 2) return undefined;
-  const key = [
+): string {
+  return [
     territoryId,
     program.fromOwnerId,
     program.fromCoreOwnerId,
@@ -77,9 +87,14 @@ export function territoryIntegrationRevolutionTickV2(
     program.startedTick,
     program.completesTick,
   ].join('|');
-  const chanceRoll = integrationRevolutionHashV2(state.seed, key, 0)
-    / 4_294_967_296;
-  if (chanceRoll >= TERRITORY_INTEGRATION_REVOLUTION_CHANCE_V2) return undefined;
+}
+
+function integrationRevolutionWindowV2(program: IntegrationProgramStateV2): {
+  firstTick: number;
+  lastTick: number;
+} | undefined {
+  const duration = program.completesTick - program.startedTick;
+  if (!Number.isInteger(duration) || duration < 2) return undefined;
   const firstTick = Math.max(
     program.startedTick + 1,
     program.startedTick + Math.ceil(
@@ -92,9 +107,109 @@ export function territoryIntegrationRevolutionTickV2(
       duration * TERRITORY_INTEGRATION_REVOLUTION_WINDOW_END_V2,
     ),
   );
-  if (lastTick < firstTick) return undefined;
-  const window = lastTick - firstTick + 1;
-  return firstTick + integrationRevolutionHashV2(state.seed, key, 1) % window;
+  return lastTick >= firstTick ? { firstTick, lastTick } : undefined;
+}
+
+export function territoryIntegrationWarPressureRevolutionBonusChanceV2(
+  score: number,
+): number {
+  if (!Number.isFinite(score) || score < TERRITORY_INTEGRATION_PRESSURE_REVOLUTION_MIN_SCORE_V2) {
+    return 0;
+  }
+  const progress = clamp(
+    (score - TERRITORY_INTEGRATION_PRESSURE_REVOLUTION_MIN_SCORE_V2)
+      / (100 - TERRITORY_INTEGRATION_PRESSURE_REVOLUTION_MIN_SCORE_V2),
+    0,
+    1,
+  );
+  return round(
+    TERRITORY_INTEGRATION_PRESSURE_REVOLUTION_MIN_CHANCE_V2
+      + (TERRITORY_INTEGRATION_PRESSURE_REVOLUTION_MAX_CHANCE_V2
+        - TERRITORY_INTEGRATION_PRESSURE_REVOLUTION_MIN_CHANCE_V2) * progress,
+    9,
+  );
+}
+
+/** Canonical pressure exposure shared by simulation and presentation. */
+export function territoryIntegrationWarPressureRevolutionRiskV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  playerId: PlayerId,
+): TerritoryIntegrationWarPressureRevolutionRiskV2 {
+  const exposedTerritories = content.territoryIds.filter((territoryId) => {
+    const territory = state.territories[territoryId];
+    const program = territory?.integrationProgram;
+    return territory?.owner === playerId
+      && program?.toOwnerId === playerId
+      && program.cause !== 'federation'
+      && state.tick < program.completesTick;
+  }).length;
+  if (exposedTerritories === 0) return {
+    exposedTerritories: 0,
+    bonusChance: 0,
+    level: 'none',
+    label: 'NO OCCUPIED TERRITORIES',
+  };
+  const score = selectWarStrainSummaryV2(state, content, playerId).score;
+  const bonusChance = territoryIntegrationWarPressureRevolutionBonusChanceV2(score);
+  const level: TerritoryIntegrationRevolutionRiskLevelV2 = bonusChance <= 0
+    ? 'none' : score >= 95 ? 'critical' : score >= 85 ? 'high' : 'elevated';
+  return {
+    exposedTerritories,
+    bonusChance,
+    level,
+    label: level === 'critical' ? 'CRITICAL REVOLUTION RISK'
+      : level === 'high' ? 'HIGH REVOLUTION RISK'
+        : level === 'elevated' ? 'ELEVATED REVOLUTION RISK'
+          : 'LOW REVOLUTION RISK',
+  };
+}
+
+/**
+ * Derives a single optional revolution tick without consuming the campaign RNG.
+ * Saving, loading and iteration order therefore cannot change either the event
+ * or any unrelated future battle, research or AI draw.
+ */
+export function territoryIntegrationRevolutionTickV2(
+  state: Pick<WorldStateV2, 'seed'>,
+  territoryId: TerritoryId,
+  program: IntegrationProgramStateV2,
+): number | undefined {
+  const window = integrationRevolutionWindowV2(program);
+  if (!window) return undefined;
+  const key = integrationRevolutionKeyV2(territoryId, program);
+  const chanceRoll = integrationRevolutionHashV2(state.seed, key, 0)
+    / 4_294_967_296;
+  if (chanceRoll >= TERRITORY_INTEGRATION_REVOLUTION_CHANCE_V2) return undefined;
+  const windowTicks = window.lastTick - window.firstTick + 1;
+  return window.firstTick
+    + integrationRevolutionHashV2(state.seed, key, 1) % windowTicks;
+}
+
+/**
+ * One independent pressure roll and one earliest trigger week are frozen from
+ * the program key. The current score is checked weekly after that gate. This
+ * reacts to later overreach without compounding a long integration into near
+ * certainty: sustained pressure can never exceed the advertised per-program
+ * bonus chance.
+ */
+export function territoryIntegrationPressureRevolutionDueV2(
+  state: Pick<WorldStateV2, 'seed' | 'tick'>,
+  territoryId: TerritoryId,
+  program: IntegrationProgramStateV2,
+  bonusChance: number,
+): boolean {
+  if (program.cause === 'federation' || bonusChance <= 0) return false;
+  const window = integrationRevolutionWindowV2(program);
+  if (!window || state.tick < window.firstTick || state.tick > window.lastTick) return false;
+  const key = integrationRevolutionKeyV2(territoryId, program);
+  const chanceRoll = integrationRevolutionHashV2(state.seed, key, 2)
+    / 4_294_967_296;
+  if (chanceRoll >= bonusChance) return false;
+  const windowTicks = window.lastTick - window.firstTick + 1;
+  const gateTick = window.firstTick
+    + integrationRevolutionHashV2(state.seed, key, 3) % windowTicks;
+  return state.tick >= gateTick;
 }
 
 /**
@@ -235,6 +350,8 @@ export interface TerritoryIntegrationQuoteV2 {
   readonly access?: TerritoryIntegrationAccessV2;
   /** Derived before ownership changes, without adding any persisted schema. */
   readonly firstConquest: boolean;
+  /** One-time human-seat discount; independent from country-trait first-conquest conditions. */
+  readonly firstPlayerIntegrationDiscount: boolean;
   readonly durationWeeks: number;
   readonly annualCost: number;
 }
@@ -279,6 +396,10 @@ export function quoteTerritoryIntegrationV2(
   const sovereignRecapture = territory?.coreOwner === newOwnerId;
   const firstConquest = !sovereignRecapture && options.cause === 'conquest'
     && !ownedForeignOpeningHomelandV2(state, content, newOwnerId);
+  const firstPlayerIntegrationDiscount = !sovereignRecapture
+    && options.cause === 'conquest'
+    && isHumanPlayerV2(state, newOwnerId)
+    && !state.firstIntegrationDiscountUsedBy.includes(newOwnerId);
   // Runtime restores a country's own sovereign core immediately. Exposing the
   // same zero quote keeps War Command from promising a calendar or bill that
   // beginTerritoryIntegrationWithCauseV2 will never create.
@@ -289,6 +410,7 @@ export function quoteTerritoryIntegrationV2(
       cause: options.cause,
       access: options.access,
       firstConquest: false,
+      firstPlayerIntegrationDiscount: false,
       durationWeeks: 0,
       annualCost: 0,
     };
@@ -302,6 +424,7 @@ export function quoteTerritoryIntegrationV2(
     {
     access: options.access,
     terrain: definition?.terrain,
+    terrains: Object.freeze([...territoryTerrainTypesV2(content, territoryId)]),
     homeland: definition?.initialOwnerId === newOwnerId,
     firstConquest,
     atWar,
@@ -329,13 +452,16 @@ export function quoteTerritoryIntegrationV2(
     cause: options.cause,
     access: options.access,
     firstConquest,
+    firstPlayerIntegrationDiscount,
     durationWeeks: Math.max(1, Math.round(
       territoryIntegrationDurationWeeksV2(content, territoryId)
         * federationFactor
         * durationFactor,
     )),
     annualCost: round(
-      territoryIntegrationAnnualCostV2(territory?.economy ?? 0) * costFactor,
+      territoryIntegrationAnnualCostV2(territory?.economy ?? 0)
+        * costFactor
+        * (firstPlayerIntegrationDiscount ? 0.25 : 1),
       9,
     ),
   };
@@ -382,6 +508,12 @@ function beginTerritoryIntegrationWithCauseV2(
     completesTick: state.tick + quote.durationWeeks,
     annualCost: quote.annualCost,
   };
+  if (quote.firstPlayerIntegrationDiscount) {
+    state.firstIntegrationDiscountUsedBy = [
+      ...state.firstIntegrationDiscountUsedBy,
+      newOwnerId,
+    ].sort((left, right) => left.localeCompare(right));
+  }
   invalidateTerritoryIndexV2(state);
   synchronizeArmyCapacityV2(state, content);
 }
@@ -429,6 +561,10 @@ export interface IntegrationRevolutionV2 {
   displacedOwnerId: PlayerId;
   restoredOwnerId: PlayerId;
 }
+
+/** A revolt fields part of its own live local cap, never a national free army. */
+export const TERRITORY_REVOLUTION_LOCAL_ARMY_MIN_CAP_SHARE_V2 = 0.28;
+export const TERRITORY_REVOLUTION_LOCAL_ARMY_MAX_CAP_SHARE_V2 = 0.50;
 
 /**
  * Recreates only the canonical shell of an absorbed opening nation. Its old
@@ -484,6 +620,40 @@ function pruneRevolutionWarOperationsV2(state: WorldStateV2): void {
   }
 }
 
+function replaceOccupationWithLocalRebelArmyV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  territoryId: TerritoryId,
+  restoredOwnerId: PlayerId,
+  pressureBonusChance: number,
+): void {
+  const territory = state.territories[territoryId];
+  const originalNation = content.nations[restoredOwnerId];
+  if (!territory || !originalNation) return;
+  const localCapacity = stateTerritoryArmyCapacityTargetV2(
+    state,
+    content,
+    territoryId,
+    restoredOwnerId,
+  );
+  const pressureShare = clamp(
+    pressureBonusChance / TERRITORY_INTEGRATION_PRESSURE_REVOLUTION_MAX_CHANCE_V2,
+    0,
+    1,
+  );
+  const localForceShare = TERRITORY_REVOLUTION_LOCAL_ARMY_MIN_CAP_SHARE_V2
+    + (TERRITORY_REVOLUTION_LOCAL_ARMY_MAX_CAP_SHARE_V2
+      - TERRITORY_REVOLUTION_LOCAL_ARMY_MIN_CAP_SHARE_V2) * pressureShare;
+  territory.army = {
+    manpower: round(Math.min(localCapacity, localCapacity * localForceShare), 9),
+    capacity: round(localCapacity, 9),
+    baseAttack: originalNation.militaryAttackRating
+      ?? originalNation.militaryQuality ?? 1,
+    baseDefense: originalNation.militaryDefenseRating
+      ?? originalNation.militaryQuality ?? 1,
+  };
+}
+
 /**
  * Resolves rare, seed-stable revolutions before weekly finance is projected.
  * The immutable 2026 opening owner is the sole restoration source; live owner,
@@ -495,7 +665,48 @@ export function processTerritoryIntegrationRevolutionsV2(
 ): IntegrationRevolutionV2[] {
   const revolutions: IntegrationRevolutionV2[] = [];
   const displacedOwners = new Map<PlayerId, PlayerId>();
+  // Freeze every risk and trigger before changing any ownership. Simultaneous
+  // revolutions therefore do not depend on territory iteration order.
+  const pressureRiskByOwner = new Map<PlayerId, TerritoryIntegrationWarPressureRevolutionRiskV2>();
   for (const territoryId of content.territoryIds) {
+    const territory = state.territories[territoryId];
+    const ownerId = territory?.owner;
+    const program = territory?.integrationProgram;
+    if (ownerId && program && program.cause !== 'federation'
+      && program.toOwnerId === ownerId && state.tick < program.completesTick
+      && !pressureRiskByOwner.has(ownerId)) {
+      pressureRiskByOwner.set(
+        ownerId,
+        territoryIntegrationWarPressureRevolutionRiskV2(state, content, ownerId),
+      );
+    }
+  }
+  const triggered = [...content.territoryIds]
+    .sort((left, right) => left.localeCompare(right))
+    .filter((territoryId) => {
+      const territory = state.territories[territoryId];
+      const program = territory?.integrationProgram;
+      const restoredOwnerId = content.territories[territoryId]?.initialOwnerId;
+      if (!territory || !program || !restoredOwnerId
+        || program.toOwnerId !== territory.owner
+        || restoredOwnerId === territory.owner
+        || state.tick <= program.startedTick
+        || state.tick >= program.completesTick) return false;
+      const ordinaryTick = territoryIntegrationRevolutionTickV2(
+        state,
+        territoryId,
+        program,
+      );
+      const pressureBonusChance = pressureRiskByOwner.get(territory.owner)?.bonusChance ?? 0;
+      return ordinaryTick === state.tick
+        || territoryIntegrationPressureRevolutionDueV2(
+          state,
+          territoryId,
+          program,
+          pressureBonusChance,
+        );
+    });
+  for (const territoryId of triggered) {
     const territory = state.territories[territoryId];
     const program = territory?.integrationProgram;
     const restoredOwnerId = content.territories[territoryId]?.initialOwnerId;
@@ -503,11 +714,11 @@ export function processTerritoryIntegrationRevolutionsV2(
       || program.toOwnerId !== territory.owner
       || restoredOwnerId === territory.owner
       || state.tick <= program.startedTick
-      || state.tick >= program.completesTick
-      || territoryIntegrationRevolutionTickV2(state, territoryId, program) !== state.tick) {
+      || state.tick >= program.completesTick) {
       continue;
     }
     const displacedOwnerId = territory.owner;
+    const pressureBonusChance = pressureRiskByOwner.get(displacedOwnerId)?.bonusChance ?? 0;
     const displacedName = state.players[displacedOwnerId]?.empireName
       || content.nations[displacedOwnerId]?.shortName || displacedOwnerId;
     const restoredName = content.nations[restoredOwnerId]?.shortName || restoredOwnerId;
@@ -522,13 +733,20 @@ export function processTerritoryIntegrationRevolutionsV2(
     territory.coreOwner = restoredOwnerId;
     territory.integration = 1;
     delete territory.integrationProgram;
+    replaceOccupationWithLocalRebelArmyV2(
+      state,
+      content,
+      territoryId,
+      restoredOwnerId,
+      pressureBonusChance,
+    );
     displacedOwners.set(displacedOwnerId, restoredOwnerId);
     revolutions.push({ territoryId, displacedOwnerId, restoredOwnerId });
     addWorldEventV2(
       state,
       'critical',
       'critical',
-      `${restoredName} rose in revolution and restored its sovereignty in ${territoryName}, ending integration into ${displacedName}.`,
+      `${restoredName} rose in revolution with a local rebel army and restored its sovereignty in ${territoryName}, ending integration into ${displacedName}.`,
       territoryId,
       restoredOwnerId,
     );

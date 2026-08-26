@@ -15,7 +15,7 @@ import { WORLD_CONTENT_V2 } from './content';
 import { WorldEngineV2 } from './WorldEngineV2';
 import { invalidateTerritoryIndexV2, selectRecruitmentThroughputV2 } from './selectors';
 import { humanStartingArmyMultiplierV2 } from './traits';
-import type { PlayerId } from './types';
+import { territoryIdV2, type PlayerId } from './types';
 import { processWarsV2, requestCeasefireV2, respondToOfferV2 } from './war';
 
 const id = (value: string) => value as PlayerId;
@@ -89,7 +89,7 @@ describe('clear war decisions and attrition', () => {
     expect(engine.warDeclarationStatus(belgium, netherlands).allowed).toBe(true);
   });
 
-  it('does not let India regenerate indefinitely against a player-scaled China', () => {
+  it('drains Indian reserves before China’s disadvantaged opening ends without conquering India', () => {
     const engine = isolatedEngine(1_504, 'chn');
     engine.state.players[id('chn')].treasury = 100_000;
     const indiaStart = engine.totalManpower('ind').deployed;
@@ -98,40 +98,30 @@ describe('clear war decisions and attrition', () => {
     expect(engine.declareWar('chn', 'ind').accepted).toBe(true);
     engine.step();
     let elapsedWeeks = 1;
-    let midCampaign: { active: boolean; battles: number; manpower: number; reserves: number } | undefined;
-    while (elapsedWeeks < 320 && engine.activeWarBetween('chn', 'ind')) {
+    while (elapsedWeeks < 80 && engine.activeWarBetween('chn', 'ind')) {
       engine.step();
       elapsedWeeks += 1;
-      if (elapsedWeeks === 80) {
-        const activeWar = engine.activeWarBetween('chn', 'ind');
-        midCampaign = {
-          active: Boolean(activeWar),
-          battles: activeWar?.battles ?? 0,
-          manpower: engine.totalManpower('ind').deployed,
-          reserves: engine.state.players[id('ind')].trainedReserves,
-        };
-      }
     }
     const indiaEnd = engine.totalManpower('ind').deployed;
-    expect(humanStartingArmyMultiplierV2('chn')).toBeLessThan(1);
-    expect(forecast.winChance).toBeGreaterThanOrEqual(30);
-    expect(forecast.winChance).toBeLessThan(45);
-    expect(midCampaign).toMatchObject({ active: true });
-    expect(midCampaign!.battles).toBeGreaterThan(30);
-    expect(midCampaign!.manpower).toBeGreaterThan(0);
+    const indiaReserveEnd = engine.state.players[id('ind')].trainedReserves;
+    // China sits near the strongest-country floor, so this is now a deliberately
+    // desperate human opening rather than a near-even matchup.
+    expect(humanStartingArmyMultiplierV2('chn')).toBeGreaterThan(0);
+    expect(humanStartingArmyMultiplierV2('chn')).toBeLessThan(0.25);
+    expect(forecast.winChance).toBe(5);
+    expect(elapsedWeeks).toBeLessThanOrEqual(80);
+    expect(engine.activeWarBetween('chn', 'ind')).toBeUndefined();
+    expect(engine.state.territories[territoryIdV2('ind')].owner).toBe(id('ind'));
+    expect(engine.territoriesOf('ind').length).toBeGreaterThanOrEqual(1);
+    expect(indiaEnd).toBeGreaterThan(0);
     // The reserve pool must decline throughout the campaign rather than
     // regenerate indefinitely behind the front.
-    expect(midCampaign!.reserves).toBeLessThan(indiaReserveStart);
-    expect(midCampaign!.manpower + midCampaign!.reserves)
+    expect(indiaReserveEnd).toBeLessThan(indiaReserveStart);
+    expect(indiaEnd + indiaReserveEnd)
       .toBeLessThan(indiaStart + indiaReserveStart);
-    expect(indiaEnd).toBeLessThan(indiaStart);
-    expect(engine.state.players[id('ind')].trainedReserves).toBeLessThanOrEqual(midCampaign!.reserves);
-    expect(elapsedWeeks).toBe(320);
-    expect(engine.activeWarBetween('chn', 'ind')).toBeDefined();
-    expect(engine.territoriesOf('ind')).toHaveLength(1);
   }, 90_000);
 
-  it('turns one peace request into bounded payments plus a full extra year of mutual peace', () => {
+  it('keeps the same one-year payments, then protects two extra years of mutual peace', () => {
     const engine = isolatedEngine(1_503, 'lux');
     engine.state.players[id('lux')].treasury = 1_000;
     expect(engine.declareWar('lux', 'bel').accepted).toBe(true);
@@ -141,6 +131,8 @@ describe('clear war decisions and attrition', () => {
     const terms = engine.ceasefireTerms(war.id, 'lux');
     const treasuryBefore = engine.state.players[id('lux')].treasury;
     expect(terms.allowed).toBe(true);
+    expect(CEASEFIRE_PAYMENT_WEEKS).toBe(52);
+    expect(CEASEFIRE_POST_PAYMENT_TRUCE_TICKS).toBe(104);
     expect(terms.paymentWeeks).toBe(CEASEFIRE_PAYMENT_WEEKS);
     expect(terms.postPaymentTruceTicks).toBe(CEASEFIRE_POST_PAYMENT_TRUCE_TICKS);
     expect(terms.truceTicks).toBe(CEASEFIRE_PAYMENT_WEEKS + CEASEFIRE_POST_PAYMENT_TRUCE_TICKS);
@@ -149,7 +141,7 @@ describe('clear war decisions and attrition', () => {
       engine.nationalEconomy('lux').weeklyRevenue * CEASEFIRE_PAYER_WEEKLY_REVENUE_SHARE,
       engine.nationalEconomy('bel').weeklyRevenue * CEASEFIRE_PAYEE_WEEKLY_REVENUE_CAP_SHARE,
     ), 5);
-    expect(terms.totalCost).toBeCloseTo(terms.weeklyCost * 52, 6);
+    expect(terms.totalCost).toBeCloseTo(terms.weeklyCost * CEASEFIRE_PAYMENT_WEEKS, 6);
     expect(terms.repeatMultiplier).toBe(1);
     expect(engine.requestCeasefire(war.id, 'lux').accepted).toBe(true);
     engine.step();
@@ -180,7 +172,7 @@ describe('clear war decisions and attrition', () => {
     expect(engine.warDeclarationStatus('bel', 'lux').reason).toMatch(/payments/i);
     engine.state.truces = savedTruces;
 
-    // The last instalment is followed by a complete additional year in which
+    // The last instalment is followed by two complete additional years in which
     // neither signatory may restart the same war.
     engine.state.tick = obligation.expiresTick;
     engine.state.ceasefireObligations = [];

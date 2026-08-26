@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   BATTLE_INTERVAL_TICKS,
+  combatDefenseEffectV2,
   effectiveDefenseStatV2,
   RAPID_RECRUITMENT_COOLDOWN_TICKS,
   RAPID_RECRUITMENT_COST_MULTIPLIER,
@@ -13,6 +14,7 @@ import { createWorldStateV2 } from './bootstrap';
 import { WORLD_CONTENT_V2 } from './content';
 import { synchronizeArmyCapacityV2 } from './capacity';
 import { assertInvariantsV2 } from './invariants';
+import { OPENING_ARMY_BONUS_DURATION_TICKS_V2 } from './openingArmyBonus';
 import {
   selectArmyStrengthV2,
   selectCatchUpFactorV2,
@@ -112,12 +114,32 @@ describe('V2 one-source manpower combat', () => {
     expect(defenderDefense.defenderLosses).toBeLessThan(baseline.defenderLosses);
   });
 
-  it('keeps the whole displayed DEF stat fully linear without a hidden nerf', () => {
+  it('keeps the whole displayed DEF stat fully linear', () => {
     expect(effectiveDefenseStatV2(0.70)).toBeCloseTo(0.70, 9);
     expect(effectiveDefenseStatV2(1)).toBe(1);
     expect(effectiveDefenseStatV2(2)).toBe(2);
     expect(effectiveDefenseStatV2(4)).toBe(4);
     expect(effectiveDefenseStatV2(100)).toBe(100);
+  });
+
+  it('lowers combat DEF while preserving parity and flattening extreme advantages', () => {
+    expect(combatDefenseEffectV2(1, 1)).toBeCloseTo(0.75, 9);
+    expect(combatDefenseEffectV2(2, 2)).toBeCloseTo(1.5, 9);
+    expect(combatDefenseEffectV2(0.8, 1)).toBeCloseTo(0.60, 9);
+
+    const atParity = combatDefenseEffectV2(1, 1);
+    const twiceAttack = combatDefenseEffectV2(2, 1);
+    const fiveTimesAttack = combatDefenseEffectV2(5, 1);
+    const tenTimesAttack = combatDefenseEffectV2(10, 1);
+    expect(atParity).toBeLessThan(1);
+    expect(twiceAttack).toBeGreaterThan(atParity);
+    expect(fiveTimesAttack).toBeGreaterThan(twiceAttack);
+    expect(tenTimesAttack).toBeGreaterThan(fiveTimesAttack);
+    expect(twiceAttack).toBeLessThan(2 * 0.75);
+    expect(tenTimesAttack).toBeLessThan(10 * 0.75 * 0.75);
+    expect((fiveTimesAttack - twiceAttack) / 3).toBeGreaterThan(
+      (tenTimesAttack - fiveTimesAttack) / 5,
+    );
   });
 
   it('keeps every DEF research upgrade useful without suppressing the displayed stat', () => {
@@ -229,6 +251,8 @@ describe('V2 one-source manpower combat', () => {
 
   it('allows a deliberately underfilled small army to declare immediately when legal and funded', () => {
     const engine = new WorldEngineV2(308);
+    expect(engine.chooseCountry(isl)).toEqual({ accepted: true });
+    engine.stopClock();
     for (const territory of engine.territoriesOf(isl)) territory.army.manpower = territory.army.capacity * 0.10;
     engine.state.players[isl].treasury = 100;
     const status = engine.warDeclarationStatus(isl, gbr);
@@ -369,6 +393,11 @@ describe('V2 one-source manpower combat', () => {
   it('keeps rapid recruitment manpower-only above 95% readiness', () => {
     const engine = new WorldEngineV2(3093);
     engine.chooseCountry(bel);
+    // This is a generic paid-recruitment test, so observe it after the
+    // temporary player opening force and cap curve have fully expired.
+    engine.state.tick = OPENING_ARMY_BONUS_DURATION_TICKS_V2;
+    engine.state.players[bel].openingArmyBonus = null;
+    synchronizeArmyCapacityV2(engine.state, WORLD_CONTENT_V2);
     for (const territory of engine.territoriesOf(bel)) {
       territory.army.manpower = territory.army.capacity * 0.96;
     }

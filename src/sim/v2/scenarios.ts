@@ -2,6 +2,7 @@ import { normalizeSeed } from '../../game/random';
 import { V2_CONTENT_VERSION } from './balance';
 import { WORLD_CONTENT_V2, type WorldContentV2 } from './content';
 import {
+  LEGACY_RANDOM_WORLD_GENERATOR_VERSION_V2,
   RANDOM_WORLD_GENERATOR_VERSION_V2,
   createRandomWorldContentV2,
   randomWorldContentVersionV2,
@@ -33,10 +34,12 @@ export function normalizeScenarioConfigV2(input: ScenarioConfigInputV2): Scenari
     ? RANDOM_WORLD_GENERATOR_VERSION_V2
     : STANDARD_SCENARIO_VERSION_V2);
   const supportedVersion = input.mode === 'random-world'
-    ? RANDOM_WORLD_GENERATOR_VERSION_V2
-    : STANDARD_SCENARIO_VERSION_V2;
-  if (!Number.isInteger(version) || version !== supportedVersion) {
-    throw new Error(`Unsupported ${input.mode} scenario version ${String(version)}.`);
+    ? version === LEGACY_RANDOM_WORLD_GENERATOR_VERSION_V2
+      || version === RANDOM_WORLD_GENERATOR_VERSION_V2
+    : version === STANDARD_SCENARIO_VERSION_V2;
+  if (!Number.isInteger(version) || !supportedVersion) {
+    const label = input.mode === 'random-world' ? 'Alternative Universe' : input.mode;
+    throw new Error(`Unsupported ${label} scenario version ${String(version)}.`);
   }
   return { mode: input.mode, version, seed: normalizeSeed(input.seed) };
 }
@@ -81,10 +84,10 @@ export function scenarioConfigFromSaveHeaderV2(input: SaveHeaderInputV2): Scenar
   const version = Number(match[1]);
   const generatedSeed = normalizeSeed(Number(match[2]));
   if (header.contentVersion !== randomWorldContentVersionV2(generatedSeed, version)) {
-    throw new Error('Random World save scenario header is non-canonical.');
+    throw new Error('Alternative Universe save scenario header is non-canonical.');
   }
   if (stateSeed !== generatedSeed) {
-    throw new Error('Random World save seed does not match its generated content identity.');
+    throw new Error('Alternative Universe save seed does not match its generated content identity.');
   }
   return normalizeScenarioConfigV2({ mode: 'random-world', version, seed: generatedSeed });
 }

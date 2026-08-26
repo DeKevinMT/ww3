@@ -1,8 +1,8 @@
 import { normalizeSeed } from '../../game/random';
 import {
+  FOOD_OPENING_RESERVE_MIN_WEEKS,
   V2_MAP_ID,
   V2_RULES_VERSION,
-  aiHumanAttackSafetyActiveV2,
   clamp,
   round,
 } from './balance';
@@ -17,6 +17,7 @@ import { contentVersionForWorldContentV2 } from './scenarios';
 import { countryTraitFactorV2, registerTraitContentV2 } from './traits';
 import {
   invalidateTerritoryIndexV2,
+  selectFoodDemandV2,
   selectFoodDomesticCapacityTargetV2,
   selectFoodStorageCapacityV2,
 } from './selectors';
@@ -177,9 +178,11 @@ export function processOpeningConflictsV2(state: WorldStateV2, content: WorldCon
   const scenario = openingConflictScheduleV2(state.seed, content).find((entry) => entry.tick === state.tick);
   if (!scenario) return;
   if (!state.players[scenario.attackerId] || !state.players[scenario.defenderId]) return;
-  if (aiHumanAttackSafetyActiveV2(state.tick)
-    && (state.humanPlayerIds.includes(scenario.attackerId)
-      || state.humanPlayerIds.includes(scenario.defenderId))) return;
+  // Seeded opening crises are AI-vs-AI scenario events and must never issue a
+  // declaration on behalf of, or directly against, a country controlled by a
+  // human. Autonomous AI declarations use the live Suspicion curve instead.
+  if (state.humanPlayerIds.includes(scenario.attackerId)
+    || state.humanPlayerIds.includes(scenario.defenderId)) return;
   if (state.players[scenario.attackerId]!.treasury < 0) return;
   const attackerAlive = Object.values(state.territories).some((territory) => territory.owner === scenario.attackerId);
   const defenderAlive = Object.values(state.territories).some((territory) => territory.owner === scenario.defenderId);
@@ -235,6 +238,7 @@ export function createWorldStateV2(
     speed: 0,
     humanPlayerId,
     humanPlayerIds: [humanPlayerId],
+    firstIntegrationDiscountUsedBy: [],
     players,
     territories,
     wars: [],
@@ -278,9 +282,12 @@ export function createWorldStateV2(
       selectFoodDomesticCapacityTargetV2(state, content, playerId),
       9,
     );
+    const storageCapacity = selectFoodStorageCapacityV2(state, content, playerId);
+    const openingReserveFloor = selectFoodDemandV2(state, playerId)
+      * FOOD_OPENING_RESERVE_MIN_WEEKS;
     state.players[playerId]!.foodStock = round(Math.min(
-      state.players[playerId]!.foodStock,
-      selectFoodStorageCapacityV2(state, content, playerId),
+      storageCapacity,
+      Math.max(state.players[playerId]!.foodStock, openingReserveFloor),
     ));
   }
   // Territory shells are built before the human roster exists. Bring the

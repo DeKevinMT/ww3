@@ -247,7 +247,7 @@ describe('national IQ gameplay proxy', () => {
       .toBeLessThanOrEqual(1.15);
   });
 
-  it('offers the same weak-defender aid regardless of selection or IQ appetite', () => {
+  it('keeps selection neutral while higher IQ narrows defensive-aid intelligence error', () => {
     const defender = nationIdV2('bel');
     const supporter = nationIdV2('nld');
     const attacker = nationIdV2('fra');
@@ -264,24 +264,34 @@ describe('national IQ gameplay proxy', () => {
     expect(access).not.toBe('none');
     if (access === 'none') throw new Error('Expected supporter access to aggressor.');
 
+    const powerSnapshot = {
+      byNation: new Map<PlayerId, number>([
+        [attacker, 100], [defender, 35], [supporter, 70],
+      ]),
+      leaderPower: 100,
+      leaderBreakthroughs: 0,
+    };
     const unselected = selectDefensiveAidAssessmentV2(
-      state, WORLD_CONTENT_V2, supporter, war, access,
+      state, WORLD_CONTENT_V2, supporter, war, access, powerSnapshot,
     );
     state.humanPlayerId = defender;
     const selected = selectDefensiveAidAssessmentV2(
-      state, WORLD_CONTENT_V2, supporter, war, access,
+      state, WORLD_CONTENT_V2, supporter, war, access, powerSnapshot,
     );
     expect(selected).toEqual(unselected);
     expect(selected).toBeDefined();
 
     const low = selectDefensiveAidAssessmentV2(
       state, contentWithIq(supporter, NATIONAL_IQ_SCORE_MIN), supporter, war, access,
+      powerSnapshot,
     )!;
     const high = selectDefensiveAidAssessmentV2(
       state, contentWithIq(supporter, NATIONAL_IQ_SCORE_MAX), supporter, war, access,
+      powerSnapshot,
     )!;
-    expect(high.interventionChance).toBe(low.interventionChance);
-    expect(high.priority).toBe(low.priority);
+    expect(low).toBeDefined();
+    expect(high).toBeDefined();
+    expect(high.intelligenceErrorBound).toBeLessThan(low.intelligenceErrorBound);
   });
 
   it('keeps base quality and research as separate multipliers', () => {

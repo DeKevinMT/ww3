@@ -4,7 +4,10 @@ import {
   clamp,
   round,
 } from './balance';
-import type { WorldContentV2 } from './content';
+import {
+  territoryTerrainConditionRecoveryMultiplierV2,
+  type WorldContentV2,
+} from './content';
 import { synchronizeArmyCapacityV2 } from './capacity';
 import { consumeOpeningArmyBonusLossV2 } from './openingArmyBonus';
 import {
@@ -93,7 +96,8 @@ function processMilitaryAndCondition(
       )
       : 1;
     const conditionGain = 0.006 * finance.conditionFundingRatio * finance.aiEfficiency
-      * (atWar ? 0.35 : 1) * reconstructionReadiness * conditionRecoveryFactor;
+      * (atWar ? 0.35 : 1) * reconstructionReadiness * conditionRecoveryFactor
+      * territoryTerrainConditionRecoveryMultiplierV2(content, view.id);
     territory.condition = round(clamp(territory.condition + conditionGain, 0.15, 1));
   }
   consumeOpeningArmyBonusLossV2(state, playerId, projectedArmy.demobilized);

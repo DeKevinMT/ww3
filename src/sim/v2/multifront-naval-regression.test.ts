@@ -9,9 +9,14 @@ import {
   warAccessSupplyMultiplierV2,
 } from './balance';
 import { createWorldStateV2 } from './bootstrap';
-import { WORLD_CONTENT_V2 } from './content';
+import {
+  territoryTerrainOperationCostMultiplierV2,
+  territoryTerrainSupplyMultiplierV2,
+  WORLD_CONTENT_V2,
+} from './content';
 import {
   invalidateTerritoryIndexV2,
+  selectWarRouteDistanceKmV2,
   selectWeeklyFinanceBreakdownV2,
 } from './selectors';
 import {
@@ -31,6 +36,7 @@ const usa = nationIdV2('usa');
 const belTerritory = territoryIdV2('bel');
 const deuTerritory = territoryIdV2('deu');
 const nldTerritory = territoryIdV2('nld');
+const gbrTerritory = territoryIdV2('gbr');
 
 describe('V2 multi-front and naval balance regressions', () => {
   it('opens and resolves every viable source-unique empire front in one combat round', () => {
@@ -117,9 +123,19 @@ describe('V2 multi-front and naval balance regressions', () => {
     const navalOperations = selectWeeklyFinanceBreakdownV2(
       navalState, WORLD_CONTENT_V2, bel,
     ).warOperations;
+    const navalDistance = selectWarRouteDistanceKmV2(
+      navalState, WORLD_CONTENT_V2, bel, gbr,
+    );
+    const expectedOperationRatio = (
+      warAccessOperationMultiplierV2('naval', navalDistance)
+        * territoryTerrainOperationCostMultiplierV2(WORLD_CONTENT_V2, gbrTerritory)
+    ) / (
+      warAccessOperationMultiplierV2('land')
+        * territoryTerrainOperationCostMultiplierV2(WORLD_CONTENT_V2, nldTerritory)
+    );
     // Finance values are rounded before exposure, so allow only that final
-    // presentation precision while the canonical multiplier above stays exact.
-    expect(navalOperations / landOperations).toBeCloseTo(1.35, 5);
+    // presentation precision while access and target terrain remain exact.
+    expect(navalOperations / landOperations).toBeCloseTo(expectedOperationRatio, 5);
   });
 
   it('lets distant sea lanes reach much farther while scaling cost and supply with distance', () => {
@@ -174,13 +190,19 @@ describe('V2 multi-front and naval balance regressions', () => {
       - (WAR_ACCESS_SUPPLY_MULTIPLIER.naval - rawDistantNavalSupply)
         * navalDistancePressureFactor;
     const boundSupply = (value: number): number => Math.max(0.25, Math.min(1, value));
+    const localTerrainSupply = territoryTerrainSupplyMultiplierV2(
+      WORLD_CONTENT_V2, farRoute!.sourceId,
+    );
+    const navalTerrainSupply = territoryTerrainSupplyMultiplierV2(
+      WORLD_CONTENT_V2, farRoute!.targetId,
+    );
     const expectedLocalSupply = boundSupply(
-      WAR_ACCESS_SUPPLY_MULTIPLIER.land
-        * countryTraitFactorV2(sourceOwner, 'front-supply', localTraitContext),
+      boundSupply(countryTraitFactorV2(sourceOwner, 'front-supply', localTraitContext)
+        * localTerrainSupply) * WAR_ACCESS_SUPPLY_MULTIPLIER.land,
     );
     const expectedDistantNavalSupply = boundSupply(
-      traitAwareNavalAccess
-        * countryTraitFactorV2(sourceOwner, 'front-supply', navalTraitContext),
+      boundSupply(countryTraitFactorV2(sourceOwner, 'front-supply', navalTraitContext)
+        * navalTerrainSupply) * traitAwareNavalAccess,
     );
     // The distance curve remains canonical, while the live route owner's
     // access-scoped trait is intentionally layered onto its actual supply.

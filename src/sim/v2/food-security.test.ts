@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { FOOD_TARGET_WEEKS } from './balance';
+import {
+  FOOD_MAX_STOCK_WEEKS,
+  FOOD_OPENING_RESERVE_MIN_WEEKS,
+  FOOD_STORAGE_MIN_WEEKS,
+  FOOD_TARGET_WEEKS,
+} from './balance';
 import { createWorldStateV2 } from './bootstrap';
 import { WORLD_CONTENT_V2 } from './content';
 import { createFinancePlansV2, processEconomyV2, processFinanceMilitaryV2 } from './economy';
@@ -60,6 +65,39 @@ describe('V2 automated food security', () => {
     const belgiumWeeks = selectFoodStorageCapacityV2(state, WORLD_CONTENT_V2, belgium) / belgiumDemand;
     const canadaWeeks = selectFoodStorageCapacityV2(state, WORLD_CONTENT_V2, canada) / canadaDemand;
     expect(canadaWeeks).toBeGreaterThan(belgiumWeeks);
+  });
+
+  it('stores food in strategic months while preserving fragile-country pressure', () => {
+    const state = createWorldStateV2(2_119);
+    const belgium = nationIdV2('bel');
+    const canada = nationIdV2('can');
+    const greenland = nationIdV2('grl');
+    const centralAfricanRepublic = nationIdV2('caf');
+    const capacityWeeks = (playerId: ReturnType<typeof nationIdV2>) => (
+      selectFoodStorageCapacityV2(state, WORLD_CONTENT_V2, playerId)
+        / selectFoodDemandV2(state, playerId)
+    );
+
+    for (const playerId of WORLD_CONTENT_V2.nationIds) {
+      const demand = selectFoodDemandV2(state, playerId);
+      const weeks = capacityWeeks(playerId);
+      expect(weeks, String(playerId)).toBeGreaterThanOrEqual(FOOD_STORAGE_MIN_WEEKS - 0.000001);
+      expect(weeks, String(playerId)).toBeLessThanOrEqual(FOOD_MAX_STOCK_WEEKS + 0.000001);
+      expect(state.players[playerId]!.foodStock / demand, String(playerId))
+        .toBeGreaterThanOrEqual(FOOD_OPENING_RESERVE_MIN_WEEKS - 0.000001);
+    }
+
+    expect(capacityWeeks(belgium)).toBeGreaterThan(FOOD_TARGET_WEEKS);
+    expect(capacityWeeks(belgium)).toBeLessThan(FOOD_TARGET_WEEKS + 1);
+    expect(capacityWeeks(canada)).toBeGreaterThan(capacityWeeks(belgium));
+    expect(capacityWeeks(greenland)).toBeCloseTo(FOOD_MAX_STOCK_WEEKS, 5);
+    expect(state.players[centralAfricanRepublic]!.foodStock
+      / selectFoodDemandV2(state, centralAfricanRepublic)).toBeCloseTo(
+      FOOD_OPENING_RESERVE_MIN_WEEKS,
+      5,
+    );
+    expect(state.players[centralAfricanRepublic]!.foodStock
+      / selectFoodDemandV2(state, centralAfricanRepublic)).toBeLessThan(FOOD_TARGET_WEEKS);
   });
 
   it('starts a food-secure country near its strategic buffer and funds food first', () => {
@@ -152,11 +190,12 @@ describe('V2 automated food security', () => {
     const plan = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, nigeria);
     const stockWeeks = state.players[nigeria].foodStock / plan.foodDemand;
     expect(WORLD_CONTENT_V2.nations[nigeria].real.foodInsecurityRate).toBeCloseTo(0.146, 3);
-    expect(stockWeeks).toBeGreaterThan(2);
-    expect(stockWeeks).toBeLessThan(3);
+    expect(stockWeeks).toBeCloseTo(FOOD_OPENING_RESERVE_MIN_WEEKS, 5);
+    expect(stockWeeks).toBeLessThan(FOOD_TARGET_WEEKS);
     expect(plan.foodCoverage).toBe(1);
-    expect(plan.foodProduced).toBeLessThan(plan.foodDemand);
-    expect(plan.foodStockChange).toBeLessThan(0);
+    expect(plan.foodDomesticProduced).toBeLessThan(plan.foodDemand);
+    expect(plan.foodImported).toBeGreaterThan(0);
+    expect(plan.foodStockChange).toBeGreaterThan(0);
     expect(plan.foodProduction / plan.revenue).toBeGreaterThan(0.10);
     expect(state.players[nigeria].foodSecurity).toBe(1);
   });
@@ -257,7 +296,7 @@ describe('V2 automated food security', () => {
     expect(empty.weeklyNet).toBeLessThan(0);
   });
 
-  it('raises preventive food purchasing smoothly as the strategic stock falls', () => {
+  it('raises preventive food purchasing until the weekly refill safety cap is reached', () => {
     const state = createWorldStateV2(2_118);
     const singapore = nationIdV2('sgp');
     state.players[singapore].treasury = 1_000;
@@ -276,7 +315,7 @@ describe('V2 automated food security', () => {
     const half = spendingAt(0.5);
     const critical = spendingAt(0.1);
     expect(half).toBeGreaterThan(full);
-    expect(critical).toBeGreaterThan(half);
+    expect(critical).toBeGreaterThanOrEqual(half);
   });
 
   it('makes more land materially increase domestic food capacity', () => {

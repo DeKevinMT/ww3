@@ -22,6 +22,7 @@ const LEGACY_CONTENT_VERSION_V16 = 'natural-earth-countries-2026-v6-naval';
 function removeSchema22Fields(save: Record<string, any>): void {
   delete save.alliances;
   delete save.allianceOffers;
+  delete save.firstIntegrationDiscountUsedBy;
   for (const nation of Object.values(save.players) as Array<Record<string, any>>) {
     delete nation.openingArmyBonus;
   }
@@ -171,7 +172,9 @@ describe('V2 legacy save migration', () => {
     const state = createWorldStateV2(8_590);
     synchronizeOpeningArmyHumanRosterV2(state, WORLD_CONTENT_V2, state.humanPlayerIds, []);
     state.tick = 37;
+    synchronizeArmyCapacityV2(state, WORLD_CONTENT_V2);
     const legacy = structuredClone(createSaveV2(state, WORLD_CONTENT_V2)) as Record<string, any>;
+    delete legacy.firstIntegrationDiscountUsedBy;
     legacy.rulesVersion = 'frontier-command-v2.59-country-traits';
     for (const nation of Object.values(legacy.players) as Array<Record<string, any>>) {
       delete nation.openingArmyBonus;
@@ -194,6 +197,7 @@ describe('V2 legacy save migration', () => {
     state.humanPlayerIds = [greenland];
     synchronizeArmyCapacityV2(state, WORLD_CONTENT_V2);
     const legacy = structuredClone(createSaveV2(state, WORLD_CONTENT_V2)) as Record<string, any>;
+    delete legacy.firstIntegrationDiscountUsedBy;
     legacy.rulesVersion = 'frontier-command-v2.59-country-traits';
     for (const nation of Object.values(legacy.players) as Array<Record<string, any>>) {
       delete nation.openingArmyBonus;
@@ -220,6 +224,7 @@ describe('V2 legacy save migration', () => {
     const belgium = nationIdV2('bel');
     const canada = nationIdV2('can');
     state.tick = 10;
+    synchronizeArmyCapacityV2(state, WORLD_CONTENT_V2);
     state.wars.push({
       id: 'war-schema-21-migration',
       attackerId: belgium,

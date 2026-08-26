@@ -660,8 +660,16 @@ describe('V2 dynamic containment coalition', () => {
     for (const territory of Object.values(state.territories)) {
       if (territory.owner === human) territory.army.manpower *= 0.1;
     }
+    const livePowers = createPowerSnapshotV2(state, WORLD_CONTENT_V2);
+    const viableJointPowers = {
+      ...livePowers,
+      byNation: new Map(livePowers.byNation).set(aggressor, 100)
+        .set(human, 30)
+        .set(supporter, 65),
+      leaderPower: Math.max(100, livePowers.leaderPower),
+    };
     const assessment = selectDefensiveAidAssessmentV2(
-      state, WORLD_CONTENT_V2, supporter, war, 'land',
+      state, WORLD_CONTENT_V2, supporter, war, 'land', viableJointPowers,
     );
     expect(assessment).toBeDefined();
     expect(assessment!.interventionChance).toBeGreaterThanOrEqual(0.12);

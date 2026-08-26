@@ -3,8 +3,11 @@ import {
   TERRITORIES,
   colorToCss,
   countryDistanceKm,
+  countrySeaRouteDistanceKm,
   countryColor,
   terrainForTerritory,
+  terrainProfileForTerritory,
+  type TerrainProfileEntry,
 } from '../../game/data/worldMap';
 import rawDeathRateData from '../../assets/wb_death_rate.json?raw';
 import rawFoodSelfSufficiencyData from '../../assets/fao_food_self_sufficiency.json?raw';
@@ -27,6 +30,12 @@ import {
   NATIONAL_QUALITY_COMBAT_SPAN,
   NATIONAL_QUALITY_GDP_WEIGHT,
   NATIONAL_QUALITY_IQ_WEIGHT,
+  TERRAIN_CONDITION_RECOVERY_MODIFIER,
+  TERRAIN_DEFENSE_MODIFIER,
+  TERRAIN_ECONOMY_GROWTH_ADJUSTMENT,
+  TERRAIN_FOOD_PRODUCTION_MODIFIER,
+  TERRAIN_OPERATION_COST_MODIFIER,
+  TERRAIN_SUPPLY_MODIFIER,
   V2_CONTENT_VERSION,
   clamp,
   round,
@@ -109,10 +118,102 @@ export interface TerritoryContentV2 {
   initialOwnerId: PlayerId;
   name: string;
   regionId: string;
+  /** Dominant terrain, retained for save/custom-world compatibility. */
   terrain: TerrainType;
+  /** Weighted dominant-first mix. Omitted custom fixtures behave as 100% `terrain`. */
+  terrainProfile?: readonly TerrainProfileEntry[];
   baseline: NationRealDataV2;
   connections: readonly TerritoryConnectionV2[];
 }
+
+const SINGLE_TERRAIN_PROFILES_V2: Readonly<Record<TerrainType, readonly TerrainProfileEntry[]>>
+  = Object.freeze(Object.fromEntries(([
+    'plains', 'urban', 'mountain', 'desert', 'jungle', 'arctic', 'coastal',
+  ] as const).map((terrain) => [
+    terrain,
+    Object.freeze([Object.freeze({ terrain, share: 1 })]),
+  ])) as Record<TerrainType, readonly TerrainProfileEntry[]>);
+
+/** Canonical profile accessor shared by combat, traits and presentation. */
+export function territoryTerrainProfileV2(
+  content: WorldContentV2,
+  territoryId: TerritoryId,
+): readonly TerrainProfileEntry[] {
+  const definition = content.territories[territoryId];
+  if (!definition) return SINGLE_TERRAIN_PROFILES_V2.plains;
+  return definition.terrainProfile ?? SINGLE_TERRAIN_PROFILES_V2[definition.terrain];
+}
+
+export function territoryTerrainTypesV2(
+  content: WorldContentV2,
+  territoryId: TerritoryId,
+): readonly TerrainType[] {
+  return territoryTerrainProfileV2(content, territoryId).map((entry) => entry.terrain);
+}
+
+/** Share-weighted physical defender modifier; every listed terrain matters. */
+export function territoryTerrainDefenseMultiplierV2(
+  content: WorldContentV2,
+  territoryId: TerritoryId,
+): number {
+  return territoryTerrainProfileV2(content, territoryId).reduce((sum, entry) => (
+    sum + TERRAIN_DEFENSE_MODIFIER[entry.terrain] * entry.share
+  ), 0);
+}
+
+export interface TerritoryTerrainEffectsV2 {
+  readonly defense: number;
+  readonly supply: number;
+  readonly operationCost: number;
+  readonly conditionRecovery: number;
+  readonly foodProduction: number;
+  /** Signed annual percentage-point adjustment, e.g. 0.002 means +0.2pp/year. */
+  readonly annualEconomyGrowthAdjustment: number;
+}
+
+/** Every existing terrain channel uses the exact same immutable weighted mix. */
+export function territoryTerrainEffectsV2(
+  content: WorldContentV2,
+  territoryId: TerritoryId,
+): TerritoryTerrainEffectsV2 {
+  const profile = territoryTerrainProfileV2(content, territoryId);
+  const weighted = (table: Readonly<Record<TerrainType, number>>): number => (
+    profile.reduce((sum, entry) => sum + table[entry.terrain] * entry.share, 0)
+  );
+  return {
+    defense: weighted(TERRAIN_DEFENSE_MODIFIER),
+    supply: weighted(TERRAIN_SUPPLY_MODIFIER),
+    operationCost: weighted(TERRAIN_OPERATION_COST_MODIFIER),
+    conditionRecovery: weighted(TERRAIN_CONDITION_RECOVERY_MODIFIER),
+    foodProduction: weighted(TERRAIN_FOOD_PRODUCTION_MODIFIER),
+    annualEconomyGrowthAdjustment: weighted(TERRAIN_ECONOMY_GROWTH_ADJUSTMENT),
+  };
+}
+
+export const territoryTerrainSupplyMultiplierV2 = (
+  content: WorldContentV2,
+  territoryId: TerritoryId,
+): number => territoryTerrainEffectsV2(content, territoryId).supply;
+
+export const territoryTerrainOperationCostMultiplierV2 = (
+  content: WorldContentV2,
+  territoryId: TerritoryId,
+): number => territoryTerrainEffectsV2(content, territoryId).operationCost;
+
+export const territoryTerrainConditionRecoveryMultiplierV2 = (
+  content: WorldContentV2,
+  territoryId: TerritoryId,
+): number => territoryTerrainEffectsV2(content, territoryId).conditionRecovery;
+
+export const territoryTerrainFoodProductionMultiplierV2 = (
+  content: WorldContentV2,
+  territoryId: TerritoryId,
+): number => territoryTerrainEffectsV2(content, territoryId).foodProduction;
+
+export const territoryTerrainEconomyGrowthAdjustmentV2 = (
+  content: WorldContentV2,
+  territoryId: TerritoryId,
+): number => territoryTerrainEffectsV2(content, territoryId).annualEconomyGrowthAdjustment;
 
 export type ScenarioIdV2 = 'standard-2026' | 'random-world';
 export type OpeningProfileV2 = 'standard-2026' | 'none';
@@ -383,6 +484,10 @@ const ACTIVE_MILITARY_MANPOWER_2026_V2: Readonly<Record<string, number>> = Objec
   est: 0.0077, irl: 0.007557, bfa: 0.0075, alb: 0.0075, svn: 0.007,
   mda: 0.0065, gab: 0.005, ben: 0.00475, kos: 0.004, sur: 0.0025,
   mne: 0.00235, lbr: 0.0021, blz: 0.002, lux: 0.0012, isl: 0.0005,
+  // Playable Greenland represents a small permanent Arctic defence cadre.
+  // This is ordinary Standard 2026 manpower for AI and human starts alike;
+  // the separate human-only opening multiplier is applied later.
+  grl: 0.0003,
 });
 
 /**
@@ -887,12 +992,22 @@ const territories = Object.fromEntries(TERRITORIES.map((territory) => {
     name: territory.name,
     regionId: territory.regionId,
     terrain: terrainForTerritory(territory.id),
+    terrainProfile: terrainProfileForTerritory(territory.id),
     baseline: { ...initialNation.real },
-    connections: territory.neighbors.map((targetId) => ({
-      targetId: territoryIdV2(targetId),
-      kind: seaNeighbours.has(targetId) ? 'sea' : 'land',
-      distanceKm: round(countryDistanceKm(territory.id, targetId), 3),
-    })),
+    connections: territory.neighbors.map((targetId) => {
+      const kind = seaNeighbours.has(targetId) ? 'sea' : 'land';
+      const distanceKm = kind === 'sea'
+        ? countrySeaRouteDistanceKm(territory.id, targetId)
+        : countryDistanceKm(territory.id, targetId);
+      if (!Number.isFinite(distanceKm)) {
+        throw new Error(`Missing canonical ${kind} route distance for ${territory.id}:${targetId}.`);
+      }
+      return {
+        targetId: territoryIdV2(targetId),
+        kind,
+        distanceKm: round(distanceKm!, 3),
+      };
+    }),
   };
   return [territoryIdV2(territory.id), value];
 })) as Record<TerritoryId, TerritoryContentV2>;

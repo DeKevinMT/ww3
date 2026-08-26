@@ -14,7 +14,10 @@ import {
   type WarStateV2,
 } from './types';
 import { resolveBattlePulseV2 } from './war';
-import { selectWarStrainSummaryV2, summarizeWarStrainV2 } from './warStrain';
+import {
+  selectWarStrainSummaryV2,
+  summarizeWarStrainV2,
+} from './warStrain';
 
 describe('naval War Strain relief', () => {
   it('makes one fresh naval front clearly lighter than one land front', () => {
@@ -32,7 +35,7 @@ describe('naval War Strain relief', () => {
     expect(score(1)).toBeLessThan(score(0));
   });
 
-  it('keeps conquest aftershock after peace but excludes voluntary federation land', () => {
+  it('adds no standalone War Pressure for conquest or federation integration', () => {
     const belgium = nationIdV2('bel');
     const luxembourg = territoryIdV2('lux');
     const conquest = createWorldStateV2(72_066);
@@ -41,8 +44,7 @@ describe('naval War Strain relief', () => {
     beginTerritoryIntegrationV2(conquest, WORLD_CONTENT_V2, luxembourg, belgium);
     beginFederationTerritoryIntegrationV2(federation, WORLD_CONTENT_V2, luxembourg, belgium);
 
-    expect(selectWarStrainSummaryV2(conquest, WORLD_CONTENT_V2, belgium))
-      .toMatchObject({ score: 8, level: 'recovering' });
+    expect(selectWarStrainSummaryV2(conquest, WORLD_CONTENT_V2, belgium).score).toBe(0);
     expect(selectWarStrainSummaryV2(federation, WORLD_CONTENT_V2, belgium).score).toBe(0);
   });
 

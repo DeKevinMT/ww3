@@ -840,16 +840,20 @@ export class MultiplayerLobby {
 
   private synchronizeScenarioPresentation(scenario: ScenarioConfigV2): void {
     if (sameScenarioV2(this.resolvedScenario.config, scenario)) return;
+    const previousMode = this.resolvedScenario.config.mode;
+    const previousPreviewCountryId = this.pickerPreviewCountryId;
     const resolved = resolveScenarioV2(scenario);
     this.resolvedScenario = resolved;
     this.openingMetrics = new IntroOpeningMetricsCacheV2().read(new WorldEngineV2(
       resolved.config.seed,
       resolved.content,
     ));
-    this.pickerPreviewCountryId = resolved.config.mode === 'random-world'
-      ? this.openingMetrics.ranking[0]?.player.id ?? resolved.content.nationIds[0]!
-      : resolved.content.nationIds.find((id) => id === 'usa')
-        ?? resolved.content.nationIds[0]!;
-    this.pickerGridScrollTop = 0;
+    this.pickerPreviewCountryId = resolved.content.nations[previousPreviewCountryId]
+      ? previousPreviewCountryId
+      : resolved.config.mode === 'random-world'
+        ? this.openingMetrics.ranking[0]?.player.id ?? resolved.content.nationIds[0]!
+        : resolved.content.nationIds.find((id) => id === 'usa')
+          ?? resolved.content.nationIds[0]!;
+    if (previousMode !== resolved.config.mode) this.pickerGridScrollTop = 0;
   }
 }

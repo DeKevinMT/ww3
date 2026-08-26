@@ -24,6 +24,7 @@ import {
   countryTraitFactorV2,
   countryTraitModifiersV2,
   countryTraitReplacementValueV2,
+  humanStartingArmyMultiplierForContentV2,
 } from './traits';
 import { nationIdV2, territoryIdV2 } from './types';
 import { WorldEngineV2 } from './WorldEngineV2';
@@ -184,7 +185,7 @@ describe('human country-trait runtime propagation', () => {
         greenland,
         'army-capacity',
         { humanControlled: true },
-      ),
+      ) * humanStartingArmyMultiplierForContentV2(WORLD_CONTENT_V2, greenland),
       5,
     );
 

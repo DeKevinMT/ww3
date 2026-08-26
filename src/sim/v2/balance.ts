@@ -7,7 +7,7 @@ import type {
   TerrainType,
 } from './types';
 
-export const V2_RULES_VERSION = 'frontier-command-v2.62-temporary-opening-armies';
+export const V2_RULES_VERSION = 'frontier-command-v2.64-war-strain-counterattacks';
 export const V2_CONTENT_VERSION = 'natural-earth-countries-2026-v7-greenland';
 export const V2_MAP_ID = 'natural-earth-countries-2026';
 export const V2_TICK_DURATION_MS = 1_000;
@@ -97,7 +97,8 @@ export const PEACE_RECRUITMENT_ACCELERATION_MULTIPLIER = 1.5;
 export const WAR_RECRUITMENT_ACCELERATION_MULTIPLIER = 3;
 export const PEACE_RECRUITMENT_ACCELERATION_COST_MULTIPLIER = 2.5;
 export const WAR_RECRUITMENT_ACCELERATION_COST_MULTIPLIER = 4.5;
-export const DEFENDER_POSITION_MULTIPLIER = 1.25;
+/** No hidden universal defender layer; terrain and visible logistics provide positional defence. */
+export const DEFENDER_POSITION_MULTIPLIER = 1;
 /** Prepared firing positions also improve defender counter-fire without duplicating the full shield bonus. */
 export const DEFENDER_COUNTERFIRE_MULTIPLIER = 1.15;
 /**
@@ -123,6 +124,31 @@ export const COMBAT_POWER_RATIO_EXPONENT = 1;
  * deliberately gone. At 0.8% this is half of the previous baseline.
  */
 export const COMBAT_DAMAGE_EFFECTIVENESS = 0.008;
+/** Individual pulses use a much wider ±25% band than the former ±6%. */
+export const BATTLE_DAMAGE_VARIANCE_HALF_RANGE_V2 = 0.25;
+/** Expected damage starts slightly above the old baseline and rises through year one. */
+export const BATTLE_DAMAGE_MEAN_START_V2 = 1.05;
+export const BATTLE_DAMAGE_MEAN_MAX_V2 = 1.15;
+export const BATTLE_DAMAGE_ESCALATION_WEEKS_V2 = 52;
+
+export function battleDamageMeanV2(warAgeWeeks: number): number {
+  const progress = clamp(
+    Math.max(0, Number.isFinite(warAgeWeeks) ? warAgeWeeks : 0)
+      / BATTLE_DAMAGE_ESCALATION_WEEKS_V2,
+    0,
+    1,
+  );
+  return BATTLE_DAMAGE_MEAN_START_V2
+    + (BATTLE_DAMAGE_MEAN_MAX_V2 - BATTLE_DAMAGE_MEAN_START_V2)
+      * progress;
+}
+
+/** One deterministic RNG draw plus the live war-age escalation curve. */
+export function battleDamageVarianceV2(randomDraw: number, warAgeWeeks: number): number {
+  const draw = clamp(Number.isFinite(randomDraw) ? randomDraw : 0.5, 0, 1);
+  return battleDamageMeanV2(warAgeWeeks)
+    + (2 * draw - 1) * BATTLE_DAMAGE_VARIANCE_HALF_RANGE_V2;
+}
 /** Offensive formations take a modest extra exposure penalty in every exchange. */
 export const ATTACKER_MILITARY_LOSS_MULTIPLIER = 1.08;
 /** Local overmatch does not add exposure until the attacker fields more than 3:1. */
@@ -137,9 +163,33 @@ export const COMBAT_ROUTE_STRENGTH_RATIO = 0.05;
 export const DEFENSE_RESEARCH_MAX_BONUS = 0.20;
 export const DEFENSE_RESEARCH_HALF_SATURATION = 20;
 export function effectiveDefenseStatV2(rawDefense: number): number {
-  // DEF is fully linear. Research, GDP/IQ and the country's one trait may
-  // improve it, but there is no hidden global compression above neutral.
+  // This is the player-facing DEF stat. Keep it fully linear so the number in
+  // the UI continues to show every real quality and research improvement.
   return Math.max(0, rawDefense);
+}
+/** The displayed DEF number contributes 75% of its former battlefield weight. */
+export const COMBAT_DEFENSE_BASE_EFFECT_V2 = 0.75;
+/** Relative DEF advantages bend logarithmically beyond opposing ATK parity. */
+export const COMBAT_DEFENSE_RELATIVE_SOFTNESS_V2 = 8;
+/**
+ * Convert the unchanged displayed DEF stat into combat-only protection. The
+ * curve is relative to opposing ATK, so equal technological growth preserves
+ * peer balance. Every point remains useful, while an exceptional DEF advantage
+ * gains progressively less battlefield leverage above parity.
+ */
+export function combatDefenseEffectV2(
+  displayedDefense: number,
+  opposingAttack: number,
+): number {
+  const defense = Math.max(0, Number.isFinite(displayedDefense) ? displayedDefense : 0);
+  const attack = Math.max(0, Number.isFinite(opposingAttack) ? opposingAttack : 0);
+  if (defense <= 0 || attack <= 0) return defense * COMBAT_DEFENSE_BASE_EFFECT_V2;
+  const relativeDefense = defense / attack;
+  if (relativeDefense <= 1) return defense * COMBAT_DEFENSE_BASE_EFFECT_V2;
+  const compressedRatio = 1 + COMBAT_DEFENSE_RELATIVE_SOFTNESS_V2 * Math.log1p(
+    (relativeDefense - 1) / COMBAT_DEFENSE_RELATIVE_SOFTNESS_V2,
+  );
+  return attack * compressedRatio * COMBAT_DEFENSE_BASE_EFFECT_V2;
 }
 /** A fresh entrant cannot claim a force another war already destroyed. */
 export const CAPTURE_MIN_CONTRIBUTION_SHARE = 0.10;
@@ -173,23 +223,43 @@ export const ALLIANCE_OFFER_DURATION_TICKS = 26;
 export const WAR_REVENGE_WINDOW_TICKS = 52;
 /** Ending a war unilaterally creates a material 52-week treaty burden. */
 export const CEASEFIRE_PAYMENT_WEEKS = 52;
-/** Neither signatory may restart the war until a full year after the last instalment. */
-export const CEASEFIRE_POST_PAYMENT_TRUCE_TICKS = 52;
+/** Neither signatory may restart the war until two full years after the last instalment. */
+export const CEASEFIRE_POST_PAYMENT_TRUCE_TICKS = 104;
 /** A unilateral exit is a costly surrender without becoming a jackpot for a much smaller recipient. */
 export const CEASEFIRE_PAYER_WEEKLY_REVENUE_SHARE = 0.45;
 export const CEASEFIRE_PAYEE_WEEKLY_REVENUE_CAP_SHARE = 0.35;
 export const CEASEFIRE_REPEAT_COST_MULTIPLIER = 1.10;
+/** AI invaders at or below this live deployed/capacity ratio must leave offensive wars. */
+export const AI_OFFENSIVE_EXHAUSTION_ARMY_FILL_RATIO = 0.10;
+/** Exhaustion is an expensive surrender: the normal ceasefire instalment is raised by 50%. */
+export const AI_EXHAUSTION_CEASEFIRE_COST_MULTIPLIER = 1.50;
 /** Active combat consumes the training pipeline; only a fifth reaches the field. */
 export const WAR_RECRUITMENT_THROUGHPUT_FACTOR = 0.20;
 /** Ending the final front leaves a short, gradually fading economic-recovery tail. */
 export const POST_WAR_TRANSITION_FATIGUE = 8;
-export const PEACE_FATIGUE_RECOVERY_PER_WEEK = 0.25;
-/** Food is measured in million-person-weeks. */
-export const FOOD_TARGET_WEEKS = 6;
+/** Peacetime clears operational fatigue at roughly 17.2 points per year. */
+export const PEACE_FATIGUE_RECOVERY_PER_WEEK = 0.33;
+/**
+ * Territorial conquest is a national undertaking even after the shooting
+ * stops. A tiny acquisition starts with twenty fatigue points; a conquest as
+ * large as half the attacker's resulting population reaches the bounded
+ * thirty-point ceiling. Ordinary peacetime recovery therefore takes roughly
+ * 1.5-2.3 years before the separate post-war transition is counted.
+ */
+export const CONQUEST_WAR_FATIGUE_MIN = 20;
+export const CONQUEST_WAR_FATIGUE_MAX = 30;
+export const CONQUEST_WAR_FATIGUE_FULL_SCALE_SHARE = 0.50;
+/** Food is measured in million-person-weeks; healthy countries target a three-month buffer. */
+export const FOOD_TARGET_WEEKS = 12;
+/** Even the most fragile opening keeps roughly five live-demand weeks in reserve. */
+export const FOOD_OPENING_RESERVE_MIN_WEEKS = 5;
 /** Storage starts with national infrastructure and expands materially with landmass. */
-export const FOOD_STORAGE_BASE_WEEKS = 5;
+export const FOOD_STORAGE_BASE_WEEKS = 12;
+/** Every country has room for at least two months of its own live national demand. */
+export const FOOD_STORAGE_MIN_WEEKS = 8;
 export const FOOD_STORAGE_MILLIONS_PER_KM2 = 0.00002;
-export const FOOD_MAX_STOCK_WEEKS = 18;
+/** Land, wealth, traits and Food Systems may expand storage up to nine months. */
+export const FOOD_MAX_STOCK_WEEKS = 36;
 export const FOOD_PRODUCTION_RESEARCH_BONUS_PER_EFFECTIVE_LEVEL = 0.01;
 export const FOOD_PRODUCTION_RESEARCH_EFFECTIVE_CEILING = 35;
 export const FOOD_PRODUCTION_RESEARCH_HALF_SATURATION = 20;
@@ -383,11 +453,6 @@ export function nuclearPowerTierCostV2(tier: number): number {
 export const AI_DECISION_INTERVAL = 8;
 /** Existing crises get time to develop before the wider 2026 order starts fracturing. */
 export const AI_FIRST_WAR_TICK = 78;
-/** 17 Aug 2026 + 176 weeks reaches January 2030 in the campaign calendar. */
-export const AI_HUMAN_ATTACK_SAFETY_END_TICK = 176;
-export function aiHumanAttackSafetyActiveV2(tick: number): boolean {
-  return Math.max(0, Math.floor(tick)) < AI_HUMAN_ATTACK_SAFETY_END_TICK;
-}
 /** New expansion wars are meaningful events, not something the world opens every few weeks. */
 export const AI_GLOBAL_WAR_COOLDOWN = 78;
 /** Established great powers strongly prefer proxy/regional expansion over a
@@ -619,13 +684,68 @@ export function researchFundingShareV2(allocations: ResearchAllocationsV2, branc
 }
 
 export const TERRAIN_DEFENSE_MODIFIER: Readonly<Record<TerrainType, number>> = {
-  plains: 1,
+  plains: 0.96,
   desert: 1,
-  coastal: 1,
-  arctic: 1,
-  jungle: 1,
-  urban: 1,
-  mountain: 1,
+  coastal: 1.04,
+  arctic: 1.09,
+  jungle: 1.12,
+  urban: 1.14,
+  mountain: 1.18,
+};
+
+/** Physical movement and supply-chain throughput on a front. */
+export const TERRAIN_SUPPLY_MODIFIER: Readonly<Record<TerrainType, number>> = {
+  plains: 1.06,
+  urban: 1.05,
+  coastal: 1.08,
+  desert: 0.89,
+  mountain: 0.87,
+  jungle: 0.85,
+  arctic: 0.82,
+};
+
+/** Recurring expense of sustaining an operation through the target terrain. */
+export const TERRAIN_OPERATION_COST_MODIFIER: Readonly<Record<TerrainType, number>> = {
+  plains: 0.96,
+  coastal: 0.96,
+  urban: 1.08,
+  desert: 1.13,
+  jungle: 1.16,
+  mountain: 1.17,
+  arctic: 1.20,
+};
+
+/** Weekly infrastructure/land-condition recovery efficiency. */
+export const TERRAIN_CONDITION_RECOVERY_MODIFIER: Readonly<Record<TerrainType, number>> = {
+  urban: 1.12,
+  plains: 1.05,
+  coastal: 1.04,
+  mountain: 0.92,
+  desert: 0.90,
+  jungle: 0.88,
+  arctic: 0.82,
+};
+
+/** Domestic food capacity on top of the calibrated real-world opening anchor. */
+export const TERRAIN_FOOD_PRODUCTION_MODIFIER: Readonly<Record<TerrainType, number>> = {
+  plains: 1.08,
+  jungle: 1.04,
+  coastal: 1.03,
+  mountain: 0.96,
+  urban: 0.94,
+  desert: 0.88,
+  arctic: 0.82,
+};
+
+/** Signed annual GDP-growth percentage-point adjustment, not an opening-GDP rewrite. */
+export const TERRAIN_ECONOMY_GROWTH_ADJUSTMENT: Readonly<Record<TerrainType, number>> = {
+  urban: 0.004,
+  coastal: 0.003,
+  plains: 0.0005,
+  jungle: -0.001,
+  mountain: -0.0015,
+  desert: -0.002,
+  arctic: -0.003,
 };
 
 export function clamp(value: number, minimum: number, maximum: number): number {

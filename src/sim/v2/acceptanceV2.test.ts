@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { nextRandom } from '../../game/random';
 import {
+  battleDamageVarianceV2,
   COMBAT_DAMAGE_EFFECTIVENESS,
   COMBAT_POWER_RATIO_EXPONENT,
+  combatDefenseEffectV2,
   AI_FIRST_WAR_TICK,
   AI_GLOBAL_WAR_COOLDOWN,
   AI_REGIONAL_ESCALATION_COOLDOWN,
@@ -18,6 +20,7 @@ import { createWorldStateV2 } from './bootstrap';
 import {
   stateTerritoryArmyCapacityTargetV2,
   stateTerritoryArmySupportCeilingV2,
+  synchronizeArmyCapacityV2,
 } from './capacity';
 import { WORLD_CONTENT_V2, type NationContentV2, type TerritoryContentV2, type WorldContentV2 } from './content';
 import { invariantErrorsV2 } from './invariants';
@@ -238,16 +241,17 @@ function runWorldSoakSeed(seed: number): number {
 }
 
 describe('V2 combat and absorption acceptance', () => {
-  it('applies the 1.25 defender multiplier exactly once', () => {
+  it('uses terrain and supply without a hidden universal defender multiplier', () => {
     const { state, currentWar, currentOperation, source, target } = pulseFixture();
     const rng = { rngState: state.rngState };
-    const varianceA = 0.94 + nextRandom(rng) * 0.12;
+    const varianceA = battleDamageVarianceV2(nextRandom(rng), 0);
     const attack = selectEffectiveAttackV2(state, FIXTURE_CONTENT, A, source.army);
     const defense = selectEffectiveDefenseV2(state, FIXTURE_CONTENT, B, target.army);
     const attackerSupply = supplyFactorV2(state, FIXTURE_CONTENT, A, A_HOME, false);
     const defenderSupply = supplyFactorV2(state, FIXTURE_CONTENT, B, B_FRONT, false);
     const attackPressure = source.army.manpower * attack * attackerSupply;
-    const expectedShield = target.army.manpower * defense * DEFENDER_POSITION_MULTIPLIER
+    const expectedShield = target.army.manpower * combatDefenseEffectV2(defense, attack)
+      * DEFENDER_POSITION_MULTIPLIER
       * TERRAIN_DEFENSE_MODIFIER.plains * defenderSupply;
     const expectedRate = Math.max(0, COMBAT_DAMAGE_EFFECTIVENESS * Math.pow(
       attackPressure / expectedShield,
@@ -259,10 +263,9 @@ describe('V2 combat and absorption acceptance', () => {
     );
 
     const event = resolveBattlePulseV2(state, FIXTURE_CONTENT, currentWar, currentOperation)!;
+    expect(DEFENDER_POSITION_MULTIPLIER).toBe(1);
     expect(event.defenderPower).toBe(round(expectedShield));
     expect(event.defenderLosses).toBe(round(expectedDamage));
-    expect(event.defenderPower).not.toBeCloseTo(round(target.army.manpower * defense * defenderSupply), 4);
-    expect(event.defenderPower).not.toBeCloseTo(round(target.army.manpower * defense * 1.25 * 1.25 * defenderSupply), 4);
   });
 
   it('keeps ownership unchanged after a failed pressure pulse', () => {
@@ -371,6 +374,7 @@ describe('V2 determinism, saves, and invariants acceptance', () => {
   it('round-trips an active war/research save and preserves the next 100 hashes', () => {
     const continuous = new WorldEngineV2(92, FIXTURE_CONTENT);
     continuous.state.tick = 51;
+    synchronizeArmyCapacityV2(continuous.state, FIXTURE_CONTENT);
     continuous.state.players[A].research.progress['advanced-weapons'] = 3.25;
     const currentWar = war(continuous.state);
     currentWar.startedTick = 40;

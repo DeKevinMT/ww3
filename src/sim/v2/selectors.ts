@@ -55,6 +55,7 @@ import {
   FOOD_PRICE_LEVEL_SOFTENING_THRESHOLD,
   FOOD_SHORTAGE_POPULATION_LOSS,
   FOOD_STORAGE_BASE_WEEKS,
+  FOOD_STORAGE_MIN_WEEKS,
   FOOD_STORAGE_MILLIONS_PER_KM2,
   FOOD_PRODUCTION_RESEARCH_BONUS_PER_EFFECTIVE_LEVEL,
   FOOD_PRODUCTION_RESEARCH_EFFECTIVE_CEILING,
@@ -163,6 +164,9 @@ import {
   WORLD_CONTENT_V2,
   nationalCombatSystemQualityMultiplierV2,
   openingCombatQualityMultiplierV2,
+  territoryTerrainEconomyGrowthAdjustmentV2,
+  territoryTerrainFoodProductionMultiplierV2,
+  territoryTerrainOperationCostMultiplierV2,
   type WorldContentV2,
 } from './content';
 import { calculateBlendedFiscalCapacityV2 } from './fiscal';
@@ -170,6 +174,7 @@ import { localArmyBaseQualityV2, mixArmyBaseQualityV2, nationArmyBaseQualityV2 }
 import {
   initialNationArmyCapacityBenchmarkV2,
   nationalArmyCapacityTargetV2,
+  openingArmyCapacityMultiplierV2,
   stateArmyCapacityTargetsV2,
 } from './capacity';
 import {
@@ -1146,6 +1151,10 @@ export function selectRecruitmentThroughputV2(
   _powerSnapshot?: PowerSnapshotV2,
 ): number {
   const army = selectTotalManpowerV2(state, playerId);
+  // The free opening soldiers remain a finite, separately tracked pool, but
+  // their temporary live Army cap is genuine room for ordinary paid training.
+  // Free and paid soldiers both occupy that room, so only the physical gap can
+  // be recruited and the capacity disappears on its normal 20-year schedule.
   const gap = Math.max(0, army.capacity - army.deployed);
   const activeWars = selectWarsOfV2(state, playerId).length;
   const wartimeTraining = activeWars > 0
@@ -1267,7 +1276,8 @@ export function selectFoodLandCapacityV2(
       : 1;
     productivePopulation += population;
     calibratedProduction += population * selfSufficiency
-      * conditionYield * economicYield;
+      * conditionYield * economicYield
+      * territoryTerrainFoodProductionMultiplierV2(content, view.id);
   }
   if (productivePopulation <= 0) return 0;
   // FAOSTAT's calorie-based self-sufficiency ratio is the immutable opening
@@ -1347,7 +1357,11 @@ export function selectFoodDemandV2(state: WorldStateV2, playerId: PlayerId): num
   const nation = state.players[playerId];
   if (!nation) return 0;
   const population = Math.max(0.01, selectControlledPopulationV2(state, playerId));
-  const army = selectTotalManpowerV2(state, playerId).deployed;
+  const army = Math.max(
+    0,
+    selectTotalManpowerV2(state, playerId).deployed
+      - selectOpeningArmyBonusRemainingV2(state, playerId),
+  );
   const foodResearch = 0.65 * nation.research.effectLevels['economy-growth']
     + 0.35 * nation.research.effectLevels.supply;
   const pressureRelief = 1 / (1 + FOOD_PRESSURE_RESEARCH_RELIEF_PER_LEVEL * foodResearch);
@@ -1390,7 +1404,11 @@ export function selectFoodStorageCapacityV2(
       'food-storage-capacity',
       traitNationContextV2(state, playerId),
     );
-  return round(clamp(physicalCapacity, demand * 2, demand * FOOD_MAX_STOCK_WEEKS));
+  return round(clamp(
+    physicalCapacity,
+    demand * FOOD_STORAGE_MIN_WEEKS,
+    demand * FOOD_MAX_STOCK_WEEKS,
+  ));
 }
 
 interface FoodPlanV2 {
@@ -2008,8 +2026,18 @@ function economicGrowthRatesV2(
     ? ECONOMY_FOOD_SURPLUS_MAX_BONUS * clamp((foodCoverage - 0.98) / 0.02, 0, 1)
     : -ECONOMY_FOOD_SHORTAGE_MAX_DRAG
       * clamp((0.90 - foodCoverage) / 0.50, 0, 1) ** 1.25;
+  const territories = selectTerritoriesOfV2(state, playerId);
+  const terrainWeight = territories.reduce((sum, territory) => (
+    sum + Math.max(0.000001, territory.economy)
+  ), 0);
+  const terrain = terrainWeight <= 0 ? 0 : territories.reduce((sum, territory) => (
+    sum + Math.max(0.000001, territory.economy)
+      * territoryTerrainEconomyGrowthAdjustmentV2(content, territory.id)
+  ), 0) / terrainWeight;
   return {
-    annual: clamp(base + investment + research + food - warGrowthDrag,
+    // Terrain is projected before the canonical national bounds. The commit
+    // phase consumes this one final rate, so visible and applied growth agree.
+    annual: clamp(base + investment + research + food + terrain - warGrowthDrag,
       ECONOMY_ANNUAL_GROWTH_MIN, ECONOMY_ANNUAL_GROWTH_MAX),
     base,
     investment,
@@ -2137,6 +2165,18 @@ export function selectWeeklyFinanceBreakdownV2(
     0,
     army.deployed - selectOpeningArmyBonusRemainingV2(state, playerId),
   );
+  const openingCapacityMultiplier = openingArmyCapacityMultiplierV2(
+    state,
+    content,
+    playerId,
+  );
+  const paidCapacity = openingCapacityMultiplier > 1
+    ? round(army.capacity / openingCapacityMultiplier)
+    : army.capacity;
+  // Temporary opening capacity is operationally recruitable. Keep the
+  // underlying paid capacity separately for standing-cap upkeep so the free
+  // opening envelope itself does not acquire a hidden maintenance bill.
+  const recruitableArmyGap = Math.max(0, army.capacity - army.deployed);
   const activeWars = selectWarsOfV2(state, playerId).length;
   const warPressure = selectWarPressureV2(state, playerId);
   const atWar = activeWars > 0;
@@ -2332,9 +2372,10 @@ export function selectWeeklyFinanceBreakdownV2(
   const weaponsUpkeep = 1 + 0.005 * nation.research.effectLevels.attack;
   const baselineUpkeep = weeklyRealDefence * (
     0.35 * paidDeployed / initialArmy
-    + 0.65 * army.capacity / initialArmy
+    + 0.65 * paidCapacity / initialArmy
   );
-  const weaponsPremium = weeklyRealDefence * 0.65 * army.capacity / initialArmy * (weaponsUpkeep - 1);
+  const weaponsPremium = weeklyRealDefence * 0.65 * paidCapacity / initialArmy
+    * (weaponsUpkeep - 1);
   const armyUpkeep = (baselineUpkeep + weaponsPremium) * armyCostOfLiving
     * countryTraitFactorV2(
       playerId,
@@ -2371,7 +2412,7 @@ export function selectWeeklyFinanceBreakdownV2(
   const accelerationCostMultiplier = atWar
     ? WAR_RECRUITMENT_ACCELERATION_COST_MULTIPLIER : PEACE_RECRUITMENT_ACCELERATION_COST_MULTIPLIER;
   const acceleratedRecruitmentRequest = Math.min(
-    Math.max(0, army.capacity - army.deployed - fundedPassiveCapacity),
+    Math.max(0, recruitableArmyGap - fundedPassiveCapacity),
     trainingPipeline * accelerationMultiplier * accelerationNeed
       * countryTraitFactorV2(
         playerId,
@@ -2411,12 +2452,12 @@ export function selectWeeklyFinanceBreakdownV2(
   const acceleratedRecruitment = atWar ? 0 : affordableAcceleratedRecruitment;
   const reservePassiveDeployment = atWar ? Math.min(
     nation.trainedReserves,
-    Math.max(0, army.capacity - army.deployed),
+    recruitableArmyGap,
     fundedPassiveCapacity * reserveDeploymentThroughput,
   ) : 0;
   const reserveAcceleratedDeployment = atWar ? Math.min(
     Math.max(0, nation.trainedReserves - reservePassiveDeployment),
-    Math.max(0, army.capacity - army.deployed - reservePassiveDeployment),
+    Math.max(0, recruitableArmyGap - reservePassiveDeployment),
     affordableAcceleratedRecruitment * reserveDeploymentThroughput,
   ) : 0;
   const reserveDeployment = reservePassiveDeployment + reserveAcceleratedDeployment;
@@ -2762,7 +2803,12 @@ export function projectFinanceManpowerPhaseV2(
     ? clamp(demobilizationTarget / deployedBefore, 0, 1) : 1;
   const projected = current.map((army) => {
     const capacity = capacityTargets.get(army.id) ?? 0;
-    const manpower = round(army.manpower * demobilizationScale);
+    // A no-op (or rounded) demobilisation may never manufacture a fraction of
+    // a soldier or push a force above an exact deployment ceiling.
+    const manpower = Math.min(
+      army.manpower,
+      round(army.manpower * demobilizationScale),
+    );
     const localQuality = localArmyBaseQualityV2(content, army.id);
     return {
       id: army.id,
@@ -2793,8 +2839,13 @@ export function projectFinanceManpowerPhaseV2(
       Math.max(0, army.capacity - army.manpower),
       totalLocalRecruitmentRoom > 0 ? recruitedUnits * gap / totalLocalRecruitmentRoom : 0,
     );
-    mixArmyBaseQualityV2(army, added, localArmyBaseQualityV2(content, army.id));
-    army.manpower = round(army.manpower + added);
+    if (added > 0) {
+      mixArmyBaseQualityV2(army, added, localArmyBaseQualityV2(content, army.id));
+      // Rounding to the canonical six decimals must never lift newly trained
+      // personnel a fraction above local capacity. An unchanged, legitimately
+      // supported force above that local cap must remain untouched.
+      army.manpower = Math.min(army.capacity, round(army.manpower + added));
+    }
   }
   const deployedAfterFinance = projected.reduce((sum, army) => sum + army.manpower, 0);
   const recruited = Math.max(0, deployedAfterFinance - deployedAfterDemobilization);
@@ -3213,6 +3264,40 @@ export function selectTerritoryRouteDistanceKmV2(
     .find((connection) => connection.targetId === targetId)?.distanceKm;
 }
 
+interface RepresentativeWarRouteV2 {
+  sourceId: TerritoryId;
+  targetId: TerritoryId;
+  access: Exclude<WarAccessV2, 'none'>;
+  distanceKm?: number;
+}
+
+/** Stable real connection used while a war is still mobilizing. */
+function representativeWarRouteV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  commanderId: PlayerId,
+  opponentId: PlayerId,
+): RepresentativeWarRouteV2 | undefined {
+  const candidates: RepresentativeWarRouteV2[] = [];
+  for (const source of selectTerritoriesOfV2(state, commanderId)) {
+    for (const connection of content.territories[source.id]?.connections ?? []) {
+      if (state.territories[connection.targetId]?.owner !== opponentId) continue;
+      candidates.push({
+        sourceId: source.id,
+        targetId: connection.targetId,
+        access: connection.kind === 'sea' ? 'naval' : 'land',
+        distanceKm: connection.distanceKm,
+      });
+    }
+  }
+  return candidates.sort((left, right) => (
+    Number(left.access === 'naval') - Number(right.access === 'naval')
+      || (left.distanceKm ?? 0) - (right.distanceKm ?? 0)
+      || left.sourceId.localeCompare(right.sourceId)
+      || left.targetId.localeCompare(right.targetId)
+  ))[0];
+}
+
 function selectWarOperationsLogisticsLoadV2(
   state: WorldStateV2,
   content: WorldContentV2,
@@ -3223,11 +3308,15 @@ function selectWarOperationsLogisticsLoadV2(
     const opponentId = war.attackerId === playerId ? war.defenderId : war.attackerId;
     const operations = war.attackerId === playerId ? war.attackerOperations : war.defenderOperations;
     if (operations.length === 0) {
-      const inferredAccess = selectWarAccessTypeV2(state, content, playerId, opponentId);
+      const route = representativeWarRouteV2(state, content, playerId, opponentId);
+      const inferredAccess = route?.access
+        ?? selectWarAccessTypeV2(state, content, playerId, opponentId);
       const access = inferredAccess === 'none' ? 'land' : inferredAccess;
-      const distance = access === 'naval'
-        ? selectWarRouteDistanceKmV2(state, content, playerId, opponentId) : undefined;
-      return sum + warAccessOperationMultiplierV2(access, distance);
+      const distance = route?.distanceKm ?? (access === 'naval'
+        ? selectWarRouteDistanceKmV2(state, content, playerId, opponentId) : undefined);
+      const terrainLoad = route
+        ? territoryTerrainOperationCostMultiplierV2(content, route.targetId) : 1;
+      return sum + warAccessOperationMultiplierV2(access, distance) * terrainLoad;
     }
     return sum + operations.reduce((fronts, operation) => {
       const load = warAccessOperationMultiplierV2(
@@ -3241,7 +3330,8 @@ function selectWarOperationsLogisticsLoadV2(
           traitOperationContextV2(state, content, war, operation, playerId),
         )
         : 1;
-      return fronts + load * traitFactor;
+      return fronts + load * traitFactor
+        * territoryTerrainOperationCostMultiplierV2(content, operation.targetId);
     }, 0);
   }, 0);
 }
@@ -3256,6 +3346,7 @@ function traitAdjustedOperationCostLoadV2(
   access: Exclude<WarAccessV2, 'none'>,
   distanceKm: number | undefined,
   context: TraitEvaluationContextV2,
+  terrainCostMultiplier = 1,
 ): number {
   const fullLoad = warAccessOperationMultiplierV2(access, distanceKm);
   const accessOnlyLoad = warAccessOperationMultiplierV2(access);
@@ -3270,7 +3361,7 @@ function traitAdjustedOperationCostLoadV2(
     playerId,
     'operation-cost',
     context,
-  );
+  ) * terrainCostMultiplier;
 }
 
 function selectWarOperationsCostLoadV2(
@@ -3283,10 +3374,12 @@ function selectWarOperationsCostLoadV2(
     const opponentId = war.attackerId === playerId ? war.defenderId : war.attackerId;
     const operations = war.attackerId === playerId ? war.attackerOperations : war.defenderOperations;
     if (operations.length === 0) {
-      const inferredAccess = selectWarAccessTypeV2(state, content, playerId, opponentId);
+      const route = representativeWarRouteV2(state, content, playerId, opponentId);
+      const inferredAccess = route?.access
+        ?? selectWarAccessTypeV2(state, content, playerId, opponentId);
       const access = inferredAccess === 'none' ? 'land' : inferredAccess;
-      const distance = access === 'naval'
-        ? selectWarRouteDistanceKmV2(state, content, playerId, opponentId) : undefined;
+      const distance = route?.distanceKm ?? (access === 'naval'
+        ? selectWarRouteDistanceKmV2(state, content, playerId, opponentId) : undefined);
       return sum + traitAdjustedOperationCostLoadV2(
         playerId,
         access,
@@ -3296,6 +3389,7 @@ function selectWarOperationsCostLoadV2(
           traitWarContextV2(war, playerId),
           { access },
         ),
+        route ? territoryTerrainOperationCostMultiplierV2(content, route.targetId) : 1,
       );
     }
     return sum + operations.reduce((fronts, operation) => (
@@ -3304,6 +3398,7 @@ function selectWarOperationsCostLoadV2(
         operation.access,
         selectTerritoryRouteDistanceKmV2(content, operation.sourceId, operation.targetId),
         traitOperationContextV2(state, content, war, operation, playerId),
+        territoryTerrainOperationCostMultiplierV2(content, operation.targetId),
       )
     ), 0);
   }, 0);

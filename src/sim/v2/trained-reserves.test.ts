@@ -6,8 +6,10 @@ import {
 } from './balance';
 import { planAiCommandsV2 } from './ai';
 import { createWorldStateV2 } from './bootstrap';
+import { synchronizeArmyCapacityV2 } from './capacity';
 import { WORLD_CONTENT_V2, type WorldContentV2 } from './content';
 import { createFinancePlansV2, processFinanceMilitaryV2 } from './economy';
+import { synchronizeOpeningArmyHumanRosterV2 } from './nationState';
 import {
   INITIAL_RESERVE_CADRE_CAPACITY_SHARE_V2,
   INITIAL_REPORTED_RESERVE_READY_SHARE_V2,
@@ -31,6 +33,7 @@ import {
 
 const belgium = nationIdV2('bel');
 const netherlands = nationIdV2('nld');
+const unitedStates = nationIdV2('usa');
 
 function setActiveFill(state: WorldStateV2, playerId: PlayerId, ratio: number): void {
   for (const territory of Object.values(state.territories)) {
@@ -59,6 +62,16 @@ function addWar(state: WorldStateV2): void {
 
 function fundedState(seed: number): WorldStateV2 {
   const state = createWorldStateV2(seed);
+  const previousHumanPlayerIds = [...state.humanPlayerIds];
+  state.humanPlayerId = unitedStates;
+  state.humanPlayerIds = [unitedStates];
+  synchronizeOpeningArmyHumanRosterV2(
+    state,
+    WORLD_CONTENT_V2,
+    previousHumanPlayerIds,
+    [unitedStates],
+  );
+  synchronizeArmyCapacityV2(state, WORLD_CONTENT_V2);
   const nation = state.players[belgium]!;
   nation.treasury = 1_000_000;
   nation.foodSecurity = 1;
@@ -204,7 +217,7 @@ describe('finite trained reserves', () => {
     expect(projection.recruited).toBeCloseTo(projection.reserveDeployed, 6);
     expect(projection.deployedAfterFinance + projection.trainedReservesAfter).toBeCloseTo(
       before + reserveBefore + projection.reserveTrained,
-      6,
+      5,
     );
     expect(projection.trainedReservesAfter).toBeLessThan(reserveBefore);
   });

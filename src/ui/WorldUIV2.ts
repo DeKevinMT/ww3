@@ -1,5 +1,16 @@
-import { REGION_BY_ID } from '../game/data/worldMap';
-import { mapBridge, type MapTerritoryState, type WorldMapEngineContract } from '../game/map/bridge';
+import {
+  REGION_BY_ID,
+  terrainProfileDisplayPercentages,
+  type TerrainProfileEntry,
+} from '../game/data/worldMap';
+import {
+  mapBridge,
+  type MapOpeningMobilisationState,
+  type MapTerritoryState,
+  type WorldMapEngineContract,
+} from '../game/map/bridge';
+import { MapStatsRefreshCadence } from '../game/map/mapStatsCadence';
+import { terrainPresentation } from '../game/terrainPresentation';
 import {
   CONQUEST_CAPTURE_GUARD_TICKS,
   DEFENSE_RESEARCH_HALF_SATURATION,
@@ -30,17 +41,26 @@ import {
   TAX_EFFICIENCY_RESEARCH_HALF_SATURATION,
   WAR_MOBILIZATION_TICKS,
 } from '../sim/v2/balance';
-import { WORLD_CONTENT_V2, type WorldContentV2 } from '../sim/v2/content';
 import {
+  territoryTerrainEffectsV2,
+  territoryTerrainProfileV2,
+  WORLD_CONTENT_V2,
+  type TerritoryTerrainEffectsV2,
+  type WorldContentV2,
+} from '../sim/v2/content';
+import {
+  openingArmyCapacityMultiplierV2,
   stateTerritoryArmyCapacityTargetV2,
   stateTerritoryArmySupportCeilingV2,
 } from '../sim/v2/capacity';
 import {
   quoteTerritoryIntegrationV2,
+  territoryIntegrationWarPressureRevolutionRiskV2,
   type TerritoryIntegrationAccessV2,
   type TerritoryIntegrationQuoteV2,
 } from '../sim/v2/integration';
 import { openingStartingTreasuryV2 } from '../sim/v2/nationState';
+import { OPENING_ARMY_BONUS_DURATION_TICKS_V2 } from '../sim/v2/openingArmyBonus';
 import type { GameModeV2, ScenarioConfigV2 } from '../sim/v2/scenarios';
 import {
   selectArmyStrengthV2,
@@ -51,6 +71,7 @@ import {
   selectNationalIqViewV2,
   selectPopulationDynamicsV2,
   selectResearchEffectImpactV2,
+  selectWarRouteDistanceKmV2,
   type MilitaryBaseSnapshotV2,
   type PowerSnapshotV2,
 } from '../sim/v2/selectors';
@@ -69,12 +90,23 @@ import {
   enqueueWarOutcomeV2,
   finishWarOutcomePauseV2,
 } from './warOutcomeQueue';
+import { selectExpansionThreatSummaryV2 } from '../sim/v2/warStrain';
+import {
+  previewWarLogisticsV2,
+  type WarLogisticsPreviewV2,
+} from '../sim/v2/warLogisticsPreview';
 import { selectWarStrainSummaryV2 } from './warStrain';
 import {
   captureScrollSessions,
   drawerScrollSessionId,
   restoreScrollSessions,
 } from './scrollSessions';
+import {
+  rankWarTargetRecommendationsV2,
+  warTargetFusionValueBonusV2,
+  warTargetRouteLabelV2,
+  type AvailableWarTargetAccessV2,
+} from './warTargetRecommendations';
 import type {
   ArmyStateV2,
   ArmyStrengthV2,
@@ -123,6 +155,10 @@ type WarTargetCandidate = {
   target: NationViewV2;
   declaration: WarDeclarationStatusV2;
   chance: number;
+  access: AvailableWarTargetAccessV2;
+  distanceKm?: number;
+  gdpPerCapitaThousands: number;
+  nationalIq: number;
 };
 
 /**
@@ -189,16 +225,17 @@ export interface WorldEngineV2UIContract {
 
 export interface WorldUIV2Options {
   introOpen?: boolean;
+  initialPreviewCountryId?: PlayerId;
   multiplayer?: boolean;
   controllerNames?: ReadonlyMap<PlayerId, string>;
   onMultiplayerRequested?: (preferredCountryId: PlayerId) => void;
   scenarioConfig?: ScenarioConfigV2;
   onScenarioModeRequested?: (mode: GameModeV2) => void;
-  onScenarioRerollRequested?: () => void;
+  onScenarioRerollRequested?: (preferredCountryId: PlayerId) => void;
   onNewGameRequested?: () => void;
 }
 
-type PanelMode = 'war' | 'nation' | 'progress' | 'economy' | 'ranking';
+type PanelMode = 'war' | 'nation' | 'research' | 'economy' | 'ranking';
 export type IntroSort = 'power' | 'military' | 'aggressiveness' | 'attack' | 'defense' | 'iq' | 'manpower' | 'economy' | 'gdp-per-capita' | 'economic-growth' | 'tax' | 'population' | 'growth';
 
 export const INTRO_SORT_OPTIONS: readonly { value: IntroSort; label: string }[] = [
@@ -455,6 +492,66 @@ export function treasuryTopbarPresentationV2(
     trend: `${signedCash(weeklyNet)}/wk`,
     trendClassName: weeklyNet >= 0 ? 'is-positive' : 'is-negative',
     ariaLabel: `Current empire treasury ${cash(treasury)}; projected recurring net ${signedCash(weeklyNet)} per week`,
+  });
+}
+
+export type SuspicionRiskLevelV2 =
+  | 'clear'
+  | 'minimal'
+  | 'watched'
+  | 'exposed'
+  | 'danger'
+  | 'critical';
+
+export interface SuspicionRiskPresentationV2 {
+  readonly score: number;
+  readonly level: SuspicionRiskLevelV2;
+  readonly label: string;
+  readonly guidance: string;
+}
+
+/**
+ * Player-facing political risk language. Suspicion is intentionally shown as
+ * the durable 0-100 declaration gate; Expansion Threat remains the faster
+ * signal for a burst of wars or conquests.
+ */
+export function suspicionRiskPresentationV2(value: number): SuspicionRiskPresentationV2 {
+  const score = Math.round(clamp(value, 0, 100));
+  if (score === 0) return Object.freeze({
+    score,
+    level: 'clear',
+    label: 'NO THREAT',
+    guidance: '0 Suspicion means 0% chance that AI starts a new war against you.',
+  });
+  if (score < 20) return Object.freeze({
+    score,
+    level: 'minimal',
+    label: 'MINIMAL',
+    guidance: 'Practically safe. AI attack interest remains negligible at this level.',
+  });
+  if (score < 40) return Object.freeze({
+    score,
+    level: 'watched',
+    label: 'WATCHED',
+    guidance: 'Other powers are watching, but you remain below the 40-point exposure line.',
+  });
+  if (score < 60) return Object.freeze({
+    score,
+    level: 'exposed',
+    label: 'EXPOSED',
+    guidance: 'AI powers now meaningfully consider attacks. Slow down and let Suspicion cool.',
+  });
+  if (score < 80) return Object.freeze({
+    score,
+    level: 'danger',
+    label: 'DANGER',
+    guidance: 'Attack interest is high. Another rapid war or conquest can trigger a response.',
+  });
+  return Object.freeze({
+    score,
+    level: 'critical',
+    label: 'CRITICAL',
+    guidance: 'You are an urgent target. Stop expanding until this meter has fallen.',
   });
 }
 
@@ -758,6 +855,91 @@ export interface NationPickerRenderOptionsV2 {
   scenarioEditable?: boolean;
 }
 
+function terrainProfileHighlights(profile: readonly TerrainProfileEntry[]): readonly TerrainProfileEntry[] {
+  const firstThree = profile.slice(0, 3);
+  const coastal = profile.find((entry) => entry.terrain === 'coastal');
+  if (!coastal || firstThree.some((entry) => entry.terrain === 'coastal')) return firstThree;
+  return [...profile.slice(0, 2), coastal];
+}
+
+function terrainProfileBadges(profile: readonly TerrainProfileEntry[]): string {
+  const highlights = terrainProfileHighlights(profile);
+  const percentages = terrainProfileDisplayPercentages(highlights);
+  return `<span class="terrain-profile-badges">${highlights.map((entry, index) => {
+    const style = terrainPresentation(entry.terrain);
+    return `<b style="--terrain:${style.cssColor}"><i>${style.glyph}</i><span>${escapeHtml(style.label.toUpperCase())}</span><em>${percentages[index]}%</em></b>`;
+  }).join('')}</span>`;
+}
+
+function terrainEffectMetrics(effects: TerritoryTerrainEffectsV2): string {
+  const multiplierMetric = (label: string, multiplier: number, lowerIsBetter = false): string => {
+    const delta = (multiplier - 1) * 100;
+    const benefit = lowerIsBetter ? -delta : delta;
+    const tone = Math.abs(delta) < 0.05 ? 'is-neutral' : benefit > 0 ? 'is-positive' : 'is-negative';
+    return `<b class="${tone}"><em>${label}</em>${delta >= 0 ? '+' : '−'}${format(Math.abs(delta), 1)}%</b>`;
+  };
+  const growth = effects.annualEconomyGrowthAdjustment * 100;
+  const growthTone = Math.abs(growth) < 0.005 ? 'is-neutral' : growth > 0 ? 'is-positive' : 'is-negative';
+  return `<span class="terrain-effect-metrics">${[
+    multiplierMetric('DEF', effects.defense),
+    multiplierMetric('SUPPLY', effects.supply),
+    multiplierMetric('OPS', effects.operationCost, true),
+    multiplierMetric('REPAIR', effects.conditionRecovery),
+    multiplierMetric('FOOD', effects.foodProduction),
+    `<b class="${growthTone}"><em>GDP/YR</em>${growth >= 0 ? '+' : '−'}${format(Math.abs(growth), 2)}PP</b>`,
+  ].join('')}</span>`;
+}
+
+function terrainProfilePanel(
+  profile: readonly TerrainProfileEntry[],
+  effects: TerritoryTerrainEffectsV2,
+): string {
+  const highlights = terrainProfileHighlights(profile);
+  const dominant = highlights[0];
+  const dominantStyle = terrainPresentation(dominant?.terrain ?? 'plains');
+  const percentages = terrainProfileDisplayPercentages(highlights);
+  const highlightedShare = Math.max(
+    0.000001,
+    highlights.reduce((sum, entry) => sum + entry.share, 0),
+  );
+  const terrainCards = highlights.map((entry, index) => {
+    const style = terrainPresentation(entry.terrain);
+    return `<article class="${index === 0 ? 'is-dominant' : ''}" style="--terrain:${style.cssColor}"><i>${style.glyph}</i><div><span>${index === 0 ? 'PRIMARY' : `TERRAIN ${index + 1}`}</span><strong>${escapeHtml(style.label)}</strong></div><b>${percentages[index]}%</b></article>`;
+  }).join('');
+  const composition = highlights.map((entry, index) => {
+    const style = terrainPresentation(entry.terrain);
+    const normalizedShare = entry.share / highlightedShare * 100;
+    return `<b style="--terrain:${style.cssColor};width:${format(normalizedShare, 3)}%" title="${escapeHtml(style.label)} ${percentages[index]}%"></b>`;
+  }).join('');
+  const metric = (
+    code: string,
+    label: string,
+    multiplier: number,
+    lowerIsBetter = false,
+  ): string => {
+    const delta = (multiplier - 1) * 100;
+    const benefit = lowerIsBetter ? -delta : delta;
+    const tone = Math.abs(delta) < 0.05 ? 'is-neutral' : benefit > 0 ? 'is-positive' : 'is-negative';
+    return `<article class="${tone}"><i>${code}</i><div><span>${label}</span><strong>${delta >= 0 ? '+' : '−'}${format(Math.abs(delta), 1)}%</strong></div></article>`;
+  };
+  const growth = effects.annualEconomyGrowthAdjustment * 100;
+  const growthTone = Math.abs(growth) < 0.005 ? 'is-neutral' : growth > 0 ? 'is-positive' : 'is-negative';
+  return `<section class="terrain-profile-card" style="--terrain:${dominantStyle.cssColor}">
+    <header class="terrain-profile-card__head"><i>${dominantStyle.glyph}</i><div><span>STRATEGIC TERRAIN</span><strong>${escapeHtml(dominantStyle.label)}-led profile</strong></div><b>${highlights.length} ACTIVE TYPES</b></header>
+    <div class="terrain-profile-composition">${terrainCards}</div>
+    <i class="terrain-composition-bar" aria-label="Strategic terrain composition">${composition}</i>
+    <span class="terrain-effect-label">TERRAIN EFFECTS</span>
+    <div class="terrain-effect-grid">
+      ${metric('DEF', 'DEFENCE', effects.defense)}
+      ${metric('SUP', 'SUPPLY', effects.supply)}
+      ${metric('OPS', 'OPERATION COST', effects.operationCost, true)}
+      ${metric('REP', 'RECOVERY', effects.conditionRecovery)}
+      ${metric('FOD', 'FOOD OUTPUT', effects.foodProduction)}
+      <article class="${growthTone}"><i>GDP</i><div><span>GROWTH / YEAR</span><strong>${growth >= 0 ? '+' : '−'}${format(Math.abs(growth), 2)}PP</strong></div></article>
+    </div>
+  </section>`;
+}
+
 export interface NationPickerRenderResultV2 {
   html: string;
   previewCountryId: PlayerId;
@@ -779,12 +961,13 @@ export function renderCountryTraitPresentationV2(
   if (!trait) return '';
   const playerMultiplier = humanCountryTraitMultiplierForContentV2(content, playerId);
   const appliedEffect = describeCountryTraitModifiersV2(trait.modifiers, playerMultiplier);
+  if (surface === 'nation') {
+    return `<section class="country-trait-card country-trait-card--nation country-trait-identity-card" data-country-trait="${escapeHtml(trait.playerId)}"><header><i>✦</i><div><span>NATIONAL IDENTITY</span><strong>${escapeHtml(trait.name)}</strong></div><b>PLAYER ×${format(playerMultiplier, 2)}</b></header><p class="country-trait-identity-card__story">${escapeHtml(trait.description)}</p><div class="country-trait-identity-card__effects"><span>ACTIVE MODIFIERS</span><p>${escapeHtml(appliedEffect)}</p></div></section>`;
+  }
   const identity = surface === 'picker'
     ? `<small>${escapeHtml(trait.description)}</small>`
     : '';
-  const label = surface === 'nation'
-    ? 'NATIONAL TRAIT'
-    : `PLAYER TRAIT <b class="country-trait-card__multiplier">×${format(playerMultiplier, 2)}</b>`;
+  const label = `PLAYER TRAIT <b class="country-trait-card__multiplier">×${format(playerMultiplier, 2)}</b>`;
   return `<section class="country-trait-card country-trait-card--${surface}" data-country-trait="${escapeHtml(trait.playerId)}"><div><span>${label}</span><strong>${escapeHtml(trait.name)}</strong></div><p>${escapeHtml(appliedEffect)}</p>${identity}</section>`;
 }
 
@@ -824,6 +1007,7 @@ export function quoteConquestIntegrationPreviewV2(
   // authoritative state and every territory object remain untouched.
   const previewState: WorldStateV2 = {
     ...state,
+    firstIntegrationDiscountUsedBy: [...state.firstIntegrationDiscountUsedBy],
     territories: { ...state.territories },
   };
   const quotes = territoryIds.map((territoryId) => {
@@ -836,6 +1020,12 @@ export function quoteConquestIntegrationPreviewV2(
     );
     const target = previewState.territories[territoryId];
     if (target) previewState.territories[territoryId] = { ...target, owner: newOwnerId };
+    if (quote.firstPlayerIntegrationDiscount) {
+      previewState.firstIntegrationDiscountUsedBy = [
+        ...previewState.firstIntegrationDiscountUsedBy,
+        newOwnerId,
+      ].sort((left, right) => left.localeCompare(right));
+    }
     return quote;
   });
   return {
@@ -885,9 +1075,26 @@ export function renderNationPickerV2(
   const startingArmyMultiplier = humanStartingArmyMultiplierForContentV2(content, preview.id);
   const startingArmy = army.deployed * startingArmyMultiplier;
   const startingArmyBonus = Math.max(0, startingArmy - army.deployed);
-  const startingArmyBonusNote = startingArmyBonus > 0.000000001
-    ? `<small>+${people(startingArmyBonus)} FREE BONUS · FADES OVER 10 YEARS</small>`
-    : '';
+  const openingForceIsBoosted = startingArmyMultiplier > 1.000000001;
+  const openingForceIsLimited = startingArmyMultiplier < 0.999999999;
+  // The shared opening snapshot is deliberately neutral AI state. A human
+  // seat below 1x scales its tick-zero trained cadre by the same opening
+  // factor; positive multipliers only add free deployed troops, never reserve.
+  const startingTrainedReserve = previewState.trainedReserves
+    * Math.min(1, startingArmyMultiplier);
+  const startingArmyAdjustmentNote = openingForceIsBoosted
+    ? `<small>+${people(startingArmyBonus)} FULLY FREE · NO FOOD · FADES OVER 20 YEARS</small>`
+    : openingForceIsLimited
+      ? '<small>OPENING LIMIT · FORCE CAPS UNLOCK TO 1× OVER 20 YEARS</small>'
+      : '';
+  const startingArmyTitle = openingForceIsBoosted
+    ? 'The player-only deployed surplus costs no money or food. It fades over twenty years and never refills; trained reserves remain at their normal 1× opening level.'
+    : openingForceIsLimited
+      ? `Opening limit: deployed Army and trained Reserve start at ×${format(startingArmyMultiplier, 2)}. Their Army and Reserve capacity limits unlock gradually to 1× over twenty years; new troops still require normal recruitment and training.`
+      : 'Normal 1× opening Army and trained Reserve, with no player-only opening boost or limit.';
+  const startingArmyClass = openingForceIsBoosted
+    ? 'stat-player-army--boost'
+    : openingForceIsLimited ? 'stat-player-army--limit' : 'stat-player-army--neutral';
   const traitPresentation = renderCountryTraitPresentationV2(preview.id, 'picker', content);
   const query = options.searchQuery.trim().toLocaleLowerCase('en');
   const continents = [...new Set(nations.map((nation) => nation.continent))]
@@ -937,18 +1144,18 @@ export function renderNationPickerV2(
   const scenarioControls = scenario ? `<div class="scenario-picker" role="group" aria-label="Game mode">
     <div class="scenario-picker__modes">
       <button class="${randomWorld ? '' : 'is-active'}" ${actionAttribute}="scenario-standard" ${scenarioButtonsDisabled}><b>STANDARD 2026</b><span>Authentic opening data</span></button>
-      <button class="${randomWorld ? 'is-active' : ''}" ${actionAttribute}="scenario-random" ${scenarioButtonsDisabled}><b>RANDOM WORLD</b><span>New balance every seed</span></button>
+      <button class="${randomWorld ? 'is-active' : ''}" ${actionAttribute}="scenario-random" ${scenarioButtonsDisabled}><b>ALTERNATIVE UNIVERSE</b><span>New balance every seed</span></button>
     </div>
-    <div class="scenario-picker__seed"><span>${randomWorld ? 'WORLD SEED' : 'SIMULATION SEED'}</span><strong>${scenarioSeed ?? '—'}</strong>${randomWorld && options.scenarioEditable ? `<button ${actionAttribute}="scenario-reroll" title="Generate another Random World">↻ REROLL</button>` : ''}</div>
+    <div class="scenario-picker__seed"><span>${randomWorld ? 'UNIVERSE SEED' : 'SIMULATION SEED'}</span><strong>${scenarioSeed ?? '—'}</strong>${randomWorld && options.scenarioEditable ? `<button ${actionAttribute}="scenario-reroll" title="Generate another Alternative Universe">↻ REROLL</button>` : ''}</div>
   </div>` : '';
   const scenarioDescription = randomWorld
-    ? 'Countries keep their geography, but population, economy, military quality and strategic power are rebuilt from the seed.'
+    ? 'Countries keep their geography, but specialized stats and rare outliers rebuild population, economy, military quality and strategic power from the seed.'
     : 'APEX runs the country. You choose who to attack.';
   const sourceLabel = randomWorld
-    ? 'Random World · deterministic generated stats · geography unchanged'
+    ? 'Alternative Universe · deterministic generated stats · geography unchanged'
     : 'IQ: learning outcomes · Natural Earth · SIPRI 2025';
   const iqTitle = randomWorld
-    ? 'Generated national learning and research capacity for this Random World seed'
+    ? 'Generated national learning and research capacity for this Alternative Universe seed'
     : 'Calibrated from international learning outcomes, with a regional fallback';
   const cards = nations.map((nation) => {
     const searchable = `${nation.name} ${nation.sigil}`.toLowerCase();
@@ -964,11 +1171,11 @@ export function renderNationPickerV2(
   }).join('');
   const html = `<section class="${pickerClass}" data-nation-picker="${options.context}" data-scenario="${scenarioMode}">
     <div class="country-select__head">
-      <div><div class="panel-kicker">${isLobby ? 'MULTIPLAYER LOBBY · COUNTRY SEAT' : `NEW CAMPAIGN · ${randomWorld ? 'RANDOM WORLD' : startYear}`}</div><h1>Choose your nation</h1><p>${isLobby ? 'Your choice is reserved for you and cannot be selected by another commander.' : scenarioDescription}</p></div>
+      <div><div class="panel-kicker">${isLobby ? 'MULTIPLAYER LOBBY · COUNTRY SEAT' : `NEW CAMPAIGN · ${randomWorld ? 'ALTERNATIVE UNIVERSE' : startYear}`}</div><h1>Choose your nation</h1><p>${isLobby ? 'Your choice is reserved for you and cannot be selected by another commander.' : scenarioDescription}</p></div>
       <div class="country-select__head-side">${scenarioControls}<div class="country-select__facts"><span><b>${nations.length}</b> countries</span><span><b>${isLobby ? '2–8' : 'ONE AI'}</b> ${isLobby ? 'players' : 'every country'}</span><span><b>${startYear}</b> start date</span><span><b>${randomWorld ? 'SEEDED' : 'LIVE'}</b> ${randomWorld ? 'world' : 'aggression'}</span></div></div>
     </div>
     <div class="country-select__tools"><label class="country-search"><span>⌕</span><input id="${searchId}" type="search" value="${escapeHtml(options.searchQuery)}" placeholder="Search countries…" autocomplete="off"></label><label class="country-sort"><span>SORT</span><select id="${sortId}" aria-label="Sort countries">${sortOptions}</select></label><div class="country-filters" role="group" aria-label="Filter countries by continent"><button class="${options.continent === 'ALL' ? 'is-active' : ''}" ${actionAttribute}="continent-filter" data-continent="ALL">ALL</button>${continents.map((continent) => `<button class="${options.continent === continent ? 'is-active' : ''}" ${actionAttribute}="continent-filter" data-continent="${escapeHtml(continent)}">${escapeHtml(continent.toUpperCase())}</button>`).join('')}<span>${visibleCount} shown</span></div></div>
-    <div class="country-select__body"><div class="country-grid">${cards}</div><aside class="country-preview" style="--country:${preview.cssColor}"><div class="country-preview__identity"><i class="country-flag country-flag--large">${countryFlagHtml(preview.id, preview.sigil, true)}</i><div><span>MILITARY RANK #${previewMetrics.rank}</span><h2 title="${escapeHtml(preview.name)}">${escapeHtml(previewState.shortName)}</h2><p>${escapeHtml(preview.subregion)}</p></div><b>${compactNumber(previewMetrics.combatPower)}<small>MILITARY POWER</small></b></div>${traitPresentation}<div class="country-preview__stats"><div class="stat-atk"><span>ATK</span><strong>${format(previewMetrics.attack, 2)}</strong></div><div class="stat-def"><span>DEF</span><strong>${format(previewMetrics.defense, 2)}</strong></div><div class="stat-aggression"><span>AGGRESSIVENESS</span><strong>${format(previewMetrics.aggressiveness, 1)}%</strong></div><div class="stat-iq" title="${iqTitle}"><span>IQ</span><strong>${format(previewMetrics.iqView.score, 1)}</strong></div><div class="stat-player-army" title="Only the extra player opening troops are free. They fade over ten years and never refill."><span>PLAYER START ARMY · ×${format(startingArmyMultiplier, 2)}</span><strong>${people(startingArmy)}</strong>${startingArmyBonusNote}</div><div><span>TRAINED RESERVE</span><strong>${people(previewState.trainedReserves)}</strong></div><div><span>POPULATION</span><strong>${population(economy.population)}</strong></div><div class="stat-economy"><span>ECONOMY</span><strong>${cash(economy.output)}</strong></div><div class="stat-treasury"><span>STARTING TREASURY</span><strong class="is-positive">${cash(startingTreasury)}</strong></div><div><span>ECONOMIC GROWTH</span><strong class="${finance.annualEconomyGrowthRate >= 0 ? 'is-positive' : 'danger-text'}">${signed(finance.annualEconomyGrowthRate * 100, 2)}%</strong></div><div title="Automatic 10–20% rate from integrated GDP per baseline productive person"><span>TAX</span><strong>${format(economy.dynamicTaxRate * 100, 1)}%</strong></div><div><span>POPULATION GROWTH</span><strong class="${populationDynamics.annualNetRate >= 0 ? 'is-positive' : 'danger-text'}">${populationDynamics.annualNetRate >= 0 ? '+' : ''}${format(populationDynamics.annualNetRate * 100, 2)}%</strong></div><div title="Live GDP divided by the currently controlled population"><span>GDP / CAPITA</span><strong>${cash(economy.wealthPerPerson / 1e6)}</strong></div></div><div class="country-preview__actions"><button class="primary-button country-preview__start" ${actionAttribute}="${isLobby ? 'select-country' : 'choose-country'}" data-country="${preview.id}">${escapeHtml(primaryLabel)}</button>${multiplayerButton}</div></aside></div>
+    <div class="country-select__body"><div class="country-grid" data-scroll-session="${isLobby ? 'lobby' : 'intro'}:country-grid">${cards}</div><aside class="country-preview" style="--country:${preview.cssColor}"><div class="country-preview__identity"><i class="country-flag country-flag--large">${countryFlagHtml(preview.id, preview.sigil, true)}</i><div><span>MILITARY RANK #${previewMetrics.rank}</span><h2 title="${escapeHtml(preview.name)}">${escapeHtml(previewState.shortName)}</h2><p>${escapeHtml(preview.subregion)}</p></div><b>${compactNumber(previewMetrics.combatPower)}<small>MILITARY POWER</small></b></div>${traitPresentation}<div class="country-preview__stats" data-scroll-session="${isLobby ? 'lobby' : 'intro'}:country-preview:${preview.id}"><div class="stat-atk"><span>ATK</span><strong>${format(previewMetrics.attack, 2)}</strong></div><div class="stat-def"><span>DEF</span><strong>${format(previewMetrics.defense, 2)}</strong></div><div class="stat-aggression"><span>AGGRESSIVENESS</span><strong>${format(previewMetrics.aggressiveness, 1)}%</strong></div><div class="stat-iq" title="${iqTitle}"><span>IQ</span><strong>${format(previewMetrics.iqView.score, 1)}</strong></div><div class="stat-player-army ${startingArmyClass}" title="${escapeHtml(startingArmyTitle)}"><span>PLAYER START ARMY · ×${format(startingArmyMultiplier, 2)}</span><strong>${people(startingArmy)}</strong>${startingArmyAdjustmentNote}</div><div class="stat-trained-reserve" data-player-opening-reserve="${startingTrainedReserve}"><span>TRAINED RESERVE</span><strong>${people(startingTrainedReserve)}</strong></div><div><span>POPULATION</span><strong>${population(economy.population)}</strong></div><div class="stat-economy"><span>ECONOMY</span><strong>${cash(economy.output)}</strong></div><div class="stat-treasury"><span>STARTING TREASURY</span><strong class="is-positive">${cash(startingTreasury)}</strong></div><div><span>ECONOMIC GROWTH</span><strong class="${finance.annualEconomyGrowthRate >= 0 ? 'is-positive' : 'danger-text'}">${signed(finance.annualEconomyGrowthRate * 100, 2)}%</strong></div><div title="Automatic 10–20% rate from integrated GDP per baseline productive person"><span>TAX</span><strong>${format(economy.dynamicTaxRate * 100, 1)}%</strong></div><div><span>POPULATION GROWTH</span><strong class="${populationDynamics.annualNetRate >= 0 ? 'is-positive' : 'danger-text'}">${populationDynamics.annualNetRate >= 0 ? '+' : ''}${format(populationDynamics.annualNetRate * 100, 2)}%</strong></div><div title="Live GDP divided by the currently controlled population"><span>GDP / CAPITA</span><strong>${cash(economy.wealthPerPerson / 1e6)}</strong></div></div><div class="country-preview__actions"><button class="primary-button country-preview__start" ${actionAttribute}="${isLobby ? 'select-country' : 'choose-country'}" data-country="${preview.id}">${escapeHtml(primaryLabel)}</button>${multiplayerButton}</div></aside></div>
     <footer><span>${sourceLabel}</span><strong>Sorted by ${escapeHtml(sortLabels[options.sort].toLowerCase())}</strong></footer>
   </section>`;
   return { html, previewCountryId: preview.id, visibleCount };
@@ -1009,6 +1216,7 @@ export function createMapSnapshot(engine: WorldEngineV2UIContract): WorldMapEngi
     tick: source.tick,
     humanPlayerId: engine.viewerPlayerId ?? source.humanPlayerId,
     humanPlayerIds: [...source.humanPlayerIds],
+    openingMobilisations: mapOpeningMobilisationsV2(source, engine.content),
     territories,
     wars: sortedWars.map((war) => ({
       id: war.id,
@@ -1033,6 +1241,65 @@ export function createMapEngineAdapter(
   let snapshotActionSequence = -1;
   let snapshotHumanPlayerId = '';
   let snapshotHumanPlayerRoster = '';
+  let snapshotLifecycleSignature = '';
+  let mapStatsInvalidated = false;
+  const mapStatsCadence = new MapStatsRefreshCadence();
+  const armyByTerritory = new Map<string, MapTerritoryState['army']>();
+  const lifecycleKey = (territory: TerritoryStateV2): string => {
+    const program = territory.integrationProgram;
+    if (program) return `${territory.owner}:${territory.coreOwner}:integrating:${program.fromCoreOwnerId}>${program.toOwnerId}:${program.completesTick}`;
+    return `${territory.owner}:${territory.coreOwner}:${territory.integration >= 0.999999 ? 'core' : 'legacy-integrating'}`;
+  };
+  const materializeSnapshot = (): WorldMapEngineContract['state'] => {
+    const source = engine.state;
+    const canonical = source.territories as unknown as Record<string, TerritoryStateV2>;
+    const territoryEntries = Object.entries(canonical);
+    const sortedWars = [...source.wars].sort((left, right) => left.id.localeCompare(right.id));
+    const warOwnerIds = new Set(sortedWars.flatMap((war) => [war.attackerId, war.defenderId]));
+    const refreshOwnerIds = mapStatsCadence.resolve({
+      tick: source.tick,
+      territories: territoryEntries.map(([id, territory]) => ({
+        id,
+        ownerId: territory.owner,
+        lifecycleKey: lifecycleKey(territory),
+      })),
+      warOwnerIds,
+    });
+    const refreshEntries = territoryEntries.filter(([id, territory]) => (
+      refreshOwnerIds.has(territory.owner) || !armyByTerritory.has(id)
+    ));
+    const militaryBaseSnapshot = refreshEntries.length > 0
+      ? engine.militaryBaseSnapshot() : undefined;
+    for (const [id, territory] of refreshEntries) {
+      armyByTerritory.set(
+        id,
+        projectMapArmyV2(engine, id as TerritoryId, territory, militaryBaseSnapshot),
+      );
+    }
+    const territories: Record<string, MapTerritoryState> = {};
+    for (const [id, territory] of territoryEntries) {
+      const army = armyByTerritory.get(id);
+      if (!army) throw new Error(`Map army projection missing for ${id}.`);
+      territories[id] = mapTerritory(id, territory, army);
+    }
+    return {
+      tick: source.tick,
+      humanPlayerId: engine.viewerPlayerId ?? source.humanPlayerId,
+      humanPlayerIds: [...source.humanPlayerIds],
+      openingMobilisations: mapOpeningMobilisationsV2(source, engine.content),
+      territories,
+      wars: sortedWars.map((war) => ({
+        id: war.id,
+        attackerId: war.attackerId,
+        defenderId: war.defenderId,
+        attackerOperations: [...war.attackerOperations].sort(compareFrontOperations)
+          .map((operation) => ({ ...operation })),
+        defenderOperations: [...war.defenderOperations].sort(compareFrontOperations)
+          .map((operation) => ({ ...operation })),
+      })),
+      logisticsMovements: engine.recentLogisticsMovements().map((movement) => ({ ...movement })),
+    };
+  };
   const readSnapshot = (): WorldMapEngineContract['state'] => {
     if (!snapshot) throw new Error('Map renderer snapshot requested before sync.');
     return snapshot;
@@ -1055,21 +1322,87 @@ export function createMapEngineAdapter(
     globalRanking: ranking,
     totalManpower: (playerId) => engine.totalManpower(playerId),
     activeWarBetween: (leftId, rightId) => engine.activeWarBetween(leftId, rightId),
+    invalidateMapStats: (territoryIds) => {
+      const ownerIds = territoryIds.flatMap((territoryId) => {
+        const territory = engine.state.territories[territoryId as TerritoryId];
+        return territory ? [territory.owner] : [];
+      });
+      if (ownerIds.length === 0) return;
+      mapStatsCadence.invalidateOwners(ownerIds);
+      mapStatsInvalidated = true;
+    },
     refreshSnapshot: () => {
       const { tick, actionSequence } = engine.state;
       const humanPlayerId = engine.viewerPlayerId ?? engine.state.humanPlayerId;
       const humanPlayerRoster = [...engine.state.humanPlayerIds]
         .sort((left, right) => left.localeCompare(right)).join('|');
+      const canonical = engine.state.territories as unknown as Record<string, TerritoryStateV2>;
+      const lifecycleSignature = `${Object.entries(canonical)
+        .map(([id, territory]) => `${id}:${lifecycleKey(territory)}`).join('|')}|wars:${[...engine.state.wars]
+          .sort((left, right) => left.id.localeCompare(right.id))
+          .map((war) => `${war.id}:${war.attackerId}:${war.defenderId}`).join('|')}`;
+      if (snapshot && (snapshotHumanPlayerId !== humanPlayerId
+        || snapshotHumanPlayerRoster !== humanPlayerRoster)) {
+        mapStatsCadence.invalidateOwners([
+          ...snapshot.humanPlayerIds,
+          snapshot.humanPlayerId,
+          ...engine.state.humanPlayerIds,
+          humanPlayerId,
+        ]);
+        mapStatsInvalidated = true;
+      }
       if (snapshot && snapshotTick === tick && snapshotActionSequence === actionSequence
         && snapshotHumanPlayerId === humanPlayerId
-        && snapshotHumanPlayerRoster === humanPlayerRoster) return;
-      snapshot = createMapSnapshot(engine);
+        && snapshotHumanPlayerRoster === humanPlayerRoster
+        && snapshotLifecycleSignature === lifecycleSignature
+        && !mapStatsInvalidated) return;
+      snapshot = materializeSnapshot();
       snapshotTick = tick;
       snapshotActionSequence = actionSequence;
       snapshotHumanPlayerId = humanPlayerId;
       snapshotHumanPlayerRoster = humanPlayerRoster;
+      snapshotLifecycleSignature = lifecycleSignature;
+      mapStatsInvalidated = false;
     },
   };
+}
+
+export function mapOpeningMobilisationStateV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  playerId: PlayerId,
+): MapOpeningMobilisationState | undefined {
+  if (!state.humanPlayerIds.includes(playerId)
+    || state.tick >= OPENING_ARMY_BONUS_DURATION_TICKS_V2) return undefined;
+  const initialMultiplier = humanStartingArmyMultiplierForContentV2(content, playerId);
+  if (Math.abs(initialMultiplier - 1) <= 0.0005) return undefined;
+  const progress = clamp(
+    state.tick / OPENING_ARMY_BONUS_DURATION_TICKS_V2,
+    0,
+    1,
+  );
+  return Object.freeze({
+    playerId,
+    remainingRatio: 1 - progress,
+    initialMultiplier,
+    currentMultiplier: openingArmyCapacityMultiplierV2(state, content, playerId),
+    remainingTicks: Math.max(0, OPENING_ARMY_BONUS_DURATION_TICKS_V2 - state.tick),
+    direction: initialMultiplier > 1 ? 'boost' : 'limit',
+  });
+}
+
+function mapOpeningMobilisationsV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+): Readonly<Record<string, MapOpeningMobilisationState>> {
+  const phases: Record<string, MapOpeningMobilisationState> = {};
+  for (const playerId of [...new Set(state.humanPlayerIds)].sort((left, right) => (
+    left.localeCompare(right)
+  ))) {
+    const phase = mapOpeningMobilisationStateV2(state, content, playerId);
+    if (phase) phases[playerId] = phase;
+  }
+  return Object.freeze(phases);
 }
 
 export class WorldUIV2 {
@@ -1102,6 +1435,13 @@ export class WorldUIV2 {
     resistanceSignature: string;
     recommendations: WarTargetCandidate[];
   };
+  private warLogisticsPreviewCache?: {
+    tick: number;
+    actionSequence: number;
+    attackerId: PlayerId;
+    defenderId: PlayerId;
+    preview: WarLogisticsPreviewV2;
+  };
   private unsubscribe?: () => void;
   private renderTimer?: number;
   private renderFrame?: number;
@@ -1113,6 +1453,8 @@ export class WorldUIV2 {
   private suppressMapUntil = 0;
   private readonly uiPointerIds = new Set<number>();
   private readonly locallyReadEventIds = new Set<number>();
+  private scrollSessions = new Map<string, number>();
+  private scrollInteractionUntil = 0;
   private uiHoverBlocked = false;
   private readonly responsiveStyle: HTMLStyleElement;
 
@@ -1123,7 +1465,11 @@ export class WorldUIV2 {
     const defaultPreviewId = engine.content.nationIds.find((id) => id === 'usa')
       ?? engine.content.nationIds[0];
     if (!defaultPreviewId) throw new Error('World UI requires at least one playable country.');
-    this.introPreviewCountryId = defaultPreviewId;
+    const preferredPreviewId = options.initialPreviewCountryId
+      && engine.content.nations[options.initialPreviewCountryId]
+      ? options.initialPreviewCountryId
+      : undefined;
+    this.introPreviewCountryId = preferredPreviewId ?? defaultPreviewId;
     this.introOpen = options.introOpen ?? true;
     this.hud = document.querySelector<HTMLElement>('#hud')!;
     this.tooltip = document.querySelector<HTMLElement>('#tooltip')!;
@@ -1139,20 +1485,22 @@ export class WorldUIV2 {
       .world-ui-v2 .v2-metrics { scrollbar-width: none; }
       .world-ui-v2 .v2-metrics > * { display: flex; }
       .world-ui-v2 .v2-metrics::-webkit-scrollbar { display: none; }
+      .world-ui-v2 [data-scroll-session] { overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+      .world-ui-v2 [data-scroll-session]:not(.v2-metrics) { touch-action: pan-y; }
       @media (max-width: 1120px) {
         .world-ui-v2 .v2-topbar { grid-template-columns: minmax(145px,190px) minmax(420px,1fr) auto !important; }
         .world-ui-v2 .v2-metrics span { display: none; }
         .world-ui-v2 .v2-metrics .top-metric--economy > span,
         .world-ui-v2 .v2-metrics .top-metric--treasury > span,
-        .world-ui-v2 .v2-metrics .top-metric--world-population > span,
-        .world-ui-v2 .v2-metrics .top-metric--world-control > span { display: block; font-size: 7px; }
+        .world-ui-v2 .v2-metrics .top-metric--military > span,
+        .world-ui-v2 .v2-metrics .top-metric--people > span { display: block; font-size: 7px; }
         .world-ui-v2 .v2-metrics small { font-size: 9px !important; }
       }
       @media (max-width: 840px) {
         .world-ui-v2 .v2-topbar { grid-template-columns: minmax(125px,1fr) auto auto !important; }
         .world-ui-v2 .command-topbar .command-identity { display: flex !important; }
         .world-ui-v2 .command-topbar .top-actions { display: flex !important; }
-        .world-ui-v2 .command-topbar .v2-metrics { position: absolute; top: 64px; right: 0; left: 0; height: 42px; padding: 4px; display: grid !important; grid-template-columns: repeat(8,minmax(88px,1fr)) !important; overflow-x: auto !important; overflow-y: hidden; border: 1px solid rgba(107,221,242,.12); border-radius: 9px; background: rgba(7,20,34,.94); }
+        .world-ui-v2 .command-topbar .v2-metrics { position: absolute; top: 64px; right: 0; left: 0; height: 42px; padding: 4px; display: grid !important; grid-template-columns: repeat(6,minmax(96px,1fr)) !important; overflow-x: auto !important; overflow-y: hidden; border: 1px solid rgba(107,221,242,.12); border-radius: 9px; background: rgba(7,20,34,.94); }
         .world-ui-v2 .v2-metrics > * { min-height: 32px !important; }
         .world-ui-v2 .world-panel.command-drawer { top: 124px; }
         .world-ui-v2 .war-tracker { top: 124px; }
@@ -1163,7 +1511,7 @@ export class WorldUIV2 {
     `;
     document.head.append(this.responsiveStyle);
     const initialIntroMetrics = this.introMetricsCache.read(engine);
-    if (engine.content.metadata?.scenarioId === 'random-world') {
+    if (engine.content.metadata?.scenarioId === 'random-world' && !preferredPreviewId) {
       this.introPreviewCountryId = initialIntroMetrics.ranking[0]?.player.id
         ?? this.introPreviewCountryId;
     }
@@ -1181,6 +1529,8 @@ export class WorldUIV2 {
     window.addEventListener('pointercancel', this.onWindowPointerRelease, true);
     window.addEventListener('pointermove', this.onWindowPointerMove, true);
     this.hud.addEventListener('pointerdown', this.onHudPointerDown, true);
+    this.hud.addEventListener('wheel', this.onHudScrollIntent, { capture: true, passive: true });
+    this.hud.addEventListener('scroll', this.onHudScrollIntent, { capture: true, passive: true });
     this.render();
   }
 
@@ -1206,6 +1556,8 @@ export class WorldUIV2 {
     window.removeEventListener('pointercancel', this.onWindowPointerRelease, true);
     window.removeEventListener('pointermove', this.onWindowPointerMove, true);
     this.hud.removeEventListener('pointerdown', this.onHudPointerDown, true);
+    this.hud.removeEventListener('wheel', this.onHudScrollIntent, true);
+    this.hud.removeEventListener('scroll', this.onHudScrollIntent, true);
     this.uiPointerIds.clear();
     this.uiHoverBlocked = false;
     mapBridge.setInputBlocked(false);
@@ -1235,6 +1587,15 @@ export class WorldUIV2 {
     this.uiHoverBlocked = overUi;
     if (overUi) this.suppressMapUntil = performance.now() + 120;
     this.syncMapInputBlock();
+  };
+
+  private readonly onHudScrollIntent = (event: Event): void => {
+    const target = event.target instanceof Element ? event.target : undefined;
+    if (!target?.closest('[data-scroll-session]')) return;
+    // Let wheel and inertial touch scrolling finish before a live simulation
+    // render replaces the active surface. No default input is prevented.
+    this.scrollInteractionUntil = performance.now() + 180;
+    this.suppressMapUntil = performance.now() + 220;
   };
 
   private syncMapInputBlock(): void {
@@ -1336,6 +1697,11 @@ export class WorldUIV2 {
         // simulation updates can wait a frame; player input cannot.
         if (this.uiPointerIds.size > 0) {
           this.renderTimer = window.setTimeout(queueFrame, 40);
+          return;
+        }
+        const scrollSettleDelay = this.scrollInteractionUntil - performance.now();
+        if (scrollSettleDelay > 0) {
+          this.renderTimer = window.setTimeout(queueFrame, Math.min(200, scrollSettleDelay + 18));
           return;
         }
         if (this.pendingMapSync) mapBridge.sync();
@@ -1445,12 +1811,29 @@ export class WorldUIV2 {
     const definition = this.engine.content.territories[territoryId];
     const owner = territory ? this.engine.player(territory.owner) : undefined;
     if (!territory || !definition || !owner) return;
-    const integration = territory.coreOwner !== territory.owner && territory.integration < 0.999999
-      ? ` · INTEGRATION ${format(territory.integration * 100)}%` : '';
+    const integrating = territory.coreOwner !== territory.owner && territory.integration < 0.999999;
+    const integrationStatus = integrating
+      ? `INTEGRATING ${format(territory.integration * 100)}%` : 'CORE TERRITORY';
     const localHuman = owner.id === this.viewerPlayerId();
+    const openingMobilisation = mapOpeningMobilisationStateV2(
+      this.engine.state,
+      this.engine.content,
+      owner.id,
+    );
+    const openingRemainingPercent = openingMobilisation
+      ? Math.round(openingMobilisation.remainingRatio * 100) : 0;
+    const openingDirectionLabel = openingMobilisation?.direction === 'boost' ? 'BOOST' : 'LIMIT';
+    const openingEffectLabel = openingMobilisation?.direction === 'boost'
+      ? 'temporary extra Army + cap' : 'temporary reduced Army + cap';
+    const openingMobilisationHtml = openingMobilisation ? `
+      <div class="tooltip__opening-mobilisation tooltip__opening-mobilisation--${openingMobilisation.direction}">
+        <div><span>OPENING MOBILISATION · ${openingDirectionLabel}</span><strong>${openingRemainingPercent}% REMAINING</strong></div>
+        <i role="progressbar" aria-label="Opening mobilisation remaining" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${openingRemainingPercent}"><b style="width:${openingRemainingPercent}%"></b></i>
+        <small><b>×${format(openingMobilisation.currentMultiplier, 2)} · ${openingEffectLabel}</b><span>${format(openingMobilisation.remainingTicks / 52, 1)} years until permanent ×1</span></small>
+      </div>` : '';
     const controllerName = this.options.controllerNames?.get(owner.id);
     const controller = owner.isHuman
-      ? `<div class="tooltip__controller ${localHuman ? 'is-local' : ''}"><b>${localHuman ? 'YOU' : escapeHtml(controllerName ?? 'HUMAN PLAYER')}</b><span>${localHuman ? 'YOUR COUNTRY' : 'HUMAN CONTROLLED'}</span></div>`
+      ? `<b class="tooltip__controller ${localHuman ? 'is-local' : ''}">${localHuman ? 'YOU' : escapeHtml(controllerName ?? 'PLAYER')}</b>`
       : '';
     const localArmyCapacity = stateTerritoryArmyCapacityTargetV2(
       this.engine.state, this.engine.content, territoryId, owner.id,
@@ -1458,17 +1841,22 @@ export class WorldUIV2 {
     const deploymentCeiling = stateTerritoryArmySupportCeilingV2(
       this.engine.state, this.engine.content, territoryId, owner.id,
     );
-    const empireSupport = Math.max(0, deploymentCeiling - localArmyCapacity);
-    const trainedReserves = this.engine.state.players[owner.id]?.trainedReserves ?? 0;
+    const terrainProfile = territoryTerrainProfileV2(this.engine.content, territoryId);
+    const terrainStyle = terrainPresentation(terrainProfile[0]?.terrain ?? definition.terrain);
+    const terrainEffects = territoryTerrainEffectsV2(this.engine.content, territoryId);
+    const localPower = this.engine.territoryPower(territoryId);
+    const attack = this.engine.effectiveAttack(owner.id, territory.army);
+    const defense = this.engine.effectiveDefense(owner.id, territory.army);
     this.tooltip.innerHTML = `
-      <div class="tooltip__eyebrow">${escapeHtml(REGION_BY_ID[definition.regionId]?.name ?? definition.regionId)}</div>
-      <strong>${escapeHtml(definition.name)}</strong>
-      <span style="color:${owner.cssColor}">${escapeHtml(owner.name)}</span>
-      ${controller}
-      <div class="tooltip__stats"><b>ACTIVE ${people(territory.army.manpower)} / ${people(deploymentCeiling)} MAX</b> · ATK ${format(this.engine.effectiveAttack(owner.id, territory.army), 2)} · DEF ${format(this.engine.effectiveDefense(owner.id, territory.army), 2)}<br>LOCAL CAP ${people(localArmyCapacity)} · EMPIRE SUPPORT +${people(empireSupport)}<br>TRAINED RESERVE ${people(trainedReserves)} · ${armyCondition(territory.army, territory.condition)}${integration}</div>
+      <div class="tooltip__eyebrow"><span>${escapeHtml(REGION_BY_ID[definition.regionId]?.name ?? definition.regionId)}</span>${terrainProfileBadges(terrainProfile)}</div>
+      <div class="tooltip__identity" style="--owner:${owner.cssColor}"><i class="country-flag">${countryFlagHtml(owner.id, owner.sigil)}</i><div><strong>${escapeHtml(definition.name)}</strong><span>${escapeHtml(owner.name)}</span></div>${controller}</div>
+      <div class="tooltip__terrain" style="--terrain:${terrainStyle.cssColor}">${terrainEffectMetrics(terrainEffects)}</div>
+      ${openingMobilisationHtml}
+      <div class="tooltip__grid"><article><span>ACTIVE ARMY</span><strong>${people(territory.army.manpower)}</strong><small>${people(localArmyCapacity)} local cap</small></article><article><span>LOCAL POWER</span><strong>${compactNumber(localPower)}</strong><small>${armyCondition(territory.army, territory.condition)}</small></article><article><span>COMBAT</span><strong>ATK ${format(attack, 1)} · DEF ${format(defense, 1)}</strong><small>${people(deploymentCeiling)} deployment max</small></article></div>
+      <div class="tooltip__footer"><b class="${integrating ? 'is-integrating' : ''}">${integrationStatus}</b><span>Click for full intelligence</span></div>
     `;
-    this.tooltip.style.left = `${Math.max(10, Math.min(window.innerWidth - 304, x + 16))}px`;
-    this.tooltip.style.top = `${Math.min(window.innerHeight - 178, y + 14)}px`;
+    this.tooltip.style.left = `${Math.max(10, Math.min(window.innerWidth - 334, x + 16))}px`;
+    this.tooltip.style.top = `${Math.max(10, Math.min(window.innerHeight - (openingMobilisation ? 278 : 224), y + 14))}px`;
     this.tooltip.classList.add('is-visible');
   }
 
@@ -1549,7 +1937,9 @@ export class WorldUIV2 {
     if (introSearch) this.introSearchQuery = introSearch.value;
     const scrollSnapshot = captureScrollSessions(
       this.hud.querySelectorAll<HTMLElement>('[data-scroll-session]'),
+      this.scrollSessions,
     );
+    this.scrollSessions = scrollSnapshot;
     const introGrid = this.hud.querySelector<HTMLElement>('.country-grid');
     if (introGrid) this.introGridScrollTop = introGrid.scrollTop;
     const empireInput = this.hud.querySelector<HTMLInputElement>('#empire-name');
@@ -1587,8 +1977,6 @@ export class WorldUIV2 {
     // This is the authoritative next-week recurring forecast.
     const displayedNet = finance.net;
     const treasuryTopbar = treasuryTopbarPresentationV2(human.treasury, displayedNet);
-    const worldTopbar = worldTopbarStatsV2(state, human.id, this.engine.content);
-    const controlledLandPercent = worldTopbar.controlledLandShare * 100;
     const army = humanOpening?.army ?? this.engine.armyStrength(human.id);
     const combatPower = humanOpening?.combatPower ?? this.engine.currentPower(human.id);
     // Reuse the already calculated finance plan. Population dynamics otherwise
@@ -1596,12 +1984,6 @@ export class WorldUIV2 {
     const populationDynamics = humanOpening?.populationDynamics
       ?? this.engine.populationDynamics(human.id, finance.populationGrowth);
     const integratedPopulation = this.engine.controlledPopulation(human.id);
-    const populationTrend = integratedPopulation
-      * ((1 + populationDynamics.annualNetRate) ** (1 / 52) - 1);
-    const annualFoodBalanceRate = annual(finance.foodBalance)
-      / Math.max(0.000001, finance.foodStorageCapacity);
-    const annualFoodBalancePercent = Math.abs(annualFoodBalanceRate * 100) < 0.005
-      ? 0 : annualFoodBalanceRate * 100;
     const completedUpgrades = Object.values(human.research.breakthroughs).reduce((sum, value) => sum + value, 0);
     const ranking = introOpening?.ranking ?? this.ranking();
     const humanRank = Math.max(1, ranking.findIndex((entry) => entry.player.id === human.id) + 1);
@@ -1619,20 +2001,18 @@ export class WorldUIV2 {
     if (this.introOpen || this.helpOpen || this.inboxOpen || this.confirmWarTargetId || this.confirmCeasefireWarId || warOutcome || this.shouldPromptEmpireName() || state.gameOver) this.tooltip.classList.remove('is-visible');
 
     this.hud.innerHTML = `
-      <header class="situation-topbar command-topbar glass-panel v2-topbar v2-interactive simple-topbar" style="grid-template-columns:minmax(190px,250px) minmax(520px,1fr) auto">
+      <header class="situation-topbar command-topbar glass-panel v2-topbar v2-interactive simple-topbar unified-topbar" style="grid-template-columns:minmax(190px,250px) minmax(520px,1fr) auto">
         <div class="coalition-chip command-identity" style="--coalition:${human.cssColor}">
           <span class="country-flag" aria-hidden="true">${countryFlagHtml(human.id, human.sigil, true)}</span><div class="coalition-chip__body"><small>${worldDateLabel(state.tick)}</small><div class="command-identity__line"><strong title="${escapeHtml(human.name)}">${escapeHtml(human.shortName)}</strong><button class="v2-rank-badge" data-action="ranking" aria-label="Open global military ranking; ${escapeHtml(human.name)} is military rank ${humanRank} of ${ranking.length} active countries">#${humanRank}/${ranking.length}</button></div></div>
         </div>
-        <div class="strategic-metrics v2-metrics simple-metrics" style="display:grid;grid-template-columns:repeat(8,minmax(76px,1fr));gap:4px;overflow-x:auto">
-          <div class="top-metric--economy" data-stat-target="economy" role="group" aria-label="Economy ${cash(economy.controlledOutput)}; annual growth ${signed(finance.annualEconomyGrowthRate * 100, 2)} percent"><span>ECONOMY</span><strong>${cash(economy.controlledOutput)}</strong><small class="weekly-delta ${finance.annualEconomyGrowthRate >= 0 ? 'is-positive' : 'is-negative'}">${signed(finance.annualEconomyGrowthRate * 100, 2)}%/year</small></div>
-          <div class="${treasuryTopbar.className}" role="group" aria-label="${escapeHtml(treasuryTopbar.ariaLabel)}"><span>TREASURY</span><strong>${treasuryTopbar.value}</strong><small class="weekly-delta ${treasuryTopbar.trendClassName}">${treasuryTopbar.trend}</small></div>
-          <div data-stat-target="people" role="group" title="Integrated people available to the empire; annual population change ${signed(populationDynamics.annualNetRate * 100, 2)}%" aria-label="Integrated population ${format(integratedPopulation, 2)} million; annual population change ${signed(populationDynamics.annualNetRate * 100, 2)} percent"><span>PEOPLE</span><strong>${population(integratedPopulation)}</strong><small class="weekly-delta ${populationTrend >= 0 ? 'is-positive' : 'is-negative'}">${signed(populationDynamics.annualNetRate * 100, 2)}%/year</small></div>
-          <div class="top-metric--world-population" role="group" title="Current population living across every mapped territory" aria-label="Current world population ${format(worldTopbar.population, 3)} million"><span>WORLD POPULATION</span><strong>${population(worldTopbar.population)}</strong><small>LIVE TOTAL</small></div>
-          <div class="top-metric--world-control" role="group" title="Share of mapped world land area currently controlled by this empire" aria-label="Empire controls ${format(controlledLandPercent, 2)} percent of mapped world land area across ${worldTopbar.controlledTerritories} of ${worldTopbar.worldTerritories} territories"><span>WORLD LAND</span><strong>${format(controlledLandPercent, 2)}%</strong><small>${worldTopbar.controlledTerritories}/${worldTopbar.worldTerritories} TERRITORIES</small></div>
-          <div data-stat-target="food" role="group" title="Annual food surplus or shortage as a share of storage capacity" aria-label="Food stock ${people(human.foodStock)} of ${people(finance.foodStorageCapacity)} capacity; annual food balance ${signed(annualFoodBalancePercent, 2)} percent of capacity"><span>FOOD</span><strong>${people(human.foodStock)} / ${people(finance.foodStorageCapacity)}</strong><small class="weekly-delta ${annualFoodBalancePercent >= 0 ? 'is-positive' : 'is-negative'}">${signed(annualFoodBalancePercent, 2)}%/year</small></div>
-          <div class="top-metric--army" data-stat-target="army" role="group" title="Active army over capacity, followed by trained reserves over their one-army maximum." aria-label="Army ${people(army.deployed)} active of ${people(army.capacity)} capacity; trained reserves ${people(human.trainedReserves)} of ${people(finance.trainedReserveCapacity)}; combat power ${compactNumber(combatPower)}"><span>ARMY</span><strong>${armyCapacityLabel(army.deployed, army.capacity)}</strong><small>RES ${people(human.trainedReserves)} / ${people(finance.trainedReserveCapacity)} · PWR ${compactNumber(combatPower)}</small></div>
-          <div class="top-metric--research" role="group" aria-label="Research ${completedUpgrades} completed upgrades; ${cash(annual(finance.research))} funded per year"><span>RESEARCH</span><strong>${completedUpgrades} upgrades</strong><small>${cash(annual(finance.research))}/yr funded</small></div>
-        </div>
+        <nav class="strategic-metrics v2-metrics simple-metrics topbar-status" style="display:grid;grid-template-columns:repeat(6,minmax(88px,1fr));gap:4px;overflow-x:auto" aria-label="National status shortcuts">
+          <button type="button" class="top-metric top-metric--economy" data-action="panel" data-panel="economy" data-stat-target="economy" aria-label="Open Economy. Output ${cash(economy.controlledOutput)}; annual growth ${signed(finance.annualEconomyGrowthRate * 100, 2)} percent"><span>ECONOMY</span><strong>${cash(economy.controlledOutput)}</strong><small class="weekly-delta ${finance.annualEconomyGrowthRate >= 0 ? 'is-positive' : 'is-negative'}">${signed(finance.annualEconomyGrowthRate * 100, 2)}% / year</small></button>
+          <button type="button" class="top-metric ${treasuryTopbar.className}" data-action="panel" data-panel="economy" data-stat-target="cash" aria-label="Open Economy. ${escapeHtml(treasuryTopbar.ariaLabel)}"><span>CASHFLOW</span><strong class="${displayedNet >= 0 ? 'is-positive' : 'is-negative'}">${signedCash(annual(displayedNet))}/yr</strong><small>${treasuryTopbar.value} treasury</small></button>
+          <button type="button" class="top-metric top-metric--military" data-action="panel" data-panel="war" data-stat-target="army" aria-label="Open War. Army ${people(army.deployed)} of ${people(army.capacity)} capacity; combat power ${compactNumber(combatPower)}"><span>MILITARY</span><strong>${format(army.fillRatio * 100)}% ready</strong><small>${compactNumber(combatPower)} power</small></button>
+          <button type="button" class="top-metric top-metric--people" data-action="panel" data-panel="nation" data-stat-target="people" aria-label="Open Nation. Integrated population ${format(integratedPopulation, 2)} million; annual population change ${signed(populationDynamics.annualNetRate * 100, 2)} percent"><span>PEOPLE</span><strong>${population(integratedPopulation)}</strong><small class="weekly-delta ${populationDynamics.annualNetRate >= 0 ? 'is-positive' : 'is-negative'}">${signed(populationDynamics.annualNetRate * 100, 2)}% / year</small></button>
+          <button type="button" class="top-metric top-metric--food" data-action="panel" data-panel="nation" data-stat-target="food" aria-label="Open Nation. Food coverage ${format(finance.foodCoverage * 100, 1)} percent; stock ${people(human.foodStock)} of ${people(finance.foodStorageCapacity)}"><span>FOOD</span><strong class="${finance.foodCoverage >= 0.98 ? 'is-positive' : 'is-negative'}">${format(finance.foodCoverage * 100, 1)}% supplied</strong><small>${people(human.foodStock)} / ${people(finance.foodStorageCapacity)} stored</small></button>
+          <button type="button" class="top-metric top-metric--research" data-action="panel" data-panel="research" aria-label="Open Research. ${completedUpgrades} completed upgrades; ${cash(annual(finance.research))} funded per year"><span>RESEARCH</span><strong>${completedUpgrades} upgrades</strong><small>${cash(annual(finance.research))} / year</small></button>
+        </nav>
         <div class="top-actions">
           <button class="icon-button inbox-button ${unread ? 'has-alert' : ''}" data-action="inbox" title="Reports">⌁${unread ? `<i>${unread}</i>` : ''}</button>
           <button class="icon-button" data-action="camera-reset" title="Center map">⌖</button>
@@ -1643,11 +2023,12 @@ export class WorldUIV2 {
       ${!spectating ? `<nav class="command-dock glass-panel" aria-label="Command center">
         <button class="${commandOpen && this.panelMode === 'war' ? 'is-active' : ''} ${wars.length ? 'has-war' : ''}" data-action="panel" data-panel="war"><i>⚔</i><span><b>WAR</b><small>${wars.length ? `${wars.length} active` : 'Choose target'}</small></span></button>
         <button class="${commandOpen && this.panelMode === 'nation' ? 'is-active' : ''}" data-action="panel" data-panel="nation"><i>◇</i><span><b>NATION</b><small>AI · ${escapeHtml(finance.aiMode)}</small></span></button>
-        <button class="${commandOpen && this.panelMode === 'progress' ? 'is-active' : ''}" data-action="panel" data-panel="progress"><i>⌁</i><span><b>PROGRESS</b><small>${completedUpgrades} upgrades</small></span></button>
+        <button class="${commandOpen && this.panelMode === 'research' ? 'is-active' : ''}" data-action="panel" data-panel="research"><i>⌁</i><span><b>RESEARCH</b><small>${completedUpgrades} upgrades</small></span></button>
         <button class="${commandOpen && this.panelMode === 'economy' ? 'is-active' : ''} ${displayedNet < 0 ? 'is-negative' : ''}" data-action="panel" data-panel="economy"><i>$</i><span><b>ECONOMY</b><small>${signed(finance.annualEconomyGrowthRate * 100, 2)}%/yr</small></span></button>
       </nav>` : ''}
 
-      ${wars.length || human.warFatigue > 0 ? this.renderWarStrainMeter(human, wars, army, finance, true) : ''}
+      ${wars.length || human.warFatigue > 0 || this.engine.globalResistance().threat > 0
+        ? this.renderWarStrainMeter(human, wars, army, finance, true) : ''}
       ${wars.length ? this.renderWarTracker(wars) : ''}
       ${this.contextPanelOpen && !spectating ? this.renderContextPanel(human, economy, finance, populationDynamics) : ''}
       ${activeOffer ? this.renderOfferBanner(activeOffer)
@@ -1692,8 +2073,8 @@ export class WorldUIV2 {
     const territory = this.selectedTerritoryId ? this.engine.state.territories[this.selectedTerritoryId] : undefined;
     if (territory && this.selectedTerritoryId) return this.renderTerritoryPanel(this.selectedTerritoryId, territory);
     if (this.panelMode === 'ranking') return this.renderRankingPanel();
-    if (this.panelMode === 'economy') return this.renderEconomyPanel(human, economy, finance, populationDynamics);
-    if (this.panelMode === 'progress') return this.renderProgressPanel();
+    if (this.panelMode === 'economy') return this.renderEconomyPanel(human, economy, finance);
+    if (this.panelMode === 'research') return this.renderResearchPanel();
     if (this.panelMode === 'nation') {
       return this.renderNationPanel(human, economy, finance, populationDynamics);
     }
@@ -1706,155 +2087,150 @@ export class WorldUIV2 {
     finance: WeeklyFinanceBreakdownV2,
     populationDynamics: PopulationDynamicsV2,
   ): string {
-    const iq = selectNationalIqViewV2(this.engine.state, this.engine.content, human.id);
-    const army = this.engine.armyStrength(human.id);
-    const militarySnapshot = this.engine.militaryBaseSnapshot();
-    const nationalArmy = nationalArmyState(this.engine, human.id, army, militarySnapshot);
-    const attack = this.engine.effectiveAttack(human.id, nationalArmy, militarySnapshot);
-    const defense = this.engine.effectiveDefense(human.id, nationalArmy, militarySnapshot);
-    const combatQuality = 0.55 * attack + 0.45 * defense;
-    const attackShare = combatQuality > 0 ? 100 * 0.55 * attack / combatQuality : 55;
-    const defenseShare = 100 - attackShare;
-    const currentPower = this.engine.currentPower(human.id, militarySnapshot);
-    const nationalQuality = militarySnapshot.nationalQualityByNation.get(human.id);
-    const baseRatings = militarySnapshot.byNation.get(human.id) ?? {
-      attack: nationalArmy.baseAttack,
-      defense: nationalArmy.baseDefense,
-    };
-    const combinedQuality = nationalQuality?.combinedMultiplier ?? 1;
-    const attackUpgradeMultiplier = attack
-      / Math.max(0.000001, baseRatings.attack * combinedQuality);
-    const defenseResultMultiplier = defense
-      / Math.max(0.000001, baseRatings.defense * combinedQuality);
-    const displayedNet = finance.net;
+    const state = this.engine.state;
+    const world = worldTopbarStatsV2(state, human.id, this.engine.content);
+    const controlledTerritories = [...this.engine.territoriesOf(human.id)];
+    const integratingTerritories = controlledTerritories.filter((territory) => (
+      territory.coreOwner !== human.id && territory.integration < 0.999999
+    ));
+    const controlledArea = controlledTerritories.reduce((sum, territory) => (
+      sum + Math.max(0, this.engine.content.territories[territory.id]?.baseline.landArea ?? 0)
+    ), 0);
+    const averageCondition = controlledArea > 0
+      ? controlledTerritories.reduce((sum, territory) => {
+        const area = Math.max(0, this.engine.content.territories[territory.id]?.baseline.landArea ?? 0);
+        return sum + area * territory.condition;
+      }, 0) / controlledArea
+      : 1;
+    const integrationPopulation = integratingTerritories
+      .reduce((sum, territory) => sum + Math.max(0, territory.population), 0);
+    const integrationProgress = integrationPopulation > 0
+      ? integratingTerritories.reduce((sum, territory) => (
+        sum + Math.max(0, territory.population) * territory.integration
+      ), 0) / integrationPopulation
+      : 1;
+    const nextIntegration = integratingTerritories
+      .filter((territory) => territory.integrationProgram)
+      .sort((left, right) => (
+        (left.integrationProgram?.completesTick ?? Number.POSITIVE_INFINITY)
+        - (right.integrationProgram?.completesTick ?? Number.POSITIVE_INFINITY)
+      ))[0];
+    const integrationWeeks = nextIntegration?.integrationProgram
+      ? Math.max(0, nextIntegration.integrationProgram.completesTick - state.tick)
+      : 0;
+    const integratedPopulation = this.engine.controlledPopulation(human.id);
+    const populationShare = world.population > 0 ? economy.population / world.population * 100 : 0;
+    const annualPopulationChange = economy.population * populationDynamics.annualNetRate;
+    const annualBirths = economy.population * populationDynamics.annualBirthRate;
+    const annualDeaths = economy.population * populationDynamics.annualDeathRate;
+    const foodReserveWeeks = finance.foodDemand > 0 ? human.foodStock / finance.foodDemand : 0;
+    const foodTrade = summarizeFoodTradeV2(finance.foodExported, finance.foodImported);
+    const traitPresentation = renderCountryTraitPresentationV2(
+      human.id,
+      'nation',
+      this.engine.content,
+    );
     const resistance = this.engine.globalResistance();
+    const suspicionRisk = suspicionRiskPresentationV2(resistance.threat);
     const coalitionNames = resistance.memberIds.slice(0, 6)
       .map((id) => this.engine.player(id)?.shortName).filter(Boolean);
-    const completedUpgrades = Object.values(human.research.breakthroughs)
-      .reduce((sum, value) => sum + value, 0);
-    const integratedPopulation = this.engine.controlledPopulation(human.id);
-    const cashStatus = human.treasury < 0 ? 'DEBT RECOVERY'
-      : displayedNet >= 0 ? 'GROWING' : finance.mode === 'war' ? 'WAR SPEND' : 'REBALANCING';
-    const activeTreaties = this.engine.state.truces
-      .filter((truce) => truce.expiresTick > this.engine.state.tick
-        && (truce.leftId === human.id || truce.rightId === human.id))
-      .map((truce) => {
-        const opponentId = truce.leftId === human.id ? truce.rightId : truce.leftId;
-        const opponent = this.engine.player(opponentId);
-        const obligation = this.engine.state.ceasefireObligations.find((candidate) => (
-          candidate.expiresTick > this.engine.state.tick
-          && ((candidate.payerId === human.id && candidate.payeeId === opponentId)
-            || (candidate.payeeId === human.id && candidate.payerId === opponentId))
-        ));
-        const lockWeeks = Math.max(0, truce.expiresTick - this.engine.state.tick);
-        const paymentWeeks = obligation ? Math.max(0, obligation.expiresTick - this.engine.state.tick) : 0;
-        const cashFlow = obligation
-          ? `${obligation.payerId === human.id ? '−' : '+'}${cash(annual(obligation.weeklyCost))}/yr · ${paymentWeeks} weeks left`
-          : 'Payments complete';
-        return `<span class="nation-reaction-detail ${obligation?.payeeId === human.id ? 'is-income' : ''}"><b>PEACE · ${escapeHtml(opponent?.shortName ?? opponentId)}</b>${cashFlow} · locked ${lockWeeks}w</span>`;
-      }).join('');
-    const reserveNet = finance.reserveTraining - finance.reserveDeployment;
     const reactionLabel = resistance.level ? 'CONTAINMENT ACTIVE'
       : resistance.members ? `${resistance.members}/5 COALITION BUILDING` : 'NO COALITION';
     const reactionDetail = resistance.members
       ? coalitionNames.map((name) => escapeHtml(name!)).join(' · ')
         + (resistance.members > coalitionNames.length ? ` · +${resistance.members - coalitionNames.length}` : '')
       : 'World powers are monitoring expansion.';
-    const traitPresentation = renderCountryTraitPresentationV2(
-      human.id,
-      'nation',
-      this.engine.content,
-    );
-    const openingBonus = human.openingArmyBonus;
-    const openingBonusWeeks = openingBonus
-      ? Math.max(0, openingBonus.expiresTick - this.engine.state.tick) : 0;
-    const openingBonusCard = openingBonus
-      && openingBonus.remainingManpower > 0.000000001
-      && openingBonusWeeks > 0
-      ? `<article class="is-opening-force" title="Player-only opening troops are free, fade every week and reach zero after ten years. Casualties consume them first." aria-label="Temporary opening army bonus ${people(openingBonus.remainingManpower)}, ${openingBonusWeeks} weeks remaining"><span>OPENING BONUS LEFT</span><strong>${people(openingBonus.remainingManpower)}</strong><small>${format(openingBonusWeeks / 52, 1)} YEARS · FREE · NO REFILL</small></article>`
-      : '';
+    const activeTreaties = state.truces
+      .filter((truce) => truce.expiresTick > state.tick
+        && (truce.leftId === human.id || truce.rightId === human.id))
+      .map((truce) => {
+        const opponentId = truce.leftId === human.id ? truce.rightId : truce.leftId;
+        const opponent = this.engine.player(opponentId);
+        const obligation = state.ceasefireObligations.find((candidate) => (
+          candidate.expiresTick > state.tick
+          && ((candidate.payerId === human.id && candidate.payeeId === opponentId)
+            || (candidate.payeeId === human.id && candidate.payerId === opponentId))
+        ));
+        const lockWeeks = Math.max(0, truce.expiresTick - state.tick);
+        const paymentWeeks = obligation ? Math.max(0, obligation.expiresTick - state.tick) : 0;
+        const paymentState = obligation
+          ? `${obligation.payerId === human.id ? 'YOU PAY' : 'YOU RECEIVE'} · ${paymentWeeks}w remaining`
+          : 'PAYMENTS COMPLETE';
+        return `<span class="nation-reaction-detail ${obligation?.payeeId === human.id ? 'is-income' : ''}"><b>PEACE · ${escapeHtml(opponent?.shortName ?? opponentId)}</b>${paymentState} · locked ${lockWeeks}w</span>`;
+      }).join('');
     return `
-      <aside class="world-panel command-drawer glass-panel nation-command command-drawer--clean" data-scroll-session="${drawerScrollSessionId('nation')}">
+      <aside class="world-panel command-drawer glass-panel nation-command command-drawer--clean command-drawer--unified" data-scroll-session="${drawerScrollSessionId('nation')}">
         <button class="panel-close" data-action="close-panel" aria-label="Close nation overview">×</button>
-        <div class="panel-kicker">NATION</div>
-        <div class="drawer-heading drawer-heading--compact"><div><h2>${escapeHtml(human.name)}</h2></div><strong class="${displayedNet >= 0 ? 'is-positive' : 'is-negative'}">${escapeHtml(cashStatus)}</strong></div>
-        ${traitPresentation}
-        <section class="national-strength-summary">
-          <div class="national-strength-head"><span>NATIONAL STRENGTH</span><strong>${compactNumber(currentPower)} POWER</strong></div>
-          <div class="national-strength-grid">
-            <article class="is-army" title="Active trained troops. Deployed manpower contributes directly to conventional power." aria-label="Active army ${people(army.deployed)}, ${format(army.fillRatio * 100)} percent of capacity"><span>ARMY</span><strong>${people(army.deployed)}</strong><small>${format(army.fillRatio * 100)}% · cap ${people(army.capacity)}</small></article>
-            ${openingBonusCard}
-            <article class="is-army" title="Trained reserve troops replace wartime losses after mobilisation; they add no power while inactive." aria-label="Trained reserve ${people(human.trainedReserves)} of ${people(finance.trainedReserveCapacity)} capacity"><span>TRAINED RESERVE</span><strong>${people(human.trainedReserves)} / ${people(finance.trainedReserveCapacity)}</strong><small class="${reserveNet >= 0 ? 'is-positive' : 'is-negative'}">${reserveNet >= 0 ? '+' : '−'}${people(Math.abs(reserveNet))} this week · ${cash(annual(finance.reserveTrainingCost))}/yr training</small></article>
-            <article class="is-atk" title="Effective attack: inherited force quality, live GDP and IQ, Economy R&D, weapons research and nuclear deterrence." aria-label="Effective attack ${format(attack, 2)}"><span>ATK</span><strong>${format(attack, 2)}</strong></article>
-            <article class="is-def" title="Effective defence: inherited force quality, live GDP and IQ, Economy R&D and defensive research, followed by diminishing returns above 1.0." aria-label="Effective defense ${format(defense, 2)}"><span>DEF</span><strong>${format(defense, 2)}</strong></article>
-            <article class="is-iq" title="Live gameplay IQ. Education research adds to the opening baseline and improves research conversion, logistics and national systems." aria-label="Live IQ ${format(iq.score, 1)}, baseline ${format(iq.baselineScore, 1)}, research bonus ${signed(iq.researchBonus, 1)}"><span>IQ</span><strong>${format(iq.score, 1)}</strong><small>R&D ${signed(iq.researchBonus, 1)} · ×${format(nationalQuality?.researchConversion ?? 1, 2)}</small></article>
-            <article class="is-gdp" title="Live integrated GDP per capita. It modifies national combat systems independently of army size." aria-label="GDP per capita ${cash(economy.wealthPerPerson / 1e6)}"><span>GDP / CAPITA</span><strong>${cash(economy.wealthPerPerson / 1e6)}</strong><small>${signed((nationalQuality?.gdpSystemContribution ?? 0) * 100, 1)}% system quality</small></article>
-            <article class="is-economy" title="Total economic output currently unlocked by territorial integration." aria-label="Controlled economy ${cash(economy.controlledOutput)}"><span>ECONOMY</span><strong>${cash(economy.controlledOutput)}</strong></article>
-          </div>
-          <div class="power-contribution">
-            <div class="power-contribution__head"><span>COMBAT MIX</span></div>
-            <i class="power-contribution__bar"><b class="is-atk" style="width:${attackShare}%"></b><b class="is-def" style="width:${defenseShare}%"></b></i>
-            <div class="power-contribution__shares"><b class="is-atk">ATK ${format(attackShare, 1)}% SHARE</b><b class="is-def">DEF ${format(defenseShare, 1)}% SHARE</b></div>
-            <div class="power-modifier-chips"><span title="GDP's separate contribution to the national combat-system multiplier">GDP ${signed((nationalQuality?.gdpSystemContribution ?? 0) * 100, 1)}%</span><span title="Live IQ's separate contribution to the national combat-system multiplier, including Education research">IQ ${signed((nationalQuality?.iqSystemContribution ?? 0) * 100, 1)}%</span><span title="Economy & Science research modernises both attack and defence">ECON R&D ${signed(((nationalQuality?.economyResearchMultiplier ?? 1) - 1) * 100, 1)}%</span><span title="Weapons research and nuclear deterrence after shared GDP, IQ and Economy R&D">ATK SYSTEMS ×${format(attackUpgradeMultiplier, 2)}</span><span title="Defensive research after shared GDP, IQ and Economy R&D, including the visible diminishing-returns curve">DEF RESULT ×${format(defenseResultMultiplier, 2)}</span></div>
-          </div>
+        <div class="panel-kicker">NATION OVERVIEW</div>
+        <div class="drawer-heading drawer-heading--compact"><div><h2>${escapeHtml(human.name)}</h2><span>EMPIRE & DOMESTIC SYSTEMS</span></div><strong class="${integratingTerritories.length ? 'is-warn' : 'is-positive'}">${integratingTerritories.length ? `${integratingTerritories.length} INTEGRATING` : 'ALL CORE'}</strong></div>
+
+        <span class="section-label">EMPIRE</span>
+        <section class="nation-overview-grid unified-stat-grid" aria-label="Empire overview">
+          <article><span>RESIDENTS</span><strong>${population(economy.population)}</strong><small>${population(integratedPopulation)} fully integrated</small></article>
+          <article><span>TERRITORIES</span><strong>${world.controlledTerritories} / ${world.worldTerritories}</strong><small>${format(world.controlledLandShare * 100, 2)}% of mapped land</small></article>
+          <article><span>WORLD POPULATION</span><strong>${format(populationShare, 2)}%</strong><small>${population(world.population)} worldwide</small></article>
+          <article class="${averageCondition >= 0.75 ? 'is-good' : averageCondition < 0.5 ? 'is-danger' : 'is-warn'}"><span>LAND CONDITION</span><strong>${format(averageCondition * 100, 1)}%</strong><small>Area-weighted infrastructure</small></article>
+          <article><span>NATIONAL AI</span><strong>${escapeHtml(finance.aiMode.toUpperCase())}</strong><small>${format(finance.aiEfficiency * 100, 1)}% operating efficiency</small></article>
         </section>
-        <span class="section-label">STATE</span>
-        <section class="national-stats-grid">
-          <article title="All residents in controlled territory; the smaller line is the population currently unlocked by integration." aria-label="Population ${population(economy.population)}, integrated ${population(integratedPopulation)}"><span>POPULATION</span><strong>${population(economy.population)}</strong><small>${population(integratedPopulation)} integrated</small></article>
-          <article title="Final annual economic growth after investment, research, food conditions and war pressure." aria-label="Annual economy growth ${signed(finance.annualEconomyGrowthRate * 100, 2)} percent"><span>ECON GROWTH</span><strong class="${finance.annualEconomyGrowthRate >= 0 ? 'is-positive' : 'is-negative'}">${signed(finance.annualEconomyGrowthRate * 100, 2)}%/yr</strong></article>
-          <article title="Estimated births minus deaths and wartime demographic pressure." aria-label="Annual population growth ${signed(populationDynamics.annualNetRate * 100, 2)} percent"><span>POP GROWTH</span><strong class="${populationDynamics.annualNetRate >= 0 ? 'is-positive' : 'is-negative'}">${signed(populationDynamics.annualNetRate * 100, 2)}%/yr</strong><small>Births · deaths · war pressure</small></article>
-          <article title="Automatic tax rate and annual tax income. Revenue uses equal economic and live productive-population bases, plus administration efficiency." aria-label="Tax rate ${format(economy.taxRate * 100, 1)} percent, annual revenue ${cash(annual(finance.revenue))}"><span>TAX</span><strong>${format(economy.taxRate * 100, 1)}%</strong><small>${cash(annual(finance.revenue))}/yr income</small></article>
-          <article title="Share of weekly food demand supplied, followed by food reserves and their storage limit." aria-label="Food coverage ${format(finance.foodCoverage * 100, 1)} percent, stock ${people(human.foodStock)} of ${people(finance.foodStorageCapacity)}"><span>FOOD SUPPLY</span><strong class="${finance.foodCoverage >= 0.98 ? 'is-positive' : 'is-negative'}">${format(finance.foodCoverage * 100, 1)}%</strong><small>${people(human.foodStock)} / ${people(finance.foodStorageCapacity)} stored</small></article>
-          <article title="Cash available now and projected cash after the current week, including any borrowing." aria-label="Treasury ${cash(human.treasury)}, projected ${cash(finance.closingTreasury)}"><span>TREASURY</span><strong class="${human.treasury >= 0 ? 'is-positive' : 'is-negative'}">${cash(human.treasury)}</strong><small>${cash(finance.closingTreasury)} next week</small></article>
-          <article title="Current annualised net cashflow after every income, operating cost, war cost and investment." aria-label="Annual balance ${signedCash(annual(finance.net))}"><span>ANNUAL BALANCE</span><strong class="${finance.net >= 0 ? 'is-positive' : 'is-negative'}">${signedCash(annual(finance.net))}</strong></article>
-          <article title="Completed upgrades across all research programs and the current annual research budget." aria-label="Research ${completedUpgrades} completed upgrades, annual funding ${cash(annual(finance.research))}"><span>RESEARCH</span><strong>${completedUpgrades} UPGRADES</strong><small>${cash(annual(finance.research))}/yr funding</small></article>
+
+        <span class="section-label">PEOPLE & FOOD</span>
+        <section class="nation-system-block nation-life-grid" aria-label="Population and food security">
+          <article class="nation-life-card nation-life-card--population">
+            <div><span>DEMOGRAPHICS</span><strong class="${populationDynamics.annualNetRate >= 0 ? 'is-positive' : 'is-negative'}">${signedPeople(annualPopulationChange)} / year</strong></div>
+            <div class="nation-demographic-flow"><span><b>+${population(annualBirths)}</b>BIRTHS</span><i>−</i><span><b>−${population(annualDeaths)}</b>DEATHS</span>${populationDynamics.annualWarPenaltyRate > 0 ? `<i>−</i><span><b>−${population(economy.population * populationDynamics.annualWarPenaltyRate)}</b>WAR DRAG</span>` : ''}</div>
+          </article>
+          <article class="nation-life-card nation-life-card--food">
+            <div><span>FOOD SECURITY</span><strong class="${finance.foodCoverage >= 0.98 ? 'is-positive' : 'is-negative'}">${format(finance.foodCoverage * 100, 1)}% supplied</strong></div>
+            <div class="nation-food-stats"><span><b>${people(human.foodStock)} / ${people(finance.foodStorageCapacity)}</b>STORED · ${format(foodReserveWeeks, 1)} WEEKS</span><span><b>${people(annual(finance.foodDomesticProduced))} / ${people(annual(finance.foodDemand))}</b>DOMESTIC / DEMAND YEARLY</span><span><b>${foodTrade.direction === 'balanced' ? 'BALANCED' : `${people(foodTrade.annualVolume)} / year`}</b>${escapeHtml(foodTrade.label)}</span></div>
+          </article>
         </section>
+
+        <span class="section-label">INTEGRATION</span>
+        <section class="nation-integration-overview ${integratingTerritories.length ? 'is-active' : 'is-complete'}">
+          <div><span>ACTIVE TERRITORIES</span><strong>${integratingTerritories.length}</strong></div>
+          <div><span>WEIGHTED PROGRESS</span><strong>${integratingTerritories.length ? `${format(integrationProgress * 100, 1)}%` : '100%'}</strong></div>
+          <div><span>NEXT COMPLETION</span><strong>${nextIntegration ? `${format(integrationWeeks / 52, 1)} years` : 'ALL CORE'}</strong></div>
+          <i aria-hidden="true"><b style="width:${format(integrationProgress * 100, 2)}%"></b></i>
+          <small>${nextIntegration ? `${escapeHtml(this.engine.content.territories[nextIntegration.id]?.name ?? nextIntegration.id)} completes first` : 'Every controlled territory is fully integrated.'}</small>
+        </section>
+
         <section class="nation-reaction-block">
           <div class="nation-reaction-head"><span>WORLD REACTION</span><strong>${escapeHtml(reactionLabel)}</strong></div>
-          <div class="simple-suspicion"><span>SUSPICION</span><i><b style="width:${resistance.threat}%"></b></i><strong>${format(resistance.threat)}%</strong></div>
+          <div class="simple-suspicion simple-suspicion--${suspicionRisk.level}">
+            <div><span>POLITICAL SUSPICION</span><b>${escapeHtml(suspicionRisk.label)}</b><strong>${suspicionRisk.score}<small>/100</small></strong></div>
+            <i role="progressbar" aria-label="Political Suspicion" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${suspicionRisk.score}"><b style="width:${suspicionRisk.score}%"></b><em style="left:20%"></em><em style="left:40%"></em><em style="left:60%"></em><em style="left:80%"></em></i>
+            <small>${escapeHtml(suspicionRisk.guidance)}</small>
+          </div>
           <p>${reactionDetail}</p>
           ${activeTreaties ? `<div class="nation-reaction-details">${activeTreaties}</div>` : ''}
         </section>
+
+        ${traitPresentation}
       </aside>
     `;
   }
-
   private renderEconomyPanel(
     human: NationViewV2,
     economy: NationalEconomyV2,
     finance: WeeklyFinanceBreakdownV2,
-    demographics: PopulationDynamicsV2,
   ): string {
-    // Food exports are shown as a direct credit against Food below. Keeping
-    // them out of this income total prevents the same receipt appearing twice.
-    const totalIncome = finance.revenue + finance.ceasefireIncome;
+    const totalIncome = finance.revenue + finance.foodExportIncome + finance.ceasefireIncome;
+    const totalExpenses = finance.expenses;
     const growth = finance.annualEconomyGrowthRate;
-    const integratedPopulation = this.engine.controlledPopulation(human.id);
-    const integratedNaturalAnnualChange = integratedPopulation * demographics.annualNetRate;
-    const foodSupplyRatio = finance.foodProduced / Math.max(0.01, finance.foodDemand);
-    const additionalIncome = [
-      finance.ceasefireIncome > 0 ? `${cash(annual(finance.ceasefireIncome))}/yr treaties` : '',
-    ].filter(Boolean).join(' · ');
-    const foodTrade = summarizeFoodTradeV2(finance.foodExported, finance.foodImported);
-    const foodExpenseLabel = foodTrade.direction === 'export'
-      ? 'FOOD · NET EXPORTS'
-      : foodTrade.direction === 'import' ? 'FOOD · NET IMPORTS' : 'FOOD';
-    const foodTradeCardClass = foodTrade.direction === 'export'
-      ? 'is-good'
-      : foodTrade.direction === 'import' ? 'is-warn' : '';
-    const foodTradeValueClass = foodTrade.direction === 'export'
-      ? 'is-positive'
-      : foodTrade.direction === 'import' ? 'is-negative' : '';
-    const foodTradeValue = foodTrade.direction === 'balanced'
-      ? 'BALANCED'
-      : `${people(foodTrade.annualVolume)}/year`;
-    const foodTradeDetail = foodTrade.direction === 'export'
-      ? `Exports exceed imports · ${cash(annual(finance.foodExportIncome))}/year credit`
-      : foodTrade.direction === 'import'
-        ? `Imports exceed exports by ${people(foodTrade.annualVolume)}/year`
-        : 'No net food imports or exports this week';
+    const incomeItems = [
+      { label: 'TAX REVENUE', weekly: Math.max(0, finance.revenue), tone: 'tax', always: true },
+      { label: 'FOOD EXPORTS', weekly: Math.max(0, finance.foodExportIncome), tone: 'exports', always: false },
+      { label: 'PEACE & TREATIES', weekly: Math.max(0, finance.ceasefireIncome), tone: 'treaties', always: false },
+    ];
+    const incomeRows = incomeItems
+      .filter((item) => item.always || item.weekly > 0.0000005)
+      .map((item) => {
+        const share = totalIncome > 0 ? item.weekly / totalIncome * 100 : 0;
+        const boundedShare = Math.max(0, Math.min(100, share));
+        const shareLabel = share > 0 && share < 0.1 ? '&lt;0.1%' : `${format(share, 1)}%`;
+        return `<article class="economy-expense-breakdown__item economy-income-breakdown__item--${item.tone} ${item.weekly > 0 ? 'is-funded' : 'is-zero'}" aria-label="${item.label}: ${cash(annual(item.weekly))} per year, ${format(share, 1)} percent of total income"><div><span>${item.label}</span><strong>+${cash(annual(item.weekly))}<small>/year</small></strong><em>${shareLabel}</em></div><i aria-hidden="true"><b style="width:${boundedShare}%"></b></i></article>`;
+      }).join('');
     const developmentFoodPause = finance.foodDevelopmentTransfer > 0.0000005;
-    const totalExpenses = Math.max(0, finance.expenses - finance.foodExportIncome);
     const expenseItems: Array<{
       key: string;
       label: string;
@@ -1865,9 +2241,7 @@ export class WorldUIV2 {
       { key: 'operations', label: baseOperatingCostLabel(
         finance.baseOperatingCost / Math.max(0.000001, finance.revenue),
       ), weekly: Math.max(0, finance.baseOperatingCost), tone: 'operations', always: true },
-      { key: 'food', label: foodExpenseLabel, weekly: Math.max(0, finance.foodProduction - finance.foodExportIncome), tone: 'food', always: true },
-      // Ordinary military spending and live-front operations are deliberately
-      // separate here; totalMilitaryCost would count war operations twice.
+      { key: 'food', label: 'FOOD SYSTEM', weekly: Math.max(0, finance.foodProduction), tone: 'food', always: true },
       { key: 'military', label: 'MILITARY', weekly: Math.max(0, finance.military), tone: 'military', always: true },
       { key: 'research', label: 'RESEARCH', weekly: Math.max(0, finance.research), tone: 'research', always: true },
       { key: 'development', label: developmentFoodPause ? 'DEVELOPMENT · FOOD PAUSE' : 'DEVELOPMENT', weekly: Math.max(0, finance.development), tone: 'development', always: true },
@@ -1876,8 +2250,6 @@ export class WorldUIV2 {
       { key: 'peace', label: 'PEACE PAYMENTS', weekly: Math.max(0, finance.ceasefirePayment), tone: 'peace', always: false },
       { key: 'debt', label: 'DEBT PREMIUM', weekly: Math.max(0, finance.debtPremium), tone: 'debt', always: false },
     ];
-    // Finance values are rounded individually. Put any microscopic rounding
-    // remainder into Development so the visible categories equal expenses.
     const categorizedExpenses = expenseItems.reduce((sum, item) => sum + item.weekly, 0);
     const developmentExpense = expenseItems.find((item) => item.key === 'development')!;
     developmentExpense.weekly = Math.max(
@@ -1890,37 +2262,49 @@ export class WorldUIV2 {
         const share = totalExpenses > 0 ? item.weekly / totalExpenses * 100 : 0;
         const boundedShare = Math.max(0, Math.min(100, share));
         const shareLabel = share > 0 && share < 0.1 ? '&lt;0.1%' : `${format(share, 1)}%`;
-        const annualAmount = cash(annual(item.weekly));
-        return `<article class="economy-expense-breakdown__item economy-expense-breakdown__item--${item.tone} ${item.weekly > 0 ? 'is-funded' : 'is-zero'}" aria-label="${item.label}: ${annualAmount} per year, ${format(share, 1)} percent of total costs"><div><span>${item.label}</span><strong>${annualAmount}<small>/year</small></strong><em>${shareLabel}</em></div><i aria-hidden="true"><b style="width:${boundedShare}%"></b></i></article>`;
+        return `<article class="economy-expense-breakdown__item economy-expense-breakdown__item--${item.tone} ${item.weekly > 0 ? 'is-funded' : 'is-zero'}" aria-label="${item.label}: ${cash(annual(item.weekly))} per year, ${format(share, 1)} percent of total costs"><div><span>${item.label}</span><strong>−${cash(annual(item.weekly))}<small>/year</small></strong><em>${shareLabel}</em></div><i aria-hidden="true"><b style="width:${boundedShare}%"></b></i></article>`;
       })
       .join('');
+    const reserveCoverage = finance.reserveTarget > 0 ? human.treasury / finance.reserveTarget : 1;
     return `
-      <aside class="world-panel command-drawer glass-panel economy-command economy-command--simple" data-scroll-session="${drawerScrollSessionId('economy')}">
+      <aside class="world-panel command-drawer glass-panel economy-command economy-command--simple command-drawer--unified" data-scroll-session="${drawerScrollSessionId('economy')}">
         <button class="panel-close" data-action="close-panel" aria-label="Close economy">×</button>
-        <div class="panel-kicker">ECONOMY · WEEK ${this.engine.state.tick}</div>
-        <div class="drawer-heading economy-heading"><div><h2>${cash(economy.controlledOutput)}</h2><span>NATIONAL ECONOMY</span></div><strong class="${growth >= 0 ? 'is-positive' : 'is-negative'}">${signed(growth * 100, 2)}% / year</strong></div>
+        <div class="panel-kicker">ECONOMY · FINANCE</div>
+        <div class="drawer-heading drawer-heading--compact economy-heading"><div><h2>${cash(human.treasury)}</h2><span>TREASURY · ${escapeHtml(finance.aiMode.toUpperCase())} BUDGET</span></div><strong class="${finance.net >= 0 ? 'is-positive' : 'is-negative'}">${signedCash(annual(finance.net))} / YEAR</strong></div>
 
-        <div class="simple-economy-grid">
-          <article class="simple-economy-card simple-economy-card--treasury"><span>APEX BUDGET</span><strong>${escapeHtml(finance.aiMode.toUpperCase())}</strong><small>Cash reserves and emergency funding are automatic</small></article>
-          <article class="simple-economy-card ${growth >= 0 ? 'is-good' : 'is-danger'}"><span>ECONOMY</span><strong>${cash(economy.controlledOutput)}</strong><small class="${growth >= 0 ? 'is-positive' : 'is-negative'}">${signed(growth * 100, 2)}%/year · ${cash(economy.wealthPerPerson / 1e6)}/person</small></article>
-          <article class="simple-economy-card" title="Taxable output blends a stable half of integrated GDP with a half that follows live productive population (${format(economy.productivePopulationFactor * 100, 1)}% of its baseline)."><span>TOTAL INCOME</span><strong class="is-positive">+${cash(annual(totalIncome))}/year</strong><small>${cash(annual(finance.revenue))}/yr tax · ${format(economy.taxRate * 100, 1)}%${additionalIncome ? ` · ${additionalIncome}` : ''}<br>${taxIncomeBasisLabel()}</small></article>
-          <article class="simple-economy-card"><span>TOTAL COSTS</span><strong class="is-negative">−${cash(annual(totalExpenses))}/year</strong><small>${finance.foodExportIncome > 0 ? `After ${cash(annual(finance.foodExportIncome))}/year food export credit` : finance.integrationCost > 0 ? `Includes ${cash(annual(finance.integrationCost))}/year integration` : 'Food, army, research, growth and wars'}</small></article>
-          <article class="simple-economy-card" title="Conquered residents unlock gradually through integration"><span>INTEGRATED PEOPLE</span><strong>${population(integratedPopulation)}</strong><small class="${integratedNaturalAnnualChange >= 0 ? 'is-positive' : 'is-negative'}">${signedPeople(integratedNaturalAnnualChange)}/year natural</small></article>
-          <article class="simple-economy-card"><span>FOOD</span><strong>${people(human.foodStock)} / ${people(finance.foodStorageCapacity)}</strong><small class="${finance.foodStockChange >= 0 ? 'is-positive' : 'is-negative'}">${format(foodSupplyRatio * 100, 1)}% weekly supply · ${signedPeople(annual(finance.foodStockChange))} stored/year</small>${developmentFoodPause ? `<small class="is-warn">Development redirected: ${cash(annual(finance.foodDevelopmentTransfer))}/year</small>` : ''}</article>
-          <article class="simple-economy-card ${foodTradeCardClass}"><span>${foodTrade.label}</span><strong class="${foodTradeValueClass}">${foodTradeValue}</strong><small>${foodTradeDetail}</small></article>
-        </div>
+        <section class="finance-flow-summary" aria-label="Annual cashflow">
+          <article class="is-income"><span>TOTAL INCOME</span><strong>+${cash(annual(totalIncome))}</strong><small>/ year</small></article>
+          <i aria-hidden="true">−</i>
+          <article class="is-expense"><span>TOTAL COSTS</span><strong>−${cash(annual(totalExpenses))}</strong><small>/ year</small></article>
+          <i aria-hidden="true">=</i>
+          <article class="${finance.net >= 0 ? 'is-income' : 'is-expense'}"><span>NET BALANCE</span><strong>${signedCash(annual(finance.net))}</strong><small>/ year</small></article>
+        </section>
+
+        <section class="finance-context-grid unified-stat-grid" aria-label="Financial overview">
+          <article><span>NATIONAL ECONOMY</span><strong>${cash(economy.controlledOutput)}</strong><small class="${growth >= 0 ? 'is-positive' : 'is-negative'}">${signed(growth * 100, 2)}% real growth / year</small></article>
+          <article><span>TAX RATE</span><strong>${format(economy.taxRate * 100, 1)}%</strong><small>${cash(annual(finance.revenue))} revenue / year</small></article>
+          <article class="${human.treasury >= 0 ? 'is-good' : 'is-warn'}"><span>TREASURY</span><strong>${cash(human.treasury)}</strong><small>${human.treasury >= 0 ? 'Available national cash balance' : 'Outstanding treasury deficit'}</small></article>
+          <article class="${reserveCoverage >= 1 ? 'is-good' : 'is-warn'}"><span>RESERVE TARGET</span><strong>${cash(finance.reserveTarget)}</strong><small>${format(Math.max(0, reserveCoverage) * 100, 1)}% funded</small></article>
+        </section>
+        ${finance.newBorrowing > 0 || human.treasury < 0 ? `<div class="simple-panel-alert is-debt"><b>DEBT FINANCING</b><span>${cash(finance.newBorrowing)} new borrowing this week · ${cash(annual(finance.debtPremium))}/year debt premium</span></div>` : ''}
+
+        <span class="section-label">INCOME BREAKDOWN · YEAR</span>
+        <section class="economy-expense-breakdown economy-income-breakdown" aria-label="Annual income breakdown">
+          <div class="economy-expense-breakdown__columns"><span>SOURCE</span><span>AMOUNT / YEAR</span><span>SHARE</span></div>
+          <div class="economy-expense-breakdown__items">${incomeRows}</div>
+          <footer><span>TOTAL INCOME</span><strong>+${cash(annual(totalIncome))}<small>/year</small></strong><b>${totalIncome > 0 ? '100%' : '0%'}</b></footer>
+        </section>
 
         <span class="section-label">EXPENSE BREAKDOWN · YEAR</span>
         <section class="economy-expense-breakdown" aria-label="Annual expense breakdown">
           <div class="economy-expense-breakdown__columns"><span>CATEGORY</span><span>AMOUNT / YEAR</span><span>SHARE</span></div>
           <div class="economy-expense-breakdown__items">${expenseRows}</div>
-          <footer><span>TOTAL COSTS</span><strong>${cash(annual(totalExpenses))}<small>/year</small></strong><b>${totalExpenses > 0 ? '100%' : '0%'}</b></footer>
+          <footer><span>TOTAL COSTS</span><strong>−${cash(annual(totalExpenses))}<small>/year</small></strong><b>${totalExpenses > 0 ? '100%' : '0%'}</b></footer>
         </section>
       </aside>
     `;
   }
-
-  private renderProgressPanel(): string {
+  private renderResearchPanel(): string {
     const human = this.engine.player(this.viewerPlayerId())!;
     const militarySnapshot = this.engine.militaryBaseSnapshot();
     const armyStrength = this.engine.armyStrength(human.id);
@@ -1955,6 +2339,9 @@ export class WorldUIV2 {
       })
       .join('');
     const nextProgress = next ? Math.round(clamp(next.progressRatio, 0, 1) * 100) : 100;
+    const nextWeeks = next && next.weeklyProgress > 0
+      ? Math.max(1, Math.ceil(Math.max(0, next.nextCost - next.progress) / next.weeklyProgress))
+      : 0;
     const nuclearProgress = Math.round(deterrence.progressRatio * 100);
     const programs = portfolio.map((branch) => {
       const progress = branch.maxed ? 100 : Math.round(clamp(branch.progressRatio, 0, 1) * 100);
@@ -1963,60 +2350,148 @@ export class WorldUIV2 {
         : branch.nextCostIncreaseRatio > 1
         ? `${format((branch.nextCostIncreaseRatio - 1) * 100)}% harder after completion` : 'final level';
       const description = `${RESEARCH_META[branch.branch].label}: ${effects} · ${harder}`;
-      return `<article class="progress-program progress-program--compact${branch.maxed ? ' is-maxed' : ''}" tabindex="0" aria-label="${escapeHtml(description)}" style="--project:${RESEARCH_COLORS[branch.branch]}" title="${escapeHtml(description)}"><div><span>${escapeHtml(RESEARCH_META[branch.branch].shortLabel)}</span><b>${branch.maxed ? 'MAX' : `${progress}%`}</b></div><strong>${branch.breakthroughs} upgrades · ${branch.maxed ? 'funding redirected' : `${branch.allocation}% focus`}</strong><i><b style="width:${progress}%"></b></i></article>`;
+      return `<article class="progress-program progress-program--compact${branch.maxed ? ' is-maxed' : ''}" tabindex="0" aria-label="${escapeHtml(description)}" style="--project:${RESEARCH_COLORS[branch.branch]}" title="${escapeHtml(description)}"><div><span>${escapeHtml(RESEARCH_META[branch.branch].shortLabel)}</span><b>${branch.maxed ? 'MAX' : `${progress}%`}</b></div><strong>${branch.breakthroughs} upgrades · ${branch.maxed ? 'focus redistributed' : `${branch.allocation}% focus`}</strong><i><b style="width:${progress}%"></b></i></article>`;
     }).join('');
     return `
-      <aside class="world-panel command-drawer glass-panel progress-command command-drawer--clean" data-scroll-session="${drawerScrollSessionId('progress')}">
-        <button class="panel-close" data-action="close-panel" aria-label="Close national progress">×</button>
-        <div class="panel-kicker">PROGRESS · CONTINUOUS DEVELOPMENT</div>
-        <div class="drawer-heading drawer-heading--compact"><div><h2>${completed} upgrades</h2><span>TEN PROGRAMS RUN AUTOMATICALLY</span></div><strong class="is-positive">${cash(annual(finance.research))}/YR</strong></div>
-        <div class="simple-economy-grid simple-panel-grid progress-summary--clean">
-          <article class="simple-economy-card"><span>TOTAL RESEARCH</span><strong>${completed} upgrades</strong><small>Across all ten programs</small></article>
-          <article class="simple-economy-card"><span>FUNDING</span><strong>${cash(annual(finance.research))}/year</strong><small>Automatically divided by focus</small></article>
-          <article class="simple-economy-card"><span>NEXT UPGRADE</span><strong>${next ? escapeHtml(RESEARCH_META[next.branch].shortLabel) : 'COMPLETE'}</strong><small>${nextProgress}% progress</small></article>
-          <article class="simple-economy-card"><span>NUCLEAR</span><strong>${deterrence.level ? `Tier ${deterrence.level}` : `${nuclearProgress}%`}</strong><small>+${format(deterrence.attackBonus * 100)}% ATK</small></article>
-        </div>
-        ${finance.foodDevelopmentTransfer > 0 ? `<div class="simple-panel-alert is-food"><b>FOOD RESEARCH PRIORITY</b><span>Research stays funded while ${cash(annual(finance.foodDevelopmentTransfer))}/year moves from Development to food. APEX prioritizes logistics and supply research until the crisis passes.</span></div>` : ''}
-        <span class="section-label">EMPIRE UPGRADES · ALREADY ACTIVE</span>
-        <div class="upgrade-total-grid">${upgradeTotals || '<div class="empty-state">No completed upgrade effects yet.</div>'}</div>
-        <span class="section-label">ALL PROGRAMS</span>
+      <aside class="world-panel command-drawer glass-panel progress-command research-command command-drawer--clean command-drawer--unified" data-scroll-session="${drawerScrollSessionId('research')}">
+        <button class="panel-close" data-action="close-panel" aria-label="Close research">×</button>
+        <div class="panel-kicker">RESEARCH</div>
+        <div class="drawer-heading drawer-heading--compact"><div><h2>National research</h2><span>10 AUTOMATIC PROGRAMS</span></div><strong class="is-positive">${completed} UPGRADES</strong></div>
+
+        <section class="research-next-card" style="--project:${next ? RESEARCH_COLORS[next.branch] : '#69e3a2'}" aria-label="Next research breakthrough">
+          <div><span>NEXT BREAKTHROUGH</span><strong>${next ? escapeHtml(RESEARCH_META[next.branch].label) : 'ALL PROGRAMS COMPLETE'}</strong><b>${nextProgress}%</b></div>
+          <i role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${nextProgress}"><b style="width:${nextProgress}%"></b></i>
+          <small>${next ? `${nextWeeks ? `About ${nextWeeks} weeks at current throughput · ` : ''}${next.allocation}% national focus` : 'Every useful research level has been completed.'}</small>
+        </section>
+
+        <section class="research-signal-grid unified-stat-grid" aria-label="Research system">
+          <article><span>R&D CONVERSION</span><strong>×${format(nationalQuality?.researchConversion ?? 1, 2)}</strong><small>Live IQ and national systems</small></article>
+          <article><span>LIVE IQ</span><strong>${format(liveIq.score, 1)}</strong><small>Education bonus ${signed(liveIq.researchBonus, 1)}</small></article>
+          <article class="${finance.warResearchPenalty > 0 ? 'is-warn' : 'is-good'}"><span>THROUGHPUT</span><strong>${format((1 - finance.warResearchPenalty) * 100, 1)}%</strong><small>${finance.warResearchPenalty > 0 ? 'Reduced by active war' : 'No wartime disruption'}</small></article>
+          <article><span>NUCLEAR PROGRAM</span><strong>${deterrence.level ? `TIER ${deterrence.level}` : `${nuclearProgress}%`}</strong><small>+${format(deterrence.attackBonus * 100)}% attack deterrence</small></article>
+        </section>
+
+        ${finance.foodDevelopmentTransfer > 0 ? '<div class="simple-panel-alert is-food"><b>FOOD RESEARCH PRIORITY</b><span>Development is temporarily redirected to food. Research remains active while APEX prioritizes logistics and supply programs.</span></div>' : ''}
+        <span class="section-label">ACTIVE EFFECTS</span>
+        <div class="upgrade-total-grid">${upgradeTotals || '<div class="empty-state">No completed research effects yet.</div>'}</div>
+        <span class="section-label">PROGRAMS</span>
         <div class="progress-programs progress-programs--compact">${programs}</div>
       </aside>
     `;
   }
-
-  private renderWarPanel(): string {
-    const human = this.engine.player(this.viewerPlayerId())!;
+  private renderMilitaryCommandOverview(
+    human: NationViewV2,
+    economy: NationalEconomyV2,
+    finance: WeeklyFinanceBreakdownV2,
+  ): string {
+    const iq = selectNationalIqViewV2(this.engine.state, this.engine.content, human.id);
     const army = this.engine.armyStrength(human.id);
     const militarySnapshot = this.engine.militaryBaseSnapshot();
     const nationalArmy = nationalArmyState(this.engine, human.id, army, militarySnapshot);
     const attack = this.engine.effectiveAttack(human.id, nationalArmy, militarySnapshot);
     const defense = this.engine.effectiveDefense(human.id, nationalArmy, militarySnapshot);
-    const combatPower = this.engine.currentPower(human.id, militarySnapshot);
-    const weakArmy = army.fillRatio < 0.55;
-    const wars = this.humanWars();
+    const currentPower = this.engine.currentPower(human.id, militarySnapshot);
+    const nationalQuality = militarySnapshot.nationalQualityByNation.get(human.id);
+    const baseRatings = militarySnapshot.byNation.get(human.id) ?? {
+      attack: nationalArmy.baseAttack,
+      defense: nationalArmy.baseDefense,
+    };
+    const combinedQuality = nationalQuality?.combinedMultiplier ?? 1;
+    const attackUpgradeMultiplier = attack
+      / Math.max(0.000001, baseRatings.attack * combinedQuality);
+    const defenseResultMultiplier = defense
+      / Math.max(0.000001, baseRatings.defense * combinedQuality);
+    const armyReady = clamp(army.fillRatio, 0, 1);
+    const reserveReady = finance.trainedReserveCapacity > 0
+      ? clamp(human.trainedReserves / finance.trainedReserveCapacity, 0, 1)
+      : 0;
+    const upkeepReady = clamp(finance.mandatoryFundingRatio, 0, 1);
+    const openingMultiplier = openingArmyCapacityMultiplierV2(
+      this.engine.state,
+      this.engine.content,
+      human.id,
+    );
+    const openingWeeks = Math.max(
+      0,
+      OPENING_ARMY_BONUS_DURATION_TICKS_V2 - this.engine.state.tick,
+    );
+    const openingBonus = human.openingArmyBonus;
+    const openingForce = Math.max(0, openingBonus?.remainingManpower ?? 0);
+    const openingStatus = Math.abs(openingMultiplier - 1) <= 0.0005 ? '' : `
+      <div class="military-opening-status ${openingMultiplier > 1 ? 'is-boost' : 'is-limit'}">
+        <div><span>${openingMultiplier > 1 ? 'PLAYER OPENING FORCE' : 'OPENING BALANCE LIMIT'}</span><strong>×${format(openingMultiplier, 2)} CURRENT CAP</strong></div>
+        <b>${openingMultiplier > 1 ? `${people(openingForce)} free troops left` : 'TEMPORARILY REDUCED'}</b>
+        <small>${format(openingWeeks / 52, 1)} years remaining · returns to ×1 · ${openingMultiplier > 1 ? 'free contingent never refills · paid recruits can use cap' : 'cap restriction only'}</small>
+      </div>`;
+    const readinessRow = (
+      label: string,
+      value: string,
+      detail: string,
+      ratio: number,
+      tone: string,
+    ): string => `<article class="${tone}"><div><span>${label}</span><strong>${value}</strong><small>${detail}</small></div><b>${format(ratio * 100, 0)}%</b><i><em style="width:${format(ratio * 100, 2)}%"></em></i></article>`;
+    return `<section class="military-command-overview">
+      <header class="military-power-hero">
+        <div><span>NATIONAL COMBAT POWER</span><strong>${compactNumber(currentPower)}</strong><small>Active force × attack/defence systems</small></div>
+        <section><article class="is-atk"><span>ATTACK</span><strong>${format(attack, 2)}</strong><small>systems ×${format(attackUpgradeMultiplier, 2)}</small></article><article class="is-def"><span>DEFENCE</span><strong>${format(defense, 2)}</strong><small>result ×${format(defenseResultMultiplier, 2)}</small></article></section>
+      </header>
+
+      <div class="military-readiness-head"><span>FORCE READINESS</span><strong class="${armyReady >= 0.55 && upkeepReady >= 0.95 ? 'is-positive' : 'is-warn'}">${armyReady >= 0.55 && upkeepReady >= 0.95 ? 'OPERATIONAL' : 'RECOVERING'}</strong></div>
+      <div class="military-readiness-grid">
+        ${readinessRow('ACTIVE FORCE', `${people(army.deployed)} / ${people(army.capacity)}`, 'deployed / capacity', armyReady, armyReady >= 0.55 ? 'is-good' : 'is-warn')}
+        ${readinessRow('TRAINED RESERVE', `${people(human.trainedReserves)} / ${people(finance.trainedReserveCapacity)}`, `${finance.reserveDeployment > 0 ? `−${people(finance.reserveDeployment)} deployed` : `+${people(finance.reserveTraining)} trained`} this week`, reserveReady, reserveReady >= 0.5 ? 'is-good' : 'is-neutral')}
+        ${readinessRow('UPKEEP FUNDED', `${format(upkeepReady * 100, 1)}%`, 'standing force maintenance', upkeepReady, upkeepReady >= 0.999 ? 'is-good' : 'is-warn')}
+      </div>
+      ${openingStatus}
+
+      <div class="military-system-grid">
+        <article><i>IQ</i><div><span>COMMAND SYSTEMS</span><strong>${format(iq.score, 1)} IQ</strong><small>${signed((nationalQuality?.iqSystemContribution ?? 0) * 100, 1)}% combat contribution</small></div></article>
+        <article><i>GDP</i><div><span>INDUSTRIAL SYSTEMS</span><strong>${signed((nationalQuality?.gdpSystemContribution ?? 0) * 100, 1)}%</strong><small>${cash(economy.wealthPerPerson / 1e6)} output per capita</small></div></article>
+        <article><i>R&D</i><div><span>ECONOMY RESEARCH</span><strong>${signed(((nationalQuality?.economyResearchMultiplier ?? 1) - 1) * 100, 1)}%</strong><small>Shared attack and defence modernisation</small></div></article>
+        <article><i>TRN</i><div><span>RECRUITMENT PIPELINE</span><strong>${format(finance.recruitmentFundingRatio * 100, 1)}%</strong><small>Current requested training funded</small></div></article>
+      </div>
+    </section>`;
+  }
+  private renderWarDiplomacyRow(war: WarStateV2, humanId: PlayerId): string {
+    const enemyId = war.attackerId === humanId ? war.defenderId : war.attackerId;
+    const enemy = this.engine.player(enemyId)!;
+    const score = war.attackerId === humanId ? war.warScore : -war.warScore;
+    const terms = this.engine.peaceProposalTerms(war.id, humanId);
+    const ceasefire = this.engine.ceasefireTerms(war.id, humanId);
+    const suggested = terms.suggestedSettlement ?? 'reparations';
+    const warAge = this.engine.state.tick - war.startedTick;
+    const peaceWait = Math.max(0, PEACE_REQUEST_MIN_WAR_AGE_TICKS - warAge);
+    const peaceButton = ceasefire.allowed
+      ? `REQUEST PEACE · ${cash(annual(ceasefire.weeklyCost))}/YR`
+      : peaceWait > 0 ? `PEACE IN ${peaceWait}W`
+      : ceasefire.cooldownRemaining > 0 ? `RETRY IN ${ceasefire.cooldownRemaining}W`
+      : /pending/i.test(ceasefire.reason ?? '') ? 'OFFER PENDING'
+      : 'PEACE UNAVAILABLE';
+    return `<article class="war-diplomacy-row" style="--enemy:${enemy.cssColor}"><i class="country-flag">${countryFlagHtml(enemy.id, enemy.sigil)}</i><div><span>TREATY CHANNEL</span><strong>${escapeHtml(enemy.shortName)}</strong><small>War score ${signed(score)} · campaign details remain in War Command</small></div><div>${terms.allowed ? `<button class="secondary-button" data-action="peace-settlement" data-player="${enemy.id}" data-settlement="${suggested}">REPARATIONS</button>` : ''}<button class="ghost-button" data-action="request-ceasefire" data-war="${war.id}" ${ceasefire.allowed ? '' : 'disabled'} title="${escapeHtml(ceasefire.reason ?? 'Peace requests use a retry cooldown.')}">${escapeHtml(peaceButton)}</button></div></article>`;
+  }
+
+  private renderWarPanel(): string {
+    const human = this.engine.player(this.viewerPlayerId())!;
+    const economy = this.engine.nationalEconomy(human.id);
     const finance = this.engine.weeklyFinanceBreakdown(human.id);
+    const army = this.engine.armyStrength(human.id);
+    const wars = this.humanWars();
     const resistance = this.engine.globalResistance();
     const recommendations = this.warTargetRecommendations(human.id, resistance);
-    const annualWarCost = annual(finance.warOperations);
     return `
-      <aside class="world-panel command-drawer glass-panel war-command command-drawer--clean" data-scroll-session="${drawerScrollSessionId('war')}">
+      <aside class="world-panel command-drawer glass-panel war-command command-drawer--clean command-drawer--unified" data-scroll-session="${drawerScrollSessionId('war')}">
         <button class="panel-close" data-action="close-panel" aria-label="Close war command">×</button>
-        <div class="panel-kicker">WAR COMMAND</div>
-        <div class="drawer-heading drawer-heading--compact"><div><h2>${wars.length ? `${wars.length} active war${wars.length > 1 ? 's' : ''}` : 'Choose a target'}</h2><span>${wars.length ? `${cash(annualWarCost)}/year in operations` : 'Attackable countries are marked on the map'}</span></div><strong class="${wars.length ? 'is-negative' : 'is-positive'}">${wars.length ? 'LIVE' : 'READY'}</strong></div>
-        <div class="simple-economy-grid simple-panel-grid war-summary-grid war-summary-grid--compact">
-          <article class="simple-economy-card ${weakArmy ? 'is-warn' : 'is-good'}"><span>ARMY</span><strong>${armyCapacityLabel(army.deployed, army.capacity)}</strong><small>${format(army.fillRatio * 100)}% ready</small></article>
-          <article class="simple-economy-card ${finance.trainedReservesAfter < finance.trainedReservesBefore ? 'is-warn' : 'is-good'}"><span>RESERVE</span><strong>${people(human.trainedReserves)} / ${people(finance.trainedReserveCapacity)}</strong><small>${finance.reserveDeployment > 0 ? `−${people(finance.reserveDeployment)} used this week` : `+${people(finance.reserveTraining)} trained this week`}</small></article>
-          <article class="simple-economy-card"><span>POWER</span><strong>${compactNumber(combatPower)}</strong><small>ATK ${format(attack, 2)} · DEF ${format(defense, 2)}</small></article>
-        </div>
-        ${wars.length ? '<span class="section-label">ACTIVE WARS · STATUS & PEACE</span>' : ''}
-        <div class="war-list war-list--compact">${wars.length ? wars.map((war) => this.renderWarCard(war, human.id, finance)).join('') : '<div class="empty-state">No active war. Select a marked country on the map or use a target below.</div>'}</div>
+        <div class="panel-kicker">WAR · MILITARY</div>
+        <div class="drawer-heading drawer-heading--compact"><div><h2>Military command</h2><span>READINESS, FORCE QUALITY & TARGETING</span></div><strong class="${wars.length ? 'is-negative' : army.fillRatio >= 0.55 ? 'is-positive' : 'is-warn'}">${wars.length ? 'AT WAR' : army.fillRatio >= 0.55 ? 'READY' : 'REBUILDING'}</strong></div>
+
+        ${this.renderMilitaryCommandOverview(human, economy, finance)}
+
+        ${wars.length ? `<span class="section-label">TREATY OPTIONS</span><div class="war-diplomacy-list">${wars.map((war) => this.renderWarDiplomacyRow(war, human.id)).join('')}</div>` : ''}
         <span class="section-label">BEST AVAILABLE TARGETS</span>
         <div class="war-intel-list war-intel-list--compact">${recommendations.length ? recommendations.map((candidate, index) => this.renderTargetRecommendation(candidate, index)).join('') : '<div class="empty-state">No legal target is currently in land or naval range.</div>'}</div>
       </aside>
     `;
   }
-
   private warTargetRecommendations(
     humanId: PlayerId,
     resistance: GlobalResistanceV2,
@@ -2031,15 +2506,30 @@ export class WorldUIV2 {
       && cached.warSignature === warSignature && cached.resistanceSignature === resistanceSignature) {
       return cached.recommendations;
     }
-    const candidates = this.connectedOpponentIds(humanId).map((targetId) => {
+    const candidates = this.connectedOpponentIds(humanId).flatMap((targetId): WarTargetCandidate[] => {
       const target = this.engine.player(targetId)!;
       const declaration = this.engine.warDeclarationStatus(humanId, targetId);
+      if (!declaration.allowed || declaration.access === 'none') return [];
       const chance = this.winChance(humanId, targetId);
-      return { targetId, target, declaration, chance };
+      const economy = this.engine.nationalEconomy(targetId);
+      const iq = selectNationalIqViewV2(this.engine.state, this.engine.content, targetId);
+      return [{
+        targetId,
+        target,
+        declaration,
+        chance,
+        access: declaration.access,
+        gdpPerCapitaThousands: economy.wealthPerPerson,
+        nationalIq: iq.score,
+        distanceKm: selectWarRouteDistanceKmV2(
+          this.engine.state,
+          this.engine.content,
+          humanId,
+          targetId,
+        ),
+      }];
     });
-    const recommendations = candidates.filter((candidate) => candidate.declaration.allowed)
-      .sort((left, right) => right.chance - left.chance
-        || left.target.name.localeCompare(right.target.name)).slice(0, 3);
+    const recommendations = rankWarTargetRecommendationsV2(candidates).slice(0, 3);
     this.warTargetCache = {
       humanId,
       tickBucket,
@@ -2060,12 +2550,18 @@ export class WorldUIV2 {
     target: NationViewV2;
     declaration: WarDeclarationStatusV2;
     chance: number;
+    access: AvailableWarTargetAccessV2;
+    distanceKm?: number;
+    gdpPerCapitaThousands: number;
+    nationalIq: number;
   }, index: number): string {
     const battleForecast = this.engine.warForecast(this.viewerPlayerId(), candidate.targetId);
     const targetArmy = this.engine.armyStrength(candidate.targetId);
     const mapTarget = battleForecast.targetId ?? candidate.target.capitalId;
     const chanceTone = candidate.chance >= 65 ? 'is-positive' : candidate.chance >= 45 ? 'is-warn' : 'is-negative';
-    return `<article class="war-intel-card war-intel-card--compact" style="--enemy:${candidate.target.cssColor}"><i class="country-flag">${countryFlagHtml(candidate.target.id, candidate.target.sigil)}</i><div><span>${index === 0 ? 'BEST TARGET' : `OPTION ${index + 1}`} · ${warAccessLabel(candidate.declaration.access)}</span><strong>${escapeHtml(candidate.target.name)}</strong><small><b class="${chanceTone}">${format(candidate.chance, 1)}% WIN</b> · army ${people(targetArmy.deployed)} · reserve ${people(candidate.target.trainedReserves)} · ${format(targetArmy.fillRatio * 100)}% ready</small></div><button data-action="quick-war" data-player="${candidate.targetId}" data-map-target="${mapTarget}" title="Review attack on ${escapeHtml(candidate.target.shortName)}"><span>REVIEW</span></button></article>`;
+    const routeLabel = warTargetRouteLabelV2(candidate.access, candidate.distanceKm);
+    const fusionBonus = warTargetFusionValueBonusV2(candidate);
+    return `<article class="war-intel-card war-intel-card--compact" style="--enemy:${candidate.target.cssColor}"><i class="country-flag">${countryFlagHtml(candidate.target.id, candidate.target.sigil)}</i><div><span>${index === 0 ? 'BEST TARGET' : `OPTION ${index + 1}`} · ${routeLabel}</span><strong>${escapeHtml(candidate.target.name)}</strong><small><b class="${chanceTone}">${format(candidate.chance, 1)}% WIN</b> · army ${people(targetArmy.deployed)} · reserve ${people(candidate.target.trainedReserves)} · ${format(targetArmy.fillRatio * 100)}% ready</small><small class="war-intel-card__fusion"><b>FUSION +${format(fusionBonus, 1)}</b> · GDP/PC ${cash(candidate.gdpPerCapitaThousands / 1e6)} · IQ ${format(candidate.nationalIq, 1)}</small></div><button data-action="quick-war" data-player="${candidate.targetId}" data-map-target="${mapTarget}" title="Review attack on ${escapeHtml(candidate.target.shortName)}"><span>REVIEW</span></button></article>`;
   }
 
   private renderWarCard(war: WarStateV2, humanId: PlayerId, finance: WeeklyFinanceBreakdownV2): string {
@@ -2105,8 +2601,12 @@ export class WorldUIV2 {
   private renderPeaceOfferCard(offer: PeaceOfferV2): string {
     const from = this.engine.player(offer.fromId)!;
     const responseWeeks = Math.max(0, offer.expiresTick - this.engine.state.tick);
+    const ceasefireDuration = offer.settlement === 'ceasefire'
+      ? this.engine.ceasefireTerms(offer.warId, offer.fromId) : undefined;
+    const paymentWeeks = offer.paymentWeeks ?? ceasefireDuration?.paymentWeeks ?? 0;
+    const protectedPeaceWeeks = ceasefireDuration?.postPaymentTruceTicks ?? 0;
     const detail = offer.settlement === 'ceasefire'
-      ? `${cash(annual(offer.weeklyCost ?? 0))}/year rate · ${cash((offer.weeklyCost ?? 0) * (offer.paymentWeeks ?? 52))} total · 104w war lock`
+      ? `${cash(annual(offer.weeklyCost ?? 0))}/year rate · ${cash((offer.weeklyCost ?? 0) * paymentWeeks)} total over ${paymentWeeks}w · then ${protectedPeaceWeeks}w protected peace`
       : `${cash(offer.cashAmount ?? 0)} reparations`;
     return `<article style="--enemy:${from.cssColor}"><div><i class="country-flag">${countryFlagHtml(from.id, from.sigil)}</i><div><strong>${escapeHtml(from.name)} offers peace</strong><small>${escapeHtml(detail)} · ${responseWeeks}w to decide</small>${offer.settlement === 'ceasefire' ? '<small>Conquered territory remains with its current owner.</small>' : ''}</div></div><div class="territory-actions" style="position:static;margin:8px 0 0;padding:0;background:none;display:grid;grid-template-columns:1fr 1fr;gap:6px"><button class="ghost-button" data-action="respond-offer" data-offer="${offer.id}" data-accept="false">Continue war</button><button class="primary-button" data-action="respond-offer" data-offer="${offer.id}" data-accept="true">Accept treaty</button></div></article>`;
   }
@@ -2114,18 +2614,14 @@ export class WorldUIV2 {
   private renderTerritoryPanel(territoryId: TerritoryId, territory: TerritoryStateV2): string {
     const definition = this.engine.content.territories[territoryId]!;
     const owner = this.engine.player(territory.owner)!;
+    const terrainProfile = territoryTerrainProfileV2(this.engine.content, territoryId);
+    const terrainEffects = territoryTerrainEffectsV2(this.engine.content, territoryId);
     const humanId = this.viewerPlayerId();
     const isOwnTerritory = owner.id === humanId;
     const ownerHumanControlled = this.engine.state.humanPlayerIds.includes(owner.id);
-    const ownerTraitIntel = renderCountryTraitIntelV2(
-      owner.id,
-      ownerHumanControlled,
-      this.engine.content,
-    );
     const empireTerritories = this.engine.territoriesOf(owner.id);
     const economy = this.engine.nationalEconomy(owner.id);
     const finance = this.engine.weeklyFinanceBreakdown(owner.id);
-    const integratedPopulation = this.engine.controlledPopulation(owner.id);
     const iq = selectNationalIqViewV2(this.engine.state, this.engine.content, owner.id);
     const army = this.engine.armyStrength(owner.id);
     const militarySnapshot = this.engine.militaryBaseSnapshot();
@@ -2136,10 +2632,6 @@ export class WorldUIV2 {
     const power = this.engine.currentPower(owner.id, militarySnapshot);
     const activeWar = owner.id !== humanId ? this.engine.activeWarBetween(humanId, owner.id) : undefined;
     const declaration = owner.id !== humanId ? this.engine.warDeclarationStatus(humanId, owner.id) : undefined;
-    const foodDemand = Math.max(0.01, finance.foodDemand);
-    const domesticFoodRatio = finance.foodDomesticProduced / foodDemand;
-    const importedFoodRatio = finance.foodImported / foodDemand;
-    const annualFoodExport = annual(finance.foodExported);
     const foodTone = finance.foodCoverage < 0.90 ? 'is-danger'
       : finance.foodCoverage < 0.98 || finance.foodStockChange < 0 ? 'is-warn' : 'is-good';
     const access = declaration?.access ?? 'none';
@@ -2166,17 +2658,21 @@ export class WorldUIV2 {
       ? territory.army.manpower / deploymentCeiling : 0;
     const unlockedPopulation = territory.population * territory.integration;
     const unlockedOutput = territory.economy * territory.integration;
-    const panelStatus = activeWar ? 'ENEMY TERRITORY · WAR LIVE'
-      : integrationWeeks > 0 ? `${isOwnTerritory ? 'YOUR' : 'FOREIGN'} TERRITORY · INTEGRATING`
-      : isOwnTerritory ? 'YOUR CORE TERRITORY' : 'FOREIGN TARGET';
-    const ownerSectionLabel = isOwnTerritory ? 'YOUR EMPIRE' : 'OWNER / EMPIRE';
+    const panelStatus = activeWar ? 'WAR LIVE'
+      : integrationWeeks > 0 ? 'INTEGRATING'
+      : isOwnTerritory ? 'YOUR CORE' : 'FOREIGN TARGET';
     const integrationPayer = isOwnTerritory ? 'YOU PAY' : `${owner.shortName.toUpperCase()} PAYS`;
     const integrationPanel = integrationWeeks > 0
-      ? `<section class="territory-integration-card"><div class="territory-integration-card__head"><span>INTEGRATING ${escapeHtml(integratingCore?.shortName ?? definition.name).toUpperCase()}</span><strong>${format(integrationPercent, 1)}%</strong></div><i role="progressbar" aria-label="Integration progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${format(integrationPercent, 1)}"><b style="width:${integrationPercent}%"></b></i><div class="territory-integration-card__metrics"><div><span>TIME LEFT</span><strong>${format(integrationYears, 1)} YEARS</strong></div><div><span>${escapeHtml(integrationPayer)}</span><strong class="is-negative">−${cash(territoryIntegrationAnnualCost)} / YEAR</strong></div></div><small>${cash(unlockedOutput)} of ${cash(territory.economy)} output unlocked · then permanent ${escapeHtml(owner.shortName)} core territory${guardWeeks > 0 ? ` · guard protected for ${guardWeeks} week${guardWeeks === 1 ? '' : 's'}` : ''}</small></section>`
+      ? `<section class="territory-integration-card"><div class="territory-integration-card__head"><span>INTEGRATING ${escapeHtml(integratingCore?.shortName ?? definition.name).toUpperCase()}</span><strong>${format(integrationPercent, 1)}%</strong></div><i role="progressbar" aria-label="Integration progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${format(integrationPercent, 1)}"><b style="width:${integrationPercent}%"></b></i><div class="territory-integration-card__metrics"><div><span>TIME LEFT</span><strong>${format(integrationYears, 1)} YEARS</strong></div><div><span>${escapeHtml(integrationPayer)}</span><strong class="is-negative">−${cash(territoryIntegrationAnnualCost)} / YEAR</strong></div></div><small>${cash(unlockedOutput)} of ${cash(territory.economy)} output unlocked · then permanent ${escapeHtml(owner.shortName)} core${guardWeeks > 0 ? ` · capture guard ${guardWeeks}w` : ''}</small></section>`
       : '';
     const blockedWarNote = !activeWar && declaration && !declaration.allowed
       ? `<div class="war-rule-note is-blocked"><b>WAR UNAVAILABLE</b><span>${escapeHtml(declaration.reason ?? 'Requirements are not met.')}</span></div>`
       : '';
+    const ownerRank = Math.max(
+      1,
+      this.ranking().findIndex((entry) => entry.player.id === owner.id) + 1,
+    );
+    const primaryWarAction = owner.id === humanId ? '' : `<section class="territory-target-command ${activeWar || !declaration?.allowed ? 'is-blocked' : ''}"><div class="territory-target-power"><span>COMBAT POWER</span><strong>${compactNumber(power)}</strong><small>#${ownerRank} GLOBAL MILITARY</small></div><div class="territory-target-systems"><span><small>ATTACK</small><b>${format(attack, 2)}</b></span><span><small>DEFENCE</small><b>${format(defense, 2)}</b></span><span><small>READY</small><b>${format(manpowerRatio * 100)}%</b></span></div><div class="territory-target-decision"><span>${activeWar ? 'WAR IN PROGRESS' : declaration?.allowed ? `${warAccessLabel(access)} ATTACK ROUTE` : 'ATTACK UNAVAILABLE'}</span>${activeWar ? '<button class="danger-button" disabled>WAR ALREADY LIVE</button>' : `<button class="danger-button" data-action="quick-war" data-player="${owner.id}" ${declaration?.allowed ? '' : 'disabled'}>${declaration?.allowed ? 'REVIEW ATTACK' : 'WAR UNAVAILABLE'}</button>`}</div></section>${declaration?.warning ? `<div class="war-rule-note is-warning"><b>WEAK-ARMY WARNING</b><span>${escapeHtml(declaration.warning)}</span></div>` : ''}${blockedWarNote}`;
     const otherHumanPlayer = owner.id !== humanId && ownerHumanControlled;
     const allied = otherHumanPlayer && this.engine.areAllied(humanId, owner.id);
     const allianceOffer = otherHumanPlayer ? this.engine.state.allianceOffers.find((offer) => (
@@ -2194,23 +2690,40 @@ export class WorldUIV2 {
         : allianceOffer
           ? `<div class="war-rule-note is-alliance"><b>ALLIANCE INVITATION SENT · ${allianceWeeks}W LEFT</b><span>Waiting for ${escapeHtml(owner.shortName)} to accept or decline.</span></div>`
           : `<div class="territory-actions territory-actions--alliance"><button class="secondary-button" data-action="propose-alliance" data-player="${owner.id}" ${allianceStatus?.allowed ? '' : 'disabled'} title="${escapeHtml(allianceStatus?.reason ?? 'Offer a mutual non-aggression pact to this human player.')}">PROPOSE PLAYER ALLIANCE</button></div>`;
+    const ownerIntel = isOwnTerritory ? '' : `
+      <span class="section-label territory-section-label">OWNER INTEL</span>
+      ${renderCountryTraitIntelV2(owner.id, ownerHumanControlled, this.engine.content)}
+      <section class="territory-owner-intel unified-stat-grid" aria-label="${escapeHtml(owner.name)} national intelligence">
+        <article class="${manpowerRatio < 0.55 ? 'is-warn' : 'is-good'}"><span>ARMY</span><strong>${armyCapacityLabel(army.deployed, army.capacity)}</strong><small>${format(manpowerRatio * 100)}% · reserve ${people(owner.trainedReserves)}</small></article>
+        <article><span>IQ</span><strong>${format(iq.score, 1)}</strong><small>National systems score</small></article>
+        <article><span>ECONOMY</span><strong>${cash(economy.controlledOutput)}</strong><small>${cash(economy.wealthPerPerson / 1e6)} GDP / capita</small></article>
+        <article class="${foodTone}"><span>FOOD</span><strong>${format(finance.foodCoverage * 100, 1)}%</strong><small>${people(owner.foodStock)} / ${people(finance.foodStorageCapacity)} stored</small></article>
+      </section>`;
     return `
-      <aside class="world-panel command-drawer glass-panel territory-inspector" data-scroll-session="${escapeHtml(drawerScrollSessionId(this.panelMode, territoryId))}">
+      <aside class="world-panel command-drawer glass-panel territory-inspector command-drawer--clean command-drawer--unified" data-scroll-session="${escapeHtml(drawerScrollSessionId(this.panelMode, territoryId))}">
         <button class="panel-close" data-action="clear-territory" aria-label="Close ${escapeHtml(definition.name)} details">×</button>
-        <div class="panel-kicker territory-status-kicker">${escapeHtml(panelStatus)}</div>
-        <div class="territory-heading territory-heading--clear"><div><h2>${escapeHtml(definition.name)}</h2><span style="color:${owner.cssColor}">Owned by ${escapeHtml(owner.name)} · ${empireTerritories.length} territor${empireTerritories.length === 1 ? 'y' : 'ies'}</span></div><i class="country-flag" style="--owner:${owner.cssColor}">${countryFlagHtml(owner.id, owner.sigil)}</i></div>
-        ${ownerTraitIntel}
-        <section class="national-strength-summary territory-owner-summary"><div class="national-strength-head"><span>${escapeHtml(ownerSectionLabel)} STRENGTH</span><strong>${compactNumber(power)} POWER</strong></div><div class="national-strength-grid"><article class="is-army"><span>ARMY</span><strong>${armyCapacityLabel(army.deployed, army.capacity)}</strong><small>${format(manpowerRatio * 100)}% ready · RES ${people(owner.trainedReserves)}</small></article><article class="is-atk"><span>ATK</span><strong>${format(attack, 2)}</strong><small>Effective attack</small></article><article class="is-def"><span>DEF</span><strong>${format(defense, 2)}</strong><small>Effective defence</small></article><article class="is-iq"><span>IQ</span><strong>${format(iq.score, 1)}</strong><small>National score</small></article><article class="is-gdp"><span>GDP / CAPITA</span><strong>${cash(economy.wealthPerPerson / 1e6)}</strong><small>Current wealth</small></article><article class="is-economy"><span>ECONOMY</span><strong>${cash(economy.controlledOutput)}</strong><small>${population(integratedPopulation)} integrated people</small></article></div></section>
-        <section class="territory-food-status ${foodTone}"><div class="territory-food-status__head"><span>FOOD · OWNER TOTAL</span><strong>${people(owner.foodStock)} / ${people(finance.foodStorageCapacity)}</strong></div><div class="territory-food-status__grid"><span><b>${format(finance.foodCoverage * 100, 1)}%</b><small>FED</small></span><span><b>${format(domesticFoodRatio * 100, 1)}%</b><small>DOMESTIC</small></span><span><b>${format(importedFoodRatio * 100, 1)}%</b><small>IMPORTS</small></span></div><p class="${finance.foodStockChange >= 0 ? 'is-positive' : 'is-negative'}">${signedPeople(annual(finance.foodStockChange))} reserves / year${annualFoodExport > 0 ? ` · ${people(annualFoodExport)} exported / year` : ''}</p></section>
+        <div class="panel-kicker territory-status-kicker">TERRITORY · ${escapeHtml(panelStatus)}</div>
+        <div class="drawer-heading drawer-heading--compact territory-heading territory-heading--unified"><div><h2>${escapeHtml(definition.name)}</h2><span style="color:${owner.cssColor}">${escapeHtml(owner.name)} · ${empireTerritories.length} TERRITOR${empireTerritories.length === 1 ? 'Y' : 'IES'}</span></div><i class="country-flag" style="--owner:${owner.cssColor}">${countryFlagHtml(owner.id, owner.sigil)}</i></div>
+        ${primaryWarAction}
+
+        ${terrainProfilePanel(terrainProfile, terrainEffects)}
+
         <span class="section-label territory-section-label">SELECTED LAND</span>
-        <div class="territory-land-grid"><article><span>RESIDENTS</span><strong>${population(territory.population)}</strong><small>${integrationWeeks > 0 ? `${population(unlockedPopulation)} unlocked for owner` : 'Resident population'}</small></article><article class="is-economy"><span>LOCAL ECONOMY</span><strong>${cash(territory.economy)}</strong><small>${integrationWeeks > 0 ? `${cash(unlockedOutput)} currently unlocked` : 'Live local output'}</small></article><article class="is-army"><span>LOCAL ARMY / MAX</span><strong>${people(territory.army.manpower)} / ${people(deploymentCeiling)}</strong><small>${format(localArmyRatio * 100)}% deployed · local ${people(localArmyCapacity)} · empire +${people(empireSupport)}</small></article><article class="is-condition"><span>CONDITION</span><strong>${format(territory.condition * 100)}%</strong><small>Land and infrastructure</small></article></div>
+        <section class="territory-land-grid unified-stat-grid">
+          <article><span>RESIDENTS</span><strong>${population(territory.population)}</strong><small>${integrationWeeks > 0 ? `${population(unlockedPopulation)} unlocked` : 'Resident population'}</small></article>
+          <article class="is-economy"><span>LOCAL ECONOMY</span><strong>${cash(territory.economy)}</strong><small>${integrationWeeks > 0 ? `${cash(unlockedOutput)} unlocked` : 'Live local output'}</small></article>
+          <article class="is-army"><span>LOCAL ARMY / MAX</span><strong>${people(territory.army.manpower)} / ${people(deploymentCeiling)}</strong><small>${format(localArmyRatio * 100)}% · local ${people(localArmyCapacity)} · support +${people(empireSupport)}</small></article>
+          <article class="is-condition ${territory.condition >= 0.75 ? 'is-good' : territory.condition < 0.5 ? 'is-danger' : 'is-warn'}"><span>CONDITION</span><strong>${format(territory.condition * 100)}%</strong><small>Land and infrastructure</small></article>
+        </section>
+
         ${integrationPanel}
-        ${playerAlliancePanel}
-        ${owner.id !== humanId ? `${declaration?.warning ? `<div class="war-rule-note is-warning"><b>WEAK-ARMY WARNING</b><span>${escapeHtml(declaration.warning)}</span></div>` : ''}${blockedWarNote}<div class="territory-actions territory-actions--single">${activeWar ? `<button class="danger-button" disabled>WAR ALREADY LIVE</button>` : `<button class="danger-button" data-action="quick-war" data-player="${owner.id}" ${declaration?.allowed ? '' : 'disabled'}>${declaration?.allowed ? `REVIEW ATTACK · ${warAccessLabel(access)}` : 'WAR UNAVAILABLE'}</button>`}</div>` : ''}
+        ${ownerIntel}
+        <div class="territory-action-stack">
+          ${playerAlliancePanel}
+        </div>
       </aside>
     `;
   }
-
   private winChance(attackerId: string, defenderId: string): number {
     return this.engine.warForecast(attackerId, defenderId).winChance;
   }
@@ -2220,7 +2733,9 @@ export class WorldUIV2 {
     const finance = this.engine.weeklyFinanceBreakdown(humanId);
     const activeFronts = wars.reduce((sum, war) => sum + allWarOperations(war).length, 0);
     const status = `${wars.length} WAR${wars.length === 1 ? '' : 'S'} · ${activeFronts} FRONT${activeFronts === 1 ? '' : 'S'} · ${cash(annual(finance.warOperations))}/YR`;
-    return `<aside class="war-tracker war-tracker--compact glass-panel"><div class="war-tracker__title"><span><i></i> WAR COMMAND</span><b>${status}</b></div><div class="war-tracker__wars" data-scroll-session="tracker:wars">${wars.map((war) => {
+    return `<aside class="war-tracker war-tracker--compact war-command-overlay glass-panel" aria-label="Active war command">
+      <header class="war-tracker__title war-command-header"><span><i aria-hidden="true"></i> WAR COMMAND</span><b>${escapeHtml(status)}</b></header>
+      <div class="war-tracker__wars war-command-campaigns" data-scroll-session="tracker:wars">${wars.map((war) => {
       const enemyId = war.attackerId === humanId ? war.defenderId : war.attackerId;
       const enemy = this.engine.player(enemyId)!;
       const own = this.totalCombatStrength(humanId);
@@ -2232,11 +2747,50 @@ export class WorldUIV2 {
       const focusId = operation?.targetId ?? estimate?.targetId ?? enemy.capitalId;
       const score = war.attackerId === humanId ? war.warScore : -war.warScore;
       const balance = clamp(own.deployed / Math.max(0.000001, own.deployed + hostile.deployed) * 100, 0, 100);
-      const outlook = !estimate ? 'Awaiting combat'
-        : `${warTimeRange(estimate.estimatedWeeksMin, estimate.estimatedWeeksMax)} · ${warOutlookLabel(estimate)}`;
-      const route = operation ? warAccessLabel(operation.access) : 'MOBILISING';
-      return `<article class="war-tracker__war"><button class="war-tracker__focus" data-action="focus-war" data-territory="${focusId}"><div class="war-tracker__enemy" style="--enemy:${enemy.cssColor}"><i class="country-flag">${countryFlagHtml(enemy.id, enemy.sigil)}</i><div><span>${route} · ${warFrontCount} FRONT${warFrontCount === 1 ? '' : 'S'}</span><strong>${escapeHtml(enemy.shortName)}</strong><small>Week ${this.engine.state.tick - war.startedTick} · ${war.battles} battles</small></div><b class="${score < 0 ? 'danger-text' : 'is-positive'}">${signed(score)}</b></div><div class="war-tracker__quick"><span><small>ARMY LEFT</small><b>${people(own.deployed)} / ${people(hostile.deployed)}</b></span><span><small>MILITARY LOST</small><b>−${people(estimate?.totalOwnLosses ?? 0)} / −${people(estimate?.totalEnemyLosses ?? 0)}</b></span><span><small>EST. END</small><b>${escapeHtml(outlook)}</b></span></div><i class="war-tracker__balance" role="progressbar" aria-label="Share of remaining deployed forces" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${format(balance, 1)}" style="--enemy:${enemy.cssColor}"><b style="width:${balance}%"></b></i></button></article>`;
-    }).join('')}</div></aside>`;
+      const warAge = Math.max(0, this.engine.state.tick - war.startedTick);
+      const routeKinds = new Set(operations.map((front) => front.access));
+      const route = operations.length === 0 ? 'MOBILISING'
+        : routeKinds.size > 1 ? 'MIXED ROUTES'
+        : warAccessLabel(operation!.access);
+      const outlook = estimate ? warOutlookLabel(estimate) : 'Awaiting combat';
+      const eta = estimate
+        ? warTimeRange(estimate.estimatedWeeksMin, estimate.estimatedWeeksMax)
+        : 'Pending first battle';
+      const ownLosses = estimate?.totalOwnLosses
+        ?? (war.attackerId === humanId ? war.attackerLosses : war.defenderLosses);
+      const enemyLosses = estimate?.totalEnemyLosses
+        ?? (war.attackerId === humanId ? war.defenderLosses : war.attackerLosses);
+      const ceasefire = this.engine.ceasefireTerms(war.id, humanId);
+      const peaceWait = Math.max(0, PEACE_REQUEST_MIN_WAR_AGE_TICKS - warAge);
+      const peaceStatus = ceasefire.allowed
+        ? `${cash(annual(ceasefire.weeklyCost))}/YR OFFER`
+        : peaceWait > 0 ? `AVAILABLE IN ${peaceWait}W`
+        : ceasefire.cooldownRemaining > 0 ? `RETRY IN ${ceasefire.cooldownRemaining}W`
+        : /pending/i.test(ceasefire.reason ?? '') ? 'OFFER PENDING'
+        : 'UNAVAILABLE';
+      const peaceTitle = ceasefire.allowed
+        ? `Request peace for ${cash(annual(ceasefire.weeklyCost))} per year`
+        : ceasefire.reason ?? peaceStatus;
+      return `<article class="war-tracker__war war-command-campaign" style="--enemy:${escapeHtml(enemy.cssColor)}">
+        <div class="war-tracker__enemy war-command-campaign__identity">
+          <i class="country-flag war-command-campaign__flag" aria-hidden="true">${countryFlagHtml(enemy.id, enemy.sigil)}</i>
+          <div class="war-command-campaign__opponent"><span>${escapeHtml(route)} · ${warFrontCount} FRONT${warFrontCount === 1 ? '' : 'S'}</span><strong>${escapeHtml(enemy.shortName)}</strong><small>WEEK ${warAge} · ${war.battles} BATTLE${war.battles === 1 ? '' : 'S'}</small></div>
+          <div class="war-command-campaign__score"><span>WAR SCORE</span><b class="${score < 0 ? 'danger-text' : 'is-positive'}">${signed(score)}</b></div>
+        </div>
+        <div class="war-tracker__quick war-command-campaign__metrics">
+          <span><small>ARMY REMAINING</small><b>${people(own.deployed)} <em>YOU</em></b><b>${people(hostile.deployed)} <em>ENEMY</em></b></span>
+          <span><small>CUMULATIVE LOSSES</small><b>−${people(ownLosses)} <em>YOU</em></b><b>−${people(enemyLosses)} <em>ENEMY</em></b></span>
+          <span><small>ETA / OUTLOOK</small><b>${escapeHtml(eta)}</b><b class="${score < 0 ? 'danger-text' : 'is-positive'}">${escapeHtml(outlook)}</b></span>
+        </div>
+        <div class="war-command-campaign__balance-head"><span>REMAINING FORCE BALANCE</span><b>${format(balance, 1)}% YOU · ${format(100 - balance, 1)}% ENEMY</b></div>
+        <i class="war-tracker__balance war-command-campaign__balance" role="progressbar" aria-label="Your share of remaining deployed forces against ${escapeHtml(enemy.shortName)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${format(balance, 1)}"><b style="width:${balance}%"></b></i>
+        <div class="war-command-campaign__actions">
+          <button type="button" class="secondary-button war-command-campaign__focus" data-action="focus-war" data-territory="${escapeHtml(focusId)}"><span>FOCUS FRONT</span><small>${escapeHtml(route)}</small></button>
+          <button type="button" class="ghost-button war-command-campaign__peace" data-action="request-ceasefire" data-war="${escapeHtml(war.id)}" ${ceasefire.allowed ? '' : 'disabled'} title="${escapeHtml(peaceTitle)}"><span>REQUEST PEACE</span><small>${escapeHtml(peaceStatus)}</small></button>
+        </div>
+      </article>`;
+    }).join('')}</div>
+    </aside>`;
   }
 
   private renderRankingPanel(): string {
@@ -2254,31 +2808,58 @@ export class WorldUIV2 {
   private renderWarStrainMeter(
     human: NationViewV2,
     wars: WarStateV2[],
-    army: ArmyStrengthV2,
+    _army: ArmyStrengthV2,
     finance: WeeklyFinanceBreakdownV2,
     standalone = false,
   ): string {
     const activeFronts = wars.reduce((sum, war) => (
       sum + warOperationsFor(war, human.id).length
     ), 0);
-    const reserveFillRatio = finance.trainedReserveCapacity > 0
-      ? clamp(human.trainedReserves / finance.trainedReserveCapacity, 0, 1) : 1;
-    // Keep the HUD on the canonical simulation selector so naval operations
-    // receive the same lighter 0.35 front weight seen by AI decisions.
+    // Keep military pressure and geopolitical expansion threat separate. A
+    // long single campaign can exhaust the country without alarming every
+    // neighbour; rapid repeated expansion drives the reaction signal below.
     const summary = selectWarStrainSummaryV2(
       this.engine.state,
       this.engine.content,
       human.id,
     );
+    const expansionThreat = selectExpansionThreatSummaryV2(
+      this.engine.state,
+      this.engine.content,
+      human.id,
+    );
+    const suspicion = clamp(this.engine.globalResistance().threat, 0, 100);
+    const suspicionRisk = suspicionRiskPresentationV2(suspicion);
+    const revolutionRisk = territoryIntegrationWarPressureRevolutionRiskV2(
+      this.engine.state,
+      this.engine.content,
+      human.id,
+    );
+    const exposedIntegrations = revolutionRisk.exposedTerritories;
+    const revoltRiskLevel = revolutionRisk.level;
+    const revoltRiskLabel = revolutionRisk.level === 'none' ? 'NONE' : revolutionRisk.level.toUpperCase();
+    const revoltWindowBonus = Math.round(revolutionRisk.bonusChance * 100);
     const recoveryWeeks = Math.ceil(human.warFatigue / PEACE_FATIGUE_RECOVERY_PER_WEEK);
-    const forceLine = wars.length
-      ? `${activeFronts}F · ARMY ${format(army.fillRatio * 100)}% · RES ${format(reserveFillRatio * 100)}%`
-      : `RECOVERY ~${recoveryWeeks}W`;
-    const effectsLine = `GROWTH −${format(finance.warEconomyGrowthDrag * 100, 1)}pp · R&D −${format(finance.warResearchPenalty * 100, 1)}%`;
-    return `<section class="war-strain-meter war-strain-meter--${summary.level}${standalone ? ' war-strain-meter--standalone glass-panel' : ''}" role="status" aria-label="War strain ${summary.score} out of 100, ${summary.label}" title="${escapeHtml(summary.guidance)}">
-      <div class="war-strain-meter__head"><span>WAR STRAIN</span><strong>${summary.label}<b>${summary.score}</b></strong></div>
-      <i class="war-strain-meter__track" role="progressbar" aria-label="War strain" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${summary.score}"><b style="width:${summary.score}%"></b></i>
-      <div class="war-strain-meter__detail"><span>${escapeHtml(forceLine)}</span><b>${escapeHtml(effectsLine)}</b></div>
+    const fatigue = clamp(human.warFatigue, 0, 100);
+    const growthDrag = Math.max(0, finance.warEconomyGrowthDrag * 100);
+    const researchDrag = Math.max(0, finance.warResearchPenalty * 100);
+    const recoveryLabel = recoveryWeeks > 0 ? `~${recoveryWeeks} WEEKS` : 'RECOVERED';
+    return `<section class="war-strain-meter war-strain-meter--${summary.level} war-pressure war-pressure--${summary.level}${standalone ? ' war-strain-meter--standalone glass-panel' : ''}" role="status" aria-label="War pressure ${summary.score} out of 100, ${escapeHtml(summary.label)}" title="${escapeHtml(summary.guidance)}">
+      <header class="war-strain-meter__head war-pressure__head"><div><span>WAR PRESSURE</span><strong>${escapeHtml(summary.label)}</strong></div><b class="war-pressure__score">${summary.score}<small>/100</small></b></header>
+      <i class="war-strain-meter__track war-pressure__track" role="progressbar" aria-label="War pressure" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${summary.score}"><b style="width:${summary.score}%"></b></i>
+      <div class="war-pressure__metrics">
+        <span><small>FATIGUE</small><b>${format(fatigue, 1)}%</b></span>
+        <span><small>FRONTS</small><b>${activeFronts}</b></span>
+        <span title="Fast signal from simultaneous wars and recent conquests; a single long campaign stays comparatively quiet."><small>EXPANSION</small><b>${expansionThreat.score}<em>/100</em></b></span>
+      </div>
+      <div class="war-strain-meter__detail war-pressure__impact"><span><small>ECONOMY</small><b>−${format(growthDrag, 1)}pp / year</b></span><span><small>RESEARCH</small><b>−${format(researchDrag, 1)}% output</b></span></div>
+      <section class="war-pressure__suspicion war-pressure__suspicion--${suspicionRisk.level}" aria-label="Political Suspicion: ${suspicionRisk.score} out of 100, ${escapeHtml(suspicionRisk.label)}">
+        <header><div><span>POLITICAL SUSPICION</span><strong>${escapeHtml(suspicionRisk.label)}</strong></div><b>${suspicionRisk.score}<small>/100</small></b></header>
+        <div class="war-pressure__suspicion-track" role="progressbar" aria-label="Political Suspicion" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${suspicionRisk.score}"><i style="width:${suspicionRisk.score}%"></i><em style="left:20%"></em><em style="left:40%"></em><em style="left:60%"></em><em style="left:80%"></em></div>
+        <footer><p>${escapeHtml(suspicionRisk.guidance)}</p><span><b>0</b> NO AI WAR</span><span><b>40</b> EXPOSED</span><span><b>80</b> CRITICAL</span></footer>
+      </section>
+      <div class="war-pressure__revolt war-pressure__revolt--${revoltRiskLevel}"><span><small>REVOLT RISK</small><strong>${revoltRiskLabel}</strong><em>${exposedIntegrations} INTEGRATION${exposedIntegrations === 1 ? '' : 'S'} EXPOSED</em></span><p>${revoltWindowBonus > 0 ? `+${revoltWindowBonus}% sustained disruption window while pressure remains this high.` : exposedIntegrations > 0 ? 'Hostile integrations remain stable while War Pressure stays below 75.' : 'No hostile conquest integrations are currently exposed.'}</p></div>
+      ${wars.length === 0 ? `<div class="war-pressure__recovery"><span>PEACETIME RECOVERY</span><strong>${escapeHtml(recoveryLabel)}</strong><small>Fatigue, economic pressure and research disruption fade automatically.</small></div>` : ''}
     </section>`;
   }
 
@@ -2291,8 +2872,12 @@ export class WorldUIV2 {
   private renderOfferBanner(offer: PeaceOfferV2): string {
     const from = this.engine.player(offer.fromId)!;
     const responseWeeks = Math.max(0, offer.expiresTick - this.engine.state.tick);
+    const ceasefireDuration = offer.settlement === 'ceasefire'
+      ? this.engine.ceasefireTerms(offer.warId, offer.fromId) : undefined;
+    const paymentWeeks = offer.paymentWeeks ?? ceasefireDuration?.paymentWeeks ?? 0;
+    const protectedPeaceWeeks = ceasefireDuration?.postPaymentTruceTicks ?? 0;
     const terms = offer.settlement === 'ceasefire'
-      ? `PEACE TREATY · ${cash(annual(offer.weeklyCost ?? 0))}/YR · ${offer.paymentWeeks ?? 52}W PAY · 104W LOCK`
+      ? `PEACE TREATY · ${cash(annual(offer.weeklyCost ?? 0))}/YR · ${paymentWeeks}W PAY · THEN ${protectedPeaceWeeks}W PROTECTED PEACE`
       : `REPARATIONS · ${cash(offer.cashAmount ?? 0)}`;
     return `<div class="decision-banner glass-panel" style="--sender:${from.cssColor}" title="Accepting ends the war; conquered territory keeps its current owner."><i class="country-flag">${countryFlagHtml(from.id, from.sigil)}</i><div><span>PEACE OFFER · ${responseWeeks}W LEFT</span><strong>${escapeHtml(from.shortName)} · ${terms}</strong></div><button class="ghost-button" data-action="respond-offer" data-offer="${offer.id}" data-accept="false">DECLINE</button><button class="primary-button" data-action="respond-offer" data-offer="${offer.id}" data-accept="true">ACCEPT</button></div>`;
   }
@@ -2360,6 +2945,14 @@ export class WorldUIV2 {
     const targetFinance = this.engine.weeklyFinanceBreakdown(target.id);
     const targetEconomy = this.engine.nationalEconomy(target.id);
     const targetIq = selectNationalIqViewV2(this.engine.state, this.engine.content, target.id);
+    const militarySnapshot = this.engine.militaryBaseSnapshot();
+    const ownPower = this.engine.currentPower(human.id, militarySnapshot);
+    const targetPower = this.engine.currentPower(target.id, militarySnapshot);
+    const powerRatio = targetPower > 0 ? ownPower / targetPower : 99;
+    const targetRank = Math.max(
+      1,
+      this.ranking().findIndex((entry) => entry.player.id === target.id) + 1,
+    );
     const ownedTargetTerritoryIds = this.engine.content.territoryIds.filter((territoryId) => (
       this.engine.state.territories[territoryId]?.owner === target.id
     ));
@@ -2377,20 +2970,117 @@ export class WorldUIV2 {
     );
     const integrationYears = integrationQuote.durationWeeks / WEEKS_PER_YEAR;
     const integrationAnnualCost = integrationQuote.annualCost;
+    const firstIntegrationDiscount = integrationQuote.quotes.some(
+      (quote) => quote.firstPlayerIntegrationDiscount,
+    );
     const weakArmy = army.fillRatio < 0.55;
-    const warning = declaration.warning ?? (weakArmy ? 'Your army has low deployed manpower for its population-based capacity.' : undefined);
+    const warning = declaration.warning
+      ?? (weakArmy ? 'Your army has low deployed manpower for its population-based capacity.' : undefined);
     const outlook = forecast.outlook.toUpperCase();
     const concurrentCampaigns = this.humanWars().length + 1;
+    const logisticsPreview = forecast.access !== 'none'
+      ? this.cachedWarLogisticsPreview(human.id, target.id)
+      : undefined;
     const supportText = forecast.supportingForces > 0
-      ? `${forecast.supportingForces} supporting arm${forecast.supportingForces === 1 ? 'y' : 'ies'}` : 'No supporting army';
+      ? `${forecast.supportingForces} supporting arm${forecast.supportingForces === 1 ? 'y' : 'ies'}`
+      : 'No supporting army';
     const campaignRisk = forecast.retaliationExpected
-      ? `Full ${target.shortName} empire: ${forecast.defenderTerritoryCount} territories · ${people(forecast.defenderEmpireStrength)} deployed · ${people(target.trainedReserves)} trained reserve · +${people(forecast.defenderEmpireSupport)} empire deployment room. Losing the first land opens one bounded retaliation attempt.`
-      : `Single-territory campaign · ${people(forecast.defenderEmpireStrength)} deployed · ${people(target.trainedReserves)} trained reserve · +${people(forecast.defenderEmpireSupport)} empire deployment room.`;
+      ? `Full ${target.shortName} empire: ${forecast.defenderTerritoryCount} territories · ${people(forecast.defenderEmpireStrength)} deployed · ${people(target.trainedReserves)} trained reserve · +${people(forecast.defenderEmpireSupport)} deployment room. Losing the first land opens one bounded retaliation attempt.`
+      : `Single-territory campaign · ${people(forecast.defenderEmpireStrength)} deployed · ${people(target.trainedReserves)} trained reserve · +${people(forecast.defenderEmpireSupport)} deployment room.`;
     const chanceTone = chance >= 65 ? 'is-good' : chance >= 45 ? 'is-warn' : 'is-danger';
     const foodRisk = targetFinance.foodCoverage < 0.95
-      ? `<div class="fusion-food-risk"><b>PEOPLE FED · ${format(targetFinance.foodCoverage * 100, 1)}%</b><span>${signedPeople(annual(targetFinance.foodStockChange))} reserves / year</span></div>`
+      ? `<div class="review-food-risk"><b>FOOD SECURITY ${format(targetFinance.foodCoverage * 100, 1)}%</b><span>${signedPeople(annual(targetFinance.foodStockChange))} reserves / year</span></div>`
       : '';
-    return `<div class="modal-backdrop"><section class="modal-card war-confirm simple-war-confirm fusion-analysis" data-scroll-session="modal:war-confirm:${escapeHtml(targetId)}" style="--target:${target.cssColor}"><header class="fusion-analysis__head"><div class="war-confirm__sigil country-flag fusion-analysis__flag">${countryFlagHtml(target.id, target.sigil, true)}</div><div><div class="panel-kicker">WAR + FUSION ANALYSIS · ${outlook}</div><h2>Attack ${escapeHtml(target.name)}?</h2></div></header><section class="fusion-zone fusion-zone--chance"><span class="fusion-zone__label">CAMPAIGN WIN CHANCE</span><div class="simple-chance ${chanceTone}"><div><span>ESTIMATED VICTORY</span><strong>${chance}%</strong></div><i><b style="width:${chance}%"></b></i><small>${WAR_MOBILIZATION_TICKS} weeks to mobilise · campaign ${warTimeRange(forecast.estimatedWeeksMin, forecast.estimatedWeeksMax)} · against ${forecast.defenderTerritoryCount} territor${forecast.defenderTerritoryCount === 1 ? 'y' : 'ies'} · ${concurrentCampaigns} active war${concurrentCampaigns === 1 ? '' : 's'} if started</small></div><p class="fusion-campaign-risk">${escapeHtml(campaignRisk)}</p></section><section class="fusion-zone fusion-zone--military"><span class="fusion-zone__label">MILITARY COMPARISON</span><div class="fusion-military-grid"><article class="fusion-army-card is-own"><span>OUR FRONT</span><strong>${people(forecast.attackerStrength)}</strong><small class="war-stat-line"><em class="metric-atk">ATK ${format(forecast.attackerAttack, 2)}</em><em class="metric-def">DEF ${format(forecast.attackerDefense, 2)}</em><em>SUP ${format(forecast.attackerSupply * 100)}%</em></small><small>TRAINED RESERVE ${people(human.trainedReserves)} · ${supportText}</small></article><article class="fusion-army-card is-enemy"><span>ENEMY FRONT</span><strong>${people(forecast.defenderStrength)}</strong><small class="war-stat-line"><em class="metric-atk">ATK ${format(forecast.defenderAttack, 2)}</em><em class="metric-def">DEF ${format(forecast.defenderDefense, 2)}</em><em>SUP ${format(forecast.defenderSupply * 100)}%</em></small><small>EMPIRE ${people(forecast.defenderEmpireStrength)} · RESERVE ${people(target.trainedReserves)}</small><small>Defensive position ×${format(forecast.defenderPositionMultiplier, 2)}</small></article></div><div class="fusion-first-battle"><span>FIRST BATTLE</span><b class="is-negative">YOU −${people(forecast.projectedAttackerLosses)}</b><b class="is-positive">ENEMY −${people(forecast.projectedDefenderLosses)}</b></div></section><section class="fusion-zone fusion-value-zone"><span class="fusion-zone__label">VALUE AFTER CONQUEST</span><div class="fusion-target-metrics"><article><span>GDP / CAPITA</span><strong>${cash(targetEconomy.wealthPerPerson / 1e6)}</strong></article><article><span>IQ</span><strong>${format(targetIq.score, 1)}</strong></article><article><span>CURRENT ECONOMY</span><strong>${cash(targetEconomy.controlledOutput)}</strong></article><article><span>POPULATION</span><strong>${population(targetEconomy.population)}</strong></article></div>${foodRisk}<div class="fusion-flow" aria-label="Conquest integration flow"><article class="fusion-flow__step is-now"><span>10% · NOW</span><strong>${cash(gains.initialIntegratedOutput)}</strong><small>~${population(gains.retainedPopulation * 0.10)} people usable</small></article><i class="fusion-flow__arrow" aria-hidden="true">→</i><article class="fusion-flow__step is-progress"><span>INTEGRATION · FROZEN QUOTES</span><strong>~${format(integrationYears, integrationYears >= 100 ? 0 : 1)} YEARS</strong><small>−${cash(integrationAnnualCost)}/year · ${integrationQuote.territoryCount} territor${integrationQuote.territoryCount === 1 ? 'y' : 'ies'}${integrationQuote.access ? ` · ${integrationQuote.access.toUpperCase()} ACCESS` : ''}</small></article><i class="fusion-flow__arrow" aria-hidden="true">→</i><article class="fusion-flow__step is-core"><span>100% · CORE / FUSION</span><strong>${cash(gains.retainedEconomy)}</strong><small>${population(gains.retainedPopulation)} people · ${gains.territoryCount} permanent core territor${gains.territoryCount === 1 ? 'y' : 'ies'}</small></article></div></section>${warning ? `<div class="war-rule-note is-warning"><b>RISK</b><span>${escapeHtml(warning)}</span></div>` : ''}${!declaration.allowed ? `<div class="war-rule-note is-blocked"><b>WAR CANNOT START</b><span>${escapeHtml(declaration.reason ?? 'Requirements are not met.')}</span></div>` : ''}<div class="panel-actions"><button class="ghost-button" data-action="cancel-war">Cancel</button><button class="danger-button" data-action="declare-war" ${declaration.allowed ? '' : 'disabled'}>${declaration.allowed ? 'START WAR' : escapeHtml((declaration.reason ?? 'WAR CANNOT START').toUpperCase())}</button></div></section></div>`;
+    const terrainLabel = forecast.terrain
+      ? terrainPresentation(forecast.terrain).label.toUpperCase()
+      : 'UNKNOWN';
+    const navalLogistics = logisticsPreview?.access === 'naval';
+    const logisticsReview = logisticsPreview ? `<section class="review-command-section review-logistics ${navalLogistics ? 'is-naval' : 'is-land'}" title="Live opening quote. Route, force size, terrain, fatigue and national traits can change recurring operations.">
+        <header><span>${navalLogistics ? 'NAVAL' : 'LAND'} LOGISTICS</span><strong>LIVE · ${WAR_MOBILIZATION_TICKS}W MOBILISATION</strong></header>
+        <div class="review-logistics__grid">
+          <article><span>${navalLogistics ? 'SEA DISTANCE' : 'ACCESS'}</span><strong>${navalLogistics ? logisticsPreview.distanceKm === undefined ? 'UNKNOWN' : `${format(logisticsPreview.distanceKm)} KM` : 'DIRECT BORDER'}</strong></article>
+          <article class="is-cost"><span>ADDED OPS / YR</span><strong>${cash(annual(logisticsPreview.additionalWeeklyWarOperations))}</strong></article>
+          <article class="is-supply"><span>SUPPLY · LOAD</span><strong>${format(forecast.attackerSupply * 100)}% · ×${format(logisticsPreview.routeOperationMultiplier, 2)}</strong></article>
+        </div>
+        <div class="review-logistics__limits" title="${navalLogistics ? 'The route cannot cross land. ' : 'A direct shared border is required. '}This campaign shares national war funding, manpower and reserve deployment with every active front.">${navalLogistics ? 'VALID SEA LANE REQUIRED' : 'DIRECT BORDER REQUIRED'} <i>·</i> SHARED FUNDING &amp; REINFORCEMENTS</div>
+      </section>` : '';
+    return `<div class="modal-backdrop"><section class="modal-card war-confirm review-attack-modal command-modal--unified" data-scroll-session="modal:war-confirm:${escapeHtml(targetId)}" style="--target:${target.cssColor}">
+      <header class="review-attack-head">
+        <div class="country-flag review-attack-head__flag">${countryFlagHtml(target.id, target.sigil, true)}</div>
+        <div><span>REVIEW ATTACK · ${escapeHtml(outlook)}</span><h2>${escapeHtml(target.name)}</h2><small>${warAccessLabel(forecast.access)} route · ${terrainLabel} front · ${forecast.defenderTerritoryCount} territor${forecast.defenderTerritoryCount === 1 ? 'y' : 'ies'}</small></div>
+        <section class="review-target-power"><span>TARGET COMBAT POWER</span><strong>${compactNumber(targetPower)}</strong><small>#${targetRank} global military</small></section>
+      </header>
+
+      <section class="review-decision-hero ${chanceTone}">
+        <div class="review-win-chance"><span>CAMPAIGN WIN CHANCE</span><strong>${chance}%</strong><i><b style="width:${chance}%"></b></i><small>${escapeHtml(outlook)} forecast</small></div>
+        <div class="review-decision-stats">
+          <article><span>OUR POWER</span><strong>${compactNumber(ownPower)}</strong><small>National combat power</small></article>
+          <article><span>POWER RATIO</span><strong>×${format(powerRatio, 2)}</strong><small>Our power / target</small></article>
+          <article><span>MOBILISATION</span><strong>${WAR_MOBILIZATION_TICKS} WEEKS</strong><small>${warTimeRange(forecast.estimatedWeeksMin, forecast.estimatedWeeksMax)} campaign</small></article>
+          <article><span>TOTAL CAMPAIGNS</span><strong>${concurrentCampaigns}</strong><small>If this attack starts</small></article>
+        </div>
+      </section>
+
+      ${logisticsReview}
+
+      <section class="review-command-section review-military-section">
+        <header><span>MILITARY COMPARISON</span><strong>FIRST CONTACT</strong></header>
+        <div class="review-force-comparison">
+          <article class="is-own"><span>OUR FRONT</span><strong>${people(forecast.attackerStrength)}</strong><div><b>ATK ${format(forecast.attackerAttack, 2)}</b><b>DEF ${format(forecast.attackerDefense, 2)}</b><b>SUP ${format(forecast.attackerSupply * 100)}%</b></div><small>Reserve ${people(human.trainedReserves)} · ${supportText}</small></article>
+          <article class="is-enemy"><span>ENEMY FRONT</span><strong>${people(forecast.defenderStrength)}</strong><div><b>ATK ${format(forecast.defenderAttack, 2)}</b><b>DEF ${format(forecast.defenderDefense, 2)}</b><b>SUP ${format(forecast.defenderSupply * 100)}%</b></div><small>Empire ${people(forecast.defenderEmpireStrength)} · reserve ${people(target.trainedReserves)} · position ×${format(forecast.defenderPositionMultiplier, 2)}</small></article>
+        </div>
+        <div class="review-first-exchange"><span>PROJECTED FIRST BATTLE</span><b class="is-negative">YOU −${people(forecast.projectedAttackerLosses)}</b><b class="is-positive">ENEMY −${people(forecast.projectedDefenderLosses)}</b></div>
+        <p class="review-campaign-risk">${escapeHtml(campaignRisk)}</p>
+      </section>
+
+      <section class="review-command-section review-conquest-section">
+        <header><span>CONQUEST VALUE</span><strong>AFTER CAPTURE</strong></header>
+        <div class="review-target-value-grid">
+          <article><span>ECONOMY</span><strong>${cash(targetEconomy.controlledOutput)}</strong></article>
+          <article><span>POPULATION</span><strong>${population(targetEconomy.population)}</strong></article>
+          <article><span>GDP / CAPITA</span><strong>${cash(targetEconomy.wealthPerPerson / 1e6)}</strong></article>
+          <article><span>IQ</span><strong>${format(targetIq.score, 1)}</strong></article>
+        </div>
+        ${foodRisk}
+        <div class="review-integration-flow" aria-label="Conquest integration flow">
+          <article class="is-now"><span>CAPTURE · 10%</span><strong>${cash(gains.initialIntegratedOutput)}</strong><small>~${population(gains.retainedPopulation * 0.10)} usable immediately</small></article>
+          <i aria-hidden="true">→</i>
+          <article class="is-progress"><span>INTEGRATION${firstIntegrationDiscount ? ' · FIRST −75%' : ''}</span><strong>~${format(integrationYears, integrationYears >= 100 ? 0 : 1)} YEARS</strong><small>−${cash(integrationAnnualCost)}/year · ${integrationQuote.territoryCount} territor${integrationQuote.territoryCount === 1 ? 'y' : 'ies'}${integrationQuote.access ? ` · ${integrationQuote.access.toUpperCase()}` : ''}</small></article>
+          <i aria-hidden="true">→</i>
+          <article class="is-core"><span>CORE · 100%</span><strong>${cash(gains.retainedEconomy)}</strong><small>${population(gains.retainedPopulation)} people · ${gains.territoryCount} permanent core territor${gains.territoryCount === 1 ? 'y' : 'ies'}</small></article>
+        </div>
+      </section>
+
+      ${warning ? `<div class="war-rule-note is-warning"><b>RISK</b><span>${escapeHtml(warning)}</span></div>` : ''}
+      ${!declaration.allowed ? `<div class="war-rule-note is-blocked"><b>WAR CANNOT START</b><span>${escapeHtml(declaration.reason ?? 'Requirements are not met.')}</span></div>` : ''}
+      <footer class="review-action-footer"><button class="ghost-button" data-action="cancel-war">CANCEL</button><button class="danger-button" data-action="declare-war" ${declaration.allowed ? '' : 'disabled'}>${declaration.allowed ? forecast.access === 'naval' ? 'START NAVAL WAR · FREE' : 'START WAR' : escapeHtml((declaration.reason ?? 'WAR CANNOT START').toUpperCase())}</button></footer>
+    </section></div>`;
+  }
+
+  private cachedWarLogisticsPreview(
+    attackerId: PlayerId,
+    defenderId: PlayerId,
+  ): WarLogisticsPreviewV2 {
+    const cached = this.warLogisticsPreviewCache;
+    if (cached
+      && cached.tick === this.engine.state.tick
+      && cached.actionSequence === this.engine.state.actionSequence
+      && cached.attackerId === attackerId
+      && cached.defenderId === defenderId) return cached.preview;
+    const preview = previewWarLogisticsV2(
+      this.engine.state,
+      this.engine.content,
+      attackerId,
+      defenderId,
+    );
+    this.warLogisticsPreviewCache = {
+      tick: this.engine.state.tick,
+      actionSequence: this.engine.state.actionSequence,
+      attackerId,
+      defenderId,
+      preview,
+    };
+    return preview;
   }
 
   private renderCeasefireConfirmation(warId: string): string {
@@ -2400,7 +3090,7 @@ export class WorldUIV2 {
     const opponentId = war.attackerId === humanId ? war.defenderId : war.attackerId;
     const opponent = this.engine.player(opponentId)!;
     const terms = this.engine.ceasefireTerms(warId, humanId);
-    return `<div class="modal-backdrop"><section class="modal-card ceasefire-confirm" style="--target:${opponent.cssColor}"><div class="panel-kicker">REQUEST PEACE TREATY</div><h2>Offer peace to ${escapeHtml(opponent.name)}?</h2><p>They may refuse. If accepted, neither country can restart this war during payments or for the following year.</p><div class="ceasefire-summary"><div><span>DIRECT PAYMENT</span><strong>${cash(annual(terms.weeklyCost))}/year</strong><small>${cash(terms.totalCost)} total over ${terms.paymentWeeks} weeks · repeat ×${format(terms.repeatMultiplier, 2)}</small></div><div><span>WAR LOCK</span><strong>${terms.truceTicks} WEEKS</strong><small>${terms.paymentWeeks}w payments + ${terms.postPaymentTruceTicks}w peace</small></div></div><div class="war-rule-note is-warning"><b>WITHDRAWAL IS FINAL</b><span>Fighting ends immediately. Already conquered territory remains with its current owner.</span><small>If refused or expired, another paid offer is available after 26 weeks.</small></div><div class="panel-actions"><button class="ghost-button" data-action="cancel-ceasefire">Continue war</button><button class="secondary-button" data-action="confirm-ceasefire" data-war="${warId}" ${terms.allowed ? '' : 'disabled'}>${terms.allowed ? `SEND TREATY · ${cash(annual(terms.weeklyCost))}/YR` : escapeHtml((terms.reason ?? 'UNAVAILABLE').toUpperCase())}</button></div></section></div>`;
+    return `<div class="modal-backdrop"><section class="modal-card ceasefire-confirm" style="--target:${opponent.cssColor}"><div class="panel-kicker">REQUEST PEACE TREATY</div><h2>Offer peace to ${escapeHtml(opponent.name)}?</h2><p>They may refuse. If accepted, neither country can restart this war during ${terms.paymentWeeks} weeks of payments and ${terms.postPaymentTruceTicks} weeks of protected peace afterward.</p><div class="ceasefire-summary"><div><span>DIRECT PAYMENT</span><strong>${cash(annual(terms.weeklyCost))}/year</strong><small>${cash(terms.totalCost)} total over ${terms.paymentWeeks} weeks · repeat ×${format(terms.repeatMultiplier, 2)}</small></div><div><span>WAR LOCK</span><strong>${terms.truceTicks} WEEKS</strong><small>${terms.paymentWeeks}w payments + ${terms.postPaymentTruceTicks}w protected peace</small></div></div><div class="war-rule-note is-warning"><b>WITHDRAWAL IS FINAL</b><span>Fighting ends immediately. Already conquered territory remains with its current owner.</span><small>If refused or expired, another paid offer is available after 26 weeks.</small></div><div class="panel-actions"><button class="ghost-button" data-action="cancel-ceasefire">Continue war</button><button class="secondary-button" data-action="confirm-ceasefire" data-war="${warId}" ${terms.allowed ? '' : 'disabled'}>${terms.allowed ? `SEND TREATY · ${cash(annual(terms.weeklyCost))}/YR` : escapeHtml((terms.reason ?? 'UNAVAILABLE').toUpperCase())}</button></div></section></div>`;
   }
 
   private renderWarOutcome(outcome: WarOutcomeV2): string {
@@ -2549,7 +3239,7 @@ export class WorldUIV2 {
             }
             break;
           case 'scenario-reroll':
-            this.options.onScenarioRerollRequested?.();
+            this.options.onScenarioRerollRequested?.(this.introPreviewCountryId);
             break;
           case 'dismiss-war-outcome': {
             this.warOutcomeQueue.shift();

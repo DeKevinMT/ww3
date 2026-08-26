@@ -36,7 +36,9 @@ function randomSeed(): number {
 function initialScenarioFromLocation(): ScenarioConfigV2 {
   const parameters = new URLSearchParams(window.location.search);
   const requestedSeed = Number(parameters.get('seed'));
-  const requestedMode: GameModeV2 = parameters.get('mode') === 'random-world'
+  const requestedModeParameter = parameters.get('mode');
+  const requestedMode: GameModeV2 = requestedModeParameter === 'alternative-universe'
+    || requestedModeParameter === 'random-world'
     ? 'random-world'
     : 'standard-2026';
   return normalizeScenarioConfigV2({
@@ -50,7 +52,7 @@ function initialScenarioFromLocation(): ScenarioConfigV2 {
 function publishScenarioToLocation(scenario: ScenarioConfigV2): void {
   const url = new URL(window.location.href);
   url.searchParams.set('seed', String(scenario.seed));
-  if (scenario.mode === 'random-world') url.searchParams.set('mode', 'random-world');
+  if (scenario.mode === 'random-world') url.searchParams.set('mode', 'alternative-universe');
   else url.searchParams.delete('mode');
   window.history.replaceState(null, '', url);
 }
@@ -94,6 +96,7 @@ function mountWorldUi(
   engine: WorldEngineV2,
   multiplayer: boolean,
   controllerNames: ReadonlyMap<PlayerId, string> = activeControllerNames,
+  initialPreviewCountryId?: PlayerId,
 ): void {
   if (activeEngine && activeEngine !== engine) activeEngine.stopClock();
   activeUi?.destroy();
@@ -101,13 +104,14 @@ function mountWorldUi(
   activeUi = new WorldUIV2(engine, multiplayer
     ? { introOpen: false, multiplayer: true, controllerNames }
     : {
+      initialPreviewCountryId,
       onMultiplayerRequested: openMultiplayerLobby,
       scenarioConfig: scenarioConfigFromEngineV2(engine),
       onScenarioModeRequested: (mode) => launchSoloScenario({ mode, seed: randomSeed() }),
-      onScenarioRerollRequested: () => launchSoloScenario({
+      onScenarioRerollRequested: (preferredCountryId) => launchSoloScenario({
         mode: activeScenario.mode,
         seed: randomSeed(),
-      }),
+      }, preferredCountryId),
       onNewGameRequested: () => launchSoloScenario({
         mode: activeScenario.mode,
         seed: randomSeed(),
@@ -115,14 +119,17 @@ function mountWorldUi(
     });
 }
 
-function launchSoloScenario(input: Pick<ScenarioConfigV2, 'mode' | 'seed'>): void {
+function launchSoloScenario(
+  input: Pick<ScenarioConfigV2, 'mode' | 'seed'>,
+  preferredCountryId?: PlayerId,
+): void {
   if (activeLobby || activeSession) return;
   const resolved = resolveScenarioV2(input);
   destroyActiveGame();
   activeScenario = resolved.config;
   publishScenarioToLocation(activeScenario);
   const engine = new WorldEngineV2(activeScenario.seed, resolved.content);
-  mountWorldUi(engine, false);
+  mountWorldUi(engine, false, activeControllerNames, preferredCountryId);
   engine.startClock();
 }
 

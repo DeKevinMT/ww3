@@ -7,6 +7,8 @@ import {
   TERRITORY_INTEGRATION_REVOLUTION_CHANCE_V2,
   TERRITORY_INTEGRATION_REVOLUTION_WINDOW_END_V2,
   TERRITORY_INTEGRATION_REVOLUTION_WINDOW_START_V2,
+  TERRITORY_REVOLUTION_LOCAL_ARMY_MAX_CAP_SHARE_V2,
+  TERRITORY_REVOLUTION_LOCAL_ARMY_MIN_CAP_SHARE_V2,
   advanceTerritoryIntegrationProgramsV2,
   beginTerritoryIntegrationV2,
   processTerritoryIntegrationRevolutionsV2,
@@ -129,9 +131,6 @@ describe('V2 rare deterministic integration revolutions', () => {
       population: territory.population,
       economy: territory.economy,
       condition: territory.condition,
-      manpower: territory.army.manpower,
-      baseAttack: territory.army.baseAttack,
-      baseDefense: territory.army.baseDefense,
     };
     state.tick = scheduled.tick;
 
@@ -154,10 +153,19 @@ describe('V2 rare deterministic integration revolutions', () => {
       population: territory.population,
       economy: territory.economy,
       condition: territory.condition,
-      manpower: territory.army.manpower,
-      baseAttack: territory.army.baseAttack,
-      baseDefense: territory.army.baseDefense,
     }).toEqual(durableBefore);
+    expect(territory.army.manpower).toBeGreaterThanOrEqual(
+      territory.army.capacity * TERRITORY_REVOLUTION_LOCAL_ARMY_MIN_CAP_SHARE_V2 - 1e-8,
+    );
+    expect(territory.army.manpower).toBeLessThanOrEqual(
+      territory.army.capacity * TERRITORY_REVOLUTION_LOCAL_ARMY_MAX_CAP_SHARE_V2 + 1e-8,
+    );
+    expect(territory.army.baseAttack).toBe(
+      WORLD_CONTENT_V2.nations[lux]!.militaryAttackRating,
+    );
+    expect(territory.army.baseDefense).toBe(
+      WORLD_CONTENT_V2.nations[lux]!.militaryDefenseRating,
+    );
     const restored = state.players[lux]!;
     expect(restored).toBeDefined();
     expect(restored.treasury).toBe(0);
@@ -217,6 +225,8 @@ describe('V2 rare deterministic integration revolutions', () => {
       createSaveV2(uninterrupted, WORLD_CONTENT_V2),
       WORLD_CONTENT_V2,
     );
+    expect(uninterrupted.firstIntegrationDiscountUsedBy).toEqual([bel]);
+    expect(resumed.firstIntegrationDiscountUsedBy).toEqual([bel]);
 
     uninterrupted.tick += 1;
     resumed.tick += 1;
@@ -233,6 +243,8 @@ describe('V2 rare deterministic integration revolutions', () => {
       canonicalStateHashV2(uninterruptedSave),
     );
     expect(resumed.territories[luxTerritory]!.owner).toBe(lux);
+    expect(uninterrupted.firstIntegrationDiscountUsedBy).toEqual([bel]);
+    expect(resumed.firstIntegrationDiscountUsedBy).toEqual([bel]);
   });
 
   it('resolves and emits the revolution before the engine finance phase', () => {
@@ -254,6 +266,19 @@ describe('V2 rare deterministic integration revolutions', () => {
     expect(changes.indexOf('revolution')).toBeLessThan(changes.lastIndexOf('tick'));
     expect(engine.state.territories[luxTerritory]!.owner).toBe(lux);
     expect(engine.state.territories[luxTerritory]!.integrationProgram).toBeUndefined();
+    const independenceWar = engine.state.wars.find((war) => (
+      war.attackerId === lux && war.defenderId === bel
+    ));
+    expect(independenceWar).toBeDefined();
+    expect(engine.state.wars.filter((war) => (
+      (war.attackerId === lux && war.defenderId === bel)
+        || (war.attackerId === bel && war.defenderId === lux)
+    ))).toHaveLength(1);
+    const rebelSurvivors = engine.state.territories[luxTerritory]!.army.manpower;
+    expect(rebelSurvivors).toBeGreaterThan(0);
+    expect(independenceWar!.attackerLosses
+      / (engine.state.territories[luxTerritory]!.army.capacity
+        * TERRITORY_REVOLUTION_LOCAL_ARMY_MIN_CAP_SHARE_V2)).toBeCloseTo(0.01, 5);
     assertInvariantsV2(engine.state, WORLD_CONTENT_V2);
   });
 });

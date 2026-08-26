@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { FOOD_OPENING_RESERVE_MIN_WEEKS } from './balance';
 import { createWorldStateV2 } from './bootstrap';
 import { WORLD_CONTENT_V2 } from './content';
 import { selectWeeklyFinanceBreakdownV2 } from './selectors';
@@ -24,7 +25,8 @@ describe('V2 African food-security calibration', () => {
         (plan.foodProduced + stock) / plan.foodDemand)) < 0.000001;
     })).toBe(true);
     expect(plans.some(({ plan }) => plan.foodProduction / plan.revenue > 0.25)).toBe(true);
-    expect(byId.get('sds')!.reserveWeeks).toBeLessThan(byId.get('nga')!.reserveWeeks);
+    expect(byId.get('sds')!.reserveWeeks).toBeCloseTo(FOOD_OPENING_RESERVE_MIN_WEEKS, 5);
+    expect(byId.get('nga')!.reserveWeeks).toBeCloseTo(FOOD_OPENING_RESERVE_MIN_WEEKS, 5);
     expect(byId.get('nga')!.reserveWeeks).toBeLessThan(byId.get('zaf')!.reserveWeeks);
     expect(byId.get('sds')!.insecurity).toBeGreaterThan(byId.get('nga')!.insecurity);
     expect(byId.get('nga')!.insecurity).toBeGreaterThan(byId.get('zaf')!.insecurity);

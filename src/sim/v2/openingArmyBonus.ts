@@ -3,8 +3,8 @@ import { resetEmptyArmyBaseQualityV2 } from './armyQuality';
 import type { WorldContentV2 } from './content';
 import type { ArmyStateV2, PlayerId, TerritoryId, WorldStateV2 } from './types';
 
-/** Player-only opening manpower is fully retired over ten 52-week years. */
-export const OPENING_ARMY_BONUS_DURATION_TICKS_V2 = 520;
+/** Every player-only opening army/cap adjustment returns to neutral over twenty years. */
+export const OPENING_ARMY_BONUS_DURATION_TICKS_V2 = 1_040;
 
 const MANPOWER_PRECISION_V2 = 9;
 const MANPOWER_EPSILON_V2 = 0.000000001;
@@ -146,7 +146,7 @@ function removeOwnedManpowerProportionallyV2(
 }
 
 /**
- * Applies the linear ten-year entitlement cap to every active opening bonus.
+ * Applies the linear twenty-year entitlement cap to every active opening bonus.
  * Earlier casualties lower `remainingManpower`, so calendar decay waits until
  * the descending entitlement drops below those surviving temporary troops.
  * Returns the physical manpower retired during this tick.

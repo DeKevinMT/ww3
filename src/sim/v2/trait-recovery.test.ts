@@ -3,6 +3,7 @@ import { PEACE_FATIGUE_RECOVERY_PER_WEEK, clamp, round } from './balance';
 import { createWorldStateV2 } from './bootstrap';
 import {
   WORLD_CONTENT_V2,
+  territoryTerrainConditionRecoveryMultiplierV2,
   type WorldContentV2,
 } from './content';
 import {
@@ -89,6 +90,7 @@ function war(
 
 function expectedConditionAfterWeek(
   state: WorldStateV2,
+  content: WorldContentV2,
   territoryId: TerritoryId,
   finance: WeeklyFinanceBreakdownV2,
   atWar: boolean,
@@ -99,7 +101,8 @@ function expectedConditionAfterWeek(
     ? 0.18 + 0.82 * clamp(territory.integration, 0, 1)
     : 1;
   const conditionGain = 0.006 * finance.conditionFundingRatio * finance.aiEfficiency
-    * (atWar ? 0.35 : 1) * reconstructionReadiness * traitFactor;
+    * (atWar ? 0.35 : 1) * reconstructionReadiness * traitFactor
+    * territoryTerrainConditionRecoveryMultiplierV2(content, territoryId);
   return round(clamp(territory.condition + conditionGain, 0.15, 1));
 }
 
@@ -121,7 +124,7 @@ describe('V2 country-trait recovery hooks', () => {
     const damagedFinance = damagedPlans.get(sudan)!;
     expect(damagedFinance.conditionFundingRatio).toBeGreaterThan(0);
     const damagedExpected = expectedConditionAfterWeek(
-      damaged, sudanTerritory, damagedFinance, false,
+      damaged, content, sudanTerritory, damagedFinance, false,
       countryTraitFactorV2(sudan, 'condition-recovery', {
         ...traitNationContextV2(damaged, sudan),
         condition: 0.799,
@@ -141,7 +144,7 @@ describe('V2 country-trait recovery hooks', () => {
     const thresholdPlans = createFinancePlansV2(threshold, content);
     const thresholdFinance = thresholdPlans.get(sudan)!;
     const thresholdExpected = expectedConditionAfterWeek(
-      threshold, sudanTerritory, thresholdFinance, false, 1,
+      threshold, content, sudanTerritory, thresholdFinance, false, 1,
     );
     processFinanceMilitaryV2(threshold, content, thresholdPlans);
     expect(threshold.territories[sudanTerritory]!.condition).toBe(thresholdExpected);
@@ -194,10 +197,10 @@ describe('V2 country-trait recovery hooks', () => {
       { ...traitNationContextV2(state, newZealand), access: 'naval' },
     );
     const navalExpected = expectedConditionAfterWeek(
-      state, newZealandTerritory, finance, true, navalRecoveryFactor,
+      state, content, newZealandTerritory, finance, true, navalRecoveryFactor,
     );
     const landExpected = expectedConditionAfterWeek(
-      state, papuaNewGuineaTerritory, finance, true, 1,
+      state, content, papuaNewGuineaTerritory, finance, true, 1,
     );
     processFinanceMilitaryV2(state, content, plans);
 
@@ -249,7 +252,7 @@ describe('V2 country-trait recovery hooks', () => {
     const occupiedPlans = createFinancePlansV2(occupied, content);
     const occupiedFinance = occupiedPlans.get(belgium)!;
     const occupiedExpected = expectedConditionAfterWeek(
-      occupied, sudanTerritory, occupiedFinance, false, 1,
+      occupied, content, sudanTerritory, occupiedFinance, false, 1,
     );
     processFinanceMilitaryV2(occupied, content, occupiedPlans);
     expect(occupied.territories[sudanTerritory]!.condition).toBe(occupiedExpected);
@@ -263,7 +266,7 @@ describe('V2 country-trait recovery hooks', () => {
     const fusedPlans = createFinancePlansV2(fused, content);
     const fusedFinance = fusedPlans.get(belgium)!;
     const fusedExpected = expectedConditionAfterWeek(
-      fused, sudanTerritory, fusedFinance, false, 1,
+      fused, content, sudanTerritory, fusedFinance, false, 1,
     );
     processFinanceMilitaryV2(fused, content, fusedPlans);
     expect(fused.territories[sudanTerritory]!.condition).toBe(fusedExpected);
@@ -277,7 +280,7 @@ describe('V2 country-trait recovery hooks', () => {
     const sudanesePlans = createFinancePlansV2(sudaneseOwner, content);
     const sudaneseFinance = sudanesePlans.get(sudan)!;
     const sudaneseExpected = expectedConditionAfterWeek(
-      sudaneseOwner, belgiumTerritory, sudaneseFinance, false,
+      sudaneseOwner, content, belgiumTerritory, sudaneseFinance, false,
       countryTraitFactorV2(sudan, 'condition-recovery', {
         ...traitNationContextV2(sudaneseOwner, sudan),
         condition: 0.5,

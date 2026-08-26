@@ -25,6 +25,17 @@ export interface MapTerritoryState {
   army: MapArmyState;
 }
 
+/** Renderer-only projection of the human 20-year opening Army + cap curve. */
+export interface MapOpeningMobilisationState {
+  playerId: string;
+  /** Share of the temporary opening effect still active: 1 at start, 0 at expiry. */
+  remainingRatio: number;
+  initialMultiplier: number;
+  currentMultiplier: number;
+  remainingTicks: number;
+  direction: 'boost' | 'limit';
+}
+
 export interface MapNationView {
   id: string;
   name: string;
@@ -80,6 +91,8 @@ export interface WorldMapEngineContract {
     tick: number;
     humanPlayerId: string;
     humanPlayerIds: readonly string[];
+    /** Human players only; absent entries have no active opening phase. */
+    openingMobilisations: Readonly<Record<string, MapOpeningMobilisationState>>;
     territories: Record<string, MapTerritoryState>;
     wars: readonly MapWarState[];
     logisticsMovements: readonly MapLogisticsMovement[];
@@ -91,6 +104,8 @@ export interface WorldMapEngineContract {
   activeWarBetween(leftId: string, rightId: string): unknown;
   /** Materialise one stable renderer snapshot immediately before a scene sync. */
   refreshSnapshot?(): void;
+  /** Bypass the peaceful map-stat cadence for the owners of these territories. */
+  invalidateMapStats?(territoryIds: readonly string[]): void;
 }
 
 export interface MapSelectionState {
@@ -138,7 +153,18 @@ class MapBridge {
   }
 
   setSelection(selection: MapSelectionState): void {
+    const focusChanged = selection.sourceId !== this.selection.sourceId
+      || selection.targetId !== this.selection.targetId;
     this.selection = selection;
+    if (focusChanged && this.engine?.invalidateMapStats && this.scene) {
+      const focusedTerritoryIds = [selection.sourceId, selection.targetId]
+        .filter((territoryId): territoryId is string => Boolean(territoryId));
+      if (focusedTerritoryIds.length > 0) {
+        this.engine.invalidateMapStats(focusedTerritoryIds);
+        this.engine.refreshSnapshot?.();
+        this.scene.sync(this.engine);
+      }
+    }
     this.scene?.setSelection(selection);
   }
 

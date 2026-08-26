@@ -6,9 +6,17 @@ import {
   MAP_WIDTH,
   TERRITORIES,
   TERRITORY_BY_ID,
+  countrySeaRouteBendDirection,
+  countrySeaRouteMapGeometry,
   isSeaConnection,
   projectWorldPoint,
+  terrainProfileForTerritory,
 } from '../data/worldMap';
+import {
+  TERRAIN_MAP_VISUAL_TUNING,
+  terrainMapColor,
+  terrainMapFillColor,
+} from '../terrainPresentation';
 import {
   mapBridge,
   type MapBattleEvent,
@@ -39,6 +47,20 @@ import {
   type CombatAccessPresentation,
   type CombatRouteSample,
 } from './combatPresentation';
+import {
+  groupFlagLandmasses,
+  resolveCountryPresentationAnchor,
+} from './countryPresentation';
+import {
+  hasDeepMapLabelSlot,
+  mapCountryLabelDecision,
+} from './mapLabelVisibility';
+import {
+  ANTARCTICA_ICE_SHELF,
+  ANTARCTICA_MAP_SILHOUETTE,
+  SEA_MAP_LABELS,
+  seaLabelZoomPresentation,
+} from './mapGeographyPresentation';
 
 interface TerritoryVisual {
   parts: Phaser.GameObjects.Polygon[];
@@ -46,13 +68,18 @@ interface TerritoryVisual {
   panel: Phaser.GameObjects.Rectangle;
   name: Phaser.GameObjects.Text;
   detail: Phaser.GameObjects.Text;
+  openingMobilisation: Phaser.GameObjects.Text;
+  openingMobilisationBarBack: Phaser.GameObjects.Rectangle;
+  openingMobilisationBarFill: Phaser.GameObjects.Rectangle;
   localForce: Phaser.GameObjects.Text;
   localForceBarBack: Phaser.GameObjects.Rectangle;
   localForceBarFill: Phaser.GameObjects.Rectangle;
-  minLabelZoom: number;
   layoutDetailVisible?: boolean;
+  layoutOpeningMobilisationVisible?: boolean;
   layoutWidth?: number;
   layoutHeight?: number;
+  openingMobilisationActive: boolean;
+  openingMobilisationRemaining: number;
   localForceText: string;
   localForceFill: number;
   localForceFillColor: number;
@@ -144,8 +171,6 @@ const MAP_MAX_ZOOM = 24;
 const MAP_ZOOM_WHEEL_RATE = 0.00135;
 const MAP_ZOOM_RESPONSE_MS = 82;
 const MICROSTATE_FOCUS_SCREEN_SIZE = 110;
-const DEEP_LABEL_MIN_ZOOM = 3;
-const DEEP_LABEL_MIN_SCREEN_SPAN = 16;
 // Natural Earth contains roughly 95k coastline vertices. Keeping sub-pixel
 // bends adds a lot of Phaser hit-test/triangulation work without making the
 // map more legible. Deep microstate zoom needs a tighter tolerance so retained
@@ -263,13 +288,20 @@ function wrappedXNear(x: number, anchorX: number): number {
   return result;
 }
 
+function countryPresentationAnchor(countryId: string): RenderPoint | undefined {
+  const fallback = TERRITORY_BY_ID[countryId];
+  return fallback
+    ? resolveCountryPresentationAnchor(countryId, fallback, projectWorldPoint)
+    : undefined;
+}
+
 /**
  * Focus and deep-label decisions use the landmass cluster around the country's
  * label anchor. Remote islands therefore do not make mainland microstates look
  * artificially huge or force a world-scale camera framing.
  */
 function countryRenderBounds(countryId: string): CountryRenderBounds | undefined {
-  const anchor = TERRITORY_BY_ID[countryId];
+  const anchor = countryPresentationAnchor(countryId);
   const rings = RENDER_RINGS.get(countryId) ?? [];
   if (!anchor || rings.length === 0) return undefined;
   const ringEntries = rings.map((ring) => {
@@ -307,7 +339,7 @@ function labelPlacementOffsets(
   width: number,
   height: number,
   strategic: boolean,
-  persistentTopPower: boolean,
+  collisionProtected: boolean,
 ): RenderPoint[] {
   if (!strategic) return [{ x: 0, y: 0 }];
   const offsets: RenderPoint[] = [
@@ -319,11 +351,11 @@ function labelPlacementOffsets(
     { x: 0, y: -2 * height - 8 }, { x: 0, y: 2 * height + 8 },
     { x: -width * 1.12, y: 0 }, { x: width * 1.12, y: 0 },
   ];
-  if (!persistentTopPower) return offsets;
+  if (!collisionProtected) return offsets;
 
-  // The global top ten is part of the overview, not optional geography. Give
-  // those labels a deterministic expanding search field so dense European and
-  // Asian clusters can fan out instead of losing the lower-ranked badge.
+  // Persistent strategic and active labels are not optional geography. Give
+  // them a deterministic expanding search field so dense clusters can fan out
+  // instead of losing a top-ten, player, war or integration badge.
   const seen = new Set(offsets.map(({ x, y }) => `${Math.round(x)}:${Math.round(y)}`));
   const stepX = width + LABEL_COLLISION_GAP * 2;
   const stepY = height + LABEL_COLLISION_GAP * 2;
@@ -371,6 +403,8 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
   private operationGraphics?: Phaser.GameObjects.Graphics;
   private routeGraphics?: Phaser.GameObjects.Graphics;
   private graticuleGraphics?: Phaser.GameObjects.Graphics;
+  private seaLabels: { definition: (typeof SEA_MAP_LABELS)[number]; text: Phaser.GameObjects.Text }[] = [];
+  private antarcticaLabel?: Phaser.GameObjects.Text;
   private logisticsGraphics?: Phaser.GameObjects.Graphics;
   private ownershipBoundaryGraphics?: Phaser.GameObjects.Graphics;
   private flagAtlas?: Phaser.Textures.CanvasTexture | null;
@@ -387,6 +421,7 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
   private humanOwnerIds = new Set<string>();
   private humanCapitalId?: string;
   private warTerritoryIds = new Set<string>();
+  private activeFrontTerritoryIds = new Set<string>();
   private ownerTerritoryCounts = new Map<string, number>();
   private ownerLabelTerritoryIds = new Map<string, string>();
   private absorbedTerritoryIds = new Set<string>();
@@ -412,6 +447,7 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
   private lastOperationSignature = '';
   private lastLogisticsSignature = '';
   private lastForcePresentationSignature = '';
+  private lastOpeningMobilisationSignature = '';
   private activeBattleEffects = 0;
   private battleLabelRefresh?: Phaser.Time.TimerEvent;
   private combatAnimationElapsed = 0;
@@ -441,6 +477,7 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
 
   create(): void {
     this.cameras.main.setBounds(0, 0, MAP_WIDTH, MAP_HEIGHT);
+    this.cameras.main.setBackgroundColor('#081d29');
     this.drawOcean();
     this.flagAtlas = this.textures.createCanvas(
       'world-flag-atlas',
@@ -468,11 +505,65 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
   }
 
   private drawOcean(): void {
+    const backdrop = this.add.graphics().setDepth(-21);
+    backdrop.fillStyle(0x081d29, 1);
+    backdrop.fillRect(-MAP_WIDTH, -MAP_HEIGHT, MAP_WIDTH * 3, MAP_HEIGHT * 3);
     const sea = this.add.graphics().setDepth(-20);
     sea.fillGradientStyle(0x071521, 0x071521, 0x0a2432, 0x0a2432, 1);
     sea.fillRect(0, 0, MAP_WIDTH, MAP_HEIGHT);
     this.graticuleGraphics = this.add.graphics().setDepth(-19);
     this.drawGraticule();
+    this.drawAntarctica();
+    this.createSeaLabels();
+  }
+
+  private drawAntarctica(): void {
+    const points = ANTARCTICA_MAP_SILHOUETTE.flatMap(([x, y]) => [x, y]);
+    this.add.polygon(0, 0, points, 0xc3dce0, 0.50)
+      .setOrigin(0, 0)
+      .setDepth(-18.5)
+      .setStrokeStyle(1.25, 0xebf7f8, 0.58);
+    const shelf = ANTARCTICA_ICE_SHELF.flatMap(([x, y]) => [x, y]);
+    this.add.polygon(0, 0, shelf, 0xe3f1f3, 0.18)
+      .setOrigin(0, 0)
+      .setDepth(-18.35)
+      .setStrokeStyle(0.75, 0xf3fbfc, 0.24);
+    this.antarcticaLabel = this.add.text(MAP_WIDTH / 2, MAP_HEIGHT - 38, 'A N T A R C T I C A', {
+      fontFamily: 'Inter, system-ui, sans-serif', fontSize: '9px', fontStyle: 'italic',
+      color: '#d3e7ea', letterSpacing: 2.8,
+    }).setOrigin(0.5).setDepth(-17).setAlpha(0.34).setResolution(LABEL_TEXT_RESOLUTION);
+  }
+
+  private createSeaLabels(): void {
+    this.seaLabels = SEA_MAP_LABELS.map((definition) => {
+      const point = definition.mapPosition
+        ? { x: definition.mapPosition[0], y: definition.mapPosition[1] }
+        : projectWorldPoint(definition.longitude, definition.latitude);
+      const ocean = definition.kind === 'ocean';
+      const text = this.add.text(point.x, point.y, definition.name, {
+        fontFamily: 'Inter, system-ui, sans-serif', fontSize: ocean ? '11px' : '8px',
+        fontStyle: 'italic', color: ocean ? '#74a7b5' : '#8ab6c0',
+        letterSpacing: ocean ? 2.1 : 1.25,
+      }).setOrigin(0.5)
+        .setRotation(Phaser.Math.DegToRad(definition.rotation ?? 0))
+        .setDepth(-17)
+        .setResolution(LABEL_TEXT_RESOLUTION);
+      return { definition, text };
+    });
+    this.refreshSeaLabels();
+  }
+
+  private refreshSeaLabels(): void {
+    const zoom = this.cameras.main.zoom;
+    for (const { definition, text } of this.seaLabels) {
+      const presentation = seaLabelZoomPresentation(definition, zoom);
+      text.setVisible(presentation.visible).setAlpha(presentation.alpha).setScale(presentation.scale);
+    }
+    if (this.antarcticaLabel) {
+      const fade = Phaser.Math.Clamp((1.95 - zoom) / 0.55, 0, 1);
+      this.antarcticaLabel.setVisible(fade > 0).setAlpha(0.30 * fade)
+        .setScale(Phaser.Math.Clamp(1 / Math.max(zoom, 0.01), 0.5, 1.1));
+    }
   }
 
   private drawGraticule(): void {
@@ -615,7 +706,8 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       }
 
       const territory = TERRITORY_BY_ID[country.id]!;
-      const hud = this.add.container(territory.x, territory.y).setDepth(8);
+      const labelAnchor = countryPresentationAnchor(country.id) ?? territory;
+      const hud = this.add.container(labelAnchor.x, labelAnchor.y).setDepth(8);
       const panel = this.add.rectangle(0, 0, 76, 24, 0x04111b, 0.95)
         .setStrokeStyle(1, 0xc4e1e8, 0.78);
       const name = this.add.text(0, 0, country.englishName.toUpperCase(), {
@@ -625,6 +717,13 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       const detail = this.add.text(0, 8, country.code, {
         fontFamily: 'Inter, system-ui, sans-serif', fontSize: `${LABEL_DETAIL_SIZE}px`, fontStyle: '700', color: '#d9f5fa', letterSpacing: 0.25,
       }).setOrigin(0.5).setStroke('#01070b', 2.5).setResolution(LABEL_TEXT_RESOLUTION).setVisible(false);
+      const openingMobilisation = this.add.text(0, 11, '', {
+        fontFamily: 'Inter, system-ui, sans-serif', fontSize: '8px', fontStyle: '700', color: '#cbbfff', letterSpacing: 0.35,
+      }).setOrigin(0.5).setStroke('#01070b', 2).setResolution(LABEL_TEXT_RESOLUTION).setVisible(false);
+      const openingMobilisationBarBack = this.add.rectangle(0, 17, 48, 2, 0x182031, 0.96)
+        .setOrigin(0, 0.5).setVisible(false);
+      const openingMobilisationBarFill = this.add.rectangle(0, 17, 0, 2, 0xb5a7ff, 0.96)
+        .setOrigin(0, 0.5).setVisible(false);
       const localForce = this.add.text(territory.x, territory.y, '', {
         fontFamily: 'Inter, system-ui, sans-serif', fontSize: '10px', fontStyle: '700', color: '#b9f8ff',
         backgroundColor: '#04111bd9', padding: { x: 4, y: 2 },
@@ -633,7 +732,14 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
         .setOrigin(0, 0.5).setDepth(7).setVisible(false);
       const localForceBarFill = this.add.rectangle(territory.x, territory.y, 34, 3, 0x58d68d, 0.92)
         .setOrigin(0, 0.5).setDepth(7.1).setVisible(false);
-      hud.add([panel, name, detail]);
+      hud.add([
+        panel,
+        name,
+        detail,
+        openingMobilisationBarBack,
+        openingMobilisationBarFill,
+        openingMobilisation,
+      ]);
       hud.setInteractive(new Phaser.Geom.Rectangle(-70, -18, 140, 36), Phaser.Geom.Rectangle.Contains);
       hud.input!.cursor = 'pointer';
       hud.on('pointerover', (pointer: Phaser.Input.Pointer) => this.hoverCountry(country.id, pointer));
@@ -643,15 +749,11 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
         this.countryPointerHandled = true;
         if (!this.inputBlocked && !this.dragged) mapBridge.onTerritoryClick?.(country.id);
       });
-      const baseLabelZoom = country.powerIndex >= 72 || country.labelRank <= 1 ? 0.78
-        : country.powerIndex >= 58 || country.labelRank <= 2 ? 0.92
-          : country.powerIndex >= 43 || country.labelRank <= 3 ? 1.12
-            : country.powerIndex >= 28 || country.labelRank <= 4 ? 1.46 : 1.88;
-      // Dense subregions rely primarily on screen-space collision culling; this
-      // small deterministic delay stops every micro-label competing at once.
-      const minLabelZoom = baseLabelZoom + (country.regionId === 'heartlands' ? 0.08 : country.subregion === 'Caribbean' ? 0.12 : 0);
       this.visuals.set(country.id, {
-        parts, hud, panel, name, detail, localForce, localForceBarBack, localForceBarFill, minLabelZoom,
+        parts, hud, panel, name, detail,
+        openingMobilisation, openingMobilisationBarBack, openingMobilisationBarFill,
+        localForce, localForceBarBack, localForceBarFill,
+        openingMobilisationActive: false, openingMobilisationRemaining: 0,
         localForceText: '', localForceFill: -1, localForceFillColor: -1,
       });
     }
@@ -690,23 +792,14 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
         x: ring.reduce((sum, point) => sum + point.x, 0) / ring.length,
         y: ring.reduce((sum, point) => sum + point.y, 0) / ring.length,
       }));
-      // Group nearby landmasses before stretching the flag. Remote French and
-      // Dutch possessions can no longer enlarge the European projection box.
-      const groups: typeof ringCenters[] = [];
-      for (const entry of ringCenters) {
-        const linked = groups.filter((group) => group.some((candidate) => {
-          const dx = Math.min(Math.abs(candidate.x - entry.x), MAP_WIDTH - Math.abs(candidate.x - entry.x));
-          return Math.hypot(dx, candidate.y - entry.y) <= 260;
-        }));
-        if (linked.length === 0) groups.push([entry]);
-        else {
-          linked[0]!.push(entry);
-          for (const extra of linked.slice(1)) {
-            linked[0]!.push(...extra);
-            groups.splice(groups.indexOf(extra), 1);
-          }
-        }
-      }
+      // Stretch once per nearby landmass. France's explicit mainland anchor
+      // prevents its Atlantic island rings bridging Europe to overseas bounds.
+      const groups = groupFlagLandmasses(
+        ownerId,
+        ringCenters,
+        MAP_WIDTH,
+        countryPresentationAnchor(ownerId),
+      );
       for (const group of groups) {
         let minX = Infinity; let minY = Infinity; let maxX = -Infinity; let maxY = -Infinity;
         for (const { ring } of group) for (const point of ring) {
@@ -791,23 +884,40 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
   }
 
   private layoutLabel(visual: TerritoryVisual, showDetail: boolean): { width: number; height: number } {
+    const showOpeningMobilisation = showDetail && visual.openingMobilisationActive;
     if (visual.layoutDetailVisible === showDetail
+      && visual.layoutOpeningMobilisationVisible === showOpeningMobilisation
       && visual.layoutWidth !== undefined && visual.layoutHeight !== undefined) {
       return { width: visual.layoutWidth, height: visual.layoutHeight };
     }
     visual.detail.setVisible(showDetail);
-    visual.name.setY(showDetail ? -4.5 : 0);
-    visual.detail.setY(6);
+    visual.openingMobilisation.setVisible(showOpeningMobilisation);
+    visual.openingMobilisationBarBack.setVisible(showOpeningMobilisation);
+    visual.openingMobilisationBarFill.setVisible(showOpeningMobilisation);
+    visual.name.setY(showOpeningMobilisation ? -11 : showDetail ? -4.5 : 0);
+    visual.detail.setY(showOpeningMobilisation ? -1 : 6);
+    visual.openingMobilisation.setY(9);
     const width = Phaser.Math.Clamp(
-      Math.max(visual.name.width, showDetail ? visual.detail.width : 0) + LABEL_PADDING_X * 2,
+      Math.max(
+        visual.name.width,
+        showDetail ? visual.detail.width : 0,
+        showOpeningMobilisation ? visual.openingMobilisation.width : 0,
+      ) + LABEL_PADDING_X * 2,
       44,
-      158,
+      showOpeningMobilisation ? 176 : 158,
     );
-    const height = showDetail ? 27 : 17;
+    const height = showOpeningMobilisation ? 43 : showDetail ? 27 : 17;
     visual.panel.setDisplaySize(width, height);
+    if (showOpeningMobilisation) {
+      const trackWidth = Math.max(28, width - LABEL_PADDING_X * 2);
+      visual.openingMobilisationBarBack.setPosition(-trackWidth / 2, 17).setSize(trackWidth, 2);
+      visual.openingMobilisationBarFill.setPosition(-trackWidth / 2, 17)
+        .setSize(trackWidth * visual.openingMobilisationRemaining, 2);
+    }
     const hitArea = visual.hud.input?.hitArea;
     if (hitArea instanceof Phaser.Geom.Rectangle) hitArea.setTo(-width / 2, -height / 2, width, height);
     visual.layoutDetailVisible = showDetail;
+    visual.layoutOpeningMobilisationVisible = showOpeningMobilisation;
     visual.layoutWidth = width;
     visual.layoutHeight = height;
     return { width, height };
@@ -815,11 +925,11 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
 
   private refreshZoomDetails(): void {
     const zoom = this.cameras.main.zoom;
+    this.refreshSeaLabels();
     const camera = this.cameras.main;
     const humanId = this.mapState?.humanPlayerId;
     const movedIds = this.movedTerritoryIds;
     const activeSourceIds = this.activeHumanSourceIds;
-    const strongestHumanIds = this.strongestHumanTerritoryIds;
     const forceScale = Phaser.Math.Clamp(1 / zoom, 1 / MAP_MAX_ZOOM, 1.18);
     const forceTextOffset = 29 / zoom;
     const forceBarOffset = 39 / zoom;
@@ -828,75 +938,74 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       visual: TerritoryVisual;
       priority: number;
       required: boolean;
-      strategic: boolean;
-      persistentTopPower: boolean;
-      persistentHuman: boolean;
+      collisionProtected: boolean;
+      ordinaryDeepLabel: boolean;
       showDetail: boolean;
+      showLocalForce: boolean;
     }[] = [];
     for (const [territoryId, visual] of this.visuals) {
-      const localTerritory = this.mapState?.territories[territoryId];
-      const showLocalForce = localTerritory?.ownerId === humanId
-        && (zoom >= 1.45 || movedIds.has(territoryId) || activeSourceIds.has(territoryId) || strongestHumanIds.has(territoryId));
-      const forceAnchor = TERRITORY_BY_ID[territoryId];
-      if (showLocalForce && forceAnchor) {
-        const barY = forceAnchor.y + forceBarOffset;
-        visual.localForce.setPosition(forceAnchor.x, forceAnchor.y + forceTextOffset)
-          .setScale(forceScale).setVisible(true)
-          .setColor(movedIds.has(territoryId) ? '#e3fdff' : '#9eeaf4')
-          .setAlpha(movedIds.has(territoryId) || activeSourceIds.has(territoryId) ? 1 : 0.76);
-        visual.localForceBarBack.setPosition(forceAnchor.x - 17 * forceScale, barY)
-          .setScale(forceScale).setVisible(true);
-        visual.localForceBarFill.setPosition(forceAnchor.x - 17 * forceScale, barY)
-          .setScale(forceScale).setVisible(true);
-      } else if (visual.localForce.visible || visual.localForceBarBack.visible || visual.localForceBarFill.visible) {
+      if (visual.localForce.visible || visual.localForceBarBack.visible || visual.localForceBarFill.visible) {
         visual.localForce.setVisible(false);
         visual.localForceBarBack.setVisible(false);
         visual.localForceBarFill.setVisible(false);
       }
+      const localTerritory = this.mapState?.territories[territoryId];
       const source = territoryId === this.selection.sourceId;
       const target = territoryId === this.selection.targetId;
       const selected = source || target;
       const hovered = territoryId === this.hoveredId;
       const ownCapital = territoryId === this.humanCapitalId;
       const atWar = this.warTerritoryIds.has(territoryId);
+      const frontTerritory = this.activeFrontTerritoryIds.has(territoryId);
       const integrating = this.integratingTerritoryIds.has(territoryId);
-      const ownerId = this.mapState?.territories[territoryId]?.ownerId;
+      const ownerId = localTerritory?.ownerId;
       const topPower = Boolean(ownerId && this.topPowerOwnerIds.has(ownerId));
       const persistentTopPower = topPower
         && this.ownerLabelTerritoryIds.get(ownerId!) === territoryId;
       const persistentHuman = Boolean(ownerId && this.humanOwnerIds.has(ownerId)
         && this.ownerLabelTerritoryIds.get(ownerId) === territoryId);
       const required = selected || hovered;
-      const strategic = required || persistentHuman || ownCapital || atWar || integrating || topPower;
       const bounds = COUNTRY_RENDER_BOUNDS.get(territoryId);
       const projectedSpan = bounds ? Math.max(bounds.width, bounds.height) * zoom : 0;
-      const deepGeography = zoom >= Math.max(DEEP_LABEL_MIN_ZOOM, visual.minLabelZoom * 1.75)
-        && projectedSpan >= DEEP_LABEL_MIN_SCREEN_SPAN;
+      const decision = mapCountryLabelDecision({
+        hovered,
+        selected,
+        topTenRealm: persistentTopPower,
+        humanRealm: persistentHuman || ownCapital,
+        warRealm: atWar,
+        frontTerritory,
+        integrating,
+        openingMobilisation: visual.openingMobilisationActive,
+        projectedSpan,
+        zoom,
+      });
       const absorbed = this.absorbedTerritoryIds.has(territoryId);
       visual.hud.setVisible(false);
-      const anchor = TERRITORY_BY_ID[territoryId];
+      const anchor = countryPresentationAnchor(territoryId);
       if (anchor) visual.hud.setPosition(anchor.x, anchor.y);
       // A captured country becomes part of its owner's empire. Its former national
       // label never returns on the map; geographic identity remains in DOM intel.
       if (absorbed) continue;
-      // The overview stays strategic: the player's empire, active belligerents,
-      // military top ten, selection and hover receive a nameplate. At close
-      // range, countries whose shape is genuinely legible may join the same
-      // collision pass, making Luxembourg-sized states discoverable.
-      const eligible = strategic || deepGeography;
-      if (!eligible) continue;
+      // At every ordinary zoom only top-ten realms, human realms and live
+      // gameplay state are persistent. Quiet countries are hover-only, with a
+      // small collision-aware exception once the camera is genuinely deep.
+      if (!decision.visible) continue;
       const country = COUNTRY_BY_ID[territoryId];
       candidates.push({
         territoryId,
         visual,
         required,
-        strategic: strategic || deepGeography,
-        persistentTopPower,
-        persistentHuman,
-        showDetail: required || persistentHuman || atWar || integrating || (topPower && zoom >= 1.55)
-          || (deepGeography && projectedSpan >= 48),
-        priority: (target ? 110_000 : source ? 105_000 : hovered ? 100_000 : persistentHuman ? (ownCapital ? 98_000 : 97_000) : persistentTopPower ? 95_000 : ownCapital ? 90_000 : atWar ? 80_000 : integrating ? 75_000 : topPower ? 70_000 : deepGeography ? 50_000 : 0)
-          + (deepGeography ? Math.min(5_000, projectedSpan * 10) : 0)
+        collisionProtected: decision.collisionProtected,
+        ordinaryDeepLabel: decision.ordinaryDeepLabel,
+        showDetail: decision.showDetail,
+        showLocalForce: localTerritory?.ownerId === humanId
+          && (required || movedIds.has(territoryId) || activeSourceIds.has(territoryId) || frontTerritory),
+        priority: (target ? 110_000 : source ? 105_000 : hovered ? 100_000
+          : persistentHuman ? (ownCapital ? 98_000 : 97_000)
+            : visual.openingMobilisationActive ? 96_000
+              : persistentTopPower ? 95_000 : frontTerritory ? 90_000
+                : atWar ? 85_000 : integrating ? 80_000 : 50_000)
+          + (decision.ordinaryDeepLabel ? Math.min(5_000, projectedSpan * 10) : 0)
           + (this.mapState ? this.strategicScores.get(this.mapState.territories[territoryId]?.ownerId ?? territoryId) ?? country?.powerIndex ?? 0 : country?.powerIndex ?? 0) * 10
           - (country?.labelRank ?? 5),
       });
@@ -909,11 +1018,13 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       { x: 0, y: Math.max(0, camera.height - 76), width: Math.min(340, camera.width), height: 76 },
     ];
     candidates.sort((left, right) => right.priority - left.priority || left.territoryId.localeCompare(right.territoryId));
+    let visibleOrdinaryDeepLabels = 0;
     for (const {
-      territoryId, visual, required, strategic, persistentTopPower, persistentHuman, showDetail,
+      territoryId, visual, required, collisionProtected, ordinaryDeepLabel, showDetail, showLocalForce,
     } of candidates) {
+      if (ordinaryDeepLabel && !hasDeepMapLabelSlot(visibleOrdinaryDeepLabels)) continue;
       // One compact badge system at every zoom. The overview shows names only;
-      // military detail appears for interaction, active wars and closer zoom.
+      // military detail appears only for interaction and active state.
       const scale = Phaser.Math.Clamp(1 / zoom, 1 / MAP_MAX_ZOOM, LABEL_MAX_SCREEN_SCALE);
       const screenScale = scale * zoom;
       const layout = this.layoutLabel(visual, showDetail);
@@ -929,7 +1040,7 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       )) continue;
       const width = layout.width * screenScale;
       const height = layout.height * screenScale;
-      const offsets = labelPlacementOffsets(width, height, strategic, persistentTopPower);
+      const offsets = labelPlacementOffsets(width, height, true, collisionProtected);
       let placement: { x: number; y: number; bounds: RenderRectangle } | undefined;
       let leastOverlap: typeof placement;
       let leastOverlapScore = Number.POSITIVE_INFINITY;
@@ -955,10 +1066,10 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
         for (const other of accepted) {
           if (!rectanglesIntersect(bounds, other)) continue;
           collides = true;
-          if (required || persistentTopPower || persistentHuman) overlap += rectangleOverlapArea(bounds, other);
+          if (collisionProtected) overlap += rectangleOverlapArea(bounds, other);
         }
         if (collides) {
-          if (required || persistentTopPower || persistentHuman) {
+          if (collisionProtected) {
             const score = overlap * 1_000 + Math.hypot(offsetX, offsetY);
             if (score < leastOverlapScore) {
               leastOverlapScore = score;
@@ -970,10 +1081,10 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
         placement = { x: centerX - anchorScreenX, y: centerY - anchorScreenY, bounds };
         break;
       }
-      // Selection/hover and each on-screen top-ten badge must remain visible.
+      // Interaction, top-ten and active badges must remain visible.
       // The expanded search normally finds free space; least-overlap is only a
       // final guarantee for very small windows or unusually dense empires.
-      if (!placement && (required || persistentTopPower || persistentHuman)) {
+      if (!placement && collisionProtected) {
         placement = leastOverlap;
       }
       if (!placement && required) {
@@ -992,6 +1103,7 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
         placement = { x: centerX - anchorScreenX, y: centerY - anchorScreenY, bounds };
       }
       if (!placement) continue;
+      if (ordinaryDeepLabel) visibleOrdinaryDeepLabels += 1;
       accepted.push(placement.bounds);
       // Snap the final label anchor in screen space. Combined with 2x text
       // textures this prevents the soft, smeared look at fractional camera zoom.
@@ -1016,6 +1128,20 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       visual.panel.setStrokeStyle(selected || hovered ? 1.4 : 1, accent, selected || hovered ? 1 : 0.74);
       visual.detail.setColor(selected ? '#ffeaa8' : own ? '#b9f8ff'
         : otherHuman ? '#ead5ff' : atWar ? '#ffd0cc' : '#c6dce2');
+      if (showLocalForce) {
+        const forceAnchor = TERRITORY_BY_ID[territoryId];
+        if (forceAnchor) {
+          const barY = forceAnchor.y + forceBarOffset;
+          visual.localForce.setPosition(forceAnchor.x, forceAnchor.y + forceTextOffset)
+            .setScale(forceScale).setVisible(true)
+            .setColor(movedIds.has(territoryId) ? '#e3fdff' : '#9eeaf4')
+            .setAlpha(movedIds.has(territoryId) || activeSourceIds.has(territoryId) ? 1 : 0.76);
+          visual.localForceBarBack.setPosition(forceAnchor.x - 17 * forceScale, barY)
+            .setScale(forceScale).setVisible(true);
+          visual.localForceBarFill.setPosition(forceAnchor.x - 17 * forceScale, barY)
+            .setScale(forceScale).setVisible(true);
+        }
+      }
     }
   }
 
@@ -1300,9 +1426,12 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       .map((territory) => territory.id));
 
     const activeHumanSourceIds = new Set<string>();
+    const activeFrontTerritoryIds = new Set<string>();
     const frontRenderOperations: FrontRenderOperation[] = [];
     for (const { operations } of warOperations) {
       for (const operation of operations) {
+        activeFrontTerritoryIds.add(operation.sourceId);
+        activeFrontTerritoryIds.add(operation.targetId);
         if (operation.commanderId === humanId) activeHumanSourceIds.add(operation.sourceId);
         const source = TERRITORY_BY_ID[operation.sourceId];
         const target = TERRITORY_BY_ID[operation.targetId];
@@ -1324,6 +1453,7 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       }
     }
     this.activeHumanSourceIds = activeHumanSourceIds;
+    this.activeFrontTerritoryIds = activeFrontTerritoryIds;
     this.frontRenderOperations = frontRenderOperations;
     this.humanLogisticsMovements = state.logisticsMovements
       .filter((movement) => movement.playerId === humanId && movement.manpower > 0.000001)
@@ -1336,6 +1466,15 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
     });
     const forcePresentationChanged = forceSignature !== this.lastForcePresentationSignature;
     if (forcePresentationChanged) this.lastForcePresentationSignature = forceSignature;
+    const openingMobilisationSignature = Object.values(state.openingMobilisations)
+      .sort((left, right) => left.playerId.localeCompare(right.playerId))
+      .map((phase) => `${phase.playerId}:${phase.direction}:${Math.round(phase.remainingRatio * 100)}`)
+      .join('|');
+    const openingMobilisationChanged = openingMobilisationSignature
+      !== this.lastOpeningMobilisationSignature;
+    if (openingMobilisationChanged) {
+      this.lastOpeningMobilisationSignature = openingMobilisationSignature;
+    }
 
     const strategicPresentationChanged = topologyChanged || state.tick - this.lastStrategicScoreTick >= 5;
     if (strategicPresentationChanged) {
@@ -1395,19 +1534,29 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       const integrating = territoryState.coreOwnerId !== territoryState.ownerId
         && territoryState.integration < 0.999999;
       const integrationPercent = Math.round(Phaser.Math.Clamp(territoryState.integration, 0, 1) * 100);
+      const openingPhase = owner.isHuman && empireCapital
+        ? state.openingMobilisations[owner.id] : undefined;
+      const openingPercent = openingPhase
+        ? Math.round(Phaser.Math.Clamp(openingPhase.remainingRatio, 0, 1) * 100) : 0;
+      const openingLabel = openingPhase
+        ? `${openingPhase.direction === 'boost' ? 'OPENING BOOST' : 'OPENING LIMIT'} · ${openingPercent}% LEFT`
+        : '';
+      const terrainProfile = terrainProfileForTerritory(territory.id);
+      const terrainFillColor = terrainMapFillColor(terrainProfile);
       const fillSignature = [
         owner.id,
         owner.id === humanId ? 'local-human' : owner.isHuman ? 'human' : 'ai',
         integrating ? integrationPercent : 'core',
+        terrainProfile.map((entry) => `${entry.terrain}:${entry.share}`).join(','),
       ].join(':');
       if (this.fillSignatures.get(territory.id) !== fillSignature) {
         this.fillSignatures.set(territory.id, fillSignature);
-        // The flag is now the ownership colour. This neutral underlay is only a
-        // fallback for entities without an ISO flag and improves text contrast.
+        // Terrain is a visible cartographic layer, while integration retains
+        // its own brighter amber state and therefore stays unambiguous.
         const integrationTint = 1 - Phaser.Math.Clamp(territoryState.integration, 0, 1);
         for (const part of visual.parts) part.setFillStyle(
-          integrating ? 0x9a6a2d : 0x0d1a22,
-          integrating ? 0.055 + 0.065 * integrationTint : 0.18,
+          integrating ? 0x9a6a2d : terrainFillColor,
+          integrating ? 0.055 + 0.065 * integrationTint : TERRAIN_MAP_VISUAL_TUNING.fillAlpha,
         );
         visual.panel.setStrokeStyle(
           1,
@@ -1432,14 +1581,30 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
         : absorbed ? ''
           : mapCombatPowerLabel(displayedArmy.power, owner.isHuman && empireCapital
             ? controllerLabel : '');
-      const labelSignature = `${owner.id}:${empireSize}:${owner.controllerName ?? ''}:${labelName}:${armyLabel}`;
+      const labelSignature = `${owner.id}:${empireSize}:${owner.controllerName ?? ''}:${labelName}:${armyLabel}:${openingLabel}`;
       if (this.labelSignatures.get(territory.id) !== labelSignature) {
         this.labelSignatures.set(territory.id, labelSignature);
         visual.name.setText(labelName);
         visual.detail.setText(armyLabel);
+        visual.openingMobilisation.setText(openingLabel);
         visual.name.setColor(owner.id === humanId ? '#e2fcff' : owner.isHuman ? '#f2e3ff' : '#f4fbfc');
         visual.layoutWidth = undefined;
         visual.layoutHeight = undefined;
+      }
+      visual.openingMobilisationActive = Boolean(openingPhase);
+      visual.openingMobilisationRemaining = openingPhase
+        ? Phaser.Math.Clamp(openingPhase.remainingRatio, 0, 1) : 0;
+      if (openingPhase) {
+        const openingColor = openingPhase.direction === 'boost' ? 0x70dcc2 : 0xb5a7ff;
+        visual.openingMobilisation.setColor(openingPhase.direction === 'boost' ? '#9aead5' : '#cbbfff');
+        visual.openingMobilisationBarFill.setFillStyle(openingColor, 0.96);
+        if (visual.layoutWidth !== undefined) {
+          const trackWidth = Math.max(28, visual.layoutWidth - LABEL_PADDING_X * 2);
+          visual.openingMobilisationBarFill.setSize(
+            trackWidth * visual.openingMobilisationRemaining,
+            2,
+          );
+        }
       }
       const localForceText = compactMapCombatPower(territoryState.army.power);
       if (visual.localForceText !== localForceText) {
@@ -1467,7 +1632,8 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       this.drawOwnershipPerimeters();
       this.setSelection(this.selection, false);
     }
-    if (topologyChanged || strategicPresentationChanged || forcePresentationChanged) {
+    if (topologyChanged || strategicPresentationChanged || forcePresentationChanged
+      || openingMobilisationChanged || operationChanged) {
       this.refreshZoomDetails();
     }
   }
@@ -1505,16 +1671,22 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
     graphics.clear();
     for (const operation of this.frontRenderOperations) {
       const descriptor = combatPresentationDescriptor(operation.access);
-      let targetX = operation.target.x;
-      if (Math.abs(targetX - operation.source.x) > MAP_WIDTH / 2) {
-        targetX += targetX > operation.source.x ? -MAP_WIDTH : MAP_WIDTH;
+      const seaGeometry = operation.access === 'naval'
+        ? countrySeaRouteMapGeometry(operation.sourceId, operation.targetId)
+        : undefined;
+      const routeSource = seaGeometry?.source ?? operation.source;
+      let targetX = seaGeometry?.target.x ?? operation.target.x;
+      if (!seaGeometry && Math.abs(targetX - routeSource.x) > MAP_WIDTH / 2) {
+        targetX += targetX > routeSource.x ? -MAP_WIDTH : MAP_WIDTH;
       }
       const routeKey = `${operation.sourceId}:${operation.targetId}`;
       const routeOffset = stableTextFraction(routeKey);
-      const bendDirection = combatRouteBendDirection(operation.sourceId, operation.targetId);
+      const bendDirection = operation.access === 'naval'
+        ? countrySeaRouteBendDirection(operation.sourceId, operation.targetId)
+        : combatRouteBendDirection(operation.sourceId, operation.targetId);
       const samples = sampleCombatRoute(
-        operation.source,
-        { x: targetX, y: operation.target.y },
+        routeSource,
+        { x: targetX, y: seaGeometry?.target.y ?? operation.target.y },
         operation.access,
         bendDirection,
         operation.access === 'naval' ? 34 : 22,
@@ -1639,6 +1811,8 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       const mergedFill = ownerId && ownerColor !== undefined
         ? colorMix(ownerId === humanId ? colorMix(ownerColor, 0x65efff, 0.22) : ownerColor, 0x071521, ownerId === humanId ? 0.08 : 0.24)
         : 0xa9c5cd;
+      const terrainProfile = terrainProfileForTerritory(territoryId);
+      const terrainColor = terrainMapColor(terrainProfile);
       for (const part of visual.parts) {
         if (mergedRegion) {
           // Territory polygons are implementation detail once a nation owns more
@@ -1647,12 +1821,12 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
           part.setAlpha(legal.size > 0 && !selected && !target && !isLegal ? 0.62 : 1);
           continue;
         }
-        const width = selected || target ? 1.85 : hovered ? 1.35 : humanOwned ? 1.3 : otherHumanOwned ? 1.15
-          : isLegal ? 1.1 : integrating ? 0.9 : 0.7;
+        const width = selected || target ? 1.85 : hovered ? 1.45 : humanOwned ? 1.3 : otherHumanOwned ? 1.15
+          : isLegal ? 1.1 : integrating ? 0.9 : TERRAIN_MAP_VISUAL_TUNING.borderWidth;
         const color = target ? 0xffd36b : selected || isLegal || humanOwned
-          ? 0x8cf3ff : otherHumanOwned ? 0xd6a7ff : integrating ? 0xf2c879 : 0xa9c5cd;
+          ? 0x8cf3ff : otherHumanOwned ? 0xd6a7ff : integrating ? 0xf2c879 : terrainColor;
         const alpha = selected || target ? 1 : hovered ? 0.98 : humanOwned ? 0.92 : otherHumanOwned ? 0.84
-          : isLegal ? 0.72 : integrating ? 0.56 : 0.28;
+          : isLegal ? 0.76 : integrating ? 0.56 : TERRAIN_MAP_VISUAL_TUNING.borderAlpha;
         part.setStrokeStyle(this.screenWorldSize(width), color, alpha).setDepth(0.8);
         part.setAlpha(legal.size > 0 && !selected && !target && !isLegal ? 0.62 : 1);
       }
@@ -1688,7 +1862,7 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
 
   focusAction(sourceId?: string, targetId?: string): void {
     const territoryId = targetId ?? sourceId;
-    const point = territoryId ? TERRITORY_BY_ID[territoryId] : undefined;
+    const point = territoryId ? countryPresentationAnchor(territoryId) : undefined;
     if (!territoryId || !point) return;
     const camera = this.cameras.main;
     const targetZoom = Math.max(camera.zoom, this.detailZoomFor(territoryId, 1.45));
@@ -1812,20 +1986,26 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       isSeaConnection(result.sourceId, result.targetId),
     );
     const descriptor = combatPresentationDescriptor(access);
-    let adjustedTargetX = targetPoint.x;
-    if (Math.abs(targetPoint.x - sourcePoint.x) > MAP_WIDTH / 2) {
-      adjustedTargetX += targetPoint.x > sourcePoint.x ? -MAP_WIDTH : MAP_WIDTH;
+    const seaGeometry = access === 'naval'
+      ? countrySeaRouteMapGeometry(result.sourceId, result.targetId)
+      : undefined;
+    const routeSource = seaGeometry?.source ?? sourcePoint;
+    let adjustedTargetX = seaGeometry?.target.x ?? targetPoint.x;
+    if (!seaGeometry && Math.abs(targetPoint.x - routeSource.x) > MAP_WIDTH / 2) {
+      adjustedTargetX += targetPoint.x > routeSource.x ? -MAP_WIDTH : MAP_WIDTH;
     }
-    const adjustedTarget = { x: adjustedTargetX, y: targetPoint.y };
-    const dx = adjustedTargetX - sourcePoint.x;
-    const dy = targetPoint.y - sourcePoint.y;
+    const adjustedTarget = { x: adjustedTargetX, y: seaGeometry?.target.y ?? targetPoint.y };
+    const dx = adjustedTargetX - routeSource.x;
+    const dy = adjustedTarget.y - routeSource.y;
     const distance = Math.max(1, Math.hypot(dx, dy));
-    const bendDirection = combatRouteBendDirection(result.sourceId, result.targetId);
+    const bendDirection = access === 'naval'
+      ? countrySeaRouteBendDirection(result.sourceId, result.targetId)
+      : combatRouteBendDirection(result.sourceId, result.targetId);
     const routeColor = result.conquered
       ? colorMix(descriptor.coreColor, 0x8fffc0, 0.38)
       : descriptor.coreColor;
     const effectScale = this.combatWorldSize(1);
-    const sourcePulse = this.add.circle(sourcePoint.x, sourcePoint.y, 2.2 * effectScale, descriptor.glowColor, 0.16)
+    const sourcePulse = this.add.circle(routeSource.x, routeSource.y, 2.2 * effectScale, descriptor.glowColor, 0.16)
       .setStrokeStyle(0.8 * effectScale, routeColor, 0.82).setDepth(19);
     this.tweens.add({
       targets: sourcePulse,
@@ -1837,7 +2017,7 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
     });
     const projectile = this.createBattleMarker(
       access,
-      sourcePoint,
+      routeSource,
       actorColor ?? (humanDefending ? 0xff6d63 : humanAttacking ? 0x70ecff : 0xff8a72),
       routeColor,
       effectScale,
@@ -1855,7 +2035,7 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       duration: flightDuration,
       ease: access === 'naval' ? 'Sine.easeInOut' : 'Cubic.easeInOut',
       onUpdate: () => {
-        const sample = combatRouteSample(sourcePoint, adjustedTarget, travel.progress, access, bendDirection);
+        const sample = combatRouteSample(routeSource, adjustedTarget, travel.progress, access, bendDirection);
         projectile.x = this.normalizedWorldX(sample.x);
         projectile.y = sample.y;
         projectile.rotation = Math.atan2(sample.tangentY, sample.tangentX);

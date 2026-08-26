@@ -3,9 +3,7 @@ import { WORLD_CONTENT_V2 } from './content';
 import { createWorldStateV2 } from './bootstrap';
 import { selectGlobalRankingV2 } from './selectors';
 import {
-  ABSOLUTE_UNDERDOG_ARMY_CAP_COUNT_V2,
   BASE_COUNTRY_TRAIT_VALUE_BUDGET_V2,
-  MICROSTATE_GROWTH_KEYS_V2,
   COUNTRY_TRAITS_V2,
   HUMAN_TRAIT_MULTIPLIER_STRONGEST_V2,
   HUMAN_TRAIT_MULTIPLIER_WEAKEST_V2,
@@ -28,6 +26,23 @@ import {
   type TraitModifierKeyV2,
 } from './traits';
 
+const stableStructuralValue = (value: unknown): unknown => {
+  if (Array.isArray(value)) return [...value].map(stableStructuralValue).sort();
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value as Readonly<Record<string, unknown>>)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, entry]) => [key, stableStructuralValue(entry)]));
+};
+
+/** Country identity must differ by mechanics, not merely by tuned percentages. */
+const structuralTraitSignature = (entry: (typeof COUNTRY_TRAITS_V2)[number]): string => (
+  entry.modifiers.map(({ key, scope, replacement }) => JSON.stringify({
+    key,
+    scope: stableStructuralValue(scope ?? null),
+    replacement: stableStructuralValue(replacement ?? null),
+  })).sort().join('|')
+);
+
 describe('country trait catalog V2', () => {
   it('covers every canonical country exactly once', () => {
     const canonicalIds = WORLD_CONTENT_V2.nationIds.map(String).sort();
@@ -40,7 +55,7 @@ describe('country trait catalog V2', () => {
     expect(traitIds.every((id) => countryTraitV2(id)?.playerId === id)).toBe(true);
   });
 
-  it('keeps English names, exact generated effects and order-independent mechanics unique', () => {
+  it('keeps English copy, exact effects and percentage-independent mechanics unique', () => {
     const names = COUNTRY_TRAITS_V2.map((entry) => entry.name);
     const effects = COUNTRY_TRAITS_V2.map((entry) => entry.effect);
     const effectCountries = new Map<string, string[]>();
@@ -61,10 +76,12 @@ describe('country trait catalog V2', () => {
     });
     const duplicateMechanics = [...signatureCountries.values()]
       .filter((countryIds) => countryIds.length > 1);
+    const structuralSignatures = COUNTRY_TRAITS_V2.map(structuralTraitSignature);
 
     expect(new Set(names).size).toBe(166);
     expect(duplicateEffects).toEqual([]);
     expect(duplicateMechanics).toEqual([]);
+    expect(new Set(structuralSignatures).size).toBe(166);
 
     const dutchVisibleWords = /\b(?:wanneer|zolang|eigen|verdediging|leger|legercapaciteit|buiten|oorlog|vrede|zwakste|kleine|sterke|voedsel|herstel|voorraad|kosten|aanvoer|verovering)\b/i;
     for (const entry of COUNTRY_TRAITS_V2) {
@@ -117,27 +134,52 @@ describe('country trait catalog V2', () => {
       );
       expect(Math.abs(entry.modifiers[0]!.percentage), entry.countryName)
         .toBeGreaterThanOrEqual(entry.modifiers[0]!.key === 'national-iq' ? 0.5 : 2);
-      expect(entry.description).toMatch(/^(?:Addresses|Gives|Makes|Offsets|Transforms|Turns)\b/);
+      expect(entry.description.trim().length, entry.countryName).toBeGreaterThan(20);
     }
   });
 
-  it('keeps bottom-tail base identities bounded while player control supplies the large advantage', () => {
-    expect(countryTraitModifiersV2('tls', 'army-capacity')[0]?.percentage).toBeGreaterThan(0);
+  it('keeps authored underdog identities instead of rewriting them from rank or population', () => {
+    expect(countryTraitV2('tls')?.modifiers.map(({ key }) => key)).toEqual([
+      'food-production', 'condition-recovery', 'defense',
+    ]);
+    expect(countryTraitV2('cri')?.modifiers.map(({ key }) => key)).toEqual([
+      'development-economy-growth', 'research-output', 'recruitment-throughput',
+    ]);
+    expect(countryTraitV2('btn')?.modifiers.map(({ key }) => key)).toEqual([
+      'defense', 'reserve-training', 'food-storage-capacity',
+    ]);
+    expect(countryTraitV2('dji')?.modifiers.map(({ key }) => key)).toEqual([
+      'operation-cost', 'naval-distance-pressure', 'tax-efficiency',
+    ]);
+    expect(countryTraitV2('guy')?.modifiers.map(({ key }) => key)).toEqual([
+      'tax-efficiency', 'defense', 'development-economy-growth',
+    ]);
+    expect(countryTraitV2('mne')?.modifiers.map(({ key }) => key)).toEqual([
+      'defense', 'military-casualties', 'operation-cost',
+    ]);
+    expect(countryTraitV2('sur')?.modifiers.map(({ key }) => key)).toEqual([
+      'defense', 'military-casualties', 'food-production',
+    ]);
+    expect(countryTraitV2('isl')?.modifiers.map(({ key }) => key)).toEqual([
+      'naval-distance-pressure', 'operation-cost', 'defense',
+    ]);
+
+    for (const playerId of ['tls', 'cri', 'btn', 'dji', 'guy', 'mne', 'sur', 'isl'] as const) {
+      expect(countryTraitModifiersV2(playerId, 'army-capacity'), playerId).toEqual([]);
+    }
+
+    // These capacity clauses are explicitly authored national identities.
     expect(countryTraitModifiersV2('swz', 'army-capacity')[0]?.percentage).toBeGreaterThan(0);
-    expect(countryTraitModifiersV2('lux', 'tax-efficiency')[0]?.percentage).toBeGreaterThan(0);
-    expect(countryTraitModifiersV2('lux', 'development-economy-growth')[0]?.percentage).toBeGreaterThan(0);
-    expect(countryTraitModifiersV2('dji', 'naval-distance-pressure')[0]?.percentage).toBeLessThan(0);
-    expect(countryTraitModifiersV2('guy', 'army-capacity')[0]?.percentage).toBeGreaterThan(0);
     expect(countryTraitModifiersV2('lux', 'army-capacity')[0]?.percentage).toBeGreaterThan(0);
-    expect(countryTraitModifiersV2('btn', 'army-capacity')[0]?.percentage).toBeGreaterThan(0);
-    expect(countryTraitModifiersV2('mne', 'operation-cost')).toHaveLength(0);
-    expect(countryTraitModifiersV2('mne', 'army-capacity')[0]?.percentage).toBeGreaterThan(0);
-    expect(countryTraitModifiersV2('sur', 'army-capacity')[0]?.percentage).toBeGreaterThan(0);
+    expect(countryTraitModifiersV2('lux', 'tax-efficiency')[0]?.percentage).toBeGreaterThan(0);
+    expect(countryTraitModifiersV2('lux', 'development-economy-growth')[0]?.percentage)
+      .toBeGreaterThan(0);
+    expect(countryTraitModifiersV2('dji', 'naval-distance-pressure')[0]?.percentage).toBeLessThan(0);
+    expect(countryTraitModifiersV2('mne', 'operation-cost')[0]?.percentage).toBeLessThan(0);
     expect(countryTraitModifiersV2('sur', 'military-casualties')[0]?.scope)
       .toEqual({ role: 'defender' });
     expect(countryTraitModifiersV2('brn', 'research-output')[0]?.percentage).toBeGreaterThan(0);
     expect(countryTraitModifiersV2('brn', 'army-upkeep')[0]?.percentage).toBeLessThan(0);
-    expect(countryTraitModifiersV2('isl', 'army-capacity')[0]?.percentage).toBeGreaterThan(0);
     expect(countryTraitModifiersV2('blz', 'military-casualties')[0]?.scope).toBeUndefined();
 
     for (const playerId of ['deu', 'jpn', 'kor'] as const) {
@@ -163,15 +205,14 @@ describe('country trait catalog V2', () => {
       .toBeLessThan(countryTraitFactorV2('grl', 'army-upkeep'));
   });
 
-  it('gives every absolute military underdog a structural army-capacity path', () => {
-    const underdogs = OPENING_MILITARY_ORDER_V2.slice(-ABSOLUTE_UNDERDOG_ARMY_CAP_COUNT_V2);
-    expect(underdogs).toHaveLength(24);
-    for (const playerId of underdogs) {
-      expect(
-        countryTraitModifiersV2(playerId, 'army-capacity')[0]?.percentage,
-        String(playerId),
-      ).toBeGreaterThan(0);
-    }
+  it('does not inject army capacity into the bottom 24 military starts', () => {
+    const bottomTail = OPENING_MILITARY_ORDER_V2.slice(-24);
+    const authoredCapacityIds = bottomTail.filter((playerId) => (
+      countryTraitModifiersV2(playerId, 'army-capacity').length > 0
+    )).sort();
+
+    expect(bottomTail).toHaveLength(24);
+    expect(authoredCapacityIds).toEqual(['bdi', 'gnq', 'grl', 'swz']);
   });
 
   it('normalizes every AI base trait with value-aware weights', () => {
@@ -185,14 +226,6 @@ describe('country trait catalog V2', () => {
     expect(lowest.score, lowest.playerId)
       .toBeGreaterThanOrEqual(BASE_COUNTRY_TRAIT_VALUE_BUDGET_V2 - 2);
     expect(countryTraitBaseValueScoreV2(greenland)).toBeLessThan(lowest.score);
-
-    for (const entry of COUNTRY_TRAITS_V2.filter((traitEntry) => (
-      WORLD_CONTENT_V2.nations[traitEntry.playerId]!.real.population < 3
-    ))) {
-      expect(entry.modifiers.some((modifierEntry) => (
-        MICROSTATE_GROWTH_KEYS_V2.has(modifierEntry.key)
-      )), entry.countryName).toBe(true);
-    }
 
     const attackPercent = Math.abs(countryTraitModifiersV2('col', 'attack')[0]!.percentage);
     const foodPercent = Math.abs(countryTraitModifiersV2('arg', 'food-production')[0]!.percentage);
@@ -242,7 +275,7 @@ describe('country trait catalog V2', () => {
     expect(liveOpening.indexOf('deu')).toBe(11);
   });
 
-  it('encodes finite numeric factors inside their channel caps', () => {
+  it('encodes finite factors, authored DEF and terrain scopes while filtering homeland', () => {
     for (const entry of COUNTRY_TRAITS_V2) {
       for (const modifier of entry.modifiers) {
         const bounds = traitFactorBoundsV2(modifier.key);
@@ -257,23 +290,37 @@ describe('country trait catalog V2', () => {
     expect(COUNTRY_TRAITS_V2.every((entry) => (
       entry.modifiers.every((modifierEntry) => modifierEntry.key !== 'starting-treasury')
     ))).toBe(true);
-    expect(COUNTRY_TRAITS_V2.every((entry) => (
-      entry.modifiers.every((modifierEntry) => modifierEntry.key !== 'defense')
-    ))).toBe(true);
+    const modifiers = COUNTRY_TRAITS_V2.flatMap((entry) => entry.modifiers);
+    expect(modifiers.filter(({ key }) => key === 'defense')).toHaveLength(69);
+    expect(modifiers.filter(({ scope }) => scope?.terrain !== undefined)).toHaveLength(64);
+    expect(modifiers.every(({ scope }) => scope?.homeland === undefined)).toBe(true);
+    expect(COUNTRY_TRAITS_V2.every(({ effect }) => !effect.includes('original homeland territory')))
+      .toBe(true);
     expect(countryTraitFactorV2('isl', 'naval-distance-pressure', { access: 'naval' })).toBeLessThan(1);
     expect(countryTraitFactorV2('arm', 'military-casualties', {
       role: 'defender', terrain: 'mountain', homeland: true,
     })).toBeLessThan(1);
   });
 
-  it('evaluates war, role and access conditions without terrain, homeland or flat DEF traits', () => {
+  it('evaluates war, role, access and terrain while homeland does not restrict a trait', () => {
     expect(countryTraitFactorV2('usa', 'operation-cost', { access: 'naval' })).toBeLessThan(1);
     expect(countryTraitFactorV2('usa', 'operation-cost', { access: 'land' })).toBe(1);
 
     const mountainDefense = { role: 'defender', terrain: 'mountain', homeland: true } as const;
-    expect(countryTraitFactorV2('afg', 'defense', mountainDefense)).toBe(1);
-    expect(countryTraitModifiersV2('afg', 'reserve-deployment-throughput')[0]?.percentage)
-      .toBeGreaterThan(0);
+    const afghanDefense = countryTraitFactorV2('afg', 'defense', mountainDefense);
+    expect(afghanDefense).toBeGreaterThan(1);
+    expect(countryTraitModifiersV2('afg', 'defense')[0]?.scope)
+      .toEqual({ role: 'defender', terrain: 'mountain' });
+    expect(countryTraitFactorV2('afg', 'defense', {
+      ...mountainDefense, homeland: false,
+    })).toBeCloseTo(afghanDefense, 12);
+    expect(countryTraitFactorV2('afg', 'defense', {
+      ...mountainDefense, terrain: 'plains',
+    })).toBe(1);
+    expect(countryTraitFactorV2('afg', 'defense', {
+      ...mountainDefense, role: 'attacker',
+    })).toBe(1);
+    expect(countryTraitModifiersV2('afg', 'reserve-deployment-throughput')).toEqual([]);
 
     expect(countryTraitFactorV2('cyp', 'military-casualties', {
       role: 'attacker', access: 'naval',
@@ -282,11 +329,20 @@ describe('country trait catalog V2', () => {
       role: 'defender', access: 'naval',
     })).toBe(1);
 
-    expect(WORLD_CONTENT_V2.territories.png?.terrain).toBe('coastal');
-    expect(countryTraitFactorV2('png', 'defense', {
+    expect(WORLD_CONTENT_V2.territories.png?.terrain).toBe('jungle');
+    expect(WORLD_CONTENT_V2.territories.png?.terrainProfile
+      ?.some((entry) => entry.terrain === 'coastal')).toBe(true);
+    const papuaDefense = countryTraitFactorV2('png', 'defense', {
       role: 'defender', terrain: 'coastal', homeland: true,
+    });
+    expect(papuaDefense).toBeGreaterThan(1);
+    expect(countryTraitFactorV2('png', 'defense', {
+      role: 'defender', terrain: 'coastal', homeland: false,
+    })).toBeCloseTo(papuaDefense, 12);
+    expect(countryTraitFactorV2('png', 'defense', {
+      role: 'defender', terrain: 'jungle', homeland: true,
     })).toBe(1);
-    expect(countryTraitModifiersV2('png', 'army-capacity')[0]?.percentage).toBeGreaterThan(0);
+    expect(countryTraitModifiersV2('png', 'army-capacity')).toEqual([]);
 
     expect(countryTraitFactorV2('cri', 'research-output', { atWar: false })).toBeGreaterThan(1);
     expect(countryTraitFactorV2('cri', 'research-output', { atWar: true })).toBe(1);
@@ -294,7 +350,8 @@ describe('country trait catalog V2', () => {
   });
 
   it('evaluates food, treasury, condition, first-conquest and front composition conditions', () => {
-    expect(countryTraitFactorV2('hti', 'defense', { foodSecurity: 0.799 })).toBe(1);
+    expect(countryTraitFactorV2('hti', 'defense', { foodSecurity: 0.799 })).toBeGreaterThan(1);
+    expect(countryTraitFactorV2('hti', 'defense', { foodSecurity: 0.8 })).toBe(1);
     expect(countryTraitFactorV2('hti', 'military-casualties', {
       foodSecurity: 0.799, role: 'defender',
     })).toBeLessThan(1);

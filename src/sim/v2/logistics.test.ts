@@ -219,11 +219,13 @@ describe('route-aware empire logistics', () => {
       .reduce((sum, territory) => sum + territory.army.manpower, 0);
 
     state.tick = startedTick + CONQUEST_CAPTURE_GUARD_TICKS - 1;
+    synchronizeArmyCapacityV2(state, WORLD_CONTENT_V2);
     const guardedMoves = redistributeArmiesV2(state, WORLD_CONTENT_V2);
     expect(guardedMoves.some((move) => move.sourceId === relayId)).toBe(false);
     expect(relay.army.manpower).toBe(guardedManpower);
 
     state.tick = startedTick + CONQUEST_CAPTURE_GUARD_TICKS;
+    synchronizeArmyCapacityV2(state, WORLD_CONTENT_V2);
     const releasedMoves = redistributeArmiesV2(state, WORLD_CONTENT_V2);
     expect(releasedMoves.some((move) => move.sourceId === relayId && move.manpower > 0)).toBe(true);
     expect(relay.army.manpower).toBeLessThan(guardedManpower);

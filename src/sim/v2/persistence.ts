@@ -55,6 +55,7 @@ export interface SaveGameV2 {
   actionSequence: number;
   humanPlayerId: PlayerId;
   humanPlayerIds: PlayerId[];
+  firstIntegrationDiscountUsedBy: PlayerId[];
   players: Record<PlayerId, NationStateV2>;
   territories: Record<TerritoryId, TerritoryStateV2>;
   wars: WarStateV2[];
@@ -86,6 +87,8 @@ const LEGACY_RULES_VERSION_V22 = 'frontier-command-v2.59-country-traits';
 const LEGACY_RULES_VERSION_V22_PRE_RANDOM = 'frontier-command-v2.60-revolutions-debt';
 /** Random World release whose boosted human armies did not yet track expiry. */
 const LEGACY_RULES_VERSION_V22_RANDOM = 'frontier-command-v2.61-random-world';
+/** Temporary opening-army release whose free surplus still faded over ten years. */
+const LEGACY_RULES_VERSION_V22_TEMPORARY = 'frontier-command-v2.62-temporary-opening-armies';
 const LEGACY_CONTENT_VERSION_V16 = 'natural-earth-countries-2026-v6-naval';
 const LEGACY_CONTENT_VERSION_V17 = 'natural-earth-countries-2026-v7-greenland';
 const LEGACY_BOT_MANPOWER_PER_UNIT = 0.10;
@@ -153,7 +156,8 @@ type LegacyPeaceOfferV20 = Omit<PeaceOfferV2, 'settlement'> & {
 };
 type LegacyWarStateV21 = Omit<WarStateV2, 'revenge'>;
 interface LegacySaveGameV21 extends Omit<SaveGameV2,
-  'schemaVersion' | 'rulesVersion' | 'alliances' | 'allianceOffers' | 'players' | 'wars'> {
+  'schemaVersion' | 'rulesVersion' | 'alliances' | 'allianceOffers'
+  | 'firstIntegrationDiscountUsedBy' | 'players' | 'wars'> {
   schemaVersion: 21;
   rulesVersion: typeof LEGACY_RULES_VERSION_V21;
   players: Record<PlayerId, LegacyNationV21>;
@@ -235,7 +239,8 @@ export interface LegacySaveGameV13 extends Omit<LegacySaveGameV14,
 }
 
 interface LegacyWorldStateV17 extends Omit<WorldStateV2,
-  'schemaVersion' | 'rulesVersion' | 'contentVersion' | 'humanPlayerIds' | 'players' | 'territories' | 'alliances' | 'allianceOffers'> {
+  'schemaVersion' | 'rulesVersion' | 'contentVersion' | 'humanPlayerIds'
+  | 'firstIntegrationDiscountUsedBy' | 'players' | 'territories' | 'alliances' | 'allianceOffers'> {
   schemaVersion: 17;
   rulesVersion: typeof LEGACY_RULES_VERSION_V17;
   contentVersion: typeof LEGACY_CONTENT_VERSION_V17;
@@ -267,11 +272,12 @@ interface LegacyWorldStateV15 extends Omit<LegacyWorldStateV16,
 }
 
 const SAVE_KEYS = [
-  'actionSequence', 'aiEscalation', 'allianceOffers', 'alliances', 'canonicalStateHash', 'ceasefireObligations', 'contentVersion', 'humanPlayerId', 'humanPlayerIds', 'mapId',
+  'actionSequence', 'aiEscalation', 'allianceOffers', 'alliances', 'canonicalStateHash', 'ceasefireObligations', 'contentVersion', 'firstIntegrationDiscountUsedBy', 'humanPlayerId', 'humanPlayerIds', 'mapId',
   'nextEventId', 'nextOfferId', 'nextWarId', 'offers', 'players', 'rngState', 'rulesVersion', 'schemaVersion',
   'seed', 'territories', 'tick', 'truces', 'wars',
 ].sort();
-const SCHEMA_21_SAVE_KEYS = SAVE_KEYS.filter((key) => key !== 'alliances' && key !== 'allianceOffers');
+const PRE_V263_SAVE_KEYS = SAVE_KEYS.filter((key) => key !== 'firstIntegrationDiscountUsedBy');
+const SCHEMA_21_SAVE_KEYS = PRE_V263_SAVE_KEYS.filter((key) => key !== 'alliances' && key !== 'allianceOffers');
 const LEGACY_SAVE_KEYS = SCHEMA_21_SAVE_KEYS.filter((key) => key !== 'humanPlayerIds');
 
 const LEGACY_NATION_KEYS_V13 = [
@@ -348,6 +354,8 @@ export function createSaveV2(state: WorldStateV2, content: WorldContentV2): Save
     actionSequence: state.actionSequence,
     humanPlayerId: state.humanPlayerId,
     humanPlayerIds: [...state.humanPlayerIds].sort((left, right) => left.localeCompare(right)),
+    firstIntegrationDiscountUsedBy: [...state.firstIntegrationDiscountUsedBy]
+      .sort((left, right) => left.localeCompare(right)),
     players: Object.fromEntries((Object.entries(state.players) as Array<[PlayerId, NationStateV2]>)
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([id, nation]) => [id, {
@@ -980,6 +988,7 @@ function migrateLegacyStateV17(
     rulesVersion: V2_RULES_VERSION,
     contentVersion: V2_CONTENT_VERSION,
     humanPlayerIds: [legacyState.humanPlayerId],
+    firstIntegrationDiscountUsedBy: [],
     alliances: [],
     allianceOffers: [],
     players,
@@ -1078,6 +1087,9 @@ function currentStateFromSave(
       army: { ...serializedTerritory.army },
     }];
   })) as Record<TerritoryId, TerritoryStateV2>;
+  const serializedDiscountLedger = (
+    save as { firstIntegrationDiscountUsedBy?: unknown }
+  ).firstIntegrationDiscountUsedBy;
   const state: WorldStateV2 = {
     ...payloadWithoutHash(save),
     schemaVersion: 22,
@@ -1085,6 +1097,9 @@ function currentStateFromSave(
     humanPlayerIds: 'humanPlayerIds' in save
       ? [...save.humanPlayerIds].sort((left, right) => left.localeCompare(right))
       : [save.humanPlayerId],
+    firstIntegrationDiscountUsedBy: Array.isArray(serializedDiscountLedger)
+      ? [...serializedDiscountLedger] as PlayerId[]
+      : serializedDiscountLedger === undefined ? [] : serializedDiscountLedger as never,
     players,
     territories,
     alliances: 'alliances' in save
@@ -1259,13 +1274,6 @@ export function loadSaveV2(
   if (schemaVersion !== 22 && schemaVersion !== 21 && schemaVersion !== 20 && schemaVersion !== 19 && schemaVersion !== 18 && schemaVersion !== 17 && schemaVersion !== 16 && schemaVersion !== 15 && schemaVersion !== 14 && schemaVersion !== 13) {
     throw new Error(`Unsupported V2 schemaVersion: ${String(schemaVersion)}. Current saves use schema 22; canonical schema 13–21 saves can be migrated.`);
   }
-  const keys = Object.keys(parsed).sort();
-  const expectedSaveKeys = schemaVersion === 22
-    ? SAVE_KEYS
-    : schemaVersion === 21 ? SCHEMA_21_SAVE_KEYS : LEGACY_SAVE_KEYS;
-  if (keys.length !== expectedSaveKeys.length || keys.some((key, index) => key !== expectedSaveKeys[index])) {
-    throw new Error('V2 save has missing or extra top-level keys.');
-  }
   const expectedRules = schemaVersion === 19 ? LEGACY_RULES_VERSION_V19
       : schemaVersion === 18 ? LEGACY_RULES_VERSION_V18
         : schemaVersion === 17 ? LEGACY_RULES_VERSION_V17
@@ -1275,6 +1283,7 @@ export function loadSaveV2(
                 : LEGACY_RULES_VERSION_V13;
   const supportedRules = schemaVersion === 22
     ? parsed.rulesVersion === V2_RULES_VERSION
+      || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_TEMPORARY
       || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_RANDOM
       || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_PRE_RANDOM
       || parsed.rulesVersion === LEGACY_RULES_VERSION_V22
@@ -1286,14 +1295,22 @@ export function loadSaveV2(
       || parsed.rulesVersion === LEGACY_RULES_VERSION_V20
     : parsed.rulesVersion === expectedRules;
   if (!supportedRules) throw new Error(`Unsupported V2 rulesVersion: ${String(parsed.rulesVersion)}.`);
+  const keys = Object.keys(parsed).sort();
+  const expectedSaveKeys = schemaVersion === 22
+    ? parsed.rulesVersion === V2_RULES_VERSION ? SAVE_KEYS : PRE_V263_SAVE_KEYS
+    : schemaVersion === 21 ? SCHEMA_21_SAVE_KEYS : LEGACY_SAVE_KEYS;
+  if (keys.length !== expectedSaveKeys.length || keys.some((key, index) => key !== expectedSaveKeys[index])) {
+    throw new Error('V2 save has missing or extra top-level keys.');
+  }
   const expectedContent = schemaVersion === 22
     ? contentVersionForWorldContentV2(content)
     : schemaVersion >= 17 ? V2_CONTENT_VERSION : LEGACY_CONTENT_VERSION_V16;
   if (parsed.contentVersion !== expectedContent) throw new Error(`Unsupported V2 contentVersion: ${String(parsed.contentVersion)}.`);
   if (schemaVersion === 22 && parsed.contentVersion !== V2_CONTENT_VERSION
     && parsed.rulesVersion !== V2_RULES_VERSION
+    && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_TEMPORARY
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_RANDOM) {
-    throw new Error('Random World saves require the current rules version.');
+    throw new Error('Alternative Universe saves require the current rules version.');
   }
   if (parsed.mapId !== V2_MAP_ID) throw new Error(`Unsupported V2 mapId: ${String(parsed.mapId)}.`);
   if (typeof parsed.canonicalStateHash !== 'string') throw new Error('V2 canonical hash is missing.');
@@ -1333,7 +1350,8 @@ export function loadSaveV2(
     // Capacity is derived, so preserving an obsolete stored value would make
     // an otherwise authentic save fail current invariants (notably Greenland).
     synchronizeArmyCapacityV2(state, content);
-    if (schemaVersion === 22 && state.tick === 0) {
+    if (schemaVersion === 22 && state.tick === 0
+      && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_TEMPORARY) {
       if (parsed.rulesVersion === LEGACY_RULES_VERSION_V22_RANDOM) {
         trackExistingOpeningArmyHumanRosterV2(state, content);
       } else if (parsed.contentVersion === V2_CONTENT_VERSION) {

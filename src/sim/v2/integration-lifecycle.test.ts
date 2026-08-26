@@ -41,6 +41,7 @@ function conservedWorldTotals(state: ReturnType<typeof createWorldStateV2>) {
 describe('V2 permanent territory integration lifecycle', () => {
   it('keeps the former core identity until the fixed calendar completes', () => {
     const state = createWorldStateV2(260822);
+    state.firstIntegrationDiscountUsedBy = [belgium];
     expect(sortedNationIdsV2(state)).toContain(luxembourg);
     const territory = state.territories[luxembourgTerritory];
     const duration = territoryIntegrationDurationWeeksV2(WORLD_CONTENT_V2, luxembourgTerritory);

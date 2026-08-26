@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { WorldEngineV2 } from './WorldEngineV2';
 import {
+  combatDefenseEffectV2,
   CONQUEST_CAPTURE_GUARD_MAX_TRANSFER_SHARE,
   DEFENDER_POSITION_MULTIPLIER,
-  TERRAIN_DEFENSE_MODIFIER,
   WAR_MOBILIZATION_TICKS,
 } from './balance';
 import { createWorldStateV2 } from './bootstrap';
@@ -12,7 +12,7 @@ import {
   stateTerritoryArmySupportCeilingV2,
   territoryArmyCapacityTargetV2,
 } from './capacity';
-import { WORLD_CONTENT_V2 } from './content';
+import { territoryTerrainDefenseMultiplierV2, WORLD_CONTENT_V2 } from './content';
 import { assertInvariantsV2 } from './invariants';
 import {
   createMilitaryBaseSnapshotV2,
@@ -107,7 +107,7 @@ describe('V2 combat, capture and absorption', () => {
     );
   });
 
-  it('applies the defender 1.25 exactly once without an artificial pulse ceiling', () => {
+  it('uses no hidden defender layer and keeps terrain visible without an artificial pulse ceiling', () => {
     const state = createWorldStateV2(20);
     const target = state.territories[nldTerritory];
     const source = state.territories[belTerritory];
@@ -115,12 +115,20 @@ describe('V2 combat, capture and absorption', () => {
     const targetManpowerBefore = target.army.manpower;
     const sourceManpowerBefore = source.army.manpower;
     const supply = supplyFactorV2(state, WORLD_CONTENT_V2, nld, nldTerritory, false);
-    const terrain = WORLD_CONTENT_V2.territories[nldTerritory].terrain;
-    const expectedShield = target.army.manpower * selectEffectiveDefenseV2(state, WORLD_CONTENT_V2, nld, target.army)
-      * DEFENDER_POSITION_MULTIPLIER * TERRAIN_DEFENSE_MODIFIER[terrain]
+    const attackerAttack = selectEffectiveAttackV2(
+      state, WORLD_CONTENT_V2, bel, source.army,
+    );
+    const displayedDefense = selectEffectiveDefenseV2(
+      state, WORLD_CONTENT_V2, nld, target.army,
+    );
+    const expectedShield = target.army.manpower
+      * combatDefenseEffectV2(displayedDefense, attackerAttack)
+      * DEFENDER_POSITION_MULTIPLIER
+      * territoryTerrainDefenseMultiplierV2(WORLD_CONTENT_V2, nldTerritory)
       * (0.65 + 0.35 * target.condition) * supply
       * selectNationalIqViewV2(WORLD_CONTENT_V2, nld).logisticsMultiplier;
     const event = resolveBattlePulseV2(state, WORLD_CONTENT_V2, testWar(state), operation())!;
+    expect(DEFENDER_POSITION_MULTIPLIER).toBe(1);
     expect(event.defenderPower).toBeCloseTo(expectedShield, 5);
     expect(event.defenderLosses).toBeGreaterThan(targetManpowerBefore * 0.05);
     expect(event.defenderLosses).toBeLessThanOrEqual(targetManpowerBefore);

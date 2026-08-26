@@ -80,6 +80,7 @@ import {
 } from './selectors';
 import { selectGlobalResistanceV2, updateGlobalResistanceV2 } from './resistance';
 import {
+  beginIndependenceWarV2,
   canDeclareWarV2,
   ceasefireTermsV2,
   declareWarV2,
@@ -598,6 +599,7 @@ export class WorldEngineV2 {
     // state. Never let different client seats produce different save hashes.
     this.state.humanPlayerId = primaryId;
     this.state.humanPlayerIds = ids;
+    this.state.firstIntegrationDiscountUsedBy = [];
     synchronizeOpeningTreasuryHumanRosterV2(
       this.state,
       this.content,
@@ -646,6 +648,7 @@ export class WorldEngineV2 {
     }
     this.state.humanPlayerId = id;
     this.state.humanPlayerIds = [id];
+    this.state.firstIntegrationDiscountUsedBy = [];
     synchronizeOpeningTreasuryHumanRosterV2(
       this.state,
       this.content,
@@ -1286,6 +1289,14 @@ export class WorldEngineV2 {
         this.state,
         this.content,
       );
+      for (const revolution of integrationRevolutions) {
+        beginIndependenceWarV2(
+          this.state,
+          this.content,
+          revolution.restoredOwnerId,
+          revolution.displacedOwnerId,
+        );
+      }
       if (integrationRevolutions.length > 0) pruneAllianceStateV2(this.state);
       for (const revolution of integrationRevolutions) this.emit({
         reason: 'revolution',
@@ -1295,6 +1306,10 @@ export class WorldEngineV2 {
           || revolution.displacedOwnerId === this._viewerPlayerId,
       });
       processOpeningArmyBonusDecayV2(this.state, this.content);
+      // The temporary player capacity follows the same twenty-year curve as the
+      // opening roster. Refresh it before finance, recruitment and combat use
+      // the new week's entitlement; the later sync still handles conquests.
+      synchronizeArmyCapacityV2(this.state, this.content);
       if (this.state.gameOver) {
         pruneWorldHistoryV2(this.state);
         this.assertStateIntegrity(true);

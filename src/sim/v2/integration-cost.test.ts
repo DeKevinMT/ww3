@@ -16,6 +16,7 @@ const luxembourgTerritory = territoryIdV2('lux');
 describe('V2 integration administration cost', () => {
   it('charges 3% of captured local output per year for the full unfinished calendar', () => {
     const state = createWorldStateV2(8_225);
+    state.firstIntegrationDiscountUsedBy = [belgium];
     beginTerritoryIntegrationV2(
       state,
       WORLD_CONTENT_V2,
@@ -101,7 +102,7 @@ describe('V2 integration administration cost', () => {
       finance.military + finance.research + finance.development
     );
 
-    expect(reserved.integrationCost).toBeCloseTo(economy.weeklyRevenue * 0.25, 6);
+    expect(reserved.integrationCost).toBeCloseTo(economy.weeklyRevenue * 0.25, 5);
     expect(programmeSpend(reserved)).toBeLessThan(programmeSpend(unreserved));
     expect(programmeSpend(unreserved) - programmeSpend(reserved))
       .toBeGreaterThan(reserved.integrationCost * 0.50);

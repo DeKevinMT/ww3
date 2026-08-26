@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createWorldStateV2 } from './bootstrap';
-import { WORLD_CONTENT_V2 } from './content';
+import { WORLD_CONTENT_V2, territoryTerrainTypesV2 } from './content';
 import {
   FEDERATION_INTEGRATION_DURATION_FACTOR_V2,
   advanceTerritoryIntegrationProgramsV2,
@@ -64,7 +64,7 @@ describe('V2 country traits in immutable integration quotes', () => {
     const albania = nationIdV2('alb');
     const hungary = nationIdV2('hun');
     const coastalTarget = foreignTerritoryV2(albania, (territoryId) => (
-      WORLD_CONTENT_V2.territories[territoryId]?.terrain === 'coastal'
+      territoryTerrainTypesV2(WORLD_CONTENT_V2, territoryId).includes('coastal')
     ));
     const accessTarget = foreignTerritoryV2(hungary);
     const coastalRaw = territoryIntegrationDurationWeeksV2(
@@ -78,7 +78,8 @@ describe('V2 country traits in immutable integration quotes', () => {
 
     const coastalFactor = countryTraitFactorV2(albania, 'integration-duration', {
       access: 'naval',
-      terrain: 'coastal',
+      terrain: WORLD_CONTENT_V2.territories[coastalTarget]?.terrain,
+      terrains: territoryTerrainTypesV2(WORLD_CONTENT_V2, coastalTarget),
       firstConquest: true,
       atWar: false,
     });

@@ -251,7 +251,7 @@ describe('multiplayer lobby launch recovery', () => {
     expect(internals.resolvedScenario.content.metadata?.scenarioId).toBe('random-world');
     expect(internals.openingMetrics.byNation.get(nationIdV2('usa'))?.economyView.population)
       .toBeCloseTo(internals.resolvedScenario.content.nations[nationIdV2('usa')]!.real.population, 6);
-    expect(internals.root.innerHTML).toContain('RANDOM WORLD');
+    expect(internals.root.innerHTML).toContain('ALTERNATIVE UNIVERSE');
     expect(internals.root.innerHTML).toContain('424242');
     expect(internals.root.innerHTML).toContain('data-mp-action="scenario-random" disabled');
     expect(internals.root.innerHTML).not.toContain('data-mp-action="scenario-reroll"');
