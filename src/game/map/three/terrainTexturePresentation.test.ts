@@ -30,9 +30,9 @@ describe('terrain texture presentation', () => {
     expect(strong.tintAlpha).toBeGreaterThan(moderate.tintAlpha);
     expect(strong.tintAlpha - moderate.tintAlpha).toBeGreaterThan(0.06);
     expect(strong.flagTintAlpha).toBeGreaterThan(moderate.flagTintAlpha);
-    expect(moderate.flagTintAlpha).toBeCloseTo(0.225, 6);
-    expect(strong.flagTintAlpha).toBeCloseTo(0.4, 6);
-    expect(strong.flagTintAlpha).toBeLessThanOrEqual(0.5);
+    expect(moderate.flagTintAlpha).toBeCloseTo(0.279, 6);
+    expect(strong.flagTintAlpha).toBeCloseTo(0.496, 6);
+    expect(strong.flagTintAlpha).toBeLessThanOrEqual(0.62);
   });
 
   it('makes a larger secondary share visibly stronger without overpowering gameplay cues', () => {
@@ -44,7 +44,8 @@ describe('terrain texture presentation', () => {
     ));
 
     expect(large.borderAlpha).toBeGreaterThan(small.borderAlpha);
-    expect(large.borderAlpha).toBeLessThanOrEqual(0.82);
+    expect(large.borderAlpha).toBeLessThanOrEqual(0.96);
+    expect(small.borderAlpha).toBeGreaterThanOrEqual(0.4);
   });
 
   it('does not let the third terrain change either map color', () => {

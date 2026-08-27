@@ -79,12 +79,21 @@ gameVersionBadge.textContent = compactGameVersion.toUpperCase();
 gameVersionBadge.setAttribute('aria-label', 'Frontier Command ' + compactGameVersion);
 document.body.append(gameVersionBadge);
 const worldMapRenderer = createWorldMapRenderer();
-let startupLoaderState: 'idle' | 'active' | 'complete' = 'idle';
+let startupLoaderState: 'idle' | 'active' | 'complete' = startupLoader?.isConnected
+  ? 'active' : 'idle';
 let startupLoaderFallbackTimer: number | undefined;
+let startupLoaderShownAt = performance.now();
+const INTRO_LOADER_MIN_VISIBLE_MS = 2_000;
+const STARTUP_LOADER_MIN_VISIBLE_MS = 2_800;
+
+if (startupLoaderState === 'active') {
+  startupLoaderFallbackTimer = window.setTimeout(dismissStartupLoader, 12_000);
+}
 
 function showStartupLoader(): void {
   if (startupLoaderState !== 'idle' || !startupLoader?.isConnected) return;
   startupLoaderState = 'active';
+  startupLoaderShownAt = performance.now();
   startupLoader.classList.remove('is-hidden', 'is-ready');
   startupLoader.setAttribute('aria-hidden', 'false');
   // A failed renderer must never leave the confirmed game permanently covered.
@@ -117,9 +126,41 @@ async function dismissStartupLoaderAfterMapFrame(): Promise<void> {
     // that intermediate map underneath the loader.
     await renderer.waitForMapReady();
     if (startupLoaderState !== 'active') return;
-    // The subsequent WebGL frame uploads and draws the completed atlas.
+    // Keep the cover up long enough for the opening camera flight and label
+    // collision pass to settle, then request a fresh final frame. This avoids
+    // revealing a globe that still visibly recentres itself.
+    const minimumDelayRemaining = Math.max(
+      0,
+      STARTUP_LOADER_MIN_VISIBLE_MS - (performance.now() - startupLoaderShownAt),
+    );
+    if (minimumDelayRemaining > 0) {
+      await new Promise<void>((resolve) => window.setTimeout(resolve, minimumDelayRemaining));
+    }
+    if (startupLoaderState !== 'active') return;
+    // The subsequent WebGL frame uploads and draws the completed atlas at its
+    // settled camera position.
     await renderer.waitForNextFrame();
     // Let the browser present that framebuffer before fading the cover away.
+    await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+  } finally {
+    dismissStartupLoader();
+  }
+}
+
+async function dismissIntroLoaderAfterReady(): Promise<void> {
+  if (startupLoaderState !== 'active') return;
+  try {
+    const renderer = await worldMapRenderer;
+    await renderer.waitForMapReady();
+    const remaining = Math.max(
+      0,
+      INTRO_LOADER_MIN_VISIBLE_MS - (performance.now() - startupLoaderShownAt),
+    );
+    if (remaining > 0) {
+      await new Promise<void>((resolve) => window.setTimeout(resolve, remaining));
+    }
+    if (startupLoaderState !== 'active') return;
+    await renderer.waitForNextFrame();
     await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
   } finally {
     dismissStartupLoader();
@@ -307,6 +348,7 @@ function openMultiplayerLobby(preferredCountryId?: PlayerId): void {
 }
 
 launchSoloScenario(activeScenario);
+void dismissIntroLoaderAfterReady();
 
 void worldMapRenderer.catch((error: unknown) => {
   dismissStartupLoader();

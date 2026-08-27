@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   FOOD_MAX_STOCK_WEEKS,
   RESEARCH_CATCH_UP_FULL_GAP,
+  warAccessOperationMultiplierV2,
 } from './balance';
 import { createWorldStateV2 } from './bootstrap';
 import {
@@ -449,7 +450,8 @@ describe('country-trait selector runtime', () => {
     const mngNeutralStorage = selectFoodStorageCapacityV2(
       mongolia.neutralState, mongolia.neutralContent, mongolia.neutralId,
     );
-    expect(mngTraitStorage).toBeGreaterThan(mngNeutralStorage);
+    // Mongolia's reworked identity no longer carries a generic food-storage bonus.
+    expect(mngTraitStorage).toBeCloseTo(mngNeutralStorage, 9);
     expect(mngTraitStorage).toBeLessThanOrEqual(mngDemand * FOOD_MAX_STOCK_WEEKS + 0.000001);
 
     const palestine = identityFixtureV2('psx', 82_054);
@@ -514,8 +516,12 @@ describe('country-trait selector runtime', () => {
     const denmarkDistanceFactor = countryTraitFactorV2(
       denmark.traitId, 'naval-distance-pressure', { access: 'naval' },
     );
+    const denmarkRouteLoad = warAccessOperationMultiplierV2('naval', 9_000);
+    const denmarkAccessLoad = warAccessOperationMultiplierV2('naval');
     expect(dnkTrait.warOperations / dnkNeutral.warOperations)
-      .toBeCloseTo((1.35 + (2.15 - 1.35) * denmarkDistanceFactor) / 2.15, 4);
+      .toBeCloseTo((denmarkAccessLoad
+        + (denmarkRouteLoad - denmarkAccessLoad) * denmarkDistanceFactor)
+          / denmarkRouteLoad, 4);
     const traitBaseDemand = selectFoodDemandV2(denmark.traitState, denmark.traitId);
     const neutralBaseDemand = selectFoodDemandV2(denmark.neutralState, denmark.neutralId);
     expect((dnkTrait.foodDemand - traitBaseDemand) / (dnkNeutral.foodDemand - neutralBaseDemand))

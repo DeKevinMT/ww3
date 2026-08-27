@@ -1096,6 +1096,50 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
 .country-preview__actions { display: grid; grid-template-columns: 1fr; gap: 7px; margin-top: 10px; }
 .country-preview__actions .country-preview__start { margin-top: 0; }
 .country-preview__multiplayer { width: 100%; min-height: 42px; }
+.world-ui-v2 .fullscreen-recommendation-backdrop { z-index: 120; }
+.world-ui-v2 .fullscreen-recommendation {
+  width: min(430px, calc(100vw - 28px));
+  padding: 24px;
+  text-align: center;
+  border-color: rgba(107, 221, 242, .30);
+  background: linear-gradient(155deg, rgba(12, 35, 50, .985), rgba(4, 14, 24, .99));
+}
+.world-ui-v2 .fullscreen-recommendation__icon {
+  width: 54px;
+  height: 54px;
+  margin: 0 auto 12px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(107, 221, 242, .32);
+  border-radius: 13px;
+  background: rgba(107, 221, 242, .08);
+  color: #a9f2ff;
+  font-size: 27px;
+}
+.world-ui-v2 .fullscreen-recommendation h2 { margin: 6px 0 8px; }
+.world-ui-v2 .fullscreen-recommendation p {
+  margin: 0;
+  color: #bfd2d7;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.world-ui-v2 .fullscreen-recommendation > small {
+  margin-top: 12px;
+  display: block;
+  color: #829da5;
+  font-size: 9.5px;
+  line-height: 1.45;
+}
+.world-ui-v2 .fullscreen-recommendation kbd {
+  padding: 1px 5px;
+  border: 1px solid rgba(255, 255, 255, .16);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, .06);
+  color: #e8f6f8;
+  font: inherit;
+  font-weight: 900;
+}
+.world-ui-v2 .fullscreen-recommendation .panel-actions { margin-top: 18px; }
 
 .world-ui-v2 .multiplayer-spectator {
   position: fixed;
@@ -5792,12 +5836,30 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
   font-size: 11.5px;
   line-height: 1.1;
 }
+.world-ui-v2 .topbar-status .top-metric > strong > i {
+  margin-left: 3px;
+  font-size: .76em;
+  font-style: normal;
+  font-weight: 900;
+  vertical-align: 1px;
+}
+.world-ui-v2 .topbar-status .top-metric > strong > i.is-positive { color: #69e3a2; }
+.world-ui-v2 .topbar-status .top-metric > strong > i.is-warn { color: #f0bd68; }
+.world-ui-v2 .topbar-status .top-metric > strong > i.is-negative { color: #ff8179; }
 .world-ui-v2 .topbar-status .top-metric > small {
   margin-top: 2px;
   color: #89a4ac;
   font-size: 8.5px;
   line-height: 1.1;
 }
+.world-ui-v2 .topbar-status .top-metric > small > b {
+  font: inherit;
+  font-weight: 900;
+}
+.world-ui-v2 .topbar-status .top-metric > small > b.is-positive,
+.world-ui-v2 .topbar-status .top-metric > small > em.is-positive { color: #69e3a2; }
+.world-ui-v2 .topbar-status .top-metric > small > b.is-negative,
+.world-ui-v2 .topbar-status .top-metric > small > em.is-negative { color: #ff8179; }
 .world-ui-v2 .topbar-status .top-metric--economy { --metric-accent: #67d7eb; }
 .world-ui-v2 .topbar-status .top-metric--treasury { --metric-accent: #f0bd68; }
 .world-ui-v2 .topbar-status .top-metric--treasury.is-positive > strong { color: #72e2a9; }
@@ -6001,57 +6063,112 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
   font-size: 10.5px;
   letter-spacing: 0;
 }
-.world-ui-v2 .nation-integration-overview {
-  padding: 11px;
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 7px;
-  border: 1px solid rgba(240, 189, 104, .18);
-  border-radius: 9px;
-  background: linear-gradient(145deg, rgba(240, 189, 104, .05), rgba(4, 15, 25, .32));
+.world-ui-v2 .nation-fusion-panel {
+  margin-top: 9px;
+  padding: 10px;
+  border: 1px solid rgba(240, 189, 104, .22);
+  border-radius: 8px;
+  background: linear-gradient(145deg, rgba(240, 189, 104, .06), rgba(7, 20, 32, .52));
 }
-.world-ui-v2 .nation-integration-overview.is-complete { border-color: rgba(105, 227, 162, .18); }
-.world-ui-v2 .nation-integration-overview > div {
-  min-width: 0;
-  padding: 7px 8px;
-  border-radius: 6px;
-  background: rgba(255, 255, 255, .023);
+.world-ui-v2 .nation-fusion-panel.is-complete { border-color: rgba(105, 227, 162, .2); }
+.world-ui-v2 .nation-fusion-panel > header,
+.world-ui-v2 .nation-fusion-panel > footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
 }
-.world-ui-v2 .nation-integration-overview span,
-.world-ui-v2 .nation-integration-overview strong { display: block; }
-.world-ui-v2 .nation-integration-overview span {
-  color: #927c5e;
-  font-size: 8.5px;
+.world-ui-v2 .nation-fusion-panel > header > span {
+  color: #d2a85f;
+  font-size: 9.5px;
   font-weight: 900;
-  letter-spacing: .45px;
+  letter-spacing: .55px;
 }
-.world-ui-v2 .nation-integration-overview strong {
-  margin-top: 3px;
-  color: #f0cf91;
+.world-ui-v2 .nation-fusion-panel > header > strong {
+  color: #f2d89e;
   font-size: 12px;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
 }
-.world-ui-v2 .nation-integration-overview > i {
+.world-ui-v2 .nation-fusion-score {
+  margin-top: 8px;
+  display: grid;
+  grid-template-columns: minmax(54px, 1fr) auto minmax(54px, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+}
+.world-ui-v2 .nation-fusion-score > span {
+  min-width: 0;
+  padding: 6px 7px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, .035);
+}
+.world-ui-v2 .nation-fusion-score small,
+.world-ui-v2 .nation-fusion-score b { display: block; }
+.world-ui-v2 .nation-fusion-score small {
+  color: #8ca2a9;
+  font-size: 9.5px;
+  font-weight: 900;
+}
+.world-ui-v2 .nation-fusion-score b { margin-top: 2px; color: #e8f2f3; font-size: 12px; }
+.world-ui-v2 .nation-fusion-score > i { color: #79949c; font-size: 13px; font-style: normal; }
+.world-ui-v2 .nation-fusion-score > em {
+  padding: 5px 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .035);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 900;
+  white-space: nowrap;
+}
+.world-ui-v2 .nation-fusion-score > em.is-positive { color: #69e3a2; }
+.world-ui-v2 .nation-fusion-score > em.is-negative { color: #ff8179; }
+.world-ui-v2 .nation-fusion-score > em.is-neutral { color: #a8bdc3; }
+.world-ui-v2 .nation-fusion-progress { margin-top: 8px; }
+.world-ui-v2 .nation-fusion-progress > span {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.world-ui-v2 .nation-fusion-progress > span b { color: #f0cf91; font-size: 10px; }
+.world-ui-v2 .nation-fusion-progress > span small { color: #8fa4aa; font-size: 9.5px; text-align: right; }
+.world-ui-v2 .nation-fusion-progress > i {
   height: 5px;
-  grid-column: 1 / -1;
+  margin-top: 5px;
   display: block;
   overflow: hidden;
   border-radius: 99px;
-  background: rgba(255, 255, 255, .06);
+  background: rgba(255, 255, 255, .07);
 }
-.world-ui-v2 .nation-integration-overview > i b {
+.world-ui-v2 .nation-fusion-progress > i b {
   height: 100%;
   display: block;
   border-radius: inherit;
   background: linear-gradient(90deg, #b17f43, #f0bd68);
 }
-.world-ui-v2 .nation-integration-overview.is-complete > i b { background: #69e3a2; }
-.world-ui-v2 .nation-integration-overview > small {
-  grid-column: 1 / -1;
-  color: #a99c88;
-  font-size: 9.5px;
-  line-height: 1.4;
+.world-ui-v2 .nation-fusion-panel.is-complete .nation-fusion-progress > i b { background: #69e3a2; }
+.world-ui-v2 .nation-fusion-origins {
+  margin-top: 7px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
 }
+.world-ui-v2 .nation-fusion-origins > span {
+  padding: 4px 6px;
+  border: 1px solid rgba(125, 185, 194, .12);
+  border-radius: 5px;
+  color: #91a9af;
+  background: rgba(255, 255, 255, .025);
+  font-size: 9.5px;
+  line-height: 1.2;
+}
+.world-ui-v2 .nation-fusion-origins b { margin-right: 4px; color: #cce4e7; }
+.world-ui-v2 .nation-fusion-panel > footer {
+  margin-top: 7px;
+  color: #8fa4aa;
+  font-size: 9.5px;
+}
+.world-ui-v2 .nation-fusion-panel > footer strong { color: #d8bd84; text-align: right; }
 
 /* Economy: one accounting equation followed by matching income/cost ledgers. */
 .world-ui-v2 .finance-flow-summary {
@@ -6642,8 +6759,10 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
   .world-ui-v2 .unified-stat-grid > article > strong { font-size: 13px; }
   .world-ui-v2 .nation-food-stats { grid-template-columns: 1fr; }
   .world-ui-v2 .nation-food-stats > span { padding: 6px 8px; }
-  .world-ui-v2 .nation-integration-overview { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .world-ui-v2 .nation-integration-overview > div:nth-child(3) { grid-column: 1 / -1; }
+  .world-ui-v2 .nation-fusion-score { grid-template-columns: minmax(54px, 1fr) auto minmax(54px, 1fr); }
+  .world-ui-v2 .nation-fusion-score > em { grid-column: 1 / -1; justify-self: start; }
+  .world-ui-v2 .nation-fusion-progress > span,
+  .world-ui-v2 .nation-fusion-panel > footer { align-items: flex-start; flex-direction: column; gap: 3px; }
   .world-ui-v2 .research-next-card strong { font-size: 13px; }
   .world-ui-v2 .research-signal-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .world-ui-v2 .progress-programs.progress-programs--compact { grid-template-columns: 1fr; }
@@ -7827,11 +7946,12 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
   background: rgba(105, 227, 162, .025);
 }
 .world-ui-v2 .review-target-value-grid span,
-.world-ui-v2 .review-target-value-grid strong { display: block; }
+.world-ui-v2 .review-target-value-grid strong,
+.world-ui-v2 .review-target-value-grid small { display: block; }
 .world-ui-v2 .review-target-value-grid span {
   overflow: hidden;
   color: #779789;
-  font-size: 7px;
+  font-size: 9px;
   font-weight: 900;
   letter-spacing: .5px;
   text-overflow: ellipsis;
@@ -8688,4 +8808,761 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
   .world-ui-v2 .war-command-campaign__actions > button { min-height: 32px; padding-inline: 6px; }
   .world-ui-v2 .war-command-campaign__actions > button > span { font-size: 8px; }
   .world-ui-v2 .war-command-campaign__actions > button > small { font-size: 7px; }
+}
+.world-ui-v2 .review-target-value-grid strong > i {
+  margin-left: 3px;
+  font-size: 9.5px;
+  font-style: normal;
+  white-space: nowrap;
+}
+.world-ui-v2 .review-target-value-grid strong > i.is-positive { color: #69e3a2; }
+.world-ui-v2 .review-target-value-grid strong > i.is-negative { color: #ff9189; }
+.world-ui-v2 .review-target-value-grid small {
+  margin-top: 4px;
+  color: #8ea4aa;
+  font-size: 9.5px;
+  line-height: 1.3;
+}
+.world-ui-v2 .review-target-value-grid > article.is-fusion { grid-column: span 2; }
+.world-ui-v2 .review-target-value-grid > article.is-fusion.is-positive {
+  border-color: rgba(105, 227, 162, .24);
+  background: rgba(105, 227, 162, .045);
+}
+.world-ui-v2 .review-target-value-grid > article.is-fusion.is-negative {
+  border-color: rgba(255, 129, 121, .28);
+  background: rgba(255, 129, 121, .05);
+}
+.world-ui-v2 .review-target-value-grid > article.is-fusion.is-neutral {
+  border-color: rgba(125, 185, 194, .2);
+  background: rgba(125, 185, 194, .035);
+}
+.world-ui-v2 .review-target-value-grid > article.is-fusion.is-negative strong { color: #ff9189; }
+.world-ui-v2 .review-target-value-grid > article.is-fusion.is-neutral strong { color: #b6cbd0; }
+.world-ui-v2 .review-target-value-grid .review-fusion-income {
+  margin-top: 6px;
+  padding-top: 5px;
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  border-top: 1px solid rgba(255, 255, 255, .07);
+  font-weight: 800;
+}
+.world-ui-v2 .review-target-value-grid .review-fusion-income > b {
+  color: #9fb4ba;
+  font-size: 9px;
+  letter-spacing: .3px;
+}
+.world-ui-v2 .review-target-value-grid .review-fusion-income.is-positive { color: #69e3a2; }
+.world-ui-v2 .review-target-value-grid .review-fusion-income.is-negative { color: #ff9189; }
+
+/* ── Polar endgame command surfaces ──────────────────────────────────────── */
+.world-ui-v2 .polar-command {
+  --panel-accent: #79e2ee;
+  background:
+    radial-gradient(circle at 78% 4%, rgba(109, 224, 239, .12), transparent 30%),
+    linear-gradient(155deg, rgba(7, 25, 37, .985), rgba(3, 13, 23, .99));
+}
+.world-ui-v2 .polar-command--antarctica {
+  --panel-accent: #ff766e;
+  background:
+    radial-gradient(circle at 80% 4%, rgba(255, 92, 83, .13), transparent 29%),
+    linear-gradient(155deg, rgba(22, 22, 31, .985), rgba(7, 13, 22, .99));
+}
+.world-ui-v2 .polar-command > .panel-close { z-index: 4; }
+.world-ui-v2 .polar-hero {
+  position: relative;
+  min-height: 94px;
+  margin: 12px 0 14px;
+  padding: 14px 76px 14px 15px;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid rgba(112, 226, 239, .2);
+  border-radius: 10px;
+  background:
+    linear-gradient(112deg, rgba(104, 223, 238, .12), rgba(104, 223, 238, .015)),
+    repeating-linear-gradient(90deg, transparent 0 31px, rgba(255,255,255,.018) 32px);
+}
+.world-ui-v2 .polar-hero::after {
+  position: absolute;
+  top: -30px;
+  right: -18px;
+  width: 118px;
+  height: 118px;
+  border: 1px solid rgba(123, 231, 243, .16);
+  border-radius: 50%;
+  box-shadow: inset 0 0 34px rgba(116, 225, 239, .08), 0 0 0 14px rgba(116, 225, 239, .018);
+  content: '';
+}
+.world-ui-v2 .polar-hero > div { position: relative; z-index: 1; min-width: 0; display: grid; gap: 3px; }
+.world-ui-v2 .polar-hero > div > span { color: #7ad8e4; font-size: 7.5px; font-weight: 900; letter-spacing: 1.15px; }
+.world-ui-v2 .polar-hero > div > strong { overflow: hidden; color: #e8fbfd; font-size: 15px; text-overflow: ellipsis; white-space: nowrap; }
+.world-ui-v2 .polar-hero > div > small { max-width: 350px; color: #88aab3; font-size: 8.5px; line-height: 1.45; }
+.world-ui-v2 .polar-hero > b { position: absolute; z-index: 2; right: 14px; color: #a2edf4; font-size: 8px; letter-spacing: 1px; }
+.world-ui-v2 .polar-hero--locked { border-color: rgba(255, 171, 104, .18); background: linear-gradient(112deg, rgba(255, 164, 92, .08), rgba(255,255,255,.015)); }
+.world-ui-v2 .polar-hero--locked > div > span,
+.world-ui-v2 .polar-hero--locked > b { color: #e8b47f; }
+.world-ui-v2 .polar-locked-route { width: 100%; }
+
+.world-ui-v2 .polar-gateway-card {
+  margin: 10px 0 12px;
+  padding: 10px 10px 10px 12px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid rgba(111, 225, 239, .19);
+  border-radius: 8px;
+  background: linear-gradient(105deg, rgba(111, 225, 239, .085), rgba(255,255,255,.012));
+}
+.world-ui-v2 .polar-gateway-card--antarctica { border-color: rgba(255, 112, 103, .18); background: linear-gradient(105deg, rgba(255, 104, 95, .075), rgba(255,255,255,.012)); }
+.world-ui-v2 .polar-gateway-card.is-locked { border-style: dashed; opacity: .72; }
+.world-ui-v2 .polar-gateway-card > div { min-width: 0; display: grid; gap: 2px; }
+.world-ui-v2 .polar-gateway-card > div > span { color: #7c9ba4; font-size: 7px; font-weight: 900; letter-spacing: .75px; }
+.world-ui-v2 .polar-gateway-card > div > strong { overflow: hidden; color: #d9ecef; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.world-ui-v2 .polar-gateway-card > div > small { overflow: hidden; color: #79949c; font-size: 7.5px; text-overflow: ellipsis; white-space: nowrap; }
+.world-ui-v2 .polar-gateway-card > button { min-width: 128px; min-height: 34px; }
+
+.world-ui-v2 .polar-project-list { display: grid; gap: 8px; }
+.world-ui-v2 .polar-project-card {
+  position: relative;
+  padding: 11px;
+  display: grid;
+  gap: 9px;
+  overflow: hidden;
+  border: 1px solid rgba(119, 218, 231, .13);
+  border-radius: 9px;
+  background: linear-gradient(125deg, rgba(111, 222, 236, .045), rgba(255,255,255,.012));
+}
+.world-ui-v2 .polar-project-card::before { position: absolute; top: 0; bottom: 0; left: 0; width: 2px; background: #54747b; content: ''; }
+.world-ui-v2 .polar-project-card.is-available { border-color: rgba(111, 227, 239, .3); background: linear-gradient(125deg, rgba(108, 224, 238, .105), rgba(255,255,255,.012)); }
+.world-ui-v2 .polar-project-card.is-available::before { background: #75e2ed; box-shadow: 0 0 11px rgba(117,226,237,.52); }
+.world-ui-v2 .polar-project-card.is-active { border-color: rgba(242, 190, 103, .28); background: linear-gradient(125deg, rgba(242, 190, 103, .09), rgba(255,255,255,.012)); }
+.world-ui-v2 .polar-project-card.is-active::before { background: #efbd6d; box-shadow: 0 0 11px rgba(239,189,109,.45); }
+.world-ui-v2 .polar-project-card.is-complete { border-color: rgba(105, 227, 162, .22); background: linear-gradient(125deg, rgba(105, 227, 162, .07), rgba(255,255,255,.012)); }
+.world-ui-v2 .polar-project-card.is-complete::before { background: #68dda1; }
+.world-ui-v2 .polar-project-card.is-locked { opacity: .68; }
+.world-ui-v2 .polar-project-card > header { min-width: 0; display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: center; gap: 8px; }
+.world-ui-v2 .polar-project-card > header > i { width: 28px; height: 28px; display: grid; place-items: center; border: 1px solid rgba(116, 226, 239, .16); border-radius: 50%; color: #8cced7; background: rgba(110,221,235,.045); font-size: 8px; font-style: normal; font-weight: 900; }
+.world-ui-v2 .polar-project-card > header > div { min-width: 0; display: grid; gap: 2px; }
+.world-ui-v2 .polar-project-card > header > div > span { color: #6f929b; font-size: 6.75px; font-weight: 900; letter-spacing: .7px; }
+.world-ui-v2 .polar-project-card > header > div > strong { overflow: hidden; color: #dceff1; font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
+.world-ui-v2 .polar-project-card > header > b { color: #79949c; font-size: 6.75px; letter-spacing: .5px; }
+.world-ui-v2 .polar-project-card.is-active > header > b { color: #e8bd72; }
+.world-ui-v2 .polar-project-card.is-complete > header > b { color: #6ee0a6; }
+.world-ui-v2 .polar-project-card > p { margin: 0; color: #839da5; font-size: 8px; line-height: 1.45; }
+.world-ui-v2 .polar-project-meta { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; }
+.world-ui-v2 .polar-project-meta > span { padding: 6px 7px; display: grid; gap: 2px; border: 1px solid rgba(255,255,255,.04); border-radius: 5px; background: rgba(255,255,255,.012); }
+.world-ui-v2 .polar-project-meta small { color: #607d85; font-size: 6.5px; font-weight: 900; letter-spacing: .45px; }
+.world-ui-v2 .polar-project-meta b { color: #bdcfd3; font-size: 9px; }
+.world-ui-v2 .polar-project-rewards { margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px; list-style: none; }
+.world-ui-v2 .polar-project-rewards > li { min-width: 0; padding: 4px 6px; display: flex; align-items: center; gap: 4px; border: 1px solid rgba(106, 224, 170, .13); border-radius: 999px; color: #91b5ad; background: rgba(105, 227, 162, .045); font-size: 7px; }
+.world-ui-v2 .polar-project-rewards > li > b { color: #70dfa7; }
+.world-ui-v2 .polar-project-progress { display: grid; grid-template-columns: 90px minmax(0, 1fr); align-items: center; gap: 7px; }
+.world-ui-v2 .polar-project-progress > i { height: 4px; overflow: hidden; border-radius: 999px; background: rgba(255,255,255,.05); }
+.world-ui-v2 .polar-project-progress > i > b { height: 100%; display: block; border-radius: inherit; background: linear-gradient(90deg, #67cfdc, #90eaf2); }
+.world-ui-v2 .polar-project-progress > span { overflow: hidden; color: #718e96; font-size: 7px; text-overflow: ellipsis; white-space: nowrap; }
+.world-ui-v2 .polar-project-card > button { min-height: 32px; }
+
+.world-ui-v2 .polar-campaign-overview { margin: 12px 0 7px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px; }
+.world-ui-v2 .polar-campaign-overview > article { min-width: 0; min-height: 61px; padding: 7px; display: grid; align-content: center; gap: 3px; border: 1px solid rgba(255, 110, 101, .11); border-radius: 6px; background: rgba(255,255,255,.014); }
+.world-ui-v2 .polar-campaign-overview span,
+.world-ui-v2 .polar-earth-grid span { color: #7b9097; font-size: 6.25px; font-weight: 900; letter-spacing: .45px; }
+.world-ui-v2 .polar-campaign-overview strong { overflow: hidden; color: #e2ecee; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.world-ui-v2 .polar-campaign-overview small { overflow: hidden; color: #687f86; font-size: 6.5px; line-height: 1.25; text-overflow: ellipsis; }
+.world-ui-v2 .polar-earth-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; }
+.world-ui-v2 .polar-earth-grid > article { min-width: 0; padding: 8px; display: grid; gap: 3px; border: 1px solid rgba(105, 227, 162, .12); border-radius: 6px; background: linear-gradient(105deg, rgba(105,227,162,.045), transparent); }
+.world-ui-v2 .polar-earth-grid strong { color: #79dca8; font-size: 9px; }
+.world-ui-v2 .polar-earth-grid small { color: #718a90; font-size: 7px; line-height: 1.35; }
+
+.world-ui-v2 .polar-corridor-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
+.world-ui-v2 .polar-corridor-card { min-width: 0; min-height: 83px; padding: 8px; display: flex; flex-direction: column; align-items: flex-start; gap: 3px; border: 1px solid rgba(255, 119, 110, .14); border-radius: 7px; color: #dce8ea; background: linear-gradient(145deg, rgba(255,102,93,.055), rgba(255,255,255,.01)); text-align: left; cursor: pointer; }
+.world-ui-v2 .polar-corridor-card:hover,
+.world-ui-v2 .polar-corridor-card:focus-visible { border-color: rgba(255, 126, 117, .38); background: rgba(255, 104, 95, .1); outline: none; }
+.world-ui-v2 .polar-corridor-card > span { color: #a66f6e; font-size: 6px; font-weight: 900; letter-spacing: .35px; }
+.world-ui-v2 .polar-corridor-card > strong { overflow: hidden; width: 100%; font-size: 8.5px; text-overflow: ellipsis; white-space: nowrap; }
+.world-ui-v2 .polar-corridor-card > small { min-height: 18px; color: #748b91; font-size: 6.5px; line-height: 1.35; }
+.world-ui-v2 .polar-corridor-card > b { margin-top: auto; color: #a26e6d; font-size: 6px; letter-spacing: .4px; }
+.world-ui-v2 .polar-corridor-card.is-available > b { color: #e6bb73; }
+.world-ui-v2 .polar-corridor-card.is-contested > b { color: #ff8179; }
+.world-ui-v2 .polar-corridor-card.is-secured { border-color: rgba(105,227,162,.19); background: rgba(105,227,162,.045); }
+.world-ui-v2 .polar-corridor-card.is-secured > b { color: #6ee0a6; }
+
+.world-ui-v2 .polar-boss-card { margin: 12px 0 2px; padding: 11px; display: grid; gap: 9px; border: 1px solid rgba(255, 101, 92, .2); border-radius: 8px; background: radial-gradient(circle at 90% 50%, rgba(255,80,72,.11), transparent 30%), rgba(255,255,255,.012); }
+.world-ui-v2 .polar-boss-card.is-sealed { border-style: dashed; filter: saturate(.62); }
+.world-ui-v2 .polar-boss-card > div { display: grid; gap: 3px; }
+.world-ui-v2 .polar-boss-card span { color: #c77b77; font-size: 6.75px; font-weight: 900; letter-spacing: .75px; }
+.world-ui-v2 .polar-boss-card strong { color: #f1dddd; font-size: 10.5px; }
+.world-ui-v2 .polar-boss-card small { color: #927d80; font-size: 7.5px; }
+.world-ui-v2 .polar-boss-card > i { height: 5px; overflow: hidden; border-radius: 999px; background: rgba(255,255,255,.045); }
+.world-ui-v2 .polar-boss-card > i > b { height: 100%; display: block; border-radius: inherit; background: linear-gradient(90deg, #ff7169, #c83f44); box-shadow: 0 0 10px rgba(255,83,76,.38); }
+
+.world-ui-v2 .polar-sector-group { display: block; }
+.world-ui-v2 .polar-sector-list { display: grid; gap: 6px; }
+.world-ui-v2 .polar-sector-card { padding: 10px; display: grid; gap: 7px; border: 1px solid rgba(255, 116, 107, .11); border-radius: 8px; background: linear-gradient(120deg, rgba(255,102,94,.035), rgba(255,255,255,.01)); }
+.world-ui-v2 .polar-sector-card.is-hidden { opacity: .59; filter: saturate(.55); }
+.world-ui-v2 .polar-sector-card.is-available { border-color: rgba(237, 190, 106, .24); }
+.world-ui-v2 .polar-sector-card.is-contested { border-color: rgba(255, 112, 103, .32); background: linear-gradient(120deg, rgba(255,94,85,.09), rgba(255,255,255,.01)); }
+.world-ui-v2 .polar-sector-card.is-secured { border-color: rgba(105, 227, 162, .2); background: linear-gradient(120deg, rgba(105,227,162,.05), rgba(255,255,255,.01)); }
+.world-ui-v2 .polar-sector-card.is-core { box-shadow: inset 0 0 24px rgba(255, 75, 70, .035); }
+.world-ui-v2 .polar-sector-card > header { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: start; }
+.world-ui-v2 .polar-sector-card > header > div { min-width: 0; display: grid; gap: 2px; }
+.world-ui-v2 .polar-sector-card > header span { color: #8e6b6c; font-size: 6.25px; font-weight: 900; letter-spacing: .55px; }
+.world-ui-v2 .polar-sector-card > header strong { overflow: hidden; color: #dfebed; font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
+.world-ui-v2 .polar-sector-card > header > b { color: #a16d6d; font-size: 6.5px; letter-spacing: .45px; }
+.world-ui-v2 .polar-sector-card.is-contested > header > b { color: #ff8279; }
+.world-ui-v2 .polar-sector-card.is-secured > header > b { color: #69dfa3; }
+.world-ui-v2 .polar-sector-card > p { margin: 0; color: #7f949a; font-size: 7.75px; line-height: 1.42; }
+.world-ui-v2 .polar-sector-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; }
+.world-ui-v2 .polar-sector-metrics > span { padding: 5px 6px; display: grid; gap: 2px; border: 1px solid rgba(255,255,255,.035); border-radius: 5px; background: rgba(255,255,255,.012); }
+.world-ui-v2 .polar-sector-metrics small { color: #6e8187; font-size: 6px; font-weight: 900; letter-spacing: .35px; }
+.world-ui-v2 .polar-sector-metrics b { color: #bac9cc; font-size: 8px; }
+.world-ui-v2 .polar-sector-integrity { height: 4px; overflow: hidden; border-radius: 999px; background: rgba(255,255,255,.045); }
+.world-ui-v2 .polar-sector-integrity > i { height: 100%; display: block; border-radius: inherit; background: linear-gradient(90deg, #c74449, #ff766e); }
+.world-ui-v2 .polar-sector-status { overflow: hidden; color: #778d93; font-size: 7px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+.world-ui-v2 .polar-sector-deployment { display: grid; grid-template-columns: minmax(0, 1fr) 92px; gap: 5px; }
+.world-ui-v2 .polar-sector-deployment > label { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) 86px; align-items: center; gap: 6px; padding: 4px 5px 4px 7px; border: 1px solid rgba(255,255,255,.055); border-radius: 6px; background: rgba(2, 10, 17, .36); }
+.world-ui-v2 .polar-sector-deployment > label > span { overflow: hidden; color: #788d93; font-size: 6.25px; font-weight: 900; letter-spacing: .35px; text-overflow: ellipsis; white-space: nowrap; }
+.world-ui-v2 .polar-expedition-input { min-width: 0; width: 100%; height: 27px; padding: 0 7px; border: 1px solid rgba(255, 124, 115, .19); border-radius: 4px; color: #f1e7e7; background: rgba(255,255,255,.035); font: inherit; font-size: 9px; outline: none; }
+.world-ui-v2 .polar-expedition-input:focus { border-color: rgba(255, 130, 121, .55); box-shadow: 0 0 0 2px rgba(255, 103, 95, .1); }
+.world-ui-v2 .polar-sector-deployment > button { min-width: 0; min-height: 35px; }
+.world-ui-v2 .polar-sector-deployment > small { grid-column: 1 / -1; color: #6d8187; font-size: 6.25px; letter-spacing: .25px; }
+
+.world-ui-v2 .polar-warning-backdrop {
+  z-index: 84;
+  padding: 16px;
+  background:
+    radial-gradient(circle at 50% 50%, rgba(148, 25, 29, .18), transparent 42%),
+    rgba(1, 5, 10, .9);
+  backdrop-filter: blur(13px) saturate(.7);
+}
+.world-ui-v2 .polar-warning-modal {
+  width: min(650px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  padding: clamp(24px, 4vw, 38px);
+  overflow-y: auto;
+  border-color: rgba(255, 104, 95, .32);
+  background:
+    linear-gradient(120deg, rgba(255, 90, 81, .055), transparent 38%),
+    linear-gradient(155deg, rgba(18, 22, 31, .99), rgba(5, 10, 18, .995));
+  box-shadow: inset 0 2px rgba(255, 107, 99, .45), 0 36px 120px rgba(0,0,0,.78), 0 0 80px rgba(188,37,41,.12);
+}
+.world-ui-v2 .polar-warning-modal::before { position: absolute; inset: 0; pointer-events: none; background: repeating-linear-gradient(0deg, transparent 0 5px, rgba(255,255,255,.009) 6px); content: ''; }
+.world-ui-v2 .polar-warning-modal > * { position: relative; z-index: 1; }
+.world-ui-v2 .polar-warning-modal > .panel-kicker { color: #ff8279; }
+.world-ui-v2 .polar-warning-modal > h2 { max-width: 520px; margin: 14px 0 10px; color: #f5ecec; font-size: clamp(25px, 4vw, 38px); line-height: 1.02; letter-spacing: -1px; }
+.world-ui-v2 .polar-warning-modal > p { margin: 0; color: #a99a9c; font-size: 11px; line-height: 1.65; }
+.world-ui-v2 .polar-warning-scan { position: relative; height: 94px; display: grid; place-items: center; border: 1px solid rgba(255,105,97,.15); border-radius: 8px; background: radial-gradient(circle, rgba(255,85,78,.13), transparent 42%), repeating-radial-gradient(circle, transparent 0 16px, rgba(255,105,97,.055) 17px 18px); }
+.world-ui-v2 .polar-warning-scan > i { position: absolute; width: 76px; height: 76px; border: 1px solid rgba(255,110,102,.24); border-radius: 50%; }
+.world-ui-v2 .polar-warning-scan > b { color: #ff7a72; font-size: 28px; text-shadow: 0 0 20px rgba(255,86,79,.45); }
+.world-ui-v2 .polar-warning-scan > span { position: absolute; margin-top: 55px; color: #ae6867; font-size: 6px; font-weight: 900; letter-spacing: 1.1px; }
+.world-ui-v2 .polar-warning-intel { margin: 18px 0 10px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.world-ui-v2 .polar-warning-intel > span { min-width: 0; padding: 9px; display: grid; gap: 3px; border: 1px solid rgba(255,110,102,.12); border-radius: 6px; background: rgba(255,255,255,.014); }
+.world-ui-v2 .polar-warning-intel b { color: #d8c7c8; font-size: 7.5px; letter-spacing: .35px; }
+.world-ui-v2 .polar-warning-intel small { color: #806f72; font-size: 7px; }
+.world-ui-v2 .polar-warning-order { margin: 10px 0 17px; padding: 10px 11px; display: grid; gap: 3px; border-left: 2px solid #ff6e66; background: rgba(255, 99, 91, .045); }
+.world-ui-v2 .polar-warning-order > b { color: #f0d6d6; font-size: 8px; letter-spacing: .45px; }
+.world-ui-v2 .polar-warning-order > span { color: #897779; font-size: 8px; line-height: 1.4; }
+.world-ui-v2 .polar-warning-modal > .primary-button { width: 100%; min-height: 43px; border-color: rgba(255,113,104,.5); color: #180708; background: linear-gradient(135deg, #ff7a72, #d74c4d); box-shadow: 0 8px 28px rgba(209,62,64,.22); }
+
+.world-ui-v2 .polar-confirm-backdrop { z-index: 78; padding: 16px; }
+.world-ui-v2 .polar-confirm-modal { width: min(520px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); padding: 26px; overflow-y: auto; border-color: rgba(113, 226, 239, .27); }
+.world-ui-v2 .polar-confirm-modal > h2 { margin: 10px 0 8px; color: #e8f6f8; font-size: 23px; }
+.world-ui-v2 .polar-confirm-modal > p { margin: 0 0 14px; color: #89a2a9; font-size: 9px; line-height: 1.55; }
+.world-ui-v2 .polar-confirm-terms { margin-bottom: 10px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.world-ui-v2 .polar-confirm-terms > span { padding: 9px; display: grid; gap: 3px; border: 1px solid rgba(111,224,238,.1); border-radius: 6px; background: rgba(111,224,238,.035); }
+.world-ui-v2 .polar-confirm-terms small { color: #6e8b93; font-size: 6.5px; font-weight: 900; letter-spacing: .5px; }
+.world-ui-v2 .polar-confirm-terms strong { color: #dbedef; font-size: 12px; }
+.world-ui-v2 .polar-confirm-note { margin-top: 12px; padding: 9px 10px; display: grid; gap: 3px; border-left: 2px solid #75dce8; background: rgba(110,220,234,.045); }
+.world-ui-v2 .polar-confirm-note > b { color: #9fe6ee; font-size: 7px; letter-spacing: .5px; }
+.world-ui-v2 .polar-confirm-note > span { color: #768f96; font-size: 7.5px; line-height: 1.4; }
+.world-ui-v2 .polar-confirm-error { display: block; margin-top: 9px; color: #ff8d85; font-size: 8px; }
+
+.world-ui-v2 .polar-victory-backdrop {
+  background:
+    radial-gradient(circle at 50% 42%, rgba(89, 225, 214, .16), transparent 35%),
+    rgba(1, 8, 15, .9);
+  backdrop-filter: blur(12px) saturate(.8);
+}
+.world-ui-v2 .polar-victory-card {
+  width: min(570px, calc(100vw - 32px));
+  padding: clamp(28px, 5vw, 48px);
+  border-color: rgba(105, 229, 215, .32);
+  background:
+    radial-gradient(circle at 50% 0, rgba(103, 232, 219, .1), transparent 38%),
+    linear-gradient(155deg, rgba(8, 29, 37, .99), rgba(3, 12, 20, .995));
+  box-shadow: inset 0 1px rgba(144, 255, 238, .2), 0 36px 120px rgba(0, 0, 0, .78);
+}
+.world-ui-v2 .polar-victory-card .victory-sigil {
+  color: #89f0df;
+  border-color: #75e0d0;
+  background: rgba(89, 225, 210, .08);
+  box-shadow: 0 0 42px rgba(89, 225, 210, .2);
+}
+.world-ui-v2 .polar-victory-card > p { max-width: 450px; margin-inline: auto; line-height: 1.55; }
+.world-ui-v2 .polar-victory-card > small { display: block; color: #84a4aa; font-size: 9px; line-height: 1.5; }
+.world-ui-v2 .polar-victory-metrics {
+  margin: 22px 0 18px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+.world-ui-v2 .polar-victory-metrics > span {
+  min-width: 0;
+  padding: 12px 8px;
+  display: grid;
+  gap: 4px;
+  border: 1px solid rgba(109, 230, 215, .13);
+  border-radius: 8px;
+  background: rgba(105, 226, 212, .035);
+}
+.world-ui-v2 .polar-victory-metrics small { color: #72989d; font-size: 7px; font-weight: 900; letter-spacing: .55px; }
+.world-ui-v2 .polar-victory-metrics b { color: #91eadc; font-size: 14px; }
+
+@media (max-width: 840px) {
+  .world-ui-v2 .polar-command { bottom: calc(76px + env(safe-area-inset-bottom)); }
+  .world-ui-v2 .polar-warning-modal { max-height: calc(100dvh - 132px); }
+}
+
+@media (max-width: 620px) {
+  .world-ui-v2 .polar-campaign-overview { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .world-ui-v2 .polar-corridor-grid { grid-template-columns: 1fr; }
+  .world-ui-v2 .polar-corridor-card { min-height: 66px; }
+  .world-ui-v2 .polar-warning-intel { grid-template-columns: 1fr; }
+  .world-ui-v2 .polar-warning-intel > span { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+  .world-ui-v2 .polar-warning-intel > span > small { text-align: right; }
+}
+
+@media (max-width: 460px) {
+  .world-ui-v2 .polar-hero { min-height: 86px; padding-right: 58px; }
+  .world-ui-v2 .polar-hero > div > strong { font-size: 12px; }
+  .world-ui-v2 .polar-project-card > header { grid-template-columns: 25px minmax(0, 1fr); }
+  .world-ui-v2 .polar-project-card > header > i { width: 25px; height: 25px; }
+  .world-ui-v2 .polar-project-card > header > b { grid-column: 2; }
+  .world-ui-v2 .polar-project-progress { grid-template-columns: 70px minmax(0, 1fr); }
+  .world-ui-v2 .polar-gateway-card { grid-template-columns: 1fr; }
+  .world-ui-v2 .polar-gateway-card > button { width: 100%; }
+  .world-ui-v2 .polar-sector-deployment { grid-template-columns: 1fr; }
+  .world-ui-v2 .polar-sector-deployment > button { width: 100%; }
+  .world-ui-v2 .polar-confirm-modal { padding: 20px; }
+  .world-ui-v2 .polar-confirm-modal > .panel-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .world-ui-v2 .polar-warning-backdrop { padding: 8px; }
+  .world-ui-v2 .polar-warning-modal { width: calc(100vw - 16px); max-height: calc(100dvh - 124px); padding: 20px; }
+  .world-ui-v2 .polar-warning-scan { height: 76px; }
+  .world-ui-v2 .polar-warning-modal > h2 { font-size: 24px; }
+  .world-ui-v2 .polar-victory-metrics { grid-template-columns: 1fr; }
+  .world-ui-v2 .polar-victory-metrics > span { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+}
+
+/* Compact command polish: one title, optional functional status, no stacked eyebrow. */
+.world-ui-v2 .command-drawer--unified .drawer-heading--single {
+  min-height: 34px;
+  margin-top: 0;
+  margin-bottom: 9px;
+  align-items: center;
+}
+.world-ui-v2 .command-drawer--unified .drawer-heading--single h2 {
+  font-size: 21px;
+  line-height: 1.15;
+}
+
+/* Small top-edge mixer; it never claims the centre of the map. */
+.world-ui-v2 .sound-options-button.is-active {
+  border-color: rgba(105, 227, 162, .55);
+  color: #91efba;
+  background: rgba(105, 227, 162, .12);
+}
+.world-ui-v2 .sound-options {
+  position: fixed;
+  z-index: 38;
+  top: 78px;
+  right: 12px;
+  width: min(292px, calc(100vw - 24px));
+  padding: 11px;
+  border-radius: 11px;
+  pointer-events: auto;
+  box-shadow: 0 14px 38px rgba(0, 0, 0, .38);
+}
+.world-ui-v2 .sound-options > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 7px;
+}
+.world-ui-v2 .sound-options h2 { margin: 0; font-size: 16px; line-height: 1; }
+.world-ui-v2 .sound-options > header button {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  background: transparent;
+  color: #9bb3ba;
+  font-size: 18px;
+  cursor: pointer;
+}
+.world-ui-v2 .sound-options > label {
+  display: grid;
+  grid-template-columns: minmax(88px, 1fr) minmax(82px, 1.15fr) 38px;
+  gap: 8px;
+  align-items: center;
+  min-height: 42px;
+  border-top: 1px solid rgba(135, 190, 204, .12);
+}
+.world-ui-v2 .sound-options label > span { min-width: 0; display: flex; flex-direction: column; }
+.world-ui-v2 .sound-options label b { color: #e5f2f4; font-size: 11px; line-height: 1.25; }
+.world-ui-v2 .sound-options label small { color: #829ba2; font-size: 9px; line-height: 1.25; }
+.world-ui-v2 .sound-options input { width: 100%; accent-color: #69e3a2; cursor: pointer; }
+.world-ui-v2 .sound-options output { color: #b8f5d1; font-size: 10px; font-weight: 800; text-align: right; }
+
+/* The Research gateway now carries the viewer's live, already-synchronised run. */
+.world-ui-v2 .polar-gateway-card--arctic .polar-gateway-card__body { min-width: 0; }
+.world-ui-v2 .polar-gateway-card__status {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.world-ui-v2 .polar-gateway-card__status > b {
+  flex: none;
+  color: #8bdff2;
+  font-size: 9px;
+  letter-spacing: .7px;
+}
+.world-ui-v2 .polar-gateway-progress { margin-top: 7px; display: grid; gap: 4px; }
+.world-ui-v2 .polar-gateway-progress > i {
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(120, 173, 185, .16);
+}
+.world-ui-v2 .polar-gateway-progress > i > b {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #52b9d1, #79efba);
+  box-shadow: 0 0 10px rgba(105, 227, 162, .32);
+}
+.world-ui-v2 .polar-gateway-progress > span {
+  color: #9cb4ba;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1.3;
+  letter-spacing: .55px;
+}
+
+/* Research totals read as compact capability cards rather than a flat data dump. */
+.world-ui-v2 .research-effects {
+  margin: 10px 0 12px;
+  padding: 10px;
+  border: 1px solid rgba(125, 184, 199, .14);
+  border-radius: 10px;
+  background: linear-gradient(145deg, rgba(15, 35, 48, .78), rgba(8, 22, 34, .58));
+}
+.world-ui-v2 .research-effects > header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 7px;
+}
+.world-ui-v2 .research-effects > header .section-label { margin: 0; }
+.world-ui-v2 .research-effects > header small { color: #839ba2; font-size: 9px; }
+.world-ui-v2 .research-effects .upgrade-total-grid { margin: 0; gap: 6px; }
+.world-ui-v2 .research-effect-card {
+  --effect-accent: #6bdcf1;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--effect-accent) 24%, rgba(255,255,255,.07));
+  border-radius: 8px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--effect-accent) 9%, transparent), rgba(255,255,255,.018));
+}
+.world-ui-v2 .research-effect-card > i {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--effect-accent) 14%, rgba(5,15,24,.9));
+  color: var(--effect-accent);
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 900;
+}
+.world-ui-v2 .research-effect-card > div { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.world-ui-v2 .research-effect-card > div > span { color: #9cb3b9; font-size: 9px; line-height: 1.2; }
+.world-ui-v2 .research-effect-card > div > strong { color: #edf8f9; font-size: 12px; line-height: 1.25; white-space: normal; }
+.world-ui-v2 .research-effect-card > small { color: var(--effect-accent); font-size: 8px; font-weight: 800; }
+.world-ui-v2 .research-effect-card--combat { --effect-accent: #ff877d; }
+.world-ui-v2 .research-effect-card--defence { --effect-accent: #78bff1; }
+.world-ui-v2 .research-effect-card--force { --effect-accent: #e9ad72; }
+.world-ui-v2 .research-effect-card--food { --effect-accent: #91d36f; }
+.world-ui-v2 .research-effect-card--people { --effect-accent: #e09de8; }
+.world-ui-v2 .research-effect-card--research { --effect-accent: #9d9cf5; }
+.world-ui-v2 .research-effect-card--economy { --effect-accent: #66ddb5; }
+
+/* Full help, kept as a scan-friendly field manual instead of a long article. */
+.world-ui-v2 .world-help { width: min(920px, calc(100vw - 28px)); max-height: min(84vh, 820px); }
+.world-ui-v2 .world-help__heading { padding-right: 32px; }
+.world-ui-v2 .world-help__heading h2 { margin: 0 0 5px; font-size: 24px; }
+.world-ui-v2 .world-help__heading p { margin: 0 0 12px; color: #9bb1b7; line-height: 1.45; }
+.world-ui-v2 .world-help-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+.world-ui-v2 .world-help-grid > article {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 9px;
+  align-items: start;
+  padding: 9px;
+}
+.world-ui-v2 .world-help-grid > article > i {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: rgba(105, 215, 239, .10);
+  color: #79dff1;
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 900;
+}
+.world-ui-v2 .world-help-grid h3 { margin: 0 0 3px; font-size: 11px; }
+.world-ui-v2 .world-help-grid p { margin: 0; color: #91a8ae; font-size: 10px; line-height: 1.42; }
+.world-ui-v2 .world-help__credits summary { color: #8fa9af; font-size: 9px; font-weight: 800; cursor: pointer; }
+
+.world-ui-v2 .review-logistics__grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.world-ui-v2 .review-logistics__grid .is-total { grid-column: 1 / -1; border-color: rgba(105, 227, 162, .28); }
+.world-ui-v2 .review-logistics__grid article small { display: block; margin-top: 3px; color: #8ea6ac; font-size: 9px; line-height: 1.3; }
+
+/* Compact Attack Review: one decision, one quote, two direct combat matchups. */
+.world-ui-v2 .review-attack-modal.command-modal--unified {
+  width: min(800px, calc(100vw - 32px));
+  padding: 14px 14px 0;
+}
+.world-ui-v2 .review-attack-head { min-height: 52px; margin-bottom: 7px; }
+.world-ui-v2 .review-decision-hero { margin-bottom: 7px; padding: 7px; }
+.world-ui-v2 .review-decision-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.world-ui-v2 .review-command-section { margin-bottom: 7px; padding: 8px; }
+.world-ui-v2 .review-logistics__grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.world-ui-v2 .review-logistics__grid .is-total { grid-column: auto; }
+.world-ui-v2 .review-logistics__grid > article.is-affordable.is-positive { --logistics-card-tone: #69e3a2; }
+.world-ui-v2 .review-logistics__grid > article.is-affordable.is-negative { --logistics-card-tone: #ff8179; }
+.world-ui-v2 .review-force-comparison { gap: 5px; }
+.world-ui-v2 .review-force-comparison > article { padding: 7px 8px; }
+.world-ui-v2 .review-force-comparison > article > strong { font-size: 16px; }
+.world-ui-v2 .review-force-comparison > article > small { margin-top: 4px; }
+.world-ui-v2 .review-combat-matchups {
+  margin-top: 6px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+}
+.world-ui-v2 .review-combat-matchups > article {
+  --matchup-tone: #78dff0;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid color-mix(in srgb, var(--matchup-tone) 18%, rgba(255,255,255,.04));
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--matchup-tone) 4%, rgba(255,255,255,.012));
+}
+.world-ui-v2 .review-combat-matchups > article.is-enemy { --matchup-tone: var(--review-accent); }
+.world-ui-v2 .review-combat-matchups span,
+.world-ui-v2 .review-combat-matchups strong,
+.world-ui-v2 .review-combat-matchups small { display: block; min-width: 0; }
+.world-ui-v2 .review-combat-matchups span {
+  color: color-mix(in srgb, var(--matchup-tone) 68%, #9eb0b6);
+  font-size: 8px;
+  font-weight: 900;
+  letter-spacing: .45px;
+}
+.world-ui-v2 .review-combat-matchups strong {
+  margin-top: 3px;
+  color: color-mix(in srgb, var(--matchup-tone) 72%, #eef5f6);
+  font-size: 15px;
+  line-height: 1.1;
+}
+.world-ui-v2 .review-combat-matchups strong > i { margin: 0 5px; color: #718a92; font-size: 8px; font-style: normal; }
+.world-ui-v2 .review-combat-matchups small { margin-top: 3px; color: #879da4; font-size: 8.5px; }
+.world-ui-v2 .review-target-value-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.world-ui-v2 .review-target-value-grid > article,
+.world-ui-v2 .review-integration-flow > article { padding: 6px 7px; }
+.world-ui-v2 .review-integration-flow { margin-top: 5px; gap: 5px; }
+.world-ui-v2 .review-first-exchange { margin-top: 6px; padding-block: 6px; }
+.world-ui-v2 .review-action-footer { margin-top: 8px; min-height: 0; padding-top: 9px; }
+
+@media (max-width: 840px) {
+  .world-ui-v2 .sound-options { top: 112px; right: 8px; }
+}
+@media (max-width: 560px) {
+  .world-ui-v2 .world-help-grid,
+  .world-ui-v2 .research-effects .upgrade-total-grid,
+  .world-ui-v2 .review-logistics__grid { grid-template-columns: 1fr; }
+  .world-ui-v2 .review-logistics__grid .is-total { grid-column: auto; }
+  .world-ui-v2 .sound-options label small { font-size: 10px; }
+  .world-ui-v2 .polar-gateway-card__status > b,
+  .world-ui-v2 .polar-gateway-progress > span,
+  .world-ui-v2 .research-effect-card > div > span,
+  .world-ui-v2 .research-effect-card > small { font-size: 10px; }
+}
+
+@media (max-width: 720px) {
+  .world-ui-v2 .review-logistics__grid,
+  .world-ui-v2 .review-force-comparison,
+  .world-ui-v2 .review-combat-matchups { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 420px) {
+  .world-ui-v2 .review-force-comparison,
+  .world-ui-v2 .review-combat-matchups { grid-template-columns: 1fr; }
+}
+
+/* Polar command readability and canonical quote presentation. */
+.world-ui-v2 .polar-affinity {
+  width: fit-content;
+  margin-top: 5px;
+  padding: 4px 7px;
+  border: 1px solid rgba(117, 226, 237, .24);
+  border-radius: 999px;
+  color: #a8edf3;
+  background: rgba(110, 222, 236, .075);
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 900;
+  line-height: 1.3;
+  letter-spacing: .35px;
+}
+.world-ui-v2 .polar-quote-breakdown { display: grid; gap: 6px; }
+.world-ui-v2 .polar-quote-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+}
+.world-ui-v2 .polar-quote-grid > span {
+  min-width: 0;
+  padding: 7px 8px;
+  display: grid;
+  align-content: center;
+  gap: 3px;
+  border: 1px solid rgba(113, 222, 235, .1);
+  border-radius: 6px;
+  background: rgba(110, 222, 235, .025);
+}
+.world-ui-v2 .polar-quote-grid > span.is-final {
+  border-color: rgba(112, 230, 171, .2);
+  background: rgba(105, 227, 162, .055);
+}
+.world-ui-v2 .polar-quote-grid small {
+  color: #88a7ae;
+  font-size: 9px;
+  font-weight: 900;
+  line-height: 1.3;
+  letter-spacing: .35px;
+}
+.world-ui-v2 .polar-quote-grid b {
+  overflow-wrap: anywhere;
+  color: #d8eaed;
+  font-size: 10px;
+  line-height: 1.35;
+}
+.world-ui-v2 .polar-quote-grid > span.is-final b { color: #7ce1aa; }
+.world-ui-v2 .polar-project-rewards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; }
+.world-ui-v2 .polar-project-rewards > li {
+  padding: 7px 8px;
+  display: grid;
+  align-items: center;
+  gap: 2px 7px;
+  border-radius: 6px;
+  font-size: 9px;
+}
+.world-ui-v2 .polar-project-rewards > li > span { color: #9cb7b2; font-weight: 850; line-height: 1.3; }
+.world-ui-v2 .polar-project-rewards > li > b { color: #78e2aa; font-size: 10px; line-height: 1.35; overflow-wrap: anywhere; }
+.world-ui-v2 .polar-project-rewards > li > small { color: #76958d; font-size: 9px; line-height: 1.3; letter-spacing: .3px; }
+.world-ui-v2 .polar-sector-card.is-focused {
+  border-color: rgba(118, 229, 241, .7);
+  outline: 2px solid rgba(118, 229, 241, .24);
+  outline-offset: 2px;
+  box-shadow: 0 0 24px rgba(94, 216, 232, .13);
+}
+.world-ui-v2 .polar-command .section-label,
+.world-ui-v2 .polar-hero > div > span,
+.world-ui-v2 .polar-hero > b,
+.world-ui-v2 .polar-gateway-card > div > span,
+.world-ui-v2 .polar-project-card > header > i,
+.world-ui-v2 .polar-project-card > header > div > span,
+.world-ui-v2 .polar-project-card > header > b,
+.world-ui-v2 .polar-campaign-overview span,
+.world-ui-v2 .polar-earth-grid span,
+.world-ui-v2 .polar-corridor-card > span,
+.world-ui-v2 .polar-corridor-card > b,
+.world-ui-v2 .polar-boss-card span,
+.world-ui-v2 .polar-sector-card > header span,
+.world-ui-v2 .polar-sector-card > header > b,
+.world-ui-v2 .polar-sector-metrics small,
+.world-ui-v2 .polar-sector-deployment > label > span,
+.world-ui-v2 .polar-sector-deployment > small,
+.world-ui-v2 .polar-warning-scan > span,
+.world-ui-v2 .polar-warning-intel b,
+.world-ui-v2 .polar-warning-order > b,
+.world-ui-v2 .polar-confirm-note > b,
+.world-ui-v2 .polar-confirm-error,
+.world-ui-v2 .polar-victory-metrics small { font-size: 9px; line-height: 1.35; }
+.world-ui-v2 .polar-hero > div > small,
+.world-ui-v2 .polar-gateway-card > div > small,
+.world-ui-v2 .polar-project-card > p,
+.world-ui-v2 .polar-campaign-overview small,
+.world-ui-v2 .polar-earth-grid small,
+.world-ui-v2 .polar-corridor-card > small,
+.world-ui-v2 .polar-boss-card small,
+.world-ui-v2 .polar-sector-card > p,
+.world-ui-v2 .polar-sector-status,
+.world-ui-v2 .polar-warning-intel small,
+.world-ui-v2 .polar-warning-order > span,
+.world-ui-v2 .polar-confirm-note > span { color: #91a9af; font-size: 10px; line-height: 1.45; }
+.world-ui-v2 .polar-project-progress > span {
+  color: #8fa8ae;
+  font-size: 9px;
+  line-height: 1.35;
+  white-space: normal;
+}
+.world-ui-v2 .polar-sector-card > header strong,
+.world-ui-v2 .polar-campaign-overview strong,
+.world-ui-v2 .polar-corridor-card > strong,
+.world-ui-v2 .polar-boss-card strong { white-space: normal; overflow-wrap: anywhere; }
+
+.world-ui-v2 .country-preview__relative-stat {
+  border-color: color-mix(in srgb, var(--intro-stat-color) 28%, rgba(255,255,255,.08));
+  background: linear-gradient(135deg, color-mix(in srgb, var(--intro-stat-color) 10%, transparent), rgba(255,255,255,.012));
+}
+.world-ui-v2 .country-preview__relative-stat > span { color: #bfd0d4; }
+.world-ui-v2 .country-preview__relative-stat > strong {
+  color: var(--intro-stat-color) !important;
+  text-shadow: 0 0 14px color-mix(in srgb, var(--intro-stat-color) 22%, transparent);
+}
+
+.globe-map__polar-card small,
+.globe-map__polar-card span,
+.globe-map__polar-card b { font-size: 10px; line-height: 1.35; }
+
+@media (max-width: 460px) {
+  .world-ui-v2 .polar-affinity,
+  .world-ui-v2 .polar-quote-grid small,
+  .world-ui-v2 .polar-project-rewards > li,
+  .world-ui-v2 .polar-project-rewards > li > small,
+  .world-ui-v2 .polar-command .section-label,
+  .world-ui-v2 .polar-project-card > header > i,
+  .world-ui-v2 .polar-project-card > header > div > span,
+  .world-ui-v2 .polar-project-card > header > b,
+  .world-ui-v2 .polar-campaign-overview span,
+  .world-ui-v2 .polar-earth-grid span,
+  .world-ui-v2 .polar-corridor-card > span,
+  .world-ui-v2 .polar-corridor-card > b,
+  .world-ui-v2 .polar-sector-card > header span,
+  .world-ui-v2 .polar-sector-card > header > b,
+  .world-ui-v2 .polar-sector-metrics small,
+  .world-ui-v2 .polar-sector-deployment > label > span,
+  .world-ui-v2 .polar-sector-deployment > small { font-size: 10px; }
+  .world-ui-v2 .polar-quote-grid,
+  .world-ui-v2 .polar-project-rewards { grid-template-columns: 1fr; }
 }

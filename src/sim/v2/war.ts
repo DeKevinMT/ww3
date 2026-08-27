@@ -17,6 +17,8 @@ import {
   COMBAT_POWER_RATIO_EXPONENT,
   COMBAT_ROUTE_STRENGTH_RATIO,
   combatDefenseEffectV2,
+  countryInteriorLogisticsDistanceKmV2,
+  countryInteriorOperationMultiplierV2,
   CONQUEST_WAR_FATIGUE_FULL_SCALE_SHARE,
   CONQUEST_WAR_FATIGUE_MAX,
   CONQUEST_WAR_FATIGUE_MIN,
@@ -42,11 +44,13 @@ import {
   PEACE_REQUEST_MIN_WAR_AGE_TICKS,
   POST_WAR_TRANSITION_FATIGUE,
   NAVAL_BATTLE_FATIGUE_MULTIPLIER,
+  NAVAL_ROUTE_BASE_DISTANCE_KM,
   STALE_WAR_TICKS,
   TRUCE_TICKS,
   WAR_ACCESS_ASSAULT_MULTIPLIER,
   WAR_ACCESS_CASUALTY_MULTIPLIER,
   WAR_ACCESS_SUPPLY_MULTIPLIER,
+  warAccessOperationMultiplierV2,
   warAccessSupplyMultiplierV2,
   WAR_DECLARATION_ATTACKER_LOSS_SHARE,
   WAR_MOBILIZATION_TICKS,
@@ -2135,6 +2139,105 @@ export function logisticsThroughputShareV2(
   );
 }
 
+export const INTERNAL_NAVAL_TRANSFER_COST_PER_MILLION_PER_1K_KM_V2 = 0.01;
+export const INTERNAL_NAVAL_TRANSFER_LONG_DISTANCE_KM_V2 = 5_000;
+export const INTERNAL_NAVAL_TRANSFER_WEEKLY_TREASURY_SHARE_MAX_V2 = 0.05;
+
+export interface InternalArmyTransferLogisticsTermsV2 {
+  readonly access: 'land' | 'naval';
+  readonly distanceKm: number;
+  readonly interiorDistanceKm: number;
+  readonly interiorOperationMultiplier: number;
+  readonly throughputMultiplier: number;
+  readonly costPerMillion: number;
+  readonly logisticsCost: number;
+}
+
+/**
+ * Canonical one-hop transfer quote. It deliberately has no save state: the
+ * exact movement telemetry can be shown by UI/finance consumers while the
+ * simulation deducts the same deterministic quote immediately.
+ */
+export function internalArmyTransferLogisticsTermsV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  playerId: PlayerId,
+  sourceId: TerritoryId,
+  targetId: TerritoryId,
+  manpower = 0,
+): InternalArmyTransferLogisticsTermsV2 {
+  const connection = content.territories[sourceId]?.connections
+    .find((edge) => edge.targetId === targetId);
+  if (!connection) throw new Error(`No internal logistics connection ${sourceId} -> ${targetId}.`);
+  const sourceLandArea = content.territories[sourceId]?.baseline.landArea ?? 0;
+  const interiorDistanceKm = countryInteriorLogisticsDistanceKmV2(sourceLandArea);
+  const interiorOperationMultiplier = countryInteriorOperationMultiplierV2(sourceLandArea);
+  if (connection.kind === 'land') {
+    return Object.freeze({
+      access: 'land' as const,
+      distanceKm: 0,
+      interiorDistanceKm,
+      interiorOperationMultiplier,
+      throughputMultiplier: round(1 / interiorOperationMultiplier, 9),
+      costPerMillion: 0,
+      logisticsCost: 0,
+    });
+  }
+
+  const distanceKm = Math.max(0, connection.distanceKm ?? NAVAL_ROUTE_BASE_DISTANCE_KM);
+  const context = composeTraitContextV2(
+    traitNationContextV2(state, playerId),
+    traitTerritoryContextV2(state, content, playerId, sourceId),
+    { access: 'naval' as const },
+  );
+  const distanceTraitFactor = countryTraitFactorV2(
+    playerId,
+    'naval-distance-pressure',
+    context,
+  );
+  const operationCostFactor = countryTraitFactorV2(playerId, 'operation-cost', context);
+  const supplyLevel = state.players[playerId]?.research.effectLevels.supply ?? 0;
+  const researchDistanceFactor = clamp(
+    1 - 0.015 * diminishingResearchLevelV2(supplyLevel),
+    0.75,
+    1,
+  );
+  const accessOnlyLoad = warAccessOperationMultiplierV2('naval');
+  const rawRouteLoad = warAccessOperationMultiplierV2('naval', distanceKm);
+  const adjustedRouteLoad = (accessOnlyLoad
+    + (rawRouteLoad - accessOnlyLoad) * distanceTraitFactor * researchDistanceFactor)
+      * interiorOperationMultiplier;
+  const throughputMultiplier = round(clamp(1 / adjustedRouteLoad, 0.18, 1), 9);
+  const costPerMillion = round(
+    INTERNAL_NAVAL_TRANSFER_COST_PER_MILLION_PER_1K_KM_V2
+      * (distanceKm + interiorDistanceKm) / 1_000
+      * distanceTraitFactor
+      * researchDistanceFactor
+      * operationCostFactor,
+    12,
+  );
+  return Object.freeze({
+    access: 'naval' as const,
+    distanceKm: round(distanceKm, 3),
+    interiorDistanceKm,
+    interiorOperationMultiplier,
+    throughputMultiplier,
+    costPerMillion,
+    logisticsCost: round(Math.max(0, manpower) * costPerMillion, 9),
+  });
+}
+
+/** Rich states become less reluctant, but distance throughput and cash cost never disappear. */
+export function internalNavalTransferWillingnessV2(
+  distanceKm: number,
+  treasuryWeeks: number,
+  urgentFront: boolean,
+): number {
+  if (distanceKm <= INTERNAL_NAVAL_TRANSFER_LONG_DISTANCE_KM_V2) return 1;
+  const wealthTolerance = smoothstep(4, 40, Math.max(0, treasuryWeeks));
+  return urgentFront ? round(0.35 + 0.65 * wealthTolerance, 9) : round(wealthTolerance, 9);
+}
+
 function captureGuardActiveV2(
   state: WorldStateV2,
   territoryId: TerritoryId,
@@ -2147,6 +2250,65 @@ function captureGuardActiveV2(
     && state.tick - program.startedTick < CONQUEST_CAPTURE_GUARD_TICKS);
 }
 
+interface InternalArmyRoutePlanV2 {
+  readonly nextHop: TerritoryId;
+  readonly weight: number;
+  readonly hasNaval: boolean;
+  readonly maxNavalDistanceKm: number;
+}
+
+/** Reverse Dijkstra pass: one deterministic route table per receiver, not per donor. */
+function internalArmyRoutesToTargetV2(
+  content: WorldContentV2,
+  component: ReadonlySet<TerritoryId>,
+  targetId: TerritoryId,
+): ReadonlyMap<TerritoryId, InternalArmyRoutePlanV2> {
+  const routes = new Map<TerritoryId, InternalArmyRoutePlanV2>();
+  routes.set(targetId, { nextHop: targetId, weight: 0, hasNaval: false, maxNavalDistanceKm: 0 });
+  const pending = new Set(component);
+  while (pending.size > 0) {
+    const currentId = [...pending]
+      .filter((id) => routes.has(id))
+      .sort((left, right) => routes.get(left)!.weight - routes.get(right)!.weight
+        || left.localeCompare(right))[0];
+    if (!currentId) break;
+    pending.delete(currentId);
+    const current = routes.get(currentId)!;
+    const edges = [...(content.territories[currentId]?.connections ?? [])]
+      .filter((edge) => component.has(edge.targetId))
+      .sort((left, right) => Number(left.kind === 'sea') - Number(right.kind === 'sea')
+        || (left.distanceKm ?? 0) - (right.distanceKm ?? 0)
+        || left.targetId.localeCompare(right.targetId));
+    for (const edge of edges) {
+      if (!pending.has(edge.targetId)) continue;
+      const navalDistanceKm = edge.kind === 'sea'
+        ? Math.max(0, edge.distanceKm ?? NAVAL_ROUTE_BASE_DISTANCE_KM) : 0;
+      // One to three ordinary land hops are preferred to loading an ocean
+      // transport; among sea choices the real canonical route length decides.
+      const interiorMultiplier = countryInteriorOperationMultiplierV2(
+        content.territories[edge.targetId]?.baseline.landArea ?? 0,
+      );
+      const edgeWeight = edge.kind === 'land'
+        ? interiorMultiplier
+        : (2 + warAccessOperationMultiplierV2('naval', navalDistanceKm)) * interiorMultiplier;
+      const candidate: InternalArmyRoutePlanV2 = {
+        nextHop: currentId,
+        weight: current.weight + edgeWeight,
+        hasNaval: current.hasNaval || edge.kind === 'sea',
+        maxNavalDistanceKm: Math.max(current.maxNavalDistanceKm, navalDistanceKm),
+      };
+      const existing = routes.get(edge.targetId);
+      const improves = !existing
+        || candidate.weight < existing.weight - 1e-9
+        || (Math.abs(candidate.weight - existing.weight) <= 1e-9
+          && (Number(candidate.hasNaval) - Number(existing.hasNaval)
+            || candidate.nextHop.localeCompare(existing.nextHop)) < 0);
+      if (improves) routes.set(edge.targetId, candidate);
+    }
+  }
+  return routes;
+}
+
 export function redistributeArmiesV2(state: WorldStateV2, content: WorldContentV2): LogisticsMovementV2[] {
   const movements: LogisticsMovementV2[] = [];
   const recordMovement = (movement: LogisticsMovementV2): void => {
@@ -2155,30 +2317,8 @@ export function redistributeArmiesV2(state: WorldStateV2, content: WorldContentV
     if (existing) {
       existing.manpower = round(existing.manpower + movement.manpower, 9);
       existing.capacity = round(existing.capacity + movement.capacity, 9);
+      existing.logisticsCost = round(existing.logisticsCost + movement.logisticsCost, 9);
     } else movements.push({ ...movement });
-  };
-  const nextHop = (component: ReadonlySet<TerritoryId>, sourceId: TerritoryId, targetId: TerritoryId): TerritoryId | undefined => {
-    if (sourceId === targetId) return undefined;
-    const queue: TerritoryId[] = [sourceId];
-    const previous = new Map<TerritoryId, TerritoryId>();
-    const visited = new Set<TerritoryId>([sourceId]);
-    while (queue.length > 0) {
-      const current = queue.shift()!;
-      const neighbours = (content.territories[current]?.connections ?? [])
-        .map((edge) => edge.targetId).filter((id) => component.has(id) && !visited.has(id))
-        .sort((left, right) => left.localeCompare(right));
-      for (const neighbour of neighbours) {
-        visited.add(neighbour);
-        previous.set(neighbour, current);
-        if (neighbour === targetId) {
-          let step = targetId;
-          while (previous.get(step) && previous.get(step) !== sourceId) step = previous.get(step)!;
-          return step;
-        }
-        queue.push(neighbour);
-      }
-    }
-    return undefined;
   };
   const territoriesByOwner = new Map<PlayerId, TerritoryId[]>();
   for (const id of sortedTerritoryIdsV2(state)) {
@@ -2201,6 +2341,11 @@ export function redistributeArmiesV2(state: WorldStateV2, content: WorldContentV
       playerId,
       ownedIds,
     );
+    const nationalEconomy = selectNationalEconomyV2(state, content, playerId);
+    const treasuryWeeks = Math.max(0, state.players[playerId]?.treasury ?? 0)
+      / Math.max(0.001, nationalEconomy.weeklyRevenue);
+    let remainingNavalLogisticsBudget = Math.max(0, state.players[playerId]?.treasury ?? 0)
+      * INTERNAL_NAVAL_TRANSFER_WEEKLY_TREASURY_SHARE_MAX_V2;
     const hostile = new Set(selectWarsOfV2(state, playerId).map((war) => war.attackerId === playerId ? war.defenderId : war.attackerId));
     const ownOperationSources = new Set<TerritoryId>();
     const threatenedTargets = new Set<TerritoryId>();
@@ -2324,14 +2469,22 @@ export function redistributeArmiesV2(state: WorldStateV2, content: WorldContentV
         .sort((a, b) => b.weight - a.weight || b.gap - a.gap || a.id.localeCompare(b.id));
       for (const receiver of receivers) {
         let needed = receiver.gap;
+        const routesToReceiver = internalArmyRoutesToTargetV2(content, componentSet, receiver.id);
         const donors = [...weighted].filter((item) => item.id !== receiver.id)
-          .map((item) => ({ ...item, surplus: outgoing.get(item.id) ?? 0 }))
-          .filter((item) => item.surplus > 1e-9)
-          .sort((a, b) => b.surplus - a.surplus || a.id.localeCompare(b.id));
+          .map((item) => ({
+            ...item,
+            surplus: outgoing.get(item.id) ?? 0,
+            route: routesToReceiver.get(item.id),
+          }))
+          .filter((item) => item.surplus > 1e-9 && item.route)
+          .sort((a, b) => Number(a.route!.hasNaval) - Number(b.route!.hasNaval)
+            || a.route!.weight - b.route!.weight
+            || b.surplus - a.surplus
+            || a.id.localeCompare(b.id));
         for (const donor of donors) {
           if (needed <= 1e-9 || remainingMove <= 1e-9) break;
-          const hop = nextHop(componentSet, donor.id, receiver.id);
-          if (!hop) continue;
+          const route = donor.route!;
+          const hop = route.nextHop;
           const from = state.territories[donor.id]!;
           const to = state.territories[hop]!;
           const available = outgoing.get(donor.id) ?? 0;
@@ -2345,8 +2498,60 @@ export function redistributeArmiesV2(state: WorldStateV2, content: WorldContentV
               empireArmyCapacity,
             ) - to.army.manpower,
           );
-          const moveManpower = Math.min(needed, available, remainingMove, destinationRoom);
+          const oneMillionTerms = internalArmyTransferLogisticsTermsV2(
+            state,
+            content,
+            playerId,
+            donor.id,
+            hop,
+            1,
+          );
+          const willingness = route.hasNaval
+            ? internalNavalTransferWillingnessV2(
+                route.maxNavalDistanceKm,
+                treasuryWeeks,
+                receiver.warFront,
+              )
+            : 1;
+          const effectiveThroughput = oneMillionTerms.throughputMultiplier * willingness;
+          if (effectiveThroughput <= 1e-9) continue;
+          let moveManpower = Math.min(
+            needed,
+            available,
+            remainingMove * effectiveThroughput,
+            destinationRoom,
+          );
+          if (oneMillionTerms.access === 'naval') {
+            const spendable = Math.min(
+              Math.max(0, state.players[playerId]!.treasury),
+              remainingNavalLogisticsBudget,
+            );
+            moveManpower = Math.min(
+              moveManpower,
+              oneMillionTerms.costPerMillion > 0
+                ? spendable / oneMillionTerms.costPerMillion : 0,
+            );
+          }
+          moveManpower = round(moveManpower, 9);
           if (moveManpower <= 1e-9) continue;
+          const movementTerms = internalArmyTransferLogisticsTermsV2(
+            state,
+            content,
+            playerId,
+            donor.id,
+            hop,
+            moveManpower,
+          );
+          if (movementTerms.logisticsCost > 0) {
+            state.players[playerId]!.treasury = round(Math.max(
+              0,
+              state.players[playerId]!.treasury - movementTerms.logisticsCost,
+            ), 9);
+            remainingNavalLogisticsBudget = round(Math.max(
+              0,
+              remainingNavalLogisticsBudget - movementTerms.logisticsCost,
+            ), 9);
+          }
           const movedBaseQuality = {
             attack: from.army.baseAttack,
             defense: from.army.baseDefense,
@@ -2356,10 +2561,15 @@ export function redistributeArmiesV2(state: WorldStateV2, content: WorldContentV
           to.army.manpower += moveManpower;
           outgoing.set(donor.id, Math.max(0, available - moveManpower));
           needed -= moveManpower;
-          remainingMove -= moveManpower;
+          remainingMove -= moveManpower / effectiveThroughput;
           recordMovement({
             playerId, sourceId: donor.id, targetId: hop,
             manpower: moveManpower, capacity: 0,
+            access: movementTerms.access,
+            distanceKm: movementTerms.distanceKm,
+            interiorDistanceKm: movementTerms.interiorDistanceKm,
+            interiorOperationMultiplier: movementTerms.interiorOperationMultiplier,
+            logisticsCost: movementTerms.logisticsCost,
           });
         }
       }

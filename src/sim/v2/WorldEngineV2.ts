@@ -34,6 +34,21 @@ import {
 } from './nationState';
 import { createSaveV2, loadSaveV2, serializeSaveV2, type SaveGameV2 } from './persistence';
 import { processPropagandaProgramsV2, selectPropagandaTermsV2 } from './propaganda';
+import {
+  acknowledgePolarWarningV2,
+  applyPolarSuspicionReliefV2,
+  createInitialPolarEndgameV2,
+  deployAntarcticExpeditionV2,
+  polarEarthUnityActiveV2,
+  processArcticResearchV2,
+  processPolarEndgameV2,
+  selectAntarcticExpeditionTermsV2,
+  selectArcticProjectTermsV2,
+  selectPolarVictoryWinnerV2,
+  startArcticProjectV2,
+  type AntarcticExpeditionTermsV2,
+  type ArcticProjectTermsV2,
+} from './polarEndgame';
 import { processResearchV2 } from './research';
 import { resolveScenarioV2, scenarioConfigFromSaveHeaderV2 } from './scenarios';
 import {
@@ -96,6 +111,8 @@ import {
 } from './war';
 import type {
   AllianceProposalStatusV2,
+  AntarcticSectorIdV2,
+  ArcticProjectIdV2,
   BattleEventV2,
   BudgetDomainV2,
   BudgetPolicyV2,
@@ -629,6 +646,7 @@ export class WorldEngineV2 {
       lastHumanTerritoryCount: this.territoriesOf(primaryId).length,
       lastHumanPower: selectCurrentPowerV2(this.state, this.content, primaryId),
     };
+    this.state.polarEndgame = createInitialPolarEndgameV2();
     this.humanWarBaselines.clear();
     this.trackHumanWars();
     this.emit({ reason: 'human-players-configured' });
@@ -679,6 +697,7 @@ export class WorldEngineV2 {
       lastHumanTerritoryCount: this.territoriesOf(id).length,
       lastHumanPower: selectCurrentPowerV2(this.state, this.content, id),
     };
+    this.state.polarEndgame = createInitialPolarEndgameV2();
     this.state.speed = 1;
     this.recordAppliedAction();
     if (publishAction) this.emitQueuedAction({ sequence: this.state.actionSequence, command });
@@ -993,6 +1012,72 @@ export class WorldEngineV2 {
     return { accepted: true };
   }
 
+  arcticProjectTerms(playerId: string, projectId: ArcticProjectIdV2): ArcticProjectTermsV2 {
+    return selectArcticProjectTermsV2(this.state, this.content, nationIdV2(playerId), projectId);
+  }
+
+  startArcticProject(playerId: string, projectId: ArcticProjectIdV2): CommandResultV2 {
+    const id = nationIdV2(playerId);
+    const terms = this.arcticProjectTerms(id, projectId);
+    if (!terms.allowed) return { accepted: false, reason: terms.reason };
+    if (!this.applyingCommand) return this.queue({ type: 'start-arctic-project', playerId: id, projectId });
+    const result = startArcticProjectV2(this.state, this.content, id, projectId);
+    if (result.accepted) {
+      this.recordAppliedAction();
+      this.emit({
+        reason: 'arctic-project-started',
+        critical: true,
+        polar: { kind: 'project-started', region: 'arctic', playerId: id, projectId },
+      });
+    }
+    return result;
+  }
+
+  acknowledgePolarWarning(playerId: string): CommandResultV2 {
+    const id = nationIdV2(playerId);
+    if (!isHumanPlayerV2(this.state, id)) return { accepted: false, reason: 'Only a human player can acknowledge this warning.' };
+    if (this.state.polarEndgame.warningTick === null) return { accepted: false, reason: 'No Antarctic warning is active.' };
+    if (!this.applyingCommand) return this.queue({ type: 'acknowledge-polar-warning', playerId: id });
+    const result = acknowledgePolarWarningV2(this.state, id);
+    if (result.accepted) {
+      this.recordAppliedAction();
+      this.emit({ reason: 'polar-warning-acknowledged', polar: { kind: 'warning', region: 'antarctica', playerId: id } });
+    }
+    return result;
+  }
+
+  antarcticExpeditionTerms(playerId: string, sectorId: AntarcticSectorIdV2): AntarcticExpeditionTermsV2 {
+    return selectAntarcticExpeditionTermsV2(this.state, this.content, nationIdV2(playerId), sectorId);
+  }
+
+  deployAntarcticExpedition(
+    playerId: string,
+    sectorId: AntarcticSectorIdV2,
+    manpower: number,
+  ): CommandResultV2 {
+    const id = nationIdV2(playerId);
+    const terms = this.antarcticExpeditionTerms(id, sectorId);
+    if (!terms.allowed) return { accepted: false, reason: terms.reason };
+    if (!Number.isFinite(manpower) || manpower < terms.minManpower - 0.000001
+      || manpower > terms.maxManpower + 0.000001) {
+      return { accepted: false, reason: `Deploy from ${terms.minManpower.toFixed(2)}M through ${terms.maxManpower.toFixed(2)}M trained reserves.` };
+    }
+    if (!this.applyingCommand) {
+      return this.queue({ type: 'deploy-antarctic-expedition', playerId: id, sectorId, manpower: round(manpower) });
+    }
+    const firstContact = this.state.polarEndgame.contactTick === null;
+    const result = deployAntarcticExpeditionV2(this.state, this.content, id, sectorId, manpower);
+    if (result.accepted) {
+      this.recordAppliedAction();
+      this.emit({
+        reason: firstContact ? 'antarctic-first-contact' : 'antarctic-expedition-deployed',
+        critical: firstContact,
+        polar: { kind: firstContact ? 'contact' : 'battle', region: 'antarctica', playerId: id, sectorId },
+      });
+    }
+    return result;
+  }
+
   /** Atomically queues the exact-100 extra-attention mix for the next tick boundary. */
   setResearchAllocations(playerId: string, allocations: ResearchAllocationsV2): CommandResultV2 {
     const id = nationIdV2(playerId);
@@ -1065,10 +1150,17 @@ export class WorldEngineV2 {
   }
 
   canDeclareWar(attackerId: string, defenderId: string): boolean {
+    if (polarEarthUnityActiveV2(this.state)) return false;
     return canDeclareWarV2(this.state, this.content, nationIdV2(attackerId), nationIdV2(defenderId));
   }
 
   warDeclarationStatus(attackerId: string, defenderId: string): WarDeclarationStatusV2 {
+    if (polarEarthUnityActiveV2(this.state)) return {
+      allowed: false,
+      reason: 'Earth defense protocols prohibit terrestrial wars during the Antarctic counteroffensive.',
+      access: 'none',
+      mobilizationCost: 0,
+    };
     return warDeclarationStatusV2(this.state, this.content, nationIdV2(attackerId), nationIdV2(defenderId));
   }
 
@@ -1083,6 +1175,9 @@ export class WorldEngineV2 {
   declareWar(attackerId: string, defenderId: string, escalatedFromWarId?: string): CommandResultV2 {
     const attacker = nationIdV2(attackerId);
     const defender = nationIdV2(defenderId);
+    if (polarEarthUnityActiveV2(this.state)) {
+      return { accepted: false, reason: 'Earth defense protocols prohibit terrestrial wars during the Antarctic counteroffensive.' };
+    }
     if (!this.applyingCommand) {
       const declaration = warDeclarationStatusV2(
         this.state,
@@ -1218,6 +1313,13 @@ export class WorldEngineV2 {
       case 'rapid-recruitment': return this.rapidRecruitment(command.playerId);
       case 'research-surge': return this.researchSurge(command.playerId, command.targetBranch);
       case 'launch-propaganda': return this.launchPropaganda(command.playerId);
+      case 'start-arctic-project': return this.startArcticProject(command.playerId, command.projectId);
+      case 'acknowledge-polar-warning': return this.acknowledgePolarWarning(command.playerId);
+      case 'deploy-antarctic-expedition': return this.deployAntarcticExpedition(
+        command.playerId,
+        command.sectorId,
+        command.manpower,
+      );
       case 'set-empire-name': return this.setEmpireName(command.playerId, command.name);
       case 'declare-war': return this.declareWar(command.attackerId, command.defenderId, command.escalatedFromWarId);
       case 'request-ceasefire': return this.requestCeasefire(command.warId, command.requesterId);
@@ -1260,6 +1362,12 @@ export class WorldEngineV2 {
   }
 
   private deriveVictory(): void {
+    if (this.state.polarEndgame.phase === 'victory') {
+      this.state.winnerId = selectPolarVictoryWinnerV2(this.state);
+      this.state.gameOver = true;
+      this.state.speed = 0;
+      return;
+    }
     // Full integration may retire the selected country's backend record before
     // global conquest. Preserve that terminal defeat while other AI owners
     // continue to exist on the map.
@@ -1284,9 +1392,12 @@ export class WorldEngineV2 {
     }
     const winner = territoryCount === this.content.territoryIds.length
       ? soleOwner : undefined;
-    this.state.winnerId = winner;
-    this.state.gameOver = Boolean(winner);
-    if (winner) this.state.speed = 0;
+    // A human who unifies the ordinary map still has to resolve the signal
+    // beneath Antarctica. AI conquest and human elimination remain terminal.
+    const humanSoleOwner = Boolean(winner && this.state.humanPlayerIds.includes(winner));
+    this.state.winnerId = humanSoleOwner ? undefined : winner;
+    this.state.gameOver = Boolean(winner && !humanSoleOwner);
+    if (winner && !humanSoleOwner) this.state.speed = 0;
   }
 
   step(ticks = 1): void {
@@ -1295,11 +1406,11 @@ export class WorldEngineV2 {
       this.flushQueuedActions();
       this.state.tick += 1;
       pruneAllianceStateV2(this.state);
-      processOpeningConflictsV2(this.state, this.content);
-      const integrationRevolutions = processTerritoryIntegrationRevolutionsV2(
-        this.state,
-        this.content,
-      );
+      const earthUnityActive = polarEarthUnityActiveV2(this.state);
+      if (!earthUnityActive) processOpeningConflictsV2(this.state, this.content);
+      const integrationRevolutions = earthUnityActive
+        ? []
+        : processTerritoryIntegrationRevolutionsV2(this.state, this.content);
       for (const revolution of integrationRevolutions) {
         beginIndependenceWarV2(
           this.state,
@@ -1317,10 +1428,22 @@ export class WorldEngineV2 {
           || revolution.displacedOwnerId === this._viewerPlayerId,
       });
       processOpeningArmyBonusDecayV2(this.state, this.content);
-      // The temporary player capacity follows the same twenty-year curve as the
+      // The temporary player capacity follows the same thirty-year curve as the
       // opening roster. Refresh it before finance, recruitment and combat use
       // the new week's entitlement; the later sync still handles conquests.
       synchronizeArmyCapacityV2(this.state, this.content);
+      const arcticChanges = processArcticResearchV2(this.state, this.content);
+      if (arcticChanges.length > 0) synchronizeArmyCapacityV2(this.state, this.content);
+      for (const change of arcticChanges) this.emit({
+        reason: change.kind === 'warning' ? 'antarctic-warning' : 'arctic-project-complete',
+        critical: change.kind === 'warning',
+        polar: {
+          kind: change.kind,
+          region: change.kind === 'warning' ? 'antarctica' : 'arctic',
+          ...(change.playerId ? { playerId: change.playerId } : {}),
+          ...(change.projectId ? { projectId: change.projectId } : {}),
+        },
+      });
       if (this.state.gameOver) {
         pruneWorldHistoryV2(this.state);
         this.assertStateIntegrity(true);
@@ -1404,8 +1527,20 @@ export class WorldEngineV2 {
       // Battles may have changed surviving manpower, local army quality and
       // ownership. Resistance decisions need fresh additive post-war power.
       const resistancePowers = createPowerSnapshotV2(this.state, this.content);
+      const polarResult = processPolarEndgameV2(this.state, this.content, resistancePowers);
       const resistanceLevel = updateGlobalResistanceV2(this.state, this.content, resistancePowers);
       processPropagandaProgramsV2(this.state);
+      applyPolarSuspicionReliefV2(this.state, polarResult.suspicionRelief);
+      for (const change of polarResult.changes) this.emit({
+        reason: `polar-${change.kind}`,
+        critical: change.kind === 'sector-secured' || change.kind === 'victory' || change.kind === 'contact',
+        polar: {
+          kind: change.kind,
+          region: 'antarctica',
+          ...(change.playerId ? { playerId: change.playerId } : {}),
+          ...(change.sectorId ? { sectorId: change.sectorId } : {}),
+        },
+      });
       if (resistanceLevel) this.emit({ reason: 'resistance-formed', critical: true });
       for (const command of planAiCommandsV2(this.state, this.content)) this.applyAiCommand(command);
       this.deriveVictory();

@@ -121,7 +121,7 @@ export const INITIAL_RESERVE_CADRE_CAPACITY_SHARE_V2 = 0.02;
  * trained personnel; the rest remains outside the game's short war horizon.
  */
 export const INITIAL_REPORTED_RESERVE_READY_SHARE_V2 = 0.55;
-export const BELGIUM_OPENING_RESERVE_CAPACITY_SHARE_V2 = 0.35;
+export const BELGIUM_OPENING_RESERVE_CAPACITY_SHARE_V2 = 0.40;
 
 /** Real-world anchor, fitted into the shared 1x active-cap reserve rule. */
 export function initialTrainedReserveManpowerV2(

@@ -6,7 +6,10 @@ import {
 } from './balance';
 import { planAiCommandsV2 } from './ai';
 import { createWorldStateV2 } from './bootstrap';
-import { synchronizeArmyCapacityV2 } from './capacity';
+import {
+  initialNationArmyCapacityBenchmarkV2,
+  synchronizeArmyCapacityV2,
+} from './capacity';
 import { WORLD_CONTENT_V2, type WorldContentV2 } from './content';
 import { createFinancePlansV2, processFinanceMilitaryV2 } from './economy';
 import { synchronizeOpeningArmyHumanRosterV2 } from './nationState';
@@ -31,6 +34,7 @@ import {
   type PlayerId,
   type WorldStateV2,
 } from './types';
+import { humanStartingArmyMultiplierForContentV2 } from './traits';
 
 const belgium = nationIdV2('bel');
 const netherlands = nationIdV2('nld');
@@ -98,6 +102,10 @@ describe('finite trained reserves', () => {
     const china = nationIdV2('chn');
     const albania = nationIdV2('alb');
     const belgiumCapacity = selectTrainedReserveCapacityV2(state, belgium);
+    const belgiumOpeningBenchmark = initialNationArmyCapacityBenchmarkV2(
+      WORLD_CONTENT_V2,
+      belgium,
+    );
 
     expect(state.players[finland]!.trainedReserves).toBe(
       initialTrainedReserveManpowerV2('fin', selectTrainedReserveCapacityV2(state, finland)),
@@ -120,11 +128,21 @@ describe('finite trained reserves', () => {
       selectTrainedReserveCapacityV2(state, albania) * INITIAL_RESERVE_CADRE_CAPACITY_SHARE_V2,
       9,
     );
+    const canonicalBelgiumReserves = initialTrainedReserveManpowerV2(
+      String(belgium),
+      belgiumOpeningBenchmark,
+      WORLD_CONTENT_V2,
+    );
+    expect(BELGIUM_OPENING_RESERVE_CAPACITY_SHARE_V2).toBe(0.40);
+    expect(canonicalBelgiumReserves).toBeCloseTo(0.0313228, 7);
     expect(state.players[belgium]!.trainedReserves).toBeCloseTo(Math.min(
       belgiumCapacity,
-      belgiumCapacity * BELGIUM_OPENING_RESERVE_CAPACITY_SHARE_V2,
+      canonicalBelgiumReserves
+        * humanStartingArmyMultiplierForContentV2(WORLD_CONTENT_V2, belgium),
     ), 6);
-    expect(state.players[belgium]!.trainedReserves / belgiumCapacity).toBeCloseTo(0.35, 5);
+    expect(canonicalBelgiumReserves / belgiumOpeningBenchmark)
+      .toBeCloseTo(BELGIUM_OPENING_RESERVE_CAPACITY_SHARE_V2, 5);
+    expect(state.players[belgium]!.trainedReserves).toBeCloseTo(0.061893295, 8);
     expect(initialTrainedReserveManpowerV2('unreported-fixture', 1)).toBe(
       INITIAL_RESERVE_CADRE_CAPACITY_SHARE_V2,
     );

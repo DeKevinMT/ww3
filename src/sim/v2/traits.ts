@@ -38,6 +38,7 @@ export const TRAIT_MODIFIER_KEYS_V2 = [
   'research-output',
   'research-progress',
   'research-catch-up-bonus',
+  'arctic-research-cost',
   'food-production',
   'food-production-cost',
   'food-import-cost',
@@ -169,6 +170,7 @@ const TRAIT_OPENING_WEAKNESS_BY_KEY_V2: Readonly<Record<TraitModifierKeyV2, Trai
   'research-output': 'research-gap',
   'research-progress': 'research-gap',
   'research-catch-up-bonus': 'research-gap',
+  'arctic-research-cost': 'research-gap',
   'food-production': 'food-security',
   'food-production-cost': 'food-security',
   'food-import-cost': 'food-security',
@@ -196,11 +198,21 @@ const openingMilitaryRankByPlayerIdV2 = Object.freeze(Object.fromEntries(
 ) as Readonly<Record<string, number>>);
 
 export const HUMAN_TRAIT_MULTIPLIER_STRONGEST_V2 = 1;
-export const HUMAN_TRAIT_MULTIPLIER_WEAKEST_V2 = 2.5;
-export const HUMAN_STARTING_ARMY_MULTIPLIER_STRONGEST_V2 = 0.1;
-export const HUMAN_STARTING_ARMY_MULTIPLIER_WEAKEST_V2 = 15;
+export const HUMAN_TRAIT_MULTIPLIER_WEAKEST_V2 = 3;
+export const HUMAN_STARTING_ARMY_MULTIPLIER_STRONGEST_V2 = 0.05;
+export const HUMAN_STARTING_ARMY_BASE_CURVE_WEAKEST_MULTIPLIER_V2 = 15;
+export const HUMAN_STARTING_ARMY_MULTIPLIER_WEAKEST_V2 = 50;
+export const HUMAN_OPENING_RESERVE_MULTIPLIER_STRONGEST_V2 = 1;
+export const HUMAN_OPENING_RESERVE_BASE_CURVE_WEAKEST_MULTIPLIER_V2 = 1.5;
+export const HUMAN_OPENING_RESERVE_MULTIPLIER_WEAKEST_V2 = 2;
+export const HUMAN_OPENING_RESERVE_BONUS_START_SHARE_V2 = 0.75;
+export const HUMAN_BROAD_UNDERDOG_COUNT_V2 = 25;
+export const HUMAN_BROAD_UNDERDOG_ARMY_MULTIPLIER_ENDPOINT_V2 = 20;
+export const HUMAN_EXTREME_UNDERDOG_COUNT_V2 = 10;
 export const HUMAN_MILITARY_RANK_CURVE_EXPONENT_V2 = 1;
 export const ABSOLUTE_UNDERDOG_ARMY_CAP_COUNT_V2 = 24;
+/** Small identity-budget lift for Belgium's existing fiscal/military trait package. */
+export const BELGIUM_TRAIT_VALUE_MULTIPLIER_V2 = 1.08;
 const LEGACY_V261_HUMAN_MILITARY_RANK_CURVE_EXPONENT_V2 = 1;
 const HUMAN_BONUS_ACCELERATION_START_RANK_V2 = 15;
 const HUMAN_BONUS_TAIL_EXPONENT_V2 = 0.78;
@@ -212,13 +224,13 @@ const HUMAN_STARTING_ARMY_CURVE_V2 = Object.freeze([
   // Give countries around Belgium's opening rank a meaningful first move
   // without extending reductions beyond the strongest 10% or flattening the
   // much steeper help reserved for the true underdog tail.
-  { rankShare: 0.38, multiplier: 1.65 },
-  { rankShare: 0.50, multiplier: 1.90 },
+  { rankShare: 0.38, multiplier: 1.80 },
+  { rankShare: 0.50, multiplier: 2.10 },
   { rankShare: 0.55, multiplier: 2.30 },
   { rankShare: 0.65, multiplier: 7.50 },
   { rankShare: 0.75, multiplier: 9 },
   { rankShare: 0.90, multiplier: 11 },
-  { rankShare: 1, multiplier: HUMAN_STARTING_ARMY_MULTIPLIER_WEAKEST_V2 },
+  { rankShare: 1, multiplier: HUMAN_STARTING_ARMY_BASE_CURVE_WEAKEST_MULTIPLIER_V2 },
 ]);
 
 /**
@@ -355,8 +367,38 @@ export function humanCountryTraitMultiplierV2(playerId: PlayerId | string): numb
 
 /** Opening-only deployed-force help for a human seat; AI countries stay at 1x. */
 export function humanStartingArmyMultiplierV2(playerId: PlayerId | string): number {
-  const smoothRank = humanMilitaryRankCurveV2(playerId, OPENING_MILITARY_ORDER_V2);
-  return humanStartingArmyMultiplierFromRankFactorV2(smoothRank);
+  return humanStartingArmyUnderdogOverlayV2(
+    playerId,
+    OPENING_MILITARY_ORDER_V2,
+    humanStartingArmyBaseCurveMultiplierForContentV2(WORLD_CONTENT_V2, playerId),
+  );
+}
+
+function humanStartingArmyUnderdogOverlayV2(
+  playerId: PlayerId | string,
+  order: readonly PlayerId[],
+  baseMultiplier: number,
+): number {
+  const rank = order.indexOf(String(playerId) as PlayerId) + 1;
+  if (rank <= 0 || rank <= order.length - HUMAN_BROAD_UNDERDOG_COUNT_V2) {
+    return baseMultiplier;
+  }
+  if (rank <= order.length - HUMAN_EXTREME_UNDERDOG_COUNT_V2) {
+    const progress = (
+      rank - (order.length - HUMAN_BROAD_UNDERDOG_COUNT_V2)
+    ) / (HUMAN_BROAD_UNDERDOG_COUNT_V2 - HUMAN_EXTREME_UNDERDOG_COUNT_V2);
+    const smoothProgress = progress * progress * (3 - 2 * progress);
+    return baseMultiplier + (
+      HUMAN_BROAD_UNDERDOG_ARMY_MULTIPLIER_ENDPOINT_V2 - baseMultiplier
+    ) * smoothProgress;
+  }
+  const progress = (
+    rank - (order.length - HUMAN_EXTREME_UNDERDOG_COUNT_V2)
+  ) / HUMAN_EXTREME_UNDERDOG_COUNT_V2;
+  const smoothProgress = progress * progress * (3 - 2 * progress);
+  return HUMAN_BROAD_UNDERDOG_ARMY_MULTIPLIER_ENDPOINT_V2
+    + (HUMAN_STARTING_ARMY_MULTIPLIER_WEAKEST_V2
+      - HUMAN_BROAD_UNDERDOG_ARMY_MULTIPLIER_ENDPOINT_V2) * smoothProgress;
 }
 
 export function humanCountryTraitMultiplierForContentV2(
@@ -375,11 +417,116 @@ export function humanStartingArmyMultiplierForContentV2(
   content: WorldContentV2,
   playerId: PlayerId | string,
 ): number {
+  const order = openingMilitaryOrderForContentV2(content);
+  const baseMultiplier = humanStartingArmyBaseCurveMultiplierForContentV2(content, playerId);
+  return humanStartingArmyUnderdogOverlayV2(playerId, order, baseMultiplier);
+}
+
+/**
+ * Frozen pre-underdog-overlay quote. This is exported so simulation, chooser
+ * presentation and regression tests can prove that ranks outside the weakest
+ * 25 still use the existing opening-army curve bit-for-bit.
+ */
+export function humanStartingArmyBaseCurveMultiplierForContentV2(
+  content: WorldContentV2,
+  playerId: PlayerId | string,
+): number {
   const smoothRank = humanMilitaryRankCurveV2(
     playerId,
     openingMilitaryOrderForContentV2(content),
   );
   return humanStartingArmyMultiplierFromRankFactorV2(smoothRank);
+}
+
+/**
+ * Human-only opening reserve help for the bottom quartile. The immutable
+ * scenario opening rank is the sole input; the top three quartiles stay 1x.
+ */
+export function humanOpeningReserveMultiplierForContentV2(
+  content: WorldContentV2,
+  playerId: PlayerId | string,
+): number {
+  const order = openingMilitaryOrderForContentV2(content);
+  const rank = openingMilitaryRankForContentV2(content, playerId);
+  if (!rank) return HUMAN_OPENING_RESERVE_MULTIPLIER_STRONGEST_V2;
+  const rankShare = (rank - 1) / Math.max(1, order.length - 1);
+  if (rankShare <= HUMAN_OPENING_RESERVE_BONUS_START_SHARE_V2) {
+    return HUMAN_OPENING_RESERVE_MULTIPLIER_STRONGEST_V2;
+  }
+  const progress = Math.min(1, Math.max(0,
+    (rankShare - HUMAN_OPENING_RESERVE_BONUS_START_SHARE_V2)
+      / (1 - HUMAN_OPENING_RESERVE_BONUS_START_SHARE_V2),
+  ));
+  const smoothProgress = progress * progress * (3 - 2 * progress);
+  const baseMultiplier = HUMAN_OPENING_RESERVE_MULTIPLIER_STRONGEST_V2
+    + (HUMAN_OPENING_RESERVE_BASE_CURVE_WEAKEST_MULTIPLIER_V2
+      - HUMAN_OPENING_RESERVE_MULTIPLIER_STRONGEST_V2) * smoothProgress;
+  if (rank <= order.length - HUMAN_EXTREME_UNDERDOG_COUNT_V2) return baseMultiplier;
+  const tailProgress = (
+    rank - (order.length - HUMAN_EXTREME_UNDERDOG_COUNT_V2)
+  ) / HUMAN_EXTREME_UNDERDOG_COUNT_V2;
+  const smoothTail = tailProgress * tailProgress * (3 - 2 * tailProgress);
+  return baseMultiplier
+    + (HUMAN_OPENING_RESERVE_MULTIPLIER_WEAKEST_V2 - baseMultiplier) * smoothTail;
+}
+
+export function isExtremeOpeningUnderdogForContentV2(
+  content: WorldContentV2,
+  playerId: PlayerId | string,
+): boolean {
+  const order = openingMilitaryOrderForContentV2(content);
+  const rank = openingMilitaryRankForContentV2(content, playerId);
+  return rank !== undefined && rank > order.length - HUMAN_EXTREME_UNDERDOG_COUNT_V2;
+}
+
+export interface HumanOpeningTrainedReserveTermsV2 {
+  canonicalReserves: number;
+  neutralReserveCapacity: number;
+  liveReserveCapacity: number;
+  reserveMultiplier: number;
+  minimumBaseReserves: number;
+  effectiveBaseReserves: number;
+  trainedReserves: number;
+}
+
+/**
+ * Pure canonical quote used by simulation and country-choice presentation.
+ * The weakest-ten floor is five percent before their final reserve multiplier,
+ * and every result is capped by the live reserve capacity supplied by caller.
+ */
+export function humanOpeningTrainedReserveTermsForContentV2(
+  content: WorldContentV2,
+  playerId: PlayerId | string,
+  canonicalReservesInput: number,
+  neutralReserveCapacityInput: number,
+  liveReserveCapacityInput: number,
+  humanControlled = true,
+): HumanOpeningTrainedReserveTermsV2 {
+  const canonicalReserves = Number.isFinite(canonicalReservesInput)
+    ? Math.max(0, canonicalReservesInput) : 0;
+  const neutralReserveCapacity = Number.isFinite(neutralReserveCapacityInput)
+    ? Math.max(0, neutralReserveCapacityInput) : 0;
+  const liveReserveCapacity = Number.isFinite(liveReserveCapacityInput)
+    ? Math.max(0, liveReserveCapacityInput) : 0;
+  const armyMultiplier = humanStartingArmyMultiplierForContentV2(content, playerId);
+  const reserveMultiplier = !humanControlled ? 1
+    : String(playerId) === 'bel' ? armyMultiplier
+      : armyMultiplier < 1 ? armyMultiplier
+        : humanOpeningReserveMultiplierForContentV2(content, playerId);
+  const minimumBaseReserves = humanControlled
+    && isExtremeOpeningUnderdogForContentV2(content, playerId)
+    ? neutralReserveCapacity * 0.05
+    : 0;
+  const effectiveBaseReserves = Math.max(canonicalReserves, minimumBaseReserves);
+  return {
+    canonicalReserves,
+    neutralReserveCapacity,
+    liveReserveCapacity,
+    reserveMultiplier,
+    minimumBaseReserves,
+    effectiveBaseReserves,
+    trainedReserves: Math.min(liveReserveCapacity, effectiveBaseReserves * reserveMultiplier),
+  };
 }
 
 /** Historical V2.61 opening multiplier for deterministic save migration only. */
@@ -422,7 +569,8 @@ export function humanCountryTraitMultiplierForContentVersionV2(
 type ModifierTupleV2 =
   | readonly [CountryTraitModifierV2]
   | readonly [CountryTraitModifierV2, CountryTraitModifierV2]
-  | readonly [CountryTraitModifierV2, CountryTraitModifierV2, CountryTraitModifierV2];
+  | readonly [CountryTraitModifierV2, CountryTraitModifierV2, CountryTraitModifierV2]
+  | readonly [CountryTraitModifierV2, CountryTraitModifierV2, CountryTraitModifierV2, CountryTraitModifierV2];
 
 const freezeScope = (scope?: TraitModifierScopeV2): TraitModifierScopeV2 | undefined => {
   if (!scope) return undefined;
@@ -480,6 +628,7 @@ const TRAIT_MODIFIER_LABELS_V2: Readonly<Record<TraitModifierKeyV2, string>> = O
   'research-output': 'research output',
   'research-progress': 'research progress',
   'research-catch-up-bonus': 'research catch-up bonus',
+  'arctic-research-cost': 'Arctic research cost',
   'food-production': 'domestic food production',
   'food-production-cost': 'food production cost',
   'food-import-cost': 'food import cost',
@@ -540,7 +689,9 @@ export const describeCountryTraitModifiersV2 = (
   modifiers: readonly CountryTraitModifierV2[],
   signedDistanceMultiplier = 1,
 ): string => modifiers.map((entry) => {
-  const rawScaledPercentage = entry.percentage * signedDistanceMultiplier;
+  const rawScaledPercentage = entry.percentage * (
+    entry.key === 'arctic-research-cost' ? 1 : signedDistanceMultiplier
+  );
   if (entry.replacement) {
     const scaledReplacement = Math.max(0, entry.replacement.from
       + (entry.replacement.to - entry.replacement.from) * signedDistanceMultiplier);
@@ -568,7 +719,7 @@ export const describeCountryTraitModifiersV2 = (
  * Human underdog scaling is applied later and does not alter this base budget.
  */
 export const BASE_COUNTRY_TRAIT_VALUE_BUDGET_V2 = 26;
-const GREENLAND_TRAIT_VALUE_BUDGET_V2 = 20;
+export const TOP_POWER_COUNTRY_TRAIT_VALUE_BUDGET_V2 = 10;
 const FIXED_REPLACEMENT_VALUE_BUDGET_V2 = 4;
 
 const TRAIT_VALUE_WEIGHT_BY_KEY_V2: Readonly<Record<TraitModifierKeyV2, number>> = Object.freeze({
@@ -601,6 +752,8 @@ const TRAIT_VALUE_WEIGHT_BY_KEY_V2: Readonly<Record<TraitModifierKeyV2, number>>
   'research-output': 1.4,
   'research-progress': 1.3,
   'research-catch-up-bonus': 0.9,
+  // Auxiliary endgame identity: excluded from ordinary opening-trait budget.
+  'arctic-research-cost': 0,
   'food-production': 0.45,
   'food-production-cost': 0.6,
   'food-import-cost': 0.5,
@@ -652,6 +805,7 @@ export const countryTraitBaseValueScoreV2 = (
 ), 0);
 
 const baseTraitPercentageBoundsV2 = (key: TraitModifierKeyV2): readonly [number, number] => {
+  if (key === 'arctic-research-cost') return [-50, 15];
   if (key === 'military-casualties') return [-20, 0];
   if (key === 'naval-distance-pressure') return [-45, 0];
   if (key === 'treasury-seizure') return [-60, 0];
@@ -793,10 +947,126 @@ const ensureMicrostateGrowthEngineV2 = (
   return Object.freeze(next) as ModifierTupleV2;
 };
 
+export const FOOD_TRAIT_ALLOWLIST_V2: readonly PlayerId[] = Object.freeze([
+  'arg', 'aus', 'bra', 'nld', 'nzl', 'psx', 'tha', 'ukr', 'vnm',
+] as PlayerId[]);
+
+type FoodTraitModifierKeyV2 =
+  | 'food-production'
+  | 'food-production-cost'
+  | 'food-import-cost'
+  | 'food-storage-capacity'
+  | 'food-export-income'
+  | 'food-logistics-pressure'
+  | 'food-access-vulnerability';
+
+export const FOOD_TRAIT_MODIFIER_KEYS_V2: readonly FoodTraitModifierKeyV2[] = Object.freeze([
+  'food-production',
+  'food-production-cost',
+  'food-import-cost',
+  'food-storage-capacity',
+  'food-export-income',
+  'food-logistics-pressure',
+  'food-access-vulnerability',
+]);
+
+const foodTraitKeysV2 = new Set<TraitModifierKeyV2>(FOOD_TRAIT_MODIFIER_KEYS_V2);
+const foodTraitAllowlistV2 = new Set<PlayerId>(FOOD_TRAIT_ALLOWLIST_V2);
+const foodReplacementKeysV2 = (
+  ...keys: TraitModifierKeyV2[]
+): readonly TraitModifierKeyV2[] => Object.freeze(keys);
+const FOOD_REPLACEMENT_KEYS_BY_SOURCE_V2: Readonly<Record<
+  FoodTraitModifierKeyV2,
+  readonly TraitModifierKeyV2[]
+>> = Object.freeze({
+  'food-production': foodReplacementKeysV2(
+    'development-economy-growth', 'army-capacity', 'reserve-training', 'research-output',
+  ),
+  'food-production-cost': foodReplacementKeysV2(
+    'base-operating-cost', 'recruitment-cost', 'army-upkeep', 'tax-efficiency',
+  ),
+  'food-import-cost': foodReplacementKeysV2(
+    'tax-efficiency', 'base-operating-cost', 'naval-distance-pressure', 'research-output',
+  ),
+  'food-storage-capacity': foodReplacementKeysV2(
+    'reserve-capacity', 'reserve-training', 'research-catch-up-bonus', 'condition-recovery',
+  ),
+  'food-export-income': foodReplacementKeysV2(
+    'tax-efficiency', 'development-economy-growth', 'research-output', 'army-upkeep',
+  ),
+  'food-logistics-pressure': foodReplacementKeysV2(
+    'front-supply', 'operation-cost', 'reserve-capacity', 'condition-recovery',
+  ),
+  'food-access-vulnerability': foodReplacementKeysV2(
+    'integration-cost', 'condition-recovery', 'reserve-deployment-throughput',
+    'research-catch-up-bonus',
+  ),
+});
+const foodReplacementFallbackKeysV2: readonly TraitModifierKeyV2[] = Object.freeze([
+  'army-capacity', 'recruitment-throughput', 'reserve-training', 'reserve-capacity',
+  'tax-efficiency', 'development-economy-growth', 'research-output',
+  'research-catch-up-bonus', 'condition-recovery', 'passive-recruitment',
+  'accelerated-recruitment', 'base-operating-cost', 'recruitment-cost',
+  'army-upkeep', 'integration-cost', 'operation-cost', 'front-supply',
+  'reserve-deployment-throughput',
+]);
+const lowerIsBetterReplacementKeysV2 = new Set<TraitModifierKeyV2>([
+  'base-operating-cost', 'recruitment-cost', 'integration-cost', 'operation-cost',
+]);
+
+/**
+ * Food identity is exceptional. Non-allowlisted filler is deterministically
+ * converted into an opening-useful military, economic or research channel.
+ * Allowlisted countries keep at most one authored food specialty.
+ */
+const replaceGenericFoodTraitsV2 = (
+  playerId: string,
+  source: ModifierTupleV2,
+): ModifierTupleV2 => {
+  const used = new Set(source
+    .filter((entry) => !foodTraitKeysV2.has(entry.key))
+    .map((entry) => entry.key));
+  let retainedFood = false;
+  const seed = [...playerId].reduce((sum, character) => sum + character.charCodeAt(0), 0);
+  const transformed = source.map((entry, index) => {
+    if (!foodTraitKeysV2.has(entry.key)) return entry;
+    if (foodTraitAllowlistV2.has(playerId as PlayerId) && !retainedFood) {
+      retainedFood = true;
+      return entry;
+    }
+    const preferredKeys = FOOD_REPLACEMENT_KEYS_BY_SOURCE_V2[entry.key as FoodTraitModifierKeyV2];
+    const start = (seed + index * 7) % preferredKeys.length;
+    let replacementKey = preferredKeys[start]!;
+    for (let offset = 0; offset < preferredKeys.length; offset += 1) {
+      const candidate = preferredKeys[(start + offset) % preferredKeys.length]!;
+      if (!used.has(candidate)) {
+        replacementKey = candidate;
+        break;
+      }
+    }
+    if (used.has(replacementKey)) {
+      replacementKey = foodReplacementFallbackKeysV2.find((candidate) => !used.has(candidate))
+        ?? replacementKey;
+    }
+    used.add(replacementKey);
+    const magnitude = Math.max(2, Math.abs(entry.percentage));
+    return modifier(
+      replacementKey,
+      lowerIsBetterReplacementKeysV2.has(replacementKey) ? -magnitude : magnitude,
+    );
+  });
+  return Object.freeze(transformed) as ModifierTupleV2;
+};
+
 const balancedTraitModifiersV2 = (
   playerId: string,
   sourceModifiers: ModifierTupleV2,
 ): ModifierTupleV2 => {
+  // Greenland is the deliberately exceptional challenge-start identity. Its
+  // authored ordinary values are designed around the exact 3x human endpoint
+  // (+27% capacity, +15% recruitment and +12% population-recruitment
+  // research), while Arctic affinity remains raw and unamplified everywhere.
+  if (playerId === 'grl') return sourceModifiers;
   // Opening balance belongs to the temporary human army/capacity curve. Traits
   // stay declarative and country-specific: rank or population never rewrites
   // their authored mechanics, terrain, or homeland conditions.
@@ -807,11 +1077,16 @@ const balancedTraitModifiersV2 = (
   const scalableValue = modifiers.reduce((sum, entry) => (
     sum + (entry.replacement ? 0 : traitModifierBaseValueV2(entry))
   ), 0);
-  const traitBudget = playerId === 'grl'
-    ? GREENLAND_TRAIT_VALUE_BUDGET_V2 : BASE_COUNTRY_TRAIT_VALUE_BUDGET_V2;
+  const rankFactor = humanMilitaryRankCurveV2(playerId, OPENING_MILITARY_ORDER_V2);
+  const countryBudgetMultiplier = playerId === 'bel'
+    ? BELGIUM_TRAIT_VALUE_MULTIPLIER_V2 : 1;
+  const traitBudget = (TOP_POWER_COUNTRY_TRAIT_VALUE_BUDGET_V2
+    + (BASE_COUNTRY_TRAIT_VALUE_BUDGET_V2 - TOP_POWER_COUNTRY_TRAIT_VALUE_BUDGET_V2)
+      * rankFactor) * countryBudgetMultiplier;
   const targetScalableValue = Math.max(1, traitBudget - fixedBudget);
   const scale = scalableValue > 0 ? targetScalableValue / scalableValue : 1;
   const percentages = modifiers.map((entry) => {
+    if (entry.key === 'arctic-research-cost') return entry.percentage;
     if (entry.replacement) return entry.percentage;
     const [minimum, maximum] = baseTraitPercentageBoundsV2(entry.key);
     return Math.min(maximum, Math.max(minimum, entry.percentage * scale));
@@ -831,7 +1106,7 @@ const balancedTraitModifiersV2 = (
     const remainingValue = targetScalableValue - currentValue;
     if (remainingValue <= 0.001) break;
     const eligible = modifiers.map((entry, index) => {
-      if (entry.replacement) return false;
+      if (entry.replacement || entry.key === 'arctic-research-cost') return false;
       const [minimum, maximum] = baseTraitPercentageBoundsV2(entry.key);
       const percentage = percentages[index]!;
       return percentage < 0 ? percentage > minimum : percentage < maximum;
@@ -870,10 +1145,12 @@ const trait = (
   _description: string,
   modifiers: ModifierTupleV2,
 ): CountryTraitV2 => {
-  if (modifiers.length > 3) {
-    throw new Error(`Country trait ${playerId} must contain one to three modifiers.`);
+  const arcticModifierCount = modifiers.filter((entry) => entry.key === 'arctic-research-cost').length;
+  if (modifiers.length > 3 && !(modifiers.length === 4 && arcticModifierCount === 1)) {
+    throw new Error(`Country trait ${playerId} must contain one to three ordinary modifiers and at most one Arctic auxiliary.`);
   }
-  const balancedModifiers = balancedTraitModifiersV2(playerId, modifiers);
+  const transformedModifiers = replaceGenericFoodTraitsV2(playerId, modifiers);
+  const balancedModifiers = balancedTraitModifiersV2(playerId, transformedModifiers);
   const english = ENGLISH_TRAIT_COPY_V2[playerId];
   const countryName = WORLD_CONTENT_V2.nations[playerId as PlayerId]?.name;
   if (!english || !countryName) throw new Error(`Missing English country trait copy for ${playerId}.`);
@@ -882,7 +1159,11 @@ const trait = (
     countryName,
     name: english.name,
     effect: describeCountryTraitModifiersV2(balancedModifiers),
-    description: english.description,
+    description: transformedModifiers.some((entry, index) => entry.key !== modifiers[index]?.key)
+      ? `${english.name} emphasizes ${transformedModifiers
+        .map((entry) => TRAIT_MODIFIER_LABELS_V2[entry.key])
+        .join(', ')} as its distinct opening doctrine.`
+      : english.description,
     openingWeakness: TRAIT_OPENING_WEAKNESS_BY_KEY_V2[balancedModifiers[0].key],
     modifiers: balancedModifiers,
   });
@@ -902,8 +1183,8 @@ interface EnglishTraitCopyV2 {
 
 /** Player-facing English identity copy; mechanics are rendered from modifiers. */
 const ENGLISH_TRAIT_COPY_V2: Readonly<Record<string, EnglishTraitCopyV2>> = Object.freeze({
-  usa: { name: 'Global Projection', description: 'Offsets the cost and supply burden of projecting a globally deployable military across oceans.' },
-  can: { name: 'Northern Supply Lines', description: 'Offsets long overseas routes with reliable supply and general defense.' },
+  usa: { name: 'Advanced Weapons Command', description: 'Couples advanced-weapons industry with precise expeditionary offense while Arctic megaprojects remain exceptionally expensive.' },
+  can: { name: 'Northern Supply Lines', description: 'Combines reliable overseas supply and northern defense with a permanent Arctic-research advantage.' },
   mex: { name: 'Federal Depth', description: 'Turns a large population into sustainable force capacity without over-amplifying a strong start.' },
   cub: { name: 'Island Mobilization', description: 'Offsets island isolation with portable defense, faster reserve deployment and cheaper naval operations.' },
   dom: { name: 'Caribbean Growth Hub', description: 'Offsets limited opening scale through peaceful economic and population growth.' },
@@ -913,10 +1194,10 @@ const ENGLISH_TRAIT_COPY_V2: Readonly<Record<string, EnglishTraitCopyV2>> = Obje
   cri: { name: 'Civil Mobilization', description: 'Offsets the lack of a standing military advantage by converting civil development into wartime mobilization.' },
   slv: { name: 'Compressed Front', description: 'Makes defended territory easier to hold and rapidly reinforce during war.' },
   gtm: { name: 'Highland Muster', description: 'Offsets limited active forces by building deep reserves behind defensible lines.' },
-  hnd: { name: 'Two-Ocean Line', description: 'Caribbean and Pacific routes share supplies while a two-coast network limits the food burden of naval deployments.' },
+  hnd: { name: 'Two-Ocean Line', description: 'Caribbean and Pacific routes share supplies while a two-coast network accelerates operational recovery.' },
   nic: { name: 'Lakes and Jungle Line', description: 'Offsets lower military scale by exhausting stronger attackers and recovering quickly.' },
   pan: { name: 'Interoceanic Link', description: 'Offsets a narrow land base through efficient finance and very affordable naval campaigns.' },
-  grl: { name: 'Arctic Mass Mobilization', description: 'Transforms the smallest opening army into a recruitable force while reduced upkeep keeps growth economically possible.' },
+  grl: { name: 'Arctic Mass Mobilization', description: 'Supports the weakest opening force with measured capacity, recruitment, population-health research and a fixed Arctic-research discount.' },
 
   arg: { name: 'Pampas Mobilization', description: 'Offsets force-capacity limits with a larger regular army supported by food production.' },
   bol: { name: 'Altiplano Fort', description: 'Offsets landlocked vulnerability with defensive positions that can exhaust stronger neighbors.' },
@@ -931,24 +1212,24 @@ const ENGLISH_TRAIT_COPY_V2: Readonly<Record<string, EnglishTraitCopyV2>> = Obje
   ury: { name: 'Citizen Reserve', description: 'Offsets small scale with efficient revenue, trained reserves and affordable upkeep.' },
   ven: { name: 'Orinoco Mobilization', description: 'Offsets weak conversion of population into fielded power through capacity, recruitment and cheaper food production.' },
 
-  aus: { name: 'Oceanic Reach', description: 'Australia turns long ocean routes into reliable naval reach and supply.' },
-  nzl: { name: 'Expeditionary Cohesion', description: 'Offsets a small expeditionary force by limiting losses and accelerating recovery on naval fronts.' },
+  aus: { name: 'Oceanic Reach', description: 'Links a major agricultural export base to long-range maritime research and ocean reach.' },
+  nzl: { name: 'Expeditionary Cohesion', description: 'Pairs a high-value agricultural export base with low-loss, fast-recovering naval expeditions.' },
   png: { name: 'Melanesian Depth', description: 'Offsets archipelago vulnerability with scalable forces and stronger defense.' },
 
   alb: { name: 'Adriatic Gateway', description: 'Offsets a small opening base with affordable naval expansion, supply and faster integration.' },
-  bel: { name: 'European Switchboard', description: 'Offsets limited territory through fiscal efficiency and general defense.' },
+  bel: { name: 'European Switchboard', description: 'Offsets limited territory through fiscal efficiency, added force capacity and urban defense.' },
   bih: { name: 'Layered Fortress', description: 'Offsets low opening power with exceptional defensive survival and reduced battle damage.' },
   bgr: { name: 'Black Sea Corridor', description: 'Offsets supply and food exposure with self-sufficiency, two-route logistics and defensive research.' },
-  dnk: { name: 'Danish Straits', description: 'Offsets reliance on nearby sea routes by reducing distance and food-logistics pressure.' },
+  dnk: { name: 'Danish Straits', description: 'Controls nearby sea routes through short supply lines and fast postwar recovery.' },
   deu: { name: 'European Logistics Hub', description: 'Turns industrial knowledge and Germany’s central position into rapid reinforcement of allied land fronts.' },
   est: { name: 'Digital Leap State', description: 'Offsets a very small opening base through research output, catch-up and lower operating costs.' },
-  fin: { name: 'Total National Defense', description: 'Offsets limited manpower through reserves, lower losses and stronger defense.' },
-  fra: { name: 'Strategic Autonomy', description: 'Offsets the technology, naval and integration costs of independent great-power operations.' },
+  fin: { name: 'Total National Defense', description: 'Offsets limited manpower through reserves, lower losses, Arctic defense and faster polar research.' },
+  fra: { name: 'Autonomous Deterrent', description: 'Pairs sovereign advanced-weapons research with affordable deployments and postwar recovery.' },
   grc: { name: 'Aegean Link', description: 'Aegean sea lanes support affordable fleets and a deeply trained island reserve.' },
   hun: { name: 'Danube Interior Line', description: 'Offsets the lack of sea access with efficient land campaigns and integration.' },
   irl: { name: 'Atlantic Knowledge Base', description: 'Offsets isolation and limited military scale through safe scientific and fiscal development.' },
-  isl: { name: 'North Atlantic Link', description: 'Offsets extreme isolation and tiny opening power with affordable reach and defense on every owned front.' },
-  ita: { name: 'Mediterranean Depth', description: 'Offsets the strain of several long naval fronts through lower logistics and fatigue pressure.' },
+  isl: { name: 'North Atlantic Link', description: 'Offsets extreme isolation through ocean reach, defense and a strong Arctic-research affinity.' },
+  ita: { name: 'Mediterranean Operational Depth', description: 'Sustains long Mediterranean campaigns through fatigue control, recovery and coastal consolidation.' },
   kos: { name: 'Accelerated State Building', description: 'Offsets a very small economy through efficient administration and rapid recovery.' },
   hrv: { name: 'Adriatic Coastal Belt', description: 'Offsets limited scale with general defense, supply and naval operations.' },
   lva: { name: 'Baltic Supply Line', description: 'Offsets a small population with deep stocks, trainable reserves and general defense.' },
@@ -956,23 +1237,23 @@ const ENGLISH_TRAIT_COPY_V2: Readonly<Record<string, EnglishTraitCopyV2>> = Obje
   lux: { name: 'Capital Mobilization', description: 'Turns exceptional finance into revenue and permanent room for a much larger army.' },
   mda: { name: 'Fertile Reserve', description: 'Offsets economic and military fragility with food security, storage and trained reserves.' },
   mne: { name: 'Mountain Fortress by the Sea', description: 'Offsets one of the weakest conventional starts through hard defense and scalable force capacity.' },
-  nld: { name: 'Delta Economy', description: 'Offsets import and maritime exposure through storage and lower food and naval costs.' },
+  nld: { name: 'Delta Agri-Tech', description: 'Turns high-yield agriculture and economy science into an efficient maritime knowledge economy.' },
   mkd: { name: 'Balkan Crossroads', description: 'Offsets a small landlocked base with exceptionally efficient land expansion.' },
-  nor: { name: 'Long-Coast Logistics', description: 'Offsets long sea distances and battle damage across an extended front.' },
-  ukr: { name: 'Deep Mobilization', description: 'Offsets a damaged front through reserve deployment, cheaper recruitment and lower wartime condition loss.' },
+  nor: { name: 'Long-Coast Logistics', description: 'Offsets long sea distances and battle damage while accelerating Arctic research.' },
+  ukr: { name: 'Breadbasket Mobilization', description: 'Links an exceptional breadbasket to rapid reserve deployment and affordable recruitment.' },
   aut: { name: 'Alpine Junction', description: 'Offsets a landlocked position with general defense, land supply and efficient integration.' },
   pol: { name: 'Eastern Depth', description: 'Offsets exposure to land attacks with bounded reserve, defense and capacity gains.' },
   prt: { name: 'Atlantic Forward Base', description: 'Offsets distance from expansion targets with cheaper naval campaigns and faster integration.' },
   rou: { name: 'Carpathian Arc', description: 'Offsets border exposure through food production, reserves and land defense.' },
-  rus: { name: 'Continental Depth', description: 'Offsets immense distances and prolonged-war pressure with scalable logistics and endurance.' },
+  rus: { name: 'Deep Mobilization Front', description: 'Turns continental distance, reserve mobilisation and war endurance into a sustained land campaign with Arctic affinity.' },
   srb: { name: 'Central Interior Line', description: 'Offsets a fully continental position through supply, land defense and rapid reserve response.' },
   svn: { name: 'Alpine-Adriatic Link', description: 'Offsets small scale with recovery, two-route supply and economic growth.' },
   svk: { name: 'Industrial Heartland', description: 'Offsets limited force scale with lower upkeep, military-industry research and more army capacity.' },
   esp: { name: 'Iberian Expeditionary Base', description: 'Atlantic and Mediterranean access sustains supplied fleets and faster recovery from long wars.' },
   cze: { name: 'Precision Industry', description: 'Offsets limited mass through affordable recruitment, military-industry research and recovery.' },
-  gbr: { name: 'Global Connections', description: 'Offsets worldwide naval distances with a restrained reach and supply bonus.' },
+  gbr: { name: 'Global Intelligence Network', description: 'Combines worldwide reach with intelligence-led research catch-up and strategic endurance.' },
   blr: { name: 'Domestic Recovery Base', description: 'Offsets continental exposure through recovery, army capacity and land supply.' },
-  swe: { name: 'Dual Use', description: 'Offsets reserve needs through logistics research, training and general defense.' },
+  swe: { name: 'Dual Use', description: 'Links logistics research, reserve training, northern defense and Arctic science.' },
   che: { name: 'Alpine Redoubt', description: 'Offsets a small landlocked base through general defense, fiscal efficiency and defeat insurance.' },
 
   dza: { name: 'Saharan Depth', description: 'Offsets route and food-import exposure with a restrained broad bonus.' },
@@ -993,7 +1274,7 @@ const ENGLISH_TRAIT_COPY_V2: Readonly<Record<string, EnglishTraitCopyV2>> = Obje
   gmb: { name: 'River Gateway', description: 'Offsets a minute corridor start with maximum supply, lower state costs and fast land integration.' },
   gha: { name: 'Gulf Trade Junction', description: 'Offsets fiscal and maritime costs by monetizing food surpluses and sea routes.' },
   gin: { name: 'Headwaters', description: 'Offsets food, route and recovery pressure during regional campaigns.' },
-  gnb: { name: 'Bijagós Routes', description: 'The Bijagós archipelago combines deep food stores with supplied, long-range sea routes.' },
+  gnb: { name: 'Bijagós Routes', description: 'The Bijagós archipelago combines trained reserves with supplied, long-range sea routes.' },
   civ: { name: 'West African Growth Hub', description: 'Offsets expansion costs through revenue, development growth and cheaper integration.' },
   cmr: { name: 'Dual Access', description: 'Offsets split continental and maritime access by rewarding coordinated two-front logistics.' },
   ken: { name: 'East African Link', description: 'Offsets coast-to-interior expansion costs with flexible supply, integration and growth.' },
@@ -1007,7 +1288,7 @@ const ENGLISH_TRAIT_COPY_V2: Readonly<Record<string, EnglishTraitCopyV2>> = Obje
   mrt: { name: 'Saharan Coast', description: 'Offsets a vulnerable coastal base with durable defense, flexible supply and deep stocks.' },
   moz: { name: 'Long Coastal Corridor', description: 'Offsets widely separated coastal operations through distance relief, supply and recovery.' },
   nam: { name: 'Extended Supply Line', description: 'Offsets low mass and long distances with cheap, reliable logistics and food imports.' },
-  ner: { name: 'Inland Supply State', description: 'Offsets a weak opening force by accumulating land supply, food stocks and trained reserves.' },
+  ner: { name: 'Inland Supply State', description: 'Offsets a weak opening force through land supply, field recovery and trained reserves.' },
   nga: { name: 'Federal Scale', description: 'Offsets the logistics and integration burden of a large state with bounded scale efficiencies.' },
   uga: { name: 'Lakes Junction', description: 'Offsets landlocked pressure through supply, reserves and domestic food production.' },
   rwa: { name: 'Dense Administrative Core', description: 'Offsets a small opening base with exceptional administration and integration speed.' },
@@ -1036,12 +1317,12 @@ const ENGLISH_TRAIT_COPY_V2: Readonly<Record<string, EnglishTraitCopyV2>> = Obje
   cyp: { name: 'Eastern Mediterranean Redoubt', description: 'Offsets a small island force through naval supply, lower attacking losses and food storage.' },
   phl: { name: 'Island Chain', description: 'Offsets a fragmented archipelago through naval supply, cheaper operations and attack.' },
   geo: { name: 'Caucasus Gateway', description: 'Offsets exposed borders and limited forces through stronger survival and land supply.' },
-  ind: { name: 'Self-Reliant Mass', description: 'Turns demographic scale and domestic military industry into sustainable long-term force growth.' },
+  ind: { name: 'Strategic Mass', description: 'Turns demographic scale, reserves and domestic military industry into sustainable force growth.' },
   idn: { name: 'Archipelago Command', description: 'Turns the world’s largest archipelago into a coherent reserve-backed naval operating area.' },
   irq: { name: 'Mesopotamian Recovery', description: 'Offsets the damage and fatigue of costly continental wars through recovery and land supply.' },
   irn: { name: 'Plateau Logistics', description: 'Offsets broad borders and technology demands with restrained defense, supply and weapons research.' },
   isr: { name: 'Reservist State', description: 'Offsets a small population through replacement, lower defensive losses and defensive research.' },
-  jpn: { name: 'Integrated Island Defense', description: 'Turns national IQ, defensive-systems research and interception readiness into a coherent shield.' },
+  jpn: { name: 'Precision Shield', description: 'Turns national IQ, defensive-systems research and disciplined interception into a coherent island shield.' },
   yem: { name: 'Yemeni Endurance', description: 'Offsets a damaged state, import pressure and defensive vulnerability with a credible recovery path.' },
   jor: { name: 'Desert Corridor', description: 'Offsets import dependence and food stress through affordable supply and resilient administration.' },
   kaz: { name: 'Steppe Depth', description: 'Steppe logistics sustain a deep trained reserve and long-lived food stocks.' },
@@ -1055,7 +1336,7 @@ const ENGLISH_TRAIT_COPY_V2: Readonly<Record<string, EnglishTraitCopyV2>> = Obje
   npl: { name: 'Himalayan Bastion', description: 'Offsets limited power with stronger defense, lower losses and peacetime recovery.' },
   prk: { name: 'Entrenched Mobilization', description: 'Offsets the cost of a large standing army with upkeep relief, defense and wartime recruitment.' },
   uzb: { name: 'Silk Road Logistics', description: 'Offsets a landlocked force through supply, cheaper recruitment and economic development.' },
-  omn: { name: 'Monsoon Route', description: 'Offsets small-state isolation with unusually sustainable naval links and food storage.' },
+  omn: { name: 'Monsoon Route', description: 'Offsets small-state isolation with sustainable naval links and accumulated navigation knowledge.' },
   tls: { name: 'Young Island State', description: 'Offsets one of the weakest starts with scalable forces, recovery and general defense.' },
   pak: { name: 'Strategic Depth', description: 'Offsets land-front supply, replacement and defensive-research pressure with restrained gains.' },
   psx: { name: 'Steadfastness', description: 'Offsets severe survival and food-access pressure without creating an offensive advantage.' },
@@ -1066,23 +1347,27 @@ const ENGLISH_TRAIT_COPY_V2: Readonly<Record<string, EnglishTraitCopyV2>> = Obje
   syr: { name: 'Levantine Defensive Belt', description: 'Offsets damaged territory through stronger survival and wartime recovery.' },
   tjk: { name: 'Pamir Reserve', description: 'Offsets low force density through stronger defense, passive recruitment and food storage.' },
   twn: { name: 'Silicon Shield', description: 'Offsets island exposure and recruitment costs with a restrained technology and defense package.' },
-  tha: { name: 'Chao Phraya Base', description: 'Offsets food, growth and defensive pressure with a balanced domestic package.' },
-  tur: { name: 'Anatolian Interior Lines', description: 'Offsets two-continent land operations with a small supply, cost and attack advantage.' },
+  tha: { name: 'Chao Phraya Rice Basin', description: 'Turns a major rice-producing heartland into development and durable jungle defense.' },
+  tur: { name: 'Straits Command', description: 'Rewards coordinated two-continent fronts with interior supply, offensive timing and fatigue control.' },
   tkm: { name: 'Karakum Reserve', description: 'Offsets landlocked supply and fixed costs through storage and affordable buildup.' },
   are: { name: 'Federal Hub', description: 'Offsets small-state force and route pressure through funded research, low upkeep and flexible supply.' },
-  vnm: { name: 'Delta Defense', description: 'Offsets invasion risk without further increasing an already strong offensive start.' },
-  chn: { name: 'Integrated Production Chain', description: 'Turns industrial scale into joint logistics, rapid mobilization and continuous military modernization.' },
-  kor: { name: 'Rapid Industrial Cycle', description: 'Turns national IQ and industrial speed into fast replacement behind a hardened defense.' },
+  vnm: { name: 'Delta Rice Defense', description: 'Pairs a major rice-producing delta with a disciplined, low-loss jungle defense.' },
+  chn: { name: 'Integrated War Economy', description: 'Turns industrial scale into land logistics, rapid mobilization and continuous military modernization.' },
+  kor: { name: 'Rapid Arsenal Cycle', description: 'Turns advanced-weapons research and industrial speed into fast replacement behind a hardened urban defense.' },
 });
 
 /** Canonical, save-free trait content. Order follows the V1 catalog. */
 export const COUNTRY_TRAITS_V2: readonly CountryTraitV2[] = Object.freeze([
   // Noord-Amerika
   trait('usa', 'Verenigde Staten', 'Wereldwijde Projectie', '−6% wekelijkse operatiekosten en +4% supply voor oorlogen met naval access.', 'Kleine, wereldwijde specialisatie voor het sterkste startland.', [
-    modifier('operation-cost', -6, NAVAL), modifier('front-supply', 4, NAVAL),
+    modifier('research-progress', 6, { researchBranches: ['advanced-weapons'] }),
+    modifier('attack', 4, NAVAL),
+    modifier('operation-cost', -3, NAVAL),
+    modifier('arctic-research-cost', 15),
   ]),
   trait('can', 'Canada', 'Noordelijke Aanvoerlijnen', '+10% supply op naval fronts en +10% DEF wanneer het eigen kerngebied arctic terrain heeft.', 'Veilige noordelijke verdediger met betrouwbare overzeese logistiek.', [
     modifier('front-supply', 10, NAVAL), modifier('defense', 10, { terrain: 'arctic', homeland: true }),
+    modifier('arctic-research-cost', -25),
   ]),
   trait('mex', 'Mexico', 'Federale Diepte', '+6% legercapaciteit; +5% passieve rekrutering zolang food security minstens 95% is.', 'Zet bevolking om in een duurzame landmacht zonder een topstart verder te laten ontsporen.', [
     modifier('army-capacity', 6), modifier('passive-recruitment', 5, { foodSecurityAtLeast: 0.95 }),
@@ -1112,7 +1397,7 @@ export const COUNTRY_TRAITS_V2: readonly CountryTraitV2[] = Object.freeze([
     modifier('defense', 26, CORE), modifier('reserve-training', 22), modifier('reserve-capacity', 18),
   ]),
   trait('hnd', 'Honduras', 'Twee-Oceanenlijn', '+25% naval-front supply; −24% naval operation cost; −20% food import cost.', 'Betaalbare zee-expansie en voedseltoevoer aan twee kusten.', [
-    modifier('front-supply', 25, NAVAL), modifier('operation-cost', -24, NAVAL), modifier('food-logistics-pressure', -20),
+    modifier('front-supply', 25, NAVAL), modifier('operation-cost', -24, NAVAL), modifier('condition-recovery', 20, NAVAL),
   ]),
   trait('nic', 'Nicaragua', 'Meren-en-Junglelinie', '+30% DEF in het eigen core territory; −20% military casualties bij verdediging; +20% recovery.', 'Slijt sterkere aanvallers uit en herstelt daarna sneller.', [
     modifier('defense', 30, CORE), modifier('military-casualties', -20, { role: 'defender' }), modifier('condition-recovery', 20),
@@ -1120,19 +1405,21 @@ export const COUNTRY_TRAITS_V2: readonly CountryTraitV2[] = Object.freeze([
   trait('pan', 'Panama', 'Interoceanische Schakel', '−30% naval operation cost; +30% tax efficiency zolang er geen land-front actief is.', 'Rijkere vredesbasis en zeer betaalbare maritieme campagnes.', [
     modifier('operation-cost', -30, NAVAL), modifier('tax-efficiency', 30, { hasLandFront: false }),
   ]),
-  trait('grl', 'Groenland', 'Arctisch Reduit', '+30% DEF in het eigen core arctic territory; −30% army upkeep; −30% rapid recruitment cost.', 'De zwakste start wordt een taaie, betaalbare arctische challenge run zonder gratis leger.', [
-    modifier('army-capacity', 112.5), modifier('recruitment-throughput', 17.5), modifier('army-upkeep', -8.75),
+  trait('grl', 'Groenland', 'Arctisch Reduit', '+9% army capacity; +5% recruitment throughput; +4% population-recruitment research; −12.5% Arctic research cost.', 'De zwakste start krijgt een beheerste mobilisatie-identiteit naast de aparte openingsmachtcurve.', [
+    modifier('army-capacity', 9), modifier('recruitment-throughput', 5),
+    modifier('research-progress', 4, { researchBranches: ['population-recruitment'] }),
+    modifier('arctic-research-cost', -12.5),
   ]),
 
   // Zuid-Amerika
   trait('arg', 'Argentinië', 'Pampamobilisatie', '+12% legercapaciteit en +10% food production.', 'Combineert landbouwbasis met een grotere reguliere landmacht.', [
-    modifier('army-capacity', 12), modifier('food-production', 10),
+    modifier('army-capacity', 8), modifier('food-production', 30),
   ]),
   trait('bol', 'Bolivia', 'Altiplanofort', '+30% DEF in het eigen core territory; −20% military casualties bij verdediging daar.', 'Landlocked kernvesting die sterkere buren kan uitputten.', [
     modifier('defense', 30, CORE), modifier('military-casualties', -20, DEF_CORE),
   ]),
   trait('bra', 'Brazilië', 'Continentale Reserve', '+5% reserve capacity en +5% reserve training; +3% population growth.', 'Bescheiden maar breed schaalbare bonus voor een al sterke reus.', [
-    modifier('reserve-capacity', 5), modifier('reserve-training', 5), modifier('population-growth', 3),
+    modifier('food-production', 30), modifier('reserve-capacity', 5), modifier('reserve-training', 5),
   ]),
   trait('chl', 'Chili', 'Lange Kustcommandolijn', '−18% naval operation cost; +16% DEF in coastal terrain.', 'Flexibel langs de kust, maar niet algemeen sterker.', [
     modifier('operation-cost', -18, NAVAL), modifier('defense', 16, { terrain: 'coastal' }),
@@ -1164,10 +1451,12 @@ export const COUNTRY_TRAITS_V2: readonly CountryTraitV2[] = Object.freeze([
 
   // Indo-Pacific
   trait('aus', 'Australië', 'Oceanisch Bereik', '−7% naval operation cost en +5% naval-front supply.', 'Kleine maritieme specialisatie voor een sterke, afgelegen start.', [
-    modifier('naval-distance-pressure', -7, NAVAL), modifier('front-supply', 5, NAVAL),
+    modifier('food-export-income', 30), modifier('naval-distance-pressure', -6, NAVAL),
+    modifier('research-progress', 6, { researchBranches: ['economy-science'] }),
   ]),
   trait('nzl', 'Nieuw-Zeeland', 'Expeditionaire Cohesie', '−20% military casualties en +18% recovery op naval fronts.', 'Kleine expeditiemacht die verliezen beperkt en snel herstelt.', [
-    modifier('military-casualties', -20, NAVAL), modifier('condition-recovery', 18, NAVAL),
+    modifier('food-export-income', 30), modifier('military-casualties', -8, NAVAL),
+    modifier('condition-recovery', 8, NAVAL),
   ]),
   trait('png', 'Papoea-Nieuw-Guinea', 'Melanesische Diepte', '+30% DEF en −20% military casualties bij verdediging van coastal homeland; +30% food production.', 'Voedselzekere eiland-underdog die invasies door haar archipel kan laten vastlopen.', [
     modifier('defense', 30, { role: 'defender', terrain: 'coastal', homeland: true }), modifier('food-production', 30), modifier('military-casualties', -20, { role: 'defender', terrain: 'coastal', homeland: true }),
@@ -1177,8 +1466,8 @@ export const COUNTRY_TRAITS_V2: readonly CountryTraitV2[] = Object.freeze([
   trait('alb', 'Albanië', 'Adriatische Poort', '−30% wekelijkse kosten van naval operations; +22% naval-front supply; −25% integration duration voor veroverd coastal terrain.', 'Snelle maritieme expansie vanuit een kleine basis.', [
     modifier('operation-cost', -30, NAVAL), modifier('front-supply', 22, NAVAL), modifier('integration-duration', -25, { terrain: 'coastal' }),
   ]),
-  trait('bel', 'België', 'Europese Schakelkamer', '+7% tax efficiency; −8% base operating cost; +8% DEF in urban terrain.', 'Compacte, efficiënte economische vesting.', [
-    modifier('tax-efficiency', 7), modifier('base-operating-cost', -8), modifier('defense', 8, { terrain: 'urban' }),
+  trait('bel', 'België', 'Europese Schakelkamer', '+7% tax efficiency; +8% army capacity; +8% DEF in urban terrain.', 'Compacte fiscale en militaire schakelstaat met extra mobilisatieruimte en stedelijke verdediging.', [
+    modifier('tax-efficiency', 7), modifier('army-capacity', 8), modifier('defense', 8, { terrain: 'urban' }),
   ]),
   trait('bih', 'Bosnië en Herzegovina', 'Gelaagde Vesting', '+30% DEF in het eigen core territory; −20% military casualties en −30% condition loss bij verdediging daar.', 'Zeer moeilijk vroeg uit te schakelen.', [
     modifier('defense', 30, CORE), modifier('military-casualties', -20, DEF_CORE), modifier('condition-loss', -30, DEF_CORE),
@@ -1187,7 +1476,7 @@ export const COUNTRY_TRAITS_V2: readonly CountryTraitV2[] = Object.freeze([
     modifier('food-production', 20), modifier('front-supply', 10), modifier('research-progress', 18, { researchBranches: ['defensive-systems'] }),
   ]),
   trait('dnk', 'Denemarken', 'Deense Zeestraten', 'Bestaande afstandsdruk op zeeroutes −20%; +8% naval-front supply; −12% food logistics pressure van naval operations.', 'Voordelige controle van nabijgelegen zeeroutes.', [
-    modifier('naval-distance-pressure', -20, NAVAL), modifier('front-supply', 8, NAVAL), modifier('food-logistics-pressure', -12, NAVAL),
+    modifier('naval-distance-pressure', -20, NAVAL), modifier('front-supply', 8, NAVAL), modifier('war-fatigue-recovery', 12, PEACE),
   ]),
   trait('deu', 'Duitsland', 'Industriële Samenhang', '+4% research progress in military-industry en economy-science; −4% base operating cost.', 'Kleine maar brede efficiëntiebonus voor de sterkste Europese start.', [
     modifier('national-iq', 1), modifier('front-supply', 6, LAND), modifier('reserve-deployment-throughput', 5),
@@ -1197,9 +1486,10 @@ export const COUNTRY_TRAITS_V2: readonly CountryTraitV2[] = Object.freeze([
   ]),
   trait('fin', 'Finland', 'Totale Landsverdediging', '+16% DEF en −10% military casualties bij verdediging in arctic terrain; +12% reserve deployment throughput.', 'Reservisten en terrein maken invasies kostbaar.', [
     modifier('defense', 16, { role: 'defender', terrain: 'arctic' }), modifier('military-casualties', -10, { role: 'defender', terrain: 'arctic' }), modifier('reserve-deployment-throughput', 12),
+    modifier('arctic-research-cost', -22),
   ]),
   trait('fra', 'Frankrijk', 'Strategische Autonomie', '+5% research progress in advanced-weapons; −4% naval operation cost; −4% integration cost.', 'Bescheiden zelfstandigheid op technologie, zee en expansie.', [
-    modifier('research-progress', 5, { researchBranches: ['advanced-weapons'] }), modifier('operation-cost', -4, NAVAL), modifier('integration-cost', -4),
+    modifier('research-progress', 6, { researchBranches: ['advanced-weapons'] }), modifier('operation-cost', -4, NAVAL), modifier('war-fatigue-recovery', 5, PEACE),
   ]),
   trait('grc', 'Griekenland', 'Egeïsche Schakel', '+14% naval-front supply; −12% naval operation cost; −10% food import cost.', 'Eilandroutes blijven betaalbaar en bevoorraad.', [
     modifier('front-supply', 14, NAVAL), modifier('operation-cost', -12, NAVAL), modifier('reserve-training', 10),
@@ -1212,9 +1502,10 @@ export const COUNTRY_TRAITS_V2: readonly CountryTraitV2[] = Object.freeze([
   ]),
   trait('isl', 'IJsland', 'Noord-Atlantische Schakel', 'Bestaande afstandsdruk op zeeroutes −45%; −30% naval operation cost; +30% DEF in arctic terrain.', 'Sterke compensatie voor de kleinste geïsoleerde Europese start.', [
     modifier('naval-distance-pressure', -25, NAVAL), modifier('operation-cost', -18, NAVAL), modifier('defense', 18, { role: 'defender' }),
+    modifier('arctic-research-cost', -35),
   ]),
   trait('ita', 'Italië', 'Mediterrane Diepte', '−5% logistics pressure van naval fronts; −10% van alleen de war-fatigue operation surcharge; +5% condition recovery.', 'Kan meerdere langdurige zeefronten iets beter dragen.', [
-    modifier('food-logistics-pressure', -5, NAVAL), modifier('war-fatigue-operation-surcharge', -10), modifier('condition-recovery', 5),
+    modifier('war-fatigue-operation-surcharge', -10), modifier('condition-recovery', 5, NAVAL), modifier('integration-duration', -5, { terrain: 'coastal' }),
   ]),
   trait('kos', 'Kosovo', 'Versnelde Staatsopbouw', '+30% tax efficiency; −30% base operating cost; +30% condition recovery.', 'Bouwt vanuit een zeer kleine economie snel een functionerende staat.', [
     modifier('tax-efficiency', 30), modifier('base-operating-cost', -30), modifier('condition-recovery', 30),
@@ -1238,16 +1529,18 @@ export const COUNTRY_TRAITS_V2: readonly CountryTraitV2[] = Object.freeze([
     modifier('defense', 20, CORE), modifier('military-casualties', -12, DEF_CORE), modifier('operation-cost', -18, NAVAL),
   ]),
   trait('nld', 'Nederland', 'Delta-economie', '+8% food storage capacity; −6% food import cost; −6% naval operation cost.', 'Kleine, beheerste bonus rond import, opslag en zeehandel.', [
-    modifier('food-storage-capacity', 8), modifier('food-import-cost', -6), modifier('operation-cost', -6, NAVAL),
+    modifier('food-production', 30), modifier('operation-cost', -6, NAVAL),
+    modifier('research-progress', 8, { researchBranches: ['economy-science'] }),
   ]),
   trait('mkd', 'Noord-Macedonië', 'Balkan-kruispunt', '−28% land operation cost; +25% land-front supply; −30% integration duration voor landverbonden veroveringen.', 'Zeer sterke regionale sneeuwbal via landroutes.', [
     modifier('operation-cost', -28, LAND), modifier('front-supply', 25, LAND), modifier('integration-duration', -30, { access: 'land', firstConquest: true }),
   ]),
   trait('nor', 'Noorwegen', 'Lange Kustlogistiek', 'Bestaande afstandsdruk op zeeroutes −35%; −10% naval operation cost; −12% condition loss door gevechten in arctic terrain.', 'Lange afstanden en noordelijk terrein worden beheersbaar.', [
     modifier('naval-distance-pressure', -35, NAVAL), modifier('operation-cost', -10, NAVAL), modifier('condition-loss', -12, { terrain: 'arctic' }),
+    modifier('arctic-research-cost', -30),
   ]),
   trait('ukr', 'Oekraïne', 'Diepe Mobilisatie', '+12% reserve deployment throughput; −10% recruitment cost; −10% condition loss door gevechten tijdens oorlog.', 'Grote reserves houden een beschadigd front langer operationeel.', [
-    modifier('reserve-deployment-throughput', 12), modifier('recruitment-cost', -10), modifier('condition-loss', -10, WAR),
+    modifier('food-production', 30), modifier('reserve-deployment-throughput', 6), modifier('recruitment-cost', -6),
   ]),
   trait('aut', 'Oostenrijk', 'Alpenknooppunt', '+16% DEF in mountain terrain; +10% land-front supply; −10% integration cost.', 'Verdedigt doorgangen en bestuurt landexpansie efficiënt.', [
     modifier('defense', 16, { terrain: 'mountain' }), modifier('front-supply', 10, LAND), modifier('integration-cost', -10),
@@ -1262,7 +1555,8 @@ export const COUNTRY_TRAITS_V2: readonly CountryTraitV2[] = Object.freeze([
     modifier('food-production', 10), modifier('reserve-training', 10), modifier('defense', 10, { role: 'defender', access: 'land' }),
   ]),
   trait('rus', 'Rusland', 'Continentale Diepte', 'Bestaande land-hopdruk in de supplyberekening −10%; +5% trained reserve capacity; −4% war fatigue gain.', 'Kleine bonus op schaal en uithoudingsvermogen voor een grootmacht.', [
-    modifier('land-hop-pressure', -10, LAND), modifier('reserve-capacity', 5), modifier('war-fatigue-gain', -4),
+    modifier('land-hop-pressure', -10, LAND), modifier('reserve-deployment-throughput', 6), modifier('war-fatigue-gain', -4),
+    modifier('arctic-research-cost', -12),
   ]),
   trait('srb', 'Servië', 'Centrale Binnenlinie', '+18% land-front supply; +18% DEF tegen landaanvallen; +18% reserve deployment throughput.', 'Sterke maar volledig continentale reactiemacht.', [
     modifier('front-supply', 18, LAND), modifier('defense', 18, { role: 'defender', access: 'land' }), modifier('reserve-deployment-throughput', 18),
@@ -1280,13 +1574,14 @@ export const COUNTRY_TRAITS_V2: readonly CountryTraitV2[] = Object.freeze([
     modifier('recruitment-cost', -12), modifier('research-progress', 12, { researchBranches: ['military-industry'] }), modifier('condition-recovery', 8),
   ]),
   trait('gbr', 'Verenigd Koninkrijk', 'Wereldwijde Verbindingen', 'Bestaande afstandsdruk op zeeroutes −15%; −4% naval operation cost; +3% naval-front supply.', 'Kleine wereldwijde zeebonus voor een topmacht.', [
-    modifier('naval-distance-pressure', -15, NAVAL), modifier('operation-cost', -4, NAVAL), modifier('front-supply', 3, NAVAL),
+    modifier('research-catch-up-bonus', 6), modifier('naval-distance-pressure', -8, NAVAL), modifier('war-fatigue-recovery', 6, PEACE),
   ]),
   trait('blr', 'Wit-Rusland', 'Binnenlandse Herstelbasis', '+20% condition recovery; +15% legercapaciteit; +18% land-front supply.', 'Herstelt en concentreert snel grote landstrijdkrachten.', [
     modifier('condition-recovery', 20), modifier('army-capacity', 15), modifier('front-supply', 18, LAND),
   ]),
   trait('swe', 'Zweden', 'Dubbel Gebruik', '+10% research progress in logistics-medicine; +10% reserve training; +8% DEF in arctic terrain.', 'Civiele capaciteit ondersteunt logistiek én landsverdediging.', [
     modifier('research-progress', 10, { researchBranches: ['logistics-medicine'] }), modifier('reserve-training', 10), modifier('defense', 8, { terrain: 'arctic' }),
+    modifier('arctic-research-cost', -18),
   ]),
   trait('che', 'Zwitserland', 'Alpenredoute', '+12% DEF in mountain terrain; −5% base operating cost; bij uitschakeling wordt 10% in plaats van 25% van de treasury buitgemaakt.', 'Bescheiden structurele efficiëntie met een unieke nederlaagverzekering.', [
     modifier('defense', 12, { terrain: 'mountain' }), modifier('base-operating-cost', -5), modifier('treasury-seizure', -60, undefined, { from: 0.25, to: 0.10, unit: 'share' }),
@@ -1324,7 +1619,7 @@ export const COUNTRY_TRAITS_V2: readonly CountryTraitV2[] = Object.freeze([
     modifier('operation-cost', -18, NAVAL), modifier('naval-distance-pressure', -25, NAVAL), modifier('tax-efficiency', 18),
   ]),
   trait('egy', 'Egypte', 'Nijlslagader', '+5% food storage capacity; +5% supply vanuit desert terrain; −4% base operating cost.', 'Bescheiden logistieke samenhang voor een Afrikaanse grootmacht.', [
-    modifier('front-supply', 4, LAND), modifier('front-supply', 3, NAVAL), modifier('operation-cost', -3, NAVAL),
+    modifier('front-supply', 4, LAND), modifier('naval-distance-pressure', -3, NAVAL), modifier('operation-cost', -3, NAVAL),
   ]),
   trait('gnq', 'Equatoriaal-Guinea', 'Golfenclave', '+60% starting treasury; +30% DEF in jungle terrain; +25% naval-front supply.', 'Kleine enclave die tijd en bereik koopt met liquide middelen.', [
     modifier('army-capacity', 14), modifier('defense', 18, { terrain: 'jungle' }), modifier('front-supply', 15, NAVAL),
@@ -1348,7 +1643,7 @@ export const COUNTRY_TRAITS_V2: readonly CountryTraitV2[] = Object.freeze([
     modifier('food-production', 22), modifier('front-supply', 18, LAND), modifier('condition-recovery', 18),
   ]),
   trait('gnb', 'Guinee-Bissau', 'Kustarchipel', '+30% food storage capacity; +30% naval-front supply; −30% naval operation cost.', 'Sterke voedsel- en zeebonus voor een uiterst kwetsbare start.', [
-    modifier('food-storage-capacity', 18), modifier('front-supply', 18, NAVAL), modifier('naval-distance-pressure', -18, NAVAL),
+    modifier('reserve-training', 18), modifier('front-supply', 18, NAVAL), modifier('naval-distance-pressure', -18, NAVAL),
   ]),
   trait('civ', 'Ivoorkust', 'West-Afrikaanse Groeipool', '+10% tax efficiency; +10% development-driven economy growth; −10% integration cost.', 'Economische expansie met beheersbare bestuurlijke lasten.', [
     modifier('tax-efficiency', 10), modifier('development-economy-growth', 10), modifier('integration-cost', -10),
@@ -1390,7 +1685,7 @@ export const COUNTRY_TRAITS_V2: readonly CountryTraitV2[] = Object.freeze([
     modifier('front-supply', 25), modifier('operation-cost', -20), modifier('food-import-cost', -20),
   ]),
   trait('ner', 'Niger', 'Binnenlandse Voorraadstaat', '+22% land-front supply; +25% food storage capacity; +20% reserve training.', 'Bouwt eerst voorraden en reserves voor een latere landcampagne.', [
-    modifier('front-supply', 22, LAND), modifier('food-storage-capacity', 25), modifier('reserve-training', 20),
+    modifier('front-supply', 22, LAND), modifier('condition-recovery', 25, PEACE), modifier('reserve-training', 20),
   ]),
   trait('nga', 'Nigeria', 'Federale Schaal', '+5% legercapaciteit; −5% food logistics pressure van actieve operaties; −5% integration cost.', 'Kleine schaalvoordelen voor een van Afrika’s sterkste staten.', [
     modifier('army-capacity', 5), modifier('food-logistics-pressure', -5), modifier('integration-cost', -5),
@@ -1533,7 +1828,7 @@ export const COUNTRY_TRAITS_V2: readonly CountryTraitV2[] = Object.freeze([
     modifier('front-supply', 7, LAND), modifier('recruitment-cost', -4), modifier('development-economy-growth', 4),
   ]),
   trait('omn', 'Oman', 'Moessonroute', '+15% naval-front supply; −15% naval operation cost; +17% food storage capacity.', 'Een kleine staat met uitzonderlijk volhoudbare zeeverbindingen.', [
-    modifier('front-supply', 15, NAVAL), modifier('operation-cost', -15, NAVAL), modifier('food-storage-capacity', 17),
+    modifier('front-supply', 15, NAVAL), modifier('operation-cost', -15, NAVAL), modifier('research-catch-up-bonus', 17),
   ]),
   trait('tls', 'Oost-Timor', 'Jonge Eilandstaat', '+18% domestic food production; +20% condition recovery buiten oorlog; +27% DEF in jungle homeland.', 'Grote herstel- en overlevingsbonus voor een van de zwakste starts.', [
     modifier('food-production', 18), modifier('condition-recovery', 18, PEACE), modifier('defense', 18, { terrain: 'jungle', homeland: true }),
@@ -1542,7 +1837,7 @@ export const COUNTRY_TRAITS_V2: readonly CountryTraitV2[] = Object.freeze([
     modifier('front-supply', 4, LAND), modifier('recruitment-throughput', 4, WAR), modifier('research-progress', 2, { researchBranches: ['defensive-systems'] }),
   ]),
   trait('psx', 'Palestina', 'Standvastigheid', '+26% DEF en −18% military casualties bij verdediging van desert homeland; resterende food-access vulnerability −12%.', 'Maakt overleven en voedseltoegang mogelijk zonder offensieve bonus.', [
-    modifier('defense', 26, { role: 'defender', terrain: 'desert', homeland: true }), modifier('military-casualties', -18, { role: 'defender', terrain: 'desert', homeland: true }), modifier('food-access-vulnerability', -12),
+    modifier('food-access-vulnerability', -30), modifier('defense', 14, { role: 'defender', terrain: 'desert' }), modifier('military-casualties', -8, { role: 'defender', terrain: 'desert' }),
   ]),
   trait('qat', 'Qatar', 'Compacte Welvaartsbuffer', '−15% army upkeep; +10% research output zolang treasury niet negatief is; +12% DEF in desert homeland.', 'Een piepkleine staat koopt tijd en technologische relevantie.', [
     modifier('army-upkeep', -15), modifier('research-output', 10, { treasuryAtLeast: 0 }), modifier('defense', 12, { terrain: 'desert', homeland: true }),
@@ -1566,10 +1861,10 @@ export const COUNTRY_TRAITS_V2: readonly CountryTraitV2[] = Object.freeze([
     modifier('research-output', 3), modifier('recruitment-cost', -2), modifier('defense', 3, { role: 'defender' }),
   ]),
   trait('tha', 'Thailand', 'Chao Phraya-basis', '+5% domestic food production; +3% development-driven economy growth; +6% DEF in jungle homeland.', 'Evenwichtige voedsel-, groei- en thuisverdediging.', [
-    modifier('food-production', 5), modifier('development-economy-growth', 3), modifier('defense', 6, { terrain: 'jungle', homeland: true }),
+    modifier('food-production', 30), modifier('development-economy-growth', 6), modifier('defense', 6, { terrain: 'jungle' }),
   ]),
   trait('tur', 'Turkije', 'Anatolische Binnenlijnen', '+4% land-front supply; −3% land operation cost; +2% ATK op land fronts.', 'Kleine operationele bonus voor een major power op twee continenten.', [
-    modifier('front-supply', 4, LAND), modifier('operation-cost', -3, LAND), modifier('attack', 2, LAND),
+    modifier('front-supply', 4, LAND), modifier('attack', 3, { bothFronts: true }), modifier('war-fatigue-operation-surcharge', -4),
   ]),
   trait('tkm', 'Turkmenistan', 'Karakumreserve', '+14% food storage capacity; −6% army upkeep; +6% land-front supply.', 'Voorraad en lage vaste kosten maken langdurige opbouw mogelijk.', [
     modifier('food-storage-capacity', 14), modifier('army-upkeep', -6), modifier('front-supply', 6, LAND),
@@ -1578,13 +1873,13 @@ export const COUNTRY_TRAITS_V2: readonly CountryTraitV2[] = Object.freeze([
     modifier('research-output', 6, { treasuryAtLeast: 0 }), modifier('army-upkeep', -4), modifier('front-supply', 3),
   ]),
   trait('vnm', 'Vietnam', 'Deltaverdediging', '+8% DEF en −4% military casualties bij verdediging van jungle homeland; −7% condition damage door gevechten daar.', 'Maakt invasies duur zonder Vietnams sterke start verder offensief te buffen.', [
-    modifier('defense', 8, { role: 'defender', terrain: 'jungle', homeland: true }), modifier('military-casualties', -4, { role: 'defender', terrain: 'jungle', homeland: true }), modifier('condition-loss', -7, { terrain: 'jungle', homeland: true }),
+    modifier('food-production', 30), modifier('defense', 6, { role: 'defender', terrain: 'jungle' }), modifier('military-casualties', -4, { role: 'defender', terrain: 'jungle' }),
   ]),
   trait('chn', 'China', 'Geïntegreerde Productieketen', '+2% research progress in military-industry; −2% recruitment cost; +2% condition recovery.', 'Een minimale efficiëntiebonus voor de nummer twee van de wereld.', [
     modifier('research-progress', 3, { researchBranches: ['military-industry'] }), modifier('accelerated-recruitment', 3), modifier('front-supply', 3),
   ]),
   trait('kor', 'Zuid-Korea', 'Snelle Industriële Cyclus', '+3% accelerated recruitment; −2% recruitment cost; +4% DEF in urban homeland.', 'Hoogwaardige snelle vervanging met een kleine stedelijke defensiebonus.', [
-    modifier('national-iq', 1), modifier('accelerated-recruitment', 3), modifier('defense', 4, { role: 'defender' }),
+    modifier('research-progress', 5, { researchBranches: ['advanced-weapons'] }), modifier('accelerated-recruitment', 3), modifier('defense', 4, { role: 'defender', terrain: 'urban' }),
   ]),
 ]);
 
@@ -1647,6 +1942,7 @@ export interface TraitFactorBoundsV2 {
 
 const DEFAULT_FACTOR_BOUNDS = Object.freeze({ minimum: 0.7, maximum: 1.3 });
 const FACTOR_BOUND_OVERRIDES: Readonly<Partial<Record<TraitModifierKeyV2, TraitFactorBoundsV2>>> = Object.freeze({
+  'arctic-research-cost': Object.freeze({ minimum: 0.5, maximum: 1.15 }),
   // Greenland keeps meaningful AI recruitable room, while the human-only
   // underdog multiplier supplies most of its exceptional playable capacity.
   'army-capacity': Object.freeze({ minimum: 0.7, maximum: 13 }),
@@ -1719,7 +2015,9 @@ export function countryTraitFactorV2(
   key: TraitModifierKeyV2,
   context: TraitEvaluationContextV2 = {},
 ): number {
-  const signedDistanceMultiplier = humanTraitMultiplierFromContextV2(playerId, context);
+  const signedDistanceMultiplier = key === 'arctic-research-cost'
+    ? 1
+    : humanTraitMultiplierFromContextV2(playerId, context);
   const factor = countryTraitModifiersV2(playerId, key)
     .filter((entry) => traitModifierAppliesV2(entry, context))
     .reduce((product, entry) => (

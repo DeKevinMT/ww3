@@ -47,6 +47,31 @@ export type ResearchEffectV2 =
   | 'operating-efficiency'
   | 'iq-increase';
 export type OperationDoctrineV2 = 'pressure' | 'breakthrough' | 'siege' | 'counteroffensive' | 'consolidation';
+export type PolarRegionV2 = 'arctic' | 'antarctica';
+export type PolarEndgamePhaseV2 =
+  | 'dormant'
+  | 'arctic-research'
+  | 'warning'
+  | 'contact'
+  | 'counteroffensive'
+  | 'core-exposed'
+  | 'victory';
+export type ArcticProjectIdV2 =
+  | 'polar-demography'
+  | 'cryogenic-logistics'
+  | 'strategic-mobilisation'
+  | 'deep-ice-signals';
+export type AntarcticCorridorIdV2 = 'drake' | 'maud' | 'ross';
+export type AntarcticSectorIdV2 =
+  | 'drake-entry'
+  | 'maud-entry'
+  | 'ross-entry'
+  | 'weddell-forge'
+  | 'queen-maud-grid'
+  | 'ross-array'
+  | 'sentinel-labyrinth'
+  | 'transantarctic-vault'
+  | 'zero-point-core';
 export type WarAccessV2 = 'land' | 'naval' | 'none';
 export type FinanceModeV2 = 'normal' | 'conserving' | 'war' | 'insolvent';
 export type NationalAiModeV2 = 'growth' | 'rebuild' | 'recovery' | 'catch-up' | 'war';
@@ -319,7 +344,7 @@ export interface AllianceProposalStatusV2 {
   reason?: string;
 }
 
-export type WorldEventKindV2 = 'system' | 'economy' | 'research' | 'war' | 'battle' | 'conquest' | 'peace' | 'critical';
+export type WorldEventKindV2 = 'system' | 'economy' | 'research' | 'war' | 'battle' | 'conquest' | 'peace' | 'critical' | 'polar';
 
 export interface WorldEventV2 {
   id: number;
@@ -329,6 +354,8 @@ export interface WorldEventV2 {
   message: string;
   territoryId?: TerritoryId;
   playerId?: PlayerId;
+  polarRegion?: PolarRegionV2;
+  polarSectorId?: AntarcticSectorIdV2;
   unread: boolean;
 }
 
@@ -376,6 +403,16 @@ export interface LogisticsMovementV2 {
   targetId: TerritoryId;
   manpower: number;
   capacity: number;
+  /** Actual one-hop route used by this weekly movement. */
+  access: Exclude<WarAccessV2, 'none'>;
+  /** Canonical sea-route distance; zero for land movements. */
+  distanceKm: number;
+  /** Sublinear equivalent-radius distance inside the source country. */
+  interiorDistanceKm: number;
+  /** Bounded physical-size load applied to this hop. */
+  interiorOperationMultiplier: number;
+  /** Treasury paid for this movement in billions; land logistics stays free. */
+  logisticsCost: number;
 }
 
 export interface AiEscalationStateV2 {
@@ -386,6 +423,68 @@ export interface AiEscalationStateV2 {
   coalitionMembers: PlayerId[];
   lastHumanTerritoryCount: number;
   lastHumanPower: number;
+}
+
+export interface ArcticProjectRunV2 {
+  projectId: ArcticProjectIdV2;
+  playerId: PlayerId;
+  startedTick: number;
+  completesTick: number;
+  costPaid: number;
+}
+
+export interface ArcticResearchProgressV2 {
+  playerId: PlayerId;
+  activeProject: ArcticProjectRunV2 | null;
+  completedProjects: ArcticProjectIdV2[];
+}
+
+export type AntarcticSectorStatusV2 = 'hidden' | 'available' | 'contested' | 'secured';
+
+export interface AntarcticSectorStateV2 {
+  status: AntarcticSectorStatusV2;
+  /** Remaining rogue-machine integrity, from zero through one hundred. */
+  integrity: number;
+  wave: number;
+  discoveredTick: number | null;
+  securedTick: number | null;
+  securedBy: PlayerId | null;
+}
+
+export interface AntarcticExpeditionStateV2 {
+  id: number;
+  playerId: PlayerId;
+  sectorId: AntarcticSectorIdV2;
+  /** Surviving deployed trained reserves, in millions. */
+  manpower: number;
+  initialManpower: number;
+  startedTick: number;
+  lastPulseTick: number;
+  damageDealt: number;
+}
+
+/** Canonical fixed-size Arctic research and Antarctic endgame campaign. */
+export interface PolarEndgameStateV2 {
+  phase: PolarEndgamePhaseV2;
+  revealedBy: PlayerId | null;
+  warningTick: number | null;
+  contactTick: number | null;
+  victoryTick: number | null;
+  /** Commander whose expedition dealt the final blow; null denotes a shared Earth Defence victory. */
+  victoryCommanderId: PlayerId | null;
+  warningAcknowledgedBy: PlayerId[];
+  arcticPrograms: Partial<Record<PlayerId, ArcticResearchProgressV2>>;
+  sectors: Record<AntarcticSectorIdV2, AntarcticSectorStateV2>;
+  expeditions: AntarcticExpeditionStateV2[];
+  earthDefenseMembers: PlayerId[];
+  globalWave: number;
+  nextCounteroffensiveTick: number | null;
+  bossPhase: 0 | 1 | 2 | 3;
+  bossIntegrity: number;
+  suspicionReliefEarned: number;
+  /** Incremented only when the renderer-visible polar state changes. */
+  visualRevision: number;
+  nextExpeditionId: number;
 }
 
 /** Live facade state. speed/winner/gameOver are transient projections and omitted from saves/hashes. */
@@ -415,6 +514,7 @@ export interface WorldStateV2 {
   allianceOffers: AllianceOfferV2[];
   events: WorldEventV2[];
   aiEscalation: AiEscalationStateV2;
+  polarEndgame: PolarEndgameStateV2;
   nextEventId: number;
   nextWarId: number;
   nextOfferId: number;
@@ -463,7 +563,7 @@ export interface WeeklyFinanceBreakdownV2 {
   excessCashInvestment: number;
   /** Required weekly payroll and maintenance; underfunding alone never demobilizes. */
   armyUpkeep: number;
-  /** Portion of required upkeep actually funded inside the military envelope. */
+  /** Cash paid into upkeep, including a treasury-funded premium up to 125%. */
   fundedArmyUpkeep: number;
   warOperations: number;
   /** All weekly military spending: ordinary military envelope plus live-front operations. */
@@ -505,6 +605,7 @@ export interface WeeklyFinanceBreakdownV2 {
   net: number;
   closingTreasury: number;
   reserveTarget: number;
+  /** Effective upkeep funding from zero through 1.25; surplus above one accelerates training. */
   mandatoryFundingRatio: number;
   recruitmentFundingRatio: number;
   conditionFundingRatio: number;
@@ -856,6 +957,13 @@ export interface WorldChangeV2 {
   victorId?: PlayerId;
   defeatedId?: PlayerId;
   critical?: boolean;
+  polar?: {
+    kind: 'project-started' | 'project-complete' | 'warning' | 'contact' | 'battle' | 'sector-secured' | 'counteroffensive' | 'victory';
+    region: PolarRegionV2;
+    playerId?: PlayerId;
+    projectId?: ArcticProjectIdV2;
+    sectorId?: AntarcticSectorIdV2;
+  };
 }
 
 export type WorldCommandV2 =
@@ -867,6 +975,9 @@ export type WorldCommandV2 =
   | { type: 'rapid-recruitment'; playerId: PlayerId }
   | { type: 'research-surge'; playerId: PlayerId; targetBranch: ResearchBranchV2 }
   | { type: 'launch-propaganda'; playerId: PlayerId }
+  | { type: 'start-arctic-project'; playerId: PlayerId; projectId: ArcticProjectIdV2 }
+  | { type: 'acknowledge-polar-warning'; playerId: PlayerId }
+  | { type: 'deploy-antarctic-expedition'; playerId: PlayerId; sectorId: AntarcticSectorIdV2; manpower: number }
   | { type: 'set-empire-name'; playerId: PlayerId; name: string }
   | { type: 'declare-war'; attackerId: PlayerId; defenderId: PlayerId; escalatedFromWarId?: string }
   | { type: 'request-ceasefire'; warId: string; requesterId: PlayerId }

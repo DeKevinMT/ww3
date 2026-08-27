@@ -1,9 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { planAiCommandsV2 } from './ai';
+import {
+  AI_EARTH_DEFENSE_MILITARY_PRIORITY_V2,
+  aiEarthDefenseMilitaryPriorityV2,
+  aiSuspicionMilitaryPriorityV2,
+  planAiCommandsV2,
+} from './ai';
 import {
   AI_EXCESS_TREASURY_GDP_THRESHOLD_SHARE,
   AI_EXCESS_TREASURY_WEEKLY_REVENUE_CAP,
+  UPKEEP_OVERFUNDING_FULL_SURPLUS_WEEKS,
+  UPKEEP_OVERFUNDING_MAX_RATIO,
   excessTreasuryInvestmentV2,
+  upkeepFundingTargetRatioV2,
 } from './balance';
 import { createWorldStateV2 } from './bootstrap';
 import { WORLD_CONTENT_V2 } from './content';
@@ -25,6 +33,66 @@ function productiveCivilianInvestment(plan: WeeklyFinanceBreakdownV2): number {
 }
 
 describe('shared national-AI spending discipline', () => {
+  it('raises the military planning priority monotonically with player suspicion', () => {
+    const priorities = [0, 10, 25, 50, 75, 100]
+      .map((suspicion) => aiSuspicionMilitaryPriorityV2(suspicion));
+
+    expect(priorities[0]).toBe(0);
+    for (let index = 1; index < priorities.length; index += 1) {
+      expect(priorities[index]).toBeGreaterThan(priorities[index - 1]!);
+    }
+    expect(aiSuspicionMilitaryPriorityV2(-100)).toBe(priorities[0]);
+    expect(aiSuspicionMilitaryPriorityV2(1_000)).toBe(priorities.at(-1));
+  });
+
+  it('switches every active country to strong Suspicion-independent Earth Defense budgets', () => {
+    const lowSuspicion = createWorldStateV2(91_012);
+    const human = nationIdV2('bel');
+    const rival = nationIdV2('nld');
+    lowSuspicion.humanPlayerId = human;
+    lowSuspicion.humanPlayerIds = [human];
+    lowSuspicion.tick = 104;
+    lowSuspicion.aiEscalation.globalThreat = 0;
+    for (const playerId of [human, rival]) {
+      lowSuspicion.players[playerId]!.budget = {
+        military: 40,
+        research: 30,
+        development: 30,
+      };
+    }
+    const highSuspicion = structuredClone(lowSuspicion);
+    highSuspicion.aiEscalation.globalThreat = 100;
+    const plannedMilitary = (state: typeof lowSuspicion, playerId: typeof human): number => {
+      const command = planAiCommandsV2(state, WORLD_CONTENT_V2).find((candidate) => (
+        candidate.type === 'set-budget-policy' && candidate.playerId === playerId
+      ));
+      return command?.type === 'set-budget-policy'
+        ? command.budget.military
+        : state.players[playerId]!.budget.military;
+    };
+
+    expect(plannedMilitary(highSuspicion, human))
+      .toBeGreaterThan(plannedMilitary(lowSuspicion, human));
+    expect(plannedMilitary(highSuspicion, rival))
+      .toBe(plannedMilitary(lowSuspicion, rival));
+    expect(aiEarthDefenseMilitaryPriorityV2(lowSuspicion)).toBe(0);
+
+    const lowContact = structuredClone(lowSuspicion);
+    lowContact.polarEndgame.phase = 'contact';
+    lowContact.polarEndgame.contactTick = lowContact.tick;
+    const highContact = structuredClone(highSuspicion);
+    highContact.polarEndgame.phase = 'contact';
+    highContact.polarEndgame.contactTick = highContact.tick;
+    expect(aiEarthDefenseMilitaryPriorityV2(lowContact))
+      .toBe(AI_EARTH_DEFENSE_MILITARY_PRIORITY_V2);
+    for (const playerId of [human, rival]) {
+      expect(plannedMilitary(lowContact, playerId))
+        .toBeGreaterThan(plannedMilitary(lowSuspicion, playerId));
+      expect(plannedMilitary(highContact, playerId))
+        .toBe(plannedMilitary(lowContact, playerId));
+    }
+  });
+
   it('uses IQ for bounded treasury judgement and adds runway per active front', () => {
     const lowIqPeace = nationalAiTreasuryPolicyV2(80, 0, 0.5);
     const highIqPeace = nationalAiTreasuryPolicyV2(108, 0, 0.5);
@@ -59,11 +127,51 @@ describe('shared national-AI spending discipline', () => {
     );
     expect(building.net).toBeCloseTo(buildingCashflow * policy.freeCashflowShare, 5);
 
-    state.players[belgium]!.treasury = building.reserveTarget * 2;
+    state.players[belgium]!.treasury = building.reserveTarget;
     const funded = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, belgium);
     const fundedCashflow = discretionaryCashflow(funded);
     expect(recurringProgramEnvelope(funded)).toBeCloseTo(fundedCashflow * 0.95, 5);
     expect(funded.net).toBeCloseTo(fundedCashflow * 0.05, 5);
+  });
+
+  it('spends only treasury above target on smooth upkeep overfunding up to 125%', () => {
+    const state = createWorldStateV2(91_006);
+    const belgium = nationIdV2('bel');
+    for (const territory of Object.values(state.territories)) {
+      if (territory.owner === belgium) territory.army.manpower = territory.army.capacity * 0.45;
+    }
+    state.players[belgium]!.treasury = 0;
+    const probe = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, belgium);
+    const target = probe.reserveTarget;
+
+    state.players[belgium]!.treasury = target;
+    const atTarget = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, belgium);
+    state.players[belgium]!.treasury = target
+      + probe.revenue * UPKEEP_OVERFUNDING_FULL_SURPLUS_WEEKS / 2;
+    const halfway = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, belgium);
+    state.players[belgium]!.treasury = target
+      + probe.revenue * UPKEEP_OVERFUNDING_FULL_SURPLUS_WEEKS;
+    const fullyFunded = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, belgium);
+    state.players[belgium]!.treasury = target + probe.revenue * 200;
+    const enormousBuffer = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, belgium);
+
+    expect(atTarget.mandatoryFundingRatio).toBeCloseTo(1, 6);
+    expect(halfway.mandatoryFundingRatio).toBeGreaterThan(1);
+    expect(halfway.mandatoryFundingRatio).toBeLessThan(UPKEEP_OVERFUNDING_MAX_RATIO);
+    expect(fullyFunded.mandatoryFundingRatio).toBeCloseTo(UPKEEP_OVERFUNDING_MAX_RATIO, 6);
+    expect(enormousBuffer.mandatoryFundingRatio).toBeCloseTo(UPKEEP_OVERFUNDING_MAX_RATIO, 6);
+    expect(fullyFunded.fundedArmyUpkeep).toBeCloseTo(
+      fullyFunded.armyUpkeep * UPKEEP_OVERFUNDING_MAX_RATIO,
+      5,
+    );
+    expect(fullyFunded.passiveRecruitment).toBeGreaterThan(atTarget.passiveRecruitment);
+    expect(fullyFunded.military - atTarget.military).toBeGreaterThan(0);
+    expect(upkeepFundingTargetRatioV2(target - 1, target, probe.revenue)).toBe(1);
+    expect(upkeepFundingTargetRatioV2(
+      target + probe.revenue * UPKEEP_OVERFUNDING_FULL_SURPLUS_WEEKS,
+      target,
+      probe.revenue,
+    )).toBeCloseTo(UPKEEP_OVERFUNDING_MAX_RATIO, 10);
   });
 
   it('starts GDP-scale excess-cash investment smoothly above ten percent', () => {
@@ -140,6 +248,7 @@ describe('shared national-AI spending discipline', () => {
     const invested = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, netherlands);
 
     expect(invested.excessCashInvestment).toBeGreaterThan(0);
+    expect(invested.mandatoryFundingRatio).toBeCloseTo(1, 6);
     expect(invested.military).toBeCloseTo(fundedBuffer.military, 6);
     expect(invested.standingOperations).toBeCloseTo(fundedBuffer.standingOperations, 6);
     expect(productiveCivilianInvestment(invested) - productiveCivilianInvestment(fundedBuffer))

@@ -92,6 +92,56 @@ export interface MapLogisticsMovement {
   capacity: number;
 }
 
+export type MapPolarRegion = 'arctic' | 'antarctica';
+
+export type MapPolarEndgamePhase =
+  | 'dormant'
+  | 'arctic-research'
+  | 'warning'
+  | 'contact'
+  | 'counteroffensive'
+  | 'core-exposed'
+  | 'victory';
+
+export type MapPolarSectorId =
+  | 'drake-entry'
+  | 'maud-entry'
+  | 'ross-entry'
+  | 'weddell-forge'
+  | 'queen-maud-grid'
+  | 'ross-array'
+  | 'sentinel-labyrinth'
+  | 'transantarctic-vault'
+  | 'zero-point-core';
+
+export type MapPolarSectorStatus = 'hidden' | 'available' | 'contested' | 'secured';
+
+export interface MapPolarSectorState {
+  readonly status: MapPolarSectorStatus;
+  readonly integrity: number;
+  readonly wave: number;
+  readonly discoveredTick?: number;
+  readonly securedTick?: number;
+  readonly securedBy?: string;
+}
+
+/**
+ * Small render-facing projection of the canonical polar campaign. Additional
+ * simulation fields can be present without coupling the Three.js adapter to
+ * research, combat or persistence implementation details.
+ */
+export interface MapPolarEndgameSnapshot {
+  readonly phase: MapPolarEndgamePhase;
+  readonly visualRevision: number;
+  readonly sectors: Readonly<Partial<Record<MapPolarSectorId, MapPolarSectorState>>>;
+  readonly expeditions?: readonly {
+    readonly playerId: string;
+    readonly sectorId: MapPolarSectorId;
+    readonly manpower: number;
+    readonly initialManpower: number;
+  }[];
+}
+
 export interface WorldMapEngineContract {
   readonly state: {
     tick: number;
@@ -102,6 +152,8 @@ export interface WorldMapEngineContract {
     territories: Record<string, MapTerritoryState>;
     wars: readonly MapWarState[];
     logisticsMovements: readonly MapLogisticsMovement[];
+    /** Optional until a legacy save or adapter has materialised polar state. */
+    polarEndgame?: MapPolarEndgameSnapshot;
   };
   player(playerId: string): MapNationView | undefined;
   territoriesOf(playerId: string): MapTerritoryState[];
@@ -128,6 +180,9 @@ export interface MapSceneAdapter {
   setInputBlocked?(blocked: boolean): void;
   focusAction(sourceId?: string, targetId?: string): void;
   focusCountry?(territoryId: string): void;
+  focusPolarRegion?(region: MapPolarRegion): void;
+  focusPolarSector?(sectorId: MapPolarSectorId): void;
+  clearPolarFocus?(): void;
   territoryScreenPosition?(territoryId: string): { x: number; y: number } | undefined;
   playBattle(result: MapBattleEvent): void;
   resetCamera(): void;
@@ -139,6 +194,8 @@ class MapBridge {
   selection: MapSelectionState = { legalTargetIds: [] };
   onTerritoryClick?: (territoryId: string) => void;
   onTerritoryHover?: (territoryId: string | undefined, clientX: number, clientY: number) => void;
+  onPolarRegionClick?: (region: MapPolarRegion) => void;
+  onPolarSectorClick?: (sectorId: MapPolarSectorId) => void;
   private inputBlocked = false;
 
   attach(scene: MapSceneAdapter): void {

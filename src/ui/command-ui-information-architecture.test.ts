@@ -31,9 +31,28 @@ describe('command UI information architecture', () => {
     expect(panel).toContain('renderMilitaryCommandOverview');
     expect(panel).toContain('TREATY OPTIONS');
     expect(panel).toContain('BEST AVAILABLE TARGETS');
+    expect(panel.indexOf('this.renderAntarcticaGatewayCard()'))
+      .toBeGreaterThan(panel.indexOf('BEST AVAILABLE TARGETS'));
     expect(panel).not.toContain('renderWarCard(');
     expect(worldUiSource).toContain('data-action="peace-settlement"');
     expect(worldUiSource).toContain('data-action="request-ceasefire"');
+  });
+
+  it('shows annual funded and required upkeep money before the separate readiness ratio', () => {
+    const military = methodSource(
+      '  private renderMilitaryCommandOverview(',
+      '  private renderWarDiplomacyRow(',
+    );
+    const upkeepRowStart = military.indexOf("readinessRow('UPKEEP FUNDED'");
+    const upkeepRow = military.slice(upkeepRowStart, military.indexOf('\n', upkeepRowStart));
+    expect(upkeepRow).toContain('cash(annual(finance.fundedArmyUpkeep))');
+    expect(upkeepRow).toContain('cash(annual(finance.armyUpkeep))');
+    expect(upkeepRow).toContain("'funded / required each year'");
+    expect(upkeepRow).not.toContain('format(upkeepReady * 100');
+    expect(military).toContain('<b>${format(ratio * 100, 0)}%</b>');
+    expect(military).toContain('clamp(finance.mandatoryFundingRatio, 0, 1.25)');
+    expect(military).toContain("upkeepReady >= 0.999 ? 'is-good' : 'is-warn', 1.25");
+    expect(military).toContain('clamp(ratio / ratioMax, 0, 1)');
   });
 
   it('keeps Nation domestic and Research research-only', () => {
@@ -41,6 +60,10 @@ describe('command UI information architecture', () => {
     const research = methodSource('  private renderResearchPanel(', '  private renderWarPanel(');
     expect(nation).toContain('PEOPLE & FOOD');
     expect(nation).toContain('INTEGRATION');
+    expect(nation).toContain('EMPIRE FUSION &amp; INTEGRATION');
+    expect(nation).toContain('nation-fusion-progress');
+    expect(nation).toContain('fusionOriginMix');
+    expect(nation).not.toContain('nation-integration-overview');
     expect(nation).toContain('WORLD REACTION');
     expect(nation.indexOf('${traitPresentation}')).toBeGreaterThan(nation.indexOf('WORLD REACTION'));
     expect(nation).not.toContain('NATIONAL STRENGTH');
@@ -59,7 +82,7 @@ describe('command UI information architecture', () => {
     expect(economy).toContain('<span>TREASURY</span><strong class=');
     expect(economy).toContain('${cash(human.treasury)}</strong>');
     expect(economy).toContain("human.treasury > 0 ? 'is-positive' : human.treasury < 0 ? 'is-negative'");
-    expect(economy).toContain('<h2>FINANCIAL OVERVIEW</h2>');
+    expect(economy).toContain('<h2>Financial overview</h2>');
     expect(economy).not.toContain('<h2>${cash(human.treasury)}</h2>');
     expect(economy).not.toContain('<span>NEXT WEEK</span>');
     expect(economy).not.toContain('INTEGRATED PEOPLE');
@@ -111,20 +134,54 @@ describe('command UI information architecture', () => {
     expect(review).toContain('review-attack-modal');
     expect(review).toContain('TARGET COMBAT POWER');
     expect(review).toContain('CAMPAIGN WIN CHANCE');
-    expect(review).toContain('MILITARY COMPARISON');
+    expect(review).toContain('ATTACK VS DEFENCE');
+    expect(review).toContain('review-combat-matchups');
+    expect(review).toContain('OUR ATTACK → THEIR DEFENCE');
+    expect(review).toContain('THEIR ATTACK → OUR DEFENCE');
     expect(review).toContain("forecast.access !== 'none'");
-    expect(review).toContain("'NAVAL' : 'LAND'} LOGISTICS");
-    expect(review).toContain("'SEA DISTANCE' : 'ACCESS'");
-    expect(review).toContain('ADDED OPS / YR');
-    expect(review).toContain('SUPPLY · LOAD');
-    expect(review).toContain("'VALID SEA LANE REQUIRED' : 'DIRECT BORDER REQUIRED'");
-    expect(review).toContain('SHARED FUNDING &amp; REINFORCEMENTS');
-    expect(review).toContain('START NAVAL WAR · FREE');
+    expect(review).toContain("'SEA ROUTE' : 'ROUTE'");
+    expect(review).toContain("logisticsPreview.distanceKm === undefined ? 'DISTANCE UNKNOWN'");
+    expect(review).toContain('EXPECTED RECURRING WAR COST');
+    expect(review).toContain('ADDED EACH WEEK');
+    expect(review).toContain('TOTAL WAR OPERATIONS');
+    expect(review).toContain('CASHFLOW AFTER START');
+    expect(review).toContain('projectedAnnualCashflow');
+    expect(review).toContain('treasuryCoverWeeks');
+    expect(review).toContain('% distance premium');
+    expect(review).toContain('and traits included');
+    expect(review).toContain("'START NAVAL WAR' : 'START WAR'");
+    expect(review).toContain("cash(logisticsPreview.additionalWeeklyWarOperations)}/WK");
+    expect(review).not.toContain(' · FREE');
+    expect(review).not.toContain('SUPPLY · LOAD');
+    expect(review).not.toContain('<span>OUR POWER</span>');
+    expect(review).not.toContain('TOTAL CAMPAIGNS');
+    expect(review).not.toContain('review-logistics__limits');
+    expect(review).not.toContain('war-rule-note is-warning');
+    expect(review).not.toContain('war-rule-note is-blocked');
+    expect(review).not.toContain('const weakArmy');
+    expect(review).not.toContain('const warning');
+    expect(review).toContain("declaration.reason ?? 'Attack requirements are not met.'");
     expect(review).toContain('CONQUEST VALUE');
+    expect(review).toContain('conquestEconomyImpact');
+    expect(review).toContain('conquestPopulationImpact');
+    expect(review).toContain('cash(gains.retainedEconomy)');
+    expect(review).toContain('population(gains.retainedPopulation)');
+    expect(review).toContain('projectNationalIqFusionV2');
+    expect(review).toContain('EMPIRE FUSION');
+    expect(review).toContain('At full core:');
+    expect(review).toContain('army quality');
+    expect(review).toContain('GDP / PERSON');
+    expect(review).toContain('projectedFusionGdpPerPerson');
+    expect(review).toContain('gains.retainedEconomy');
+    expect(review).toContain('gains.retainedPopulation');
+    expect(review).not.toContain('<span>IQ</span>');
+    expect(review).not.toContain('GDP / CAPITA');
     expect(review).toContain('review-action-footer');
     expect(review).toContain('data-action="cancel-war"');
     expect(review).toContain('data-action="declare-war"');
     expect(stylesSource).toContain('.review-logistics__grid');
+    expect(stylesSource).toContain('.review-combat-matchups');
+    expect(stylesSource).toContain('.review-logistics__grid > article.is-affordable.is-negative');
     expect(stylesSource).not.toContain('review-naval-logistics__load');
   });
 

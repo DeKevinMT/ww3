@@ -139,6 +139,14 @@ describe('V2 multi-front and naval balance regressions', () => {
   });
 
   it('lets distant sea lanes reach much farther while scaling cost and supply with distance', () => {
+    const regionalCost = warAccessOperationMultiplierV2('naval', 2_000);
+    const longRangeCost = warAccessOperationMultiplierV2('naval', 6_000);
+    const pacificCost = warAccessOperationMultiplierV2('naval', 12_000);
+    expect(regionalCost).toBeGreaterThan(warAccessOperationMultiplierV2('land', 12_000));
+    expect(longRangeCost).toBeGreaterThan(regionalCost);
+    expect(pacificCost).toBeGreaterThan(longRangeCost);
+    expect(pacificCost).toBeGreaterThan(2.15);
+
     const farRoute = Object.values(WORLD_CONTENT_V2.territories)
       .flatMap((territory) => territory.connections
         .filter((connection) => connection.kind === 'sea')

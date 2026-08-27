@@ -7,11 +7,14 @@ import worldUiSource from './WorldUIV2.ts?raw';
 const indexSource = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
 
 describe('post-selection map loader', () => {
-  it('starts hidden so it never covers the country picker', () => {
+  it('shows a short initial loader before revealing the country picker', () => {
     expect(indexSource.match(/id="startup-loader"/g)).toHaveLength(1);
-    expect(indexSource).toContain('id="startup-loader" class="is-hidden"');
-    expect(indexSource).toContain('aria-hidden="true"');
+    expect(indexSource).toContain('id="startup-loader" role="status"');
+    expect(indexSource).toContain('aria-hidden="false"');
     expect(mainSource).toContain("document.querySelector<HTMLElement>('#startup-loader')");
+    expect(mainSource).toContain('const INTRO_LOADER_MIN_VISIBLE_MS = 2_000;');
+    expect(mainSource).toContain('void dismissIntroLoaderAfterReady();');
+    expect(mainSource).toContain('INTRO_LOADER_MIN_VISIBLE_MS - (performance.now() - startupLoaderShownAt)');
     expect(mainSource).not.toContain('await renderer.firstFrameReady;');
   });
 
@@ -23,7 +26,7 @@ describe('post-selection map loader', () => {
     expect(chooseCountryBody.indexOf('this.options.onCountryConfirmed?.(countryId);'))
       .toBeGreaterThan(chooseCountryBody.indexOf('if (!commandAccepted(result))'));
     expect(mainSource).toContain('onCountryConfirmed: showStartupLoader');
-    expect(mainSource).toContain("startupLoaderState: 'idle' | 'active' | 'complete' = 'idle'");
+    expect(mainSource).toContain("startupLoaderState: 'idle' | 'active' | 'complete' = startupLoader?.isConnected");
     expect(mainSource).toContain("startupLoader.classList.remove('is-hidden', 'is-ready')");
   });
 
@@ -34,9 +37,14 @@ describe('post-selection map loader', () => {
     expect(worldUiSource).toContain('if (didSyncMap) mapBridge.sync();');
     expect(worldUiSource).toContain('this.options.onInitialMapSynchronized?.();');
     expect(mainSource).toContain('await renderer.waitForMapReady();');
+    expect(mainSource).toContain('const STARTUP_LOADER_MIN_VISIBLE_MS = 2_800;');
+    expect(mainSource).toContain('STARTUP_LOADER_MIN_VISIBLE_MS - (performance.now() - startupLoaderShownAt)');
+    expect(mainSource).toContain('window.setTimeout(resolve, minimumDelayRemaining)');
     expect(mainSource).toContain('await renderer.waitForNextFrame();');
     expect(mainSource).toContain('window.requestAnimationFrame(() => resolve())');
     expect(mainSource.indexOf('await renderer.waitForMapReady();'))
+      .toBeLessThan(mainSource.indexOf('await renderer.waitForNextFrame();'));
+    expect(mainSource.indexOf('minimumDelayRemaining'))
       .toBeLessThan(mainSource.indexOf('await renderer.waitForNextFrame();'));
     expect(globeSceneSource).toContain('return this.globeTexture.waitForReady();');
     expect(globeSceneSource.indexOf('for (const resolve of resolvers) resolve();'))

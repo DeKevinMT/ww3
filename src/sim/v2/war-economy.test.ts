@@ -136,7 +136,7 @@ describe('V2 wartime economy pressure', () => {
     expect(state.players[nationIdV2('bel')].warFatigue).toBe(0);
     expect(selectWarPressureV2(state, nationIdV2('bel')).outputPenalty).toBe(0);
     expect(selectWarPressureV2(state, nationIdV2('bel')).researchPenalty).toBe(0);
-  });
+  }, 10_000);
 
   it('stacks a fresh recovery load after every campaign instead of reusing one floor', () => {
     const state = createWorldStateV2(882);

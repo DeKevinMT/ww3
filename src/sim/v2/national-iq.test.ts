@@ -9,7 +9,10 @@ import {
   NATIONAL_QUALITY_GDP_WEIGHT,
   NATIONAL_QUALITY_IQ_WEIGHT,
 } from './balance';
-import { selectDefensiveAidAssessmentV2 } from './ai';
+import {
+  defensiveInterventionPowerEstimateV2,
+  selectDefensiveAidAssessmentV2,
+} from './ai';
 import { createWorldStateV2 } from './bootstrap';
 import {
   calibratedMilitaryRatingsV2,
@@ -19,7 +22,9 @@ import {
   type WorldContentV2,
 } from './content';
 import {
+  invalidateTerritoryIndexV2,
   selectEffectiveAttackV2,
+  projectNationalIqFusionV2,
   selectWarAccessTypeV2,
   selectGlobalRankingV2,
   selectNationalIqViewV2,
@@ -43,6 +48,14 @@ function contentWithIq(playerId: PlayerId, iqScore: number): WorldContentV2 {
       },
     },
   };
+}
+
+function contentWithIqs(entries: readonly (readonly [PlayerId, number])[]): WorldContentV2 {
+  const nations = { ...WORLD_CONTENT_V2.nations };
+  for (const [playerId, iqScore] of entries) {
+    nations[playerId] = { ...nations[playerId], iqScore };
+  }
+  return { ...WORLD_CONTENT_V2, nations };
 }
 
 describe('national IQ gameplay proxy', () => {
@@ -172,6 +185,216 @@ describe('national IQ gameplay proxy', () => {
       .toBeLessThan(selectPopulationDynamicsV2(state, lowContent, belgium, 0).annualNetRate);
   });
 
+  it('preserves the native baseline when a country controls only its own population', () => {
+    const belgium = nationIdV2('bel');
+    const state = createWorldStateV2(8_208);
+    const view = selectNationalIqViewV2(state, WORLD_CONTENT_V2, belgium);
+    const homelandPopulation = state.territories[territoryIdV2('bel')].population;
+
+    expect(view.nativeBaseline).toBe(view.fusedBaseline);
+    expect(view.baselineScore).toBe(view.nativeBaseline);
+    expect(view.fusionDelta).toBe(0);
+    expect(view.controlledPopulation).toBeCloseTo(homelandPopulation, 8);
+    expect(view.integratedContributingPopulation).toBeCloseTo(homelandPopulation, 8);
+    expect(view.nativeContributingPopulation).toBeCloseTo(homelandPopulation, 8);
+    expect(view.foreignContributingPopulation).toBe(0);
+    expect(view.foreignContributingShare).toBe(0);
+    expect(view.fusionComponents).toEqual([expect.objectContaining({
+      originId: belgium,
+      populationShare: 1,
+      foreign: false,
+    })]);
+  });
+
+  it('fuses live populations proportionally to integration and reaches the exact full weighted mix', () => {
+    const belgium = nationIdV2('bel');
+    const netherlands = nationIdV2('nld');
+    const belgianTerritory = territoryIdV2('bel');
+    const dutchTerritory = territoryIdV2('nld');
+    const content = contentWithIqs([[belgium, 90], [netherlands, 106]]);
+    const state = createWorldStateV2(8_209, content);
+    state.territories[belgianTerritory].population = 10;
+    state.territories[dutchTerritory].population = 30;
+    state.territories[dutchTerritory].owner = belgium;
+    state.territories[dutchTerritory].integration = 0.25;
+    invalidateTerritoryIndexV2(state);
+
+    const partial = selectNationalIqViewV2(state, content, belgium);
+    const expectedPartial = (10 * 90 + 30 * 0.25 * 106) / (10 + 30 * 0.25);
+    expect(partial.fusedBaseline).toBeCloseTo(expectedPartial, 3);
+    expect(partial.foreignContributingPopulation).toBe(7.5);
+    expect(partial.foreignContributingShare).toBeCloseTo(7.5 / 17.5, 8);
+    expect(partial.fusionDelta).toBeGreaterThan(0);
+
+    state.territories[dutchTerritory].integration = 1;
+    const complete = selectNationalIqViewV2(state, content, belgium);
+    const expectedComplete = (10 * 90 + 30 * 106) / 40;
+    expect(complete.fusedBaseline).toBeCloseTo(expectedComplete, 3);
+    expect(complete.fusionDelta).toBeGreaterThan(partial.fusionDelta);
+    expect(complete.foreignContributingPopulation).toBe(30);
+    expect(complete.foreignContributingShare).toBe(0.75);
+    expect(complete.fusionComponents.find((component) => component.originId === netherlands))
+      .toEqual(expect.objectContaining({
+        baselineScore: 106,
+        contributingPopulation: 30,
+        populationShare: 0.75,
+        foreign: true,
+      }));
+  });
+
+  it('moves the fused baseline in the correct direction for high- and low-IQ acquisitions', () => {
+    const belgium = nationIdV2('bel');
+    const netherlands = nationIdV2('nld');
+    const dutchTerritory = territoryIdV2('nld');
+    const highContent = contentWithIqs([[belgium, 96], [netherlands, 108]]);
+    const lowContent = contentWithIqs([[belgium, 96], [netherlands, 80]]);
+    const highState = createWorldStateV2(8_210, highContent);
+    const lowState = createWorldStateV2(8_210, lowContent);
+    for (const state of [highState, lowState]) {
+      state.territories[dutchTerritory].owner = belgium;
+      state.territories[dutchTerritory].integration = 1;
+    }
+
+    const high = selectNationalIqViewV2(highState, highContent, belgium);
+    const low = selectNationalIqViewV2(lowState, lowContent, belgium);
+    expect(high.fusedBaseline).toBeGreaterThan(high.nativeBaseline);
+    expect(high.fusionDelta).toBeGreaterThan(0);
+    expect(low.fusedBaseline).toBeLessThan(low.nativeBaseline);
+    expect(low.fusionDelta).toBeLessThan(0);
+  });
+
+  it('applies only the live empire leader IQ trait once after population fusion', () => {
+    const germany = nationIdV2('deu');
+    const belgium = nationIdV2('bel');
+    const content = contentWithIqs([[germany, 100], [belgium, 90]]);
+    const state = createWorldStateV2(8_215, content);
+    state.humanPlayerId = belgium;
+    state.humanPlayerIds = [belgium];
+    state.territories[territoryIdV2('deu')].population = 10;
+    state.territories[territoryIdV2('bel')].population = 10;
+    state.territories[territoryIdV2('bel')].owner = germany;
+    state.territories[territoryIdV2('bel')].integration = 1;
+    const leaderTrait = countryTraitFactorV2(germany, 'national-iq');
+
+    const view = selectNationalIqViewV2(state, content, germany);
+    expect(leaderTrait).toBeGreaterThan(1);
+    expect(view.traitFactor).toBe(leaderTrait);
+    expect(view.fusedBaseline).toBeCloseTo(((100 + 90) / 2) * leaderTrait, 2);
+    expect(view.fusionComponents.find((component) => component.originId === belgium)?.baselineScore)
+      .toBe(90);
+  });
+
+  it('invalidates its cached view for ownership, integration and live-population changes', () => {
+    const belgium = nationIdV2('bel');
+    const netherlands = nationIdV2('nld');
+    const dutchTerritory = territoryIdV2('nld');
+    const state = createWorldStateV2(8_211);
+    const baseline = selectNationalIqViewV2(state, WORLD_CONTENT_V2, belgium);
+
+    state.territories[dutchTerritory].owner = belgium;
+    state.territories[dutchTerritory].integration = 0.25;
+    invalidateTerritoryIndexV2(state);
+    const acquired = selectNationalIqViewV2(state, WORLD_CONTENT_V2, belgium);
+    expect(acquired).not.toBe(baseline);
+    expect(selectNationalIqViewV2(state, WORLD_CONTENT_V2, belgium)).toBe(acquired);
+
+    state.territories[dutchTerritory].integration = 0.50;
+    const integrating = selectNationalIqViewV2(state, WORLD_CONTENT_V2, belgium);
+    expect(integrating).not.toBe(acquired);
+    expect(integrating.foreignContributingPopulation)
+      .toBeGreaterThan(acquired.foreignContributingPopulation);
+
+    state.territories[dutchTerritory].population += 1;
+    const growing = selectNationalIqViewV2(state, WORLD_CONTENT_V2, belgium);
+    expect(growing).not.toBe(integrating);
+    expect(growing.foreignContributingPopulation)
+      .toBeGreaterThan(integrating.foreignContributingPopulation);
+
+    state.territories[dutchTerritory].owner = netherlands;
+    invalidateTerritoryIndexV2(state);
+    const lost = selectNationalIqViewV2(state, WORLD_CONTENT_V2, belgium);
+    expect(lost).not.toBe(growing);
+    expect(lost.fusedBaseline).toBe(lost.nativeBaseline);
+    expect(lost.foreignContributingPopulation).toBe(0);
+  });
+
+  it('applies education research after population fusion without changing the fused baseline', () => {
+    const belgium = nationIdV2('bel');
+    const netherlands = nationIdV2('nld');
+    const content = contentWithIqs([[belgium, 90], [netherlands, 106]]);
+    const state = createWorldStateV2(8_212, content);
+    state.territories[territoryIdV2('nld')].owner = belgium;
+    state.territories[territoryIdV2('nld')].integration = 1;
+    const fused = selectNationalIqViewV2(state, content, belgium);
+
+    state.players[belgium].research.effectLevels['iq-increase'] = 5;
+    const researched = selectNationalIqViewV2(state, content, belgium);
+    expect(researched.fusedBaseline).toBe(fused.fusedBaseline);
+    expect(researched.baselineScore).toBe(fused.baselineScore);
+    expect(researched.researchBonus).toBeGreaterThan(0);
+    expect(researched.score).toBeCloseTo(
+      researched.fusedBaseline + researched.researchBonus,
+      3,
+    );
+  });
+
+  it('keeps fusion deterministic across save-style clones and territory record order', () => {
+    const belgium = nationIdV2('bel');
+    const netherlands = nationIdV2('nld');
+    const content = contentWithIqs([[belgium, 90], [netherlands, 106]]);
+    const state = createWorldStateV2(8_213, content);
+    state.territories[territoryIdV2('nld')].owner = belgium;
+    state.territories[territoryIdV2('nld')].integration = 0.63;
+    const restored = structuredClone(state);
+    restored.territories = Object.fromEntries(
+      Object.entries(restored.territories).reverse(),
+    ) as typeof restored.territories;
+
+    expect(selectNationalIqViewV2(restored, content, belgium))
+      .toEqual(selectNationalIqViewV2(state, content, belgium));
+  });
+
+  it('purely projects high- and low-IQ country takeovers for Attack Review', () => {
+    const belgium = nationIdV2('bel');
+    const netherlands = nationIdV2('nld');
+    const dutchTerritory = territoryIdV2('nld');
+    const highContent = contentWithIqs([[belgium, 96], [netherlands, 108]]);
+    const lowContent = contentWithIqs([[belgium, 96], [netherlands, 80]]);
+    const highState = createWorldStateV2(8_214, highContent);
+    const lowState = createWorldStateV2(8_214, lowContent);
+    const highBefore = structuredClone(highState.territories[dutchTerritory]);
+    const lowBefore = structuredClone(lowState.territories[dutchTerritory]);
+
+    const high = projectNationalIqFusionV2(
+      highState,
+      highContent,
+      belgium,
+      netherlands,
+    );
+    const low = projectNationalIqFusionV2(
+      lowState,
+      lowContent,
+      belgium,
+      netherlands,
+    );
+
+    expect(high.targetTerritoryIds).toContain(dutchTerritory);
+    expect(high.projected.fusedBaseline).toBeGreaterThan(high.current.fusedBaseline);
+    expect(high.scoreDelta).toBeGreaterThan(0);
+    expect(high.combatQualityMultiplierDelta).toBeGreaterThan(0);
+    expect(high.economyGrowthMultiplierDelta).toBeGreaterThan(0);
+    expect(high.researchMultiplierDelta).toBeGreaterThan(0);
+    expect(high.logisticsMultiplierDelta).toBeGreaterThan(0);
+    expect(low.projected.fusedBaseline).toBeLessThan(low.current.fusedBaseline);
+    expect(low.scoreDelta).toBeLessThan(0);
+    expect(low.combatQualityMultiplierDelta).toBeLessThan(0);
+    expect(low.economyGrowthMultiplierDelta).toBeLessThan(0);
+    expect(low.researchMultiplierDelta).toBeLessThan(0);
+    expect(low.logisticsMultiplierDelta).toBeLessThan(0);
+    expect(highState.territories[dutchTerritory]).toEqual(highBefore);
+    expect(lowState.territories[dutchTerritory]).toEqual(lowBefore);
+  });
+
   it('turns costly education research into a diminishing, hard-capped live IQ gain', () => {
     const belgium = nationIdV2('bel');
     const state = createWorldStateV2(8_205);
@@ -250,12 +473,15 @@ describe('national IQ gameplay proxy', () => {
   it('keeps selection neutral while higher IQ narrows defensive-aid intelligence error', () => {
     const defender = nationIdV2('bel');
     const supporter = nationIdV2('nld');
-    const attacker = nationIdV2('fra');
+    const attacker = nationIdV2('deu');
+    const observer = nationIdV2('gbr');
     const state = createWorldStateV2(8_204);
-    state.tick = 40;
+    state.tick = 120;
+    state.humanPlayerId = observer;
+    state.humanPlayerIds = [observer];
     const war = {
       id: 'shared-defensive-aid', attackerId: attacker, defenderId: defender,
-      startedTick: 10, lastBattleTick: 40, warScore: 0, battles: 8,
+      startedTick: 75, lastBattleTick: 120, warScore: 0, battles: 12,
       attackerLosses: 0, defenderLosses: 0, lastPeaceOfferTick: -1,
       attackerOperations: [], defenderOperations: [],
     };
@@ -275,22 +501,20 @@ describe('national IQ gameplay proxy', () => {
       state, WORLD_CONTENT_V2, supporter, war, access, powerSnapshot,
     );
     state.humanPlayerId = defender;
+    state.humanPlayerIds = [defender];
     const selected = selectDefensiveAidAssessmentV2(
       state, WORLD_CONTENT_V2, supporter, war, access, powerSnapshot,
     );
     expect(selected).toEqual(unselected);
     expect(selected).toBeDefined();
 
-    const low = selectDefensiveAidAssessmentV2(
-      state, contentWithIq(supporter, NATIONAL_IQ_SCORE_MIN), supporter, war, access,
-      powerSnapshot,
-    )!;
-    const high = selectDefensiveAidAssessmentV2(
-      state, contentWithIq(supporter, NATIONAL_IQ_SCORE_MAX), supporter, war, access,
-      powerSnapshot,
-    )!;
-    expect(low).toBeDefined();
-    expect(high).toBeDefined();
+    const low = defensiveInterventionPowerEstimateV2(
+      state, contentWithIq(supporter, NATIONAL_IQ_SCORE_MIN), supporter, war, powerSnapshot,
+    );
+    const high = defensiveInterventionPowerEstimateV2(
+      state, contentWithIq(supporter, NATIONAL_IQ_SCORE_MAX), supporter, war, powerSnapshot,
+    );
+    expect(high.exactCombinedPowerRatio).toBe(low.exactCombinedPowerRatio);
     expect(high.intelligenceErrorBound).toBeLessThan(low.intelligenceErrorBound);
   });
 

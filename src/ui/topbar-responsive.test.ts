@@ -20,7 +20,7 @@ describe('responsive strategic topbar', () => {
     const military = worldUiSource.indexOf('data-panel="war" data-stat-target="army"');
     const people = worldUiSource.indexOf('data-stat-target="people"');
     const food = worldUiSource.indexOf('data-stat-target="food"');
-    const research = worldUiSource.indexOf('data-panel="research" aria-label="Open Research');
+    const research = worldUiSource.indexOf('class="top-metric top-metric--research"');
 
     expect(economy).toBeGreaterThan(0);
     expect(treasury).toBeGreaterThan(economy);
@@ -31,7 +31,20 @@ describe('responsive strategic topbar', () => {
     expect(worldUiSource).not.toContain('<span>APEX</span>');
     expect(worldUiSource).toContain('data-panel="research"');
     expect(worldUiSource).not.toContain('data-panel="progress"');
-    expect(worldUiSource).toContain('<span>TREASURY</span><strong>${treasuryTopbar.value}</strong>');
+    expect(worldUiSource).toContain('<span>TREASURY</span><strong>${treasuryTopbar.value} <i class="${treasuryTopbar.reserveFillClassName}">${treasuryTopbar.reserveFill} TARGET</i></strong>');
+    expect(worldUiSource).toContain('finance.reserveTarget');
     expect(worldUiSource).toContain('Cashflow ${signedCash(annual(displayedNet))}/yr');
+    expect(worldUiSource).toContain('<span>MILITARY · RES</span><strong>${format(army.fillRatio * 100)}% · R ${people(human.trainedReserves)}</strong>');
+    expect(worldUiSource).toContain('power · PRIORITY ${human.budget.military}%');
+    expect(worldUiSource.match(/title="[^"]+" aria-label="Open (?:Economy|War|Nation|Research)/g)).toHaveLength(6);
+    expect(worldUiSource).toContain('trained reserves ${people(human.trainedReserves)} of ${people(finance.trainedReserveCapacity)} capacity');
+    expect(worldUiSource).toContain('(1 + finance.annualEconomyGrowthRate)');
+    expect(worldUiSource).toContain('/ Math.max(0.01, 1 + populationDynamics.annualNetRate)');
+    expect(worldUiSource).toContain('${cash(economy.wealthPerPerson / 1e6)}/person ${signed(topbarGdpPerCapitaAnnualGrowth * 100, 2)}%');
+    expect(worldUiSource).toContain('${cash(economy.controlledOutput)} <i class="${finance.annualEconomyGrowthRate >= 0');
+    expect(worldUiSource).toContain('${signed(finance.annualEconomyGrowthRate * 100, 2)}%</i></strong>');
+    expect(worldUiSource).toContain("finance.annualEconomyGrowthRate >= 0 ? 'is-positive' : 'is-negative'");
+    expect(worldUiSource).toContain('${population(integratedPopulation)} <i class="${populationDynamics.annualNetRate >= 0');
+    expect(worldUiSource).toContain('${signed(populationDynamics.annualNetRate * 100, 2)}%</i></strong><small><b>IQ ${format(topbarIq.score, 1)}</b></small>');
   });
 });

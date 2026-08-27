@@ -5,10 +5,14 @@ import {
   EMPTY_RESEARCH_EFFECT_LEVELS,
   EMPTY_RESEARCH_PROGRESS,
   FOOD_TARGET_WEEKS,
+  TRAINED_RESERVE_CAPACITY_MULTIPLIER,
   clamp,
   round,
 } from './balance';
-import { initialNationArmyCapacityBenchmarkV2 } from './capacity';
+import {
+  initialNationArmyCapacityBenchmarkV2,
+  nationalArmyCapacityAtOneXOpeningV2,
+} from './capacity';
 import type { WorldContentV2 } from './content';
 import { calculateBlendedFiscalCapacityV2 } from './fiscal';
 import { initialTrainedReserveManpowerV2 } from './reserveForces';
@@ -16,7 +20,10 @@ import { OPENING_ARMY_BONUS_DURATION_TICKS_V2 } from './openingArmyBonus';
 import {
   countryTraitFactorV2,
   humanCountryTraitMultiplierForContentV2,
+  humanOpeningReserveMultiplierForContentV2,
+  humanOpeningTrainedReserveTermsForContentV2,
   humanStartingArmyMultiplierForContentV2,
+  isExtremeOpeningUnderdogForContentV2,
   legacyV261HumanStartingArmyMultiplierForContentV2,
 } from './traits';
 import type { NationStateV2, PlayerId, WorldStateV2 } from './types';
@@ -97,7 +104,9 @@ export function synchronizeOpeningTreasuryHumanRosterV2(
  * manpower changes here; capacity is synchronized by the caller onto the same
  * temporary curve. A sub-1x opening also scales the tick-zero reserve cadre by
  * the same factor; removing that human seat restores the exact 1x cadre. A
- * positive opening boost normally never creates free reserves. Belgium is the
+ * positive opening boost normally never creates free reserves. The bottom
+ * quartile receives bounded rank-based reserves, the weakest ten continue to
+ * 2x with a five-percent neutral-cap floor. Belgium is the
  * one explicit scenario exception: its 35% opening reserve must remain 35% of
  * its temporary player capacity as well as its ordinary AI capacity. Extra
  * deployed soldiers are free and non-replenishable, and the fading capacity
@@ -120,14 +129,28 @@ export function synchronizeOpeningArmyHumanRosterV2(
     const after = next.has(id) ? humanStartingArmyMultiplierForContentV2(content, id) : 1;
     if (Math.abs(before - after) <= 0.000000001) continue;
     state.players[id]!.openingArmyBonus = null;
-    const reserveBeforeFactor = id === 'bel' ? before : Math.min(1, before);
-    const reserveAfterFactor = id === 'bel' ? after : Math.min(1, after);
-    if (Math.abs(reserveBeforeFactor - reserveAfterFactor) > 0.000000001) {
-      state.players[id]!.trainedReserves = round(
-        state.players[id]!.trainedReserves / reserveBeforeFactor * reserveAfterFactor,
-        9,
-      );
-    }
+    const canonicalReserves = initialTrainedReserveManpowerV2(
+      String(id),
+      initialNationArmyCapacityBenchmarkV2(content, id),
+      content,
+    );
+    const neutralReserveCapacity = nationalArmyCapacityAtOneXOpeningV2(state, content, id)
+      * TRAINED_RESERVE_CAPACITY_MULTIPLIER
+      * countryTraitFactorV2(id, 'reserve-capacity', {
+        humanControlled: next.has(id),
+        humanTraitMultiplier: next.has(id)
+          ? humanCountryTraitMultiplierForContentV2(content, id)
+          : undefined,
+      });
+    const reserveTerms = humanOpeningTrainedReserveTermsForContentV2(
+      content,
+      id,
+      canonicalReserves,
+      neutralReserveCapacity,
+      neutralReserveCapacity * after,
+      next.has(id),
+    );
+    state.players[id]!.trainedReserves = round(reserveTerms.trainedReserves, 9);
     for (const territory of Object.values(state.territories)) {
       if (territory.owner !== id) continue;
       territory.army.manpower = round(territory.army.manpower / before * after, 9);

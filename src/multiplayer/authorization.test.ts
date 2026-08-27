@@ -34,6 +34,27 @@ describe('multiplayer command authorization', () => {
     }, true).accepted).toBe(false);
   });
 
+  it('binds Arctic research, warning acknowledgement and Antarctic deployment to the issuing seat', () => {
+    const state = createWorldStateV2(55, WORLD_CONTENT_V2);
+    const ownCommands = [
+      { type: 'start-arctic-project', playerId: belgium, projectId: 'polar-demography' },
+      { type: 'acknowledge-polar-warning', playerId: belgium },
+      { type: 'deploy-antarctic-expedition', playerId: belgium, sectorId: 'drake-entry', manpower: 1 },
+    ] as const;
+    const spoofedCommands = [
+      { type: 'start-arctic-project', playerId: canada, projectId: 'polar-demography' },
+      { type: 'acknowledge-polar-warning', playerId: canada },
+      { type: 'deploy-antarctic-expedition', playerId: canada, sectorId: 'drake-entry', manpower: 1 },
+    ] as const;
+
+    for (const command of ownCommands) {
+      expect(authorizeMultiplayerCommandV2(state, belgium, command, false).accepted).toBe(true);
+    }
+    for (const command of spoofedCommands) {
+      expect(authorizeMultiplayerCommandV2(state, belgium, command, true).accepted).toBe(false);
+    }
+  });
+
   it('only lets the addressed country answer a peace offer', () => {
     const state = createWorldStateV2(53, WORLD_CONTENT_V2);
     state.offers.push({

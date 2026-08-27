@@ -14,15 +14,56 @@ import {
   ANTARCTICA_COASTLINE,
   ANTARCTICA_ICE_SHELF,
   ANTARCTICA_MAP_SILHOUETTE,
+  ANTARCTICA_SECTOR_PRESENTATIONS,
   ARCTIC_ICE_COASTLINE,
   ARCTIC_RESEARCH_ACCESS_TERRITORY_IDS,
   ARCTIC_RESEARCH_ZONE_ID,
   SEA_MAP_LABELS,
+  antarcticaSectorAtCoordinates,
   arcticResearchAccessTerritoriesForEmpire,
   seaLabelZoomPresentation,
 } from './mapGeographyPresentation';
 
 const stylesSource = readFileSync(new URL('../../styles.css', import.meta.url), 'utf8');
+
+function greatCircleCoordinate(
+  start: readonly [number, number],
+  end: readonly [number, number],
+  progress: number,
+): readonly [number, number] {
+  const vector = ([longitude, latitude]: readonly [number, number]) => {
+    const lon = longitude * Math.PI / 180;
+    const lat = latitude * Math.PI / 180;
+    return [Math.cos(lat) * Math.cos(lon), Math.sin(lat), Math.cos(lat) * Math.sin(lon)] as const;
+  };
+  const a = vector(start);
+  const b = vector(end);
+  const angle = Math.acos(Math.max(-1, Math.min(1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2])));
+  const sinAngle = Math.sin(angle);
+  const left = sinAngle < 1e-9 ? 1 - progress : Math.sin((1 - progress) * angle) / sinAngle;
+  const right = sinAngle < 1e-9 ? progress : Math.sin(progress * angle) / sinAngle;
+  const x = a[0] * left + b[0] * right;
+  const y = a[1] * left + b[1] * right;
+  const z = a[2] * left + b[2] * right;
+  return [Math.atan2(z, x) * 180 / Math.PI, Math.atan2(y, Math.hypot(x, z)) * 180 / Math.PI];
+}
+
+function pointInRing(
+  longitude: number,
+  latitude: number,
+  ring: readonly (readonly [number, number])[],
+): boolean {
+  let inside = false;
+  for (let current = 0, previous = ring.length - 1; current < ring.length; previous = current, current += 1) {
+    const [currentLon, currentLat] = ring[current]!;
+    const [previousLon, previousLat] = ring[previous]!;
+    if ((currentLat > latitude) === (previousLat > latitude)) continue;
+    const crossingLongitude = (previousLon - currentLon) * (latitude - currentLat)
+      / (previousLat - currentLat) + currentLon;
+    if (longitude < crossingLongitude) inside = !inside;
+  }
+  return inside;
+}
 
 describe('map geography presentation', () => {
   it('covers the major strategic oceans and European seas with unique labels', () => {
@@ -79,7 +120,7 @@ describe('map geography presentation', () => {
     expect(antarcticaMethod).not.toContain('setInteractive');
   });
 
-  it('reserves exactly three inactive future access corridors without creating territories', () => {
+  it('defines three open-sea Antarctica corridors without creating territories', () => {
     expect(ANTARCTICA_ACCESS_ANCHORS).toHaveLength(3);
     expect(ANTARCTICA_ACCESS_ANCHORS.map((anchor) => anchor.id)).toEqual([
       'drake-passage', 'south-africa-corridor', 'australia-new-zealand-corridor',
@@ -87,10 +128,51 @@ describe('map geography presentation', () => {
     expect(ANTARCTICA_ACCESS_ANCHORS.map((anchor) => anchor.corridor)).toEqual([
       'south-america', 'south-africa', 'australia-new-zealand',
     ]);
-    expect(ANTARCTICA_ACCESS_ANCHORS.every((anchor) => !anchor.active)).toBe(true);
+    expect(ANTARCTICA_ACCESS_ANCHORS[0]?.origin).toEqual([-67.15, -56]);
+    expect(ANTARCTICA_ACCESS_ANCHORS.map((anchor) => anchor.entrySectorId)).toEqual([
+      'drake-entry', 'maud-entry', 'ross-entry',
+    ]);
     expect(ANTARCTICA_ACCESS_ANCHORS.some((anchor) => (
       TERRITORIES.some((territory) => territory.id === anchor.id)
     ))).toBe(false);
+  });
+
+  it('keeps the complete Drake great-circle route clear of Chile and Argentina', () => {
+    const drake = ANTARCTICA_ACCESS_ANCHORS[0]!;
+    const southAmericanLand = COUNTRIES.filter((country) => (
+      country.englishName === 'Chile' || country.englishName === 'Argentina'
+    ));
+    expect(southAmericanLand).toHaveLength(2);
+    const intersections: Array<{ sample: number; country: string }> = [];
+    for (let sample = 0; sample <= 200; sample += 1) {
+      const [longitude, latitude] = greatCircleCoordinate(
+        drake.origin,
+        [drake.longitude, drake.latitude],
+        sample / 200,
+      );
+      for (const country of southAmericanLand) {
+        if (country.rings.some((ring) => pointInRing(longitude, latitude, ring))) {
+          intersections.push({ sample, country: country.englishName });
+        }
+      }
+    }
+    expect(intersections).toEqual([]);
+  });
+
+  it('keeps all nine campaign sectors stable and analytically pickable', () => {
+    expect(ANTARCTICA_SECTOR_PRESENTATIONS.map((sector) => sector.id)).toEqual([
+      'drake-entry', 'maud-entry', 'ross-entry', 'weddell-forge',
+      'queen-maud-grid', 'ross-array', 'sentinel-labyrinth',
+      'transantarctic-vault', 'zero-point-core',
+    ]);
+    const visible = new Set(
+      ANTARCTICA_SECTOR_PRESENTATIONS
+        .filter((sector) => sector.id === 'drake-entry' || sector.id === 'zero-point-core')
+        .map((sector) => sector.id),
+    );
+    expect(antarcticaSectorAtCoordinates(-58, -66, visible)).toBe('drake-entry');
+    expect(antarcticaSectorAtCoordinates(0, -89, visible)).toBe('zero-point-core');
+    expect(antarcticaSectorAtCoordinates(20, -70, visible)).toBeUndefined();
   });
 
   it('keeps the Arctic Research Zone outside canonical countries and territories', () => {

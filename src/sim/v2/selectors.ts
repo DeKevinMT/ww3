@@ -98,6 +98,7 @@ import {
   EXTREME_CRISIS_MAX_UPKEEP_FUNDING,
   PASSIVE_RECRUITMENT_CAPACITY_RATE,
   PASSIVE_RECRUITMENT_TRAINING_BONUS,
+  UPKEEP_OVERFUNDING_MAX_RATIO,
   RECRUITMENT_SIZE_REFERENCE_CAPACITY,
   RECRUITMENT_SIZE_SCALING_EXPONENT,
   RECRUITMENT_SIZE_SPEED_MAX,
@@ -146,6 +147,7 @@ import {
   NATIONAL_AI_FUNDED_FREE_CASHFLOW_SHARE,
   WAR_RECRUITMENT_ACCELERATION_COST_MULTIPLIER,
   WAR_RECRUITMENT_ACCELERATION_MULTIPLIER,
+  countryInteriorOperationMultiplierV2,
   warAccessOperationMultiplierV2,
   WAR_FATIGUE_OPERATION_COST_MAX_BONUS,
   WAR_FATIGUE_OPERATION_COST_PER_POINT,
@@ -159,6 +161,7 @@ import {
   excessTreasuryInvestmentV2,
   round,
   smoothstep,
+  upkeepFundingTargetRatioV2,
 } from './balance';
 import {
   WORLD_CONTENT_V2,
@@ -317,6 +320,7 @@ function territoryIndexV2(state: WorldStateV2): TerritoryIndexV2 {
 /** Call whenever canonical territory ownership changes during a tick. */
 export function invalidateTerritoryIndexV2(state: WorldStateV2): void {
   territoryIndexCache.delete(state);
+  nationalIqViewCache.delete(state);
 }
 
 /** Call whenever a permanently absorbed nation is removed from canonical state. */
@@ -457,8 +461,44 @@ export function selectNationalCombatQualityV2(
   );
 }
 
-export interface NationalIqViewV2 {
+export interface NationalIqFusionComponentV2 {
+  /** Immutable opening nation whose population supplies this component. */
+  originId: PlayerId;
+  /** That origin nation's unmodified gameplay baseline. */
   baselineScore: number;
+  /** Live population admitted by territorial integration, in millions. */
+  contributingPopulation: number;
+  /** Share of the empire's complete integration-weighted population. */
+  populationShare: number;
+  /** Additive contribution to the raw population-weighted baseline. */
+  weightedBaselineContribution: number;
+  /** True when this population did not belong to the live empire leader at opening. */
+  foreign: boolean;
+}
+
+export interface NationalIqViewV2 {
+  /** Leader's own opening baseline after its one live national-IQ trait. */
+  nativeBaseline: number;
+  /** Population-fused baseline after that same leader trait; alias of baselineScore. */
+  fusedBaseline: number;
+  /** Compatibility name retained for all existing simulation consumers. */
+  baselineScore: number;
+  /** Signed IQ change caused only by population fusion, before research. */
+  fusionDelta: number;
+  /** Current empire-leader trait applied once after population fusion. */
+  traitFactor: number;
+  /** Complete live population under control, before integration weighting. */
+  controlledPopulation: number;
+  /** Live population admitted by integration and used in the IQ weighting. */
+  integratedContributingPopulation: number;
+  /** Integration-weighted population from the leader's immutable opening territory. */
+  nativeContributingPopulation: number;
+  /** Integration-weighted population from acquired opening territories. */
+  foreignContributingPopulation: number;
+  /** Foreign share of integratedContributingPopulation. */
+  foreignContributingShare: number;
+  /** Stable origin-id-ordered population breakdown used to inspect fusion. */
+  fusionComponents: readonly NationalIqFusionComponentV2[];
   researchBonus: number;
   score: number;
   source: 'country-learning-gameplay-baseline' | 'country-learning-gameplay-baseline-plus-research';
@@ -472,6 +512,8 @@ export interface NationalIqViewV2 {
 interface NationalIqViewCacheEntryV2 {
   content: WorldContentV2;
   baselineScore: number;
+  fusionFingerprint: string;
+  traitFactor: number;
   researchLevel: number;
   view: NationalIqViewV2;
 }
@@ -480,6 +522,187 @@ const nationalIqViewCache = new WeakMap<
   WorldStateV2,
   Map<PlayerId, NationalIqViewCacheEntryV2>
 >();
+
+interface NationalIqFusionInputsV2 {
+  nativeRawBaseline: number;
+  fusedRawBaseline: number;
+  controlledPopulation: number;
+  integratedContributingPopulation: number;
+  nativeContributingPopulation: number;
+  foreignContributingPopulation: number;
+  foreignContributingShare: number;
+  components: readonly NationalIqFusionComponentV2[];
+  fingerprint: string;
+}
+
+/**
+ * Population identities stay anchored to immutable opening ownership. A later
+ * core fusion changes sovereignty, not the deterministic baseline attached to
+ * the people living in that territory.
+ */
+function nationalIqFusionInputsV2(
+  state: WorldStateV2 | undefined,
+  content: WorldContentV2,
+  playerId: PlayerId,
+  fullyIntegratedTerritoryIds?: ReadonlySet<TerritoryId>,
+): NationalIqFusionInputsV2 {
+  const nativeRawBaseline = content.nations[playerId]?.iqScore ?? NATIONAL_IQ_SCORE_NEUTRAL;
+  if (!state) {
+    const population = Math.max(0, content.nations[playerId]?.real.population ?? 0);
+    const component: NationalIqFusionComponentV2 = Object.freeze({
+      originId: playerId,
+      baselineScore: round(nativeRawBaseline, 3),
+      contributingPopulation: round(population, 9),
+      populationShare: population > 0 ? 1 : 0,
+      weightedBaselineContribution: population > 0 ? round(nativeRawBaseline, 9) : 0,
+      foreign: false,
+    });
+    return {
+      nativeRawBaseline,
+      fusedRawBaseline: nativeRawBaseline,
+      controlledPopulation: population,
+      integratedContributingPopulation: population,
+      nativeContributingPopulation: population,
+      foreignContributingPopulation: 0,
+      foreignContributingShare: 0,
+      components: Object.freeze([component]),
+      fingerprint: `content:${playerId}:${nativeRawBaseline}:${population}`,
+    };
+  }
+
+  interface ComponentAccumulatorV2 {
+    baselineScore: number;
+    population: number;
+  }
+  const byOrigin = new Map<PlayerId, ComponentAccumulatorV2>();
+  const fingerprint: string[] = [];
+  let controlledPopulation = 0;
+  let integratedContributingPopulation = 0;
+  let nativeContributingPopulation = 0;
+  let foreignContributingPopulation = 0;
+  let weightedBaseline = 0;
+  const ownedTerritoryIds = territoryIndexV2(state).owned.get(playerId) ?? [];
+  const relevantTerritoryIds = fullyIntegratedTerritoryIds
+    ? [...new Set([...ownedTerritoryIds, ...fullyIntegratedTerritoryIds])]
+      .sort((left, right) => String(left).localeCompare(String(right)))
+    : ownedTerritoryIds;
+  for (const territoryId of relevantTerritoryIds) {
+    const territory = state.territories[territoryId];
+    const projected = fullyIntegratedTerritoryIds?.has(territoryId) ?? false;
+    if (!territory || (territory.owner !== playerId && !projected)) continue;
+    const originId = content.territories[territoryId]?.initialOwnerId ?? territory.coreOwner;
+    const originBaseline = content.nations[originId]?.iqScore ?? NATIONAL_IQ_SCORE_NEUTRAL;
+    const population = Number.isFinite(territory.population)
+      ? Math.max(0, territory.population) : 0;
+    const integration = projected
+      ? 1
+      : Number.isFinite(territory.integration)
+        ? clamp(territory.integration, 0, 1) : 0;
+    const contributingPopulation = population * integration;
+    fingerprint.push(
+      `${territoryId}:${originId}:${originBaseline}:${territory.population}:${territory.integration}`,
+    );
+    controlledPopulation += population;
+    integratedContributingPopulation += contributingPopulation;
+    weightedBaseline += contributingPopulation * originBaseline;
+    if (originId === playerId) nativeContributingPopulation += contributingPopulation;
+    else foreignContributingPopulation += contributingPopulation;
+    const accumulator = byOrigin.get(originId) ?? {
+      baselineScore: originBaseline,
+      population: 0,
+    };
+    accumulator.population += contributingPopulation;
+    byOrigin.set(originId, accumulator);
+  }
+
+  const fusedRawBaseline = integratedContributingPopulation > 0
+    ? weightedBaseline / integratedContributingPopulation
+    : nativeRawBaseline;
+  const components = [...byOrigin.entries()]
+    .sort(([left], [right]) => String(left).localeCompare(String(right)))
+    .map(([originId, component]): NationalIqFusionComponentV2 => {
+      const populationShare = integratedContributingPopulation > 0
+        ? component.population / integratedContributingPopulation : 0;
+      return Object.freeze({
+        originId,
+        baselineScore: round(component.baselineScore, 3),
+        contributingPopulation: round(component.population, 9),
+        populationShare: round(populationShare, 9),
+        weightedBaselineContribution: round(component.baselineScore * populationShare, 9),
+        foreign: originId !== playerId,
+      });
+    });
+  return {
+    nativeRawBaseline,
+    fusedRawBaseline,
+    controlledPopulation,
+    integratedContributingPopulation,
+    nativeContributingPopulation,
+    foreignContributingPopulation,
+    foreignContributingShare: integratedContributingPopulation > 0
+      ? foreignContributingPopulation / integratedContributingPopulation : 0,
+    components: Object.freeze(components),
+    fingerprint: fingerprint.join('|'),
+  };
+}
+
+function createNationalIqViewFromFusionV2(
+  content: WorldContentV2,
+  playerId: PlayerId,
+  fusion: NationalIqFusionInputsV2,
+  iqTraitFactor: number,
+  baselineScore: number,
+  researchLevel: number,
+): NationalIqViewV2 {
+  const definition = content.nations[playerId];
+  const nativeBaseline = clamp(
+    fusion.nativeRawBaseline * iqTraitFactor,
+    NATIONAL_IQ_SCORE_MIN,
+    NATIONAL_IQ_SCORE_MAX,
+  );
+  const uncappedResearchBonus = diminishingResearchLevelV2(
+    researchLevel,
+    NATIONAL_IQ_RESEARCH_MAX_BONUS,
+    NATIONAL_IQ_RESEARCH_HALF_SATURATION,
+  );
+  const score = clamp(
+    baselineScore + uncappedResearchBonus,
+    NATIONAL_IQ_SCORE_MIN,
+    NATIONAL_IQ_EFFECTIVE_SCORE_MAX,
+  );
+  const researchBonus = score - baselineScore;
+  const delta = score - NATIONAL_IQ_SCORE_NEUTRAL;
+  const gdpPerCapita = definition
+    ? definition.real.gdp / Math.max(0.000001, definition.real.population) * 1_000
+    : NATIONAL_IQ_GDP_PER_CAPITA_FLOOR;
+  return {
+    nativeBaseline: round(nativeBaseline, 3),
+    fusedBaseline: round(baselineScore, 3),
+    baselineScore: round(baselineScore, 3),
+    fusionDelta: round(baselineScore - nativeBaseline, 3),
+    traitFactor: round(iqTraitFactor, 9),
+    controlledPopulation: round(fusion.controlledPopulation, 9),
+    integratedContributingPopulation: round(fusion.integratedContributingPopulation, 9),
+    nativeContributingPopulation: round(fusion.nativeContributingPopulation, 9),
+    foreignContributingPopulation: round(fusion.foreignContributingPopulation, 9),
+    foreignContributingShare: round(fusion.foreignContributingShare, 9),
+    fusionComponents: fusion.components,
+    researchBonus: round(researchBonus, 3),
+    score: round(score, 3),
+    source: researchBonus > 0
+      ? 'country-learning-gameplay-baseline-plus-research'
+      : 'country-learning-gameplay-baseline',
+    combatQualityMultiplier: definition
+      ? openingCombatQualityMultiplierV2(gdpPerCapita, score) : 1,
+    economyGrowthMultiplier: round(1 + delta * NATIONAL_IQ_ECONOMY_GROWTH_PER_POINT, 9),
+    researchMultiplier: round(1 + delta * NATIONAL_IQ_RESEARCH_PER_POINT, 9),
+    logisticsMultiplier: round(1 + delta * NATIONAL_IQ_LOGISTICS_PER_POINT, 9),
+    populationGrowthMultiplier: round(
+      1 - delta * NATIONAL_IQ_POPULATION_GROWTH_PER_POINT,
+      9,
+    ),
+  };
+}
 
 /**
  * One bounded, inspectable quality view shared by every IQ-influenced system.
@@ -500,14 +723,14 @@ export function selectNationalIqViewV2(
   const content = effectivePlayerId === undefined
     ? stateOrContent as WorldContentV2 : contentOrPlayerId as WorldContentV2;
   const playerId = effectivePlayerId ?? contentOrPlayerId as PlayerId;
-  const definition = content.nations[playerId];
   const iqTraitFactor = countryTraitFactorV2(
     playerId,
     'national-iq',
     state ? traitNationContextV2(state, playerId) : {},
   );
+  const fusion = nationalIqFusionInputsV2(state, content, playerId);
   const baselineScore = clamp(
-    (definition?.iqScore ?? NATIONAL_IQ_SCORE_NEUTRAL) * iqTraitFactor,
+    fusion.fusedRawBaseline * iqTraitFactor,
     NATIONAL_IQ_SCORE_MIN,
     NATIONAL_IQ_SCORE_MAX,
   );
@@ -519,48 +742,150 @@ export function selectNationalIqViewV2(
   if (cached
     && cached.content === content
     && cached.baselineScore === baselineScore
+    && cached.fusionFingerprint === fusion.fingerprint
+    && cached.traitFactor === iqTraitFactor
     && cached.researchLevel === researchLevel) return cached.view;
-  const uncappedResearchBonus = diminishingResearchLevelV2(
+  const view = createNationalIqViewFromFusionV2(
+    content,
+    playerId,
+    fusion,
+    iqTraitFactor,
+    baselineScore,
     researchLevel,
-    NATIONAL_IQ_RESEARCH_MAX_BONUS,
-    NATIONAL_IQ_RESEARCH_HALF_SATURATION,
   );
-  const score = clamp(
-    baselineScore + uncappedResearchBonus,
-    NATIONAL_IQ_SCORE_MIN,
-    NATIONAL_IQ_EFFECTIVE_SCORE_MAX,
-  );
-  const researchBonus = score - baselineScore;
-  const delta = score - NATIONAL_IQ_SCORE_NEUTRAL;
-  const gdpPerCapita = definition
-    ? definition.real.gdp / Math.max(0.000001, definition.real.population) * 1_000
-    : NATIONAL_IQ_GDP_PER_CAPITA_FLOOR;
-  const view: NationalIqViewV2 = {
-    baselineScore: round(baselineScore, 3),
-    researchBonus: round(researchBonus, 3),
-    score: round(score, 3),
-    source: researchBonus > 0
-      ? 'country-learning-gameplay-baseline-plus-research'
-      : 'country-learning-gameplay-baseline',
-    combatQualityMultiplier: definition
-      ? openingCombatQualityMultiplierV2(gdpPerCapita, score) : 1,
-    economyGrowthMultiplier: round(1 + delta * NATIONAL_IQ_ECONOMY_GROWTH_PER_POINT, 9),
-    researchMultiplier: round(1 + delta * NATIONAL_IQ_RESEARCH_PER_POINT, 9),
-    logisticsMultiplier: round(1 + delta * NATIONAL_IQ_LOGISTICS_PER_POINT, 9),
-    populationGrowthMultiplier: round(
-      1 - delta * NATIONAL_IQ_POPULATION_GROWTH_PER_POINT,
-      9,
-    ),
-  };
   if (state) {
     let byPlayer = nationalIqViewCache.get(state);
     if (!byPlayer) {
       byPlayer = new Map();
       nationalIqViewCache.set(state, byPlayer);
     }
-    byPlayer.set(playerId, { content, baselineScore, researchLevel, view });
+    byPlayer.set(playerId, {
+      content,
+      baselineScore,
+      fusionFingerprint: fusion.fingerprint,
+      traitFactor: iqTraitFactor,
+      researchLevel,
+      view,
+    });
   }
   return view;
+}
+
+export interface NationalIqFusionProjectionV2 {
+  /** Fully integrated target territories included in the projection. */
+  targetTerritoryIds: readonly TerritoryId[];
+  current: NationalIqViewV2;
+  projected: NationalIqViewV2;
+  fusedBaselineDelta: number;
+  scoreDelta: number;
+  combatQualityMultiplierDelta: number;
+  economyGrowthMultiplierDelta: number;
+  researchMultiplierDelta: number;
+  logisticsMultiplierDelta: number;
+  populationGrowthMultiplierDelta: number;
+}
+
+function projectNationalIqTerritoriesV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  playerId: PlayerId,
+  targetTerritoryIds: readonly TerritoryId[],
+): NationalIqFusionProjectionV2 {
+  const stableTargetIds = [...new Set(targetTerritoryIds)]
+    .filter((territoryId) => Boolean(state.territories[territoryId]))
+    .sort((left, right) => String(left).localeCompare(String(right)));
+  const current = selectNationalIqViewV2(state, content, playerId);
+  const iqTraitFactor = countryTraitFactorV2(
+    playerId,
+    'national-iq',
+    traitNationContextV2(state, playerId),
+  );
+  const fusion = nationalIqFusionInputsV2(
+    state,
+    content,
+    playerId,
+    new Set(stableTargetIds),
+  );
+  const baselineScore = clamp(
+    fusion.fusedRawBaseline * iqTraitFactor,
+    NATIONAL_IQ_SCORE_MIN,
+    NATIONAL_IQ_SCORE_MAX,
+  );
+  const researchLevel = Math.max(
+    0,
+    state.players[playerId]?.research.effectLevels['iq-increase'] ?? 0,
+  );
+  const projected = createNationalIqViewFromFusionV2(
+    content,
+    playerId,
+    fusion,
+    iqTraitFactor,
+    baselineScore,
+    researchLevel,
+  );
+  return {
+    targetTerritoryIds: Object.freeze(stableTargetIds),
+    current,
+    projected,
+    fusedBaselineDelta: round(projected.fusedBaseline - current.fusedBaseline, 3),
+    scoreDelta: round(projected.score - current.score, 3),
+    combatQualityMultiplierDelta: round(
+      projected.combatQualityMultiplier - current.combatQualityMultiplier,
+      9,
+    ),
+    economyGrowthMultiplierDelta: round(
+      projected.economyGrowthMultiplier - current.economyGrowthMultiplier,
+      9,
+    ),
+    researchMultiplierDelta: round(
+      projected.researchMultiplier - current.researchMultiplier,
+      9,
+    ),
+    logisticsMultiplierDelta: round(
+      projected.logisticsMultiplier - current.logisticsMultiplier,
+      9,
+    ),
+    populationGrowthMultiplierDelta: round(
+      projected.populationGrowthMultiplier - current.populationGrowthMultiplier,
+      9,
+    ),
+  };
+}
+
+/** Pure preview of one territory after it reaches complete integration. */
+export function projectNationalIqTerritoryFusionV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  playerId: PlayerId,
+  targetTerritoryId: TerritoryId,
+): NationalIqFusionProjectionV2 {
+  return projectNationalIqTerritoriesV2(
+    state,
+    content,
+    playerId,
+    [targetTerritoryId],
+  );
+}
+
+/**
+ * Pure Attack Review preview: every territory currently controlled by the
+ * target country is added to the attacker at full integration.
+ */
+export function projectNationalIqFusionV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  playerId: PlayerId,
+  targetPlayerId: PlayerId,
+): NationalIqFusionProjectionV2 {
+  const targetTerritoryIds = sortedTerritoryIdsV2(state).filter((territoryId) => (
+    state.territories[territoryId]?.owner === targetPlayerId
+  ));
+  return projectNationalIqTerritoriesV2(
+    state,
+    content,
+    playerId,
+    targetTerritoryIds,
+  );
 }
 
 export function selectNationStateV2(state: WorldStateV2, playerId: PlayerId): NationStateV2 | undefined {
@@ -2318,6 +2643,7 @@ export function selectWeeklyFinanceBreakdownV2(
     activeWars,
     economyScale,
   );
+  const reserveTarget = economy.weeklyRevenue * treasuryPolicy.reserveWeeks;
   const excessCashInvestment = excessTreasuryInvestmentV2(
     nation.treasury,
     economy.controlledOutput,
@@ -2394,6 +2720,9 @@ export function selectWeeklyFinanceBreakdownV2(
       'army-upkeep',
       nationTraitContext,
     );
+  const trainedReserveCapacity = selectTrainedReserveCapacityV2(state, playerId);
+  const recruitmentSystemNeedsFunding = recruitableArmyGap > 0.000000001
+    || nation.trainedReserves < trainedReserveCapacity - 0.000000001;
   // Ordinary revenue uses the persisted budget exactly. A GDP-scale cash
   // surplus may supplement only real military needs before its remainder is
   // routed into productive research and development below.
@@ -2408,11 +2737,36 @@ export function selectWeeklyFinanceBreakdownV2(
   // Front operations are paid directly below. They do not consume the Armed
   // Forces envelope a second time or masquerade as ordinary standing upkeep.
   const mandatoryRequest = armyUpkeep;
-  const mandatoryFundingRatio = mandatoryRequest > 0 ? clamp(military / mandatoryRequest, 0, 1) : 1;
-  const mandatoryFunded = Math.min(military, mandatoryRequest);
-  let remainingMilitary = Math.max(0, military - mandatoryFunded);
+  const baseMandatoryFunded = Math.min(military, mandatoryRequest);
+  const baseMandatoryFundingRatio = mandatoryRequest > 0
+    ? clamp(baseMandatoryFunded / mandatoryRequest, 0, 1)
+    : 1;
+  // Once ordinary upkeep is complete, genuine cash above the national reserve
+  // target may fund a smooth, expensive readiness surge. This is an extra
+  // recurring bill rather than reusable recruitment money.
+  const upkeepFundingTarget = baseMandatoryFundingRatio >= 0.999999
+    && recruitmentSystemNeedsFunding
+    ? upkeepFundingTargetRatioV2(nation.treasury, reserveTarget, economy.weeklyRevenue)
+    : baseMandatoryFundingRatio;
+  const upkeepOverfunding = mandatoryRequest > 0
+    && baseMandatoryFundingRatio >= 0.999999
+    && recruitmentSystemNeedsFunding
+    ? Math.min(
+      Math.max(0, nation.treasury - reserveTarget),
+      mandatoryRequest * Math.max(0, upkeepFundingTarget - 1),
+    )
+    : 0;
+  const mandatoryFunded = baseMandatoryFunded + upkeepOverfunding;
+  const mandatoryFundingRatio = mandatoryRequest > 0
+    ? clamp(mandatoryFunded / mandatoryRequest, 0, UPKEEP_OVERFUNDING_MAX_RATIO)
+    : 1;
+  let remainingMilitary = Math.max(0, military - baseMandatoryFunded);
+  military += upkeepOverfunding;
   const passiveRecruitmentRequest = selectRecruitmentThroughputV2(state, content, playerId, powerSnapshot);
-  const fundedPassiveCapacity = passiveRecruitmentRequest * mandatoryFundingRatio;
+  const fundedPassiveCapacity = Math.min(
+    recruitableArmyGap,
+    passiveRecruitmentRequest * mandatoryFundingRatio,
+  );
   const trainingPipeline = selectRecruitmentTrainingPipelineV2(state, content, playerId);
   const recruitmentUnitCost = selectRecruitmentUnitCostV2(state, playerId, content);
   const fillRatio = army.capacity > 0 ? army.deployed / army.capacity : 0;
@@ -2478,7 +2832,6 @@ export function selectWeeklyFinanceBreakdownV2(
       / reserveDeploymentThroughput
       * recruitmentUnitCost * accelerationCostMultiplier
     : affordableRecruitmentCost;
-  const trainedReserveCapacity = selectTrainedReserveCapacityV2(state, playerId);
   const reserveRoomAfterDeployment = Math.max(
     0,
     trainedReserveCapacity - (nation.trainedReserves - reserveDeployment),
@@ -2497,7 +2850,8 @@ export function selectWeeklyFinanceBreakdownV2(
   const reserveTrainingMultiplier = 1
     + RESERVE_TRAINING_RESEARCH_BONUS_PER_EFFECTIVE_LEVEL * reserveTrainingLevel;
   const reserveTrainingRequest = (atWar || activeReadyForReserve)
-    ? trainingPipeline * (atWar ? TRAINED_RESERVE_WARTIME_TRAINING_FACTOR : 1)
+    ? trainingPipeline * mandatoryFundingRatio
+      * (atWar ? TRAINED_RESERVE_WARTIME_TRAINING_FACTOR : 1)
       * reserveTrainingMultiplier
       * countryTraitFactorV2(
         playerId,
@@ -2700,7 +3054,7 @@ export function selectWeeklyFinanceBreakdownV2(
     expenses: actuallySpent + debtPremium,
     net: operatingNet - debtPremium,
     closingTreasury,
-    reserveTarget: economy.weeklyRevenue * treasuryPolicy.reserveWeeks,
+    reserveTarget,
     mandatoryFundingRatio,
     recruitmentFundingRatio: recruitmentRequest > 0 ? recruitment / recruitmentRequest : 1,
     conditionFundingRatio: conditionRequest > 0 ? condition / conditionRequest : 1,
@@ -3328,7 +3682,12 @@ function selectWarOperationsLogisticsLoadV2(
         ? selectWarRouteDistanceKmV2(state, content, playerId, opponentId) : undefined);
       const terrainLoad = route
         ? territoryTerrainOperationCostMultiplierV2(content, route.targetId) : 1;
-      return sum + warAccessOperationMultiplierV2(access, distance) * terrainLoad;
+      const interiorLoad = countryInteriorOperationMultiplierV2(
+        route
+          ? content.territories[route.sourceId]?.baseline.landArea ?? 0
+          : content.nations[playerId]?.real.landArea ?? 0,
+      );
+      return sum + warAccessOperationMultiplierV2(access, distance) * terrainLoad * interiorLoad;
     }
     return sum + operations.reduce((fronts, operation) => {
       const load = warAccessOperationMultiplierV2(
@@ -3343,7 +3702,10 @@ function selectWarOperationsLogisticsLoadV2(
         )
         : 1;
       return fronts + load * traitFactor
-        * territoryTerrainOperationCostMultiplierV2(content, operation.targetId);
+        * territoryTerrainOperationCostMultiplierV2(content, operation.targetId)
+        * countryInteriorOperationMultiplierV2(
+          content.territories[operation.sourceId]?.baseline.landArea ?? 0,
+        );
     }, 0);
   }, 0);
 }
@@ -3359,6 +3721,7 @@ function traitAdjustedOperationCostLoadV2(
   distanceKm: number | undefined,
   context: TraitEvaluationContextV2,
   terrainCostMultiplier = 1,
+  interiorOperationMultiplier = 1,
 ): number {
   const fullLoad = warAccessOperationMultiplierV2(access, distanceKm);
   const accessOnlyLoad = warAccessOperationMultiplierV2(access);
@@ -3373,7 +3736,7 @@ function traitAdjustedOperationCostLoadV2(
     playerId,
     'operation-cost',
     context,
-  ) * terrainCostMultiplier;
+  ) * terrainCostMultiplier * interiorOperationMultiplier;
 }
 
 function selectWarOperationsCostLoadV2(
@@ -3402,6 +3765,11 @@ function selectWarOperationsCostLoadV2(
           { access },
         ),
         route ? territoryTerrainOperationCostMultiplierV2(content, route.targetId) : 1,
+        countryInteriorOperationMultiplierV2(
+          route
+            ? content.territories[route.sourceId]?.baseline.landArea ?? 0
+            : content.nations[playerId]?.real.landArea ?? 0,
+        ),
       );
     }
     return sum + operations.reduce((fronts, operation) => (
@@ -3411,6 +3779,9 @@ function selectWarOperationsCostLoadV2(
         selectTerritoryRouteDistanceKmV2(content, operation.sourceId, operation.targetId),
         traitOperationContextV2(state, content, war, operation, playerId),
         territoryTerrainOperationCostMultiplierV2(content, operation.targetId),
+        countryInteriorOperationMultiplierV2(
+          content.territories[operation.sourceId]?.baseline.landArea ?? 0,
+        ),
       )
     ), 0);
   }, 0);

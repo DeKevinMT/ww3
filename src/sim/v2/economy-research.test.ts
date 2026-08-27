@@ -109,15 +109,20 @@ describe('V2 finance and research', () => {
     const fundedDiscretionary = fundedOffensive.revenue + fundedOffensive.foodExportIncome
       - fundedOffensive.baseOperatingCost - fundedOffensive.foodProduction
       + fundedOffensive.foodDevelopmentTransfer;
+    const fundedUpkeepPremium = Math.max(
+      0,
+      fundedOffensive.fundedArmyUpkeep - fundedOffensive.armyUpkeep,
+    );
     expect(fundedOffensive.military + fundedOffensive.research + fundedOffensive.development
       + fundedOffensive.foodDevelopmentTransfer).toBeCloseTo(
-      fundedDiscretionary * 1.02 + fundedOffensive.excessCashInvestment,
+      fundedDiscretionary * 1.02 + fundedOffensive.excessCashInvestment + fundedUpkeepPremium,
       5,
     );
     expect(fundedOffensive.net).toBeCloseTo(
       -fundedDiscretionary * 0.02
         - fundedOffensive.warOperations
-        - fundedOffensive.excessCashInvestment,
+        - fundedOffensive.excessCashInvestment
+        - fundedUpkeepPremium,
       5,
     );
   });
@@ -139,8 +144,9 @@ describe('V2 finance and research', () => {
       const plan = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, bel);
       const discretionary = plan.revenue + plan.foodExportIncome
         - plan.baseOperatingCost - plan.foodProduction + plan.foodDevelopmentTransfer;
+      const upkeepPremium = Math.max(0, plan.fundedArmyUpkeep - plan.armyUpkeep);
       return (plan.military + plan.research + plan.development
-        + plan.foodDevelopmentTransfer) / discretionary;
+        + plan.foodDevelopmentTransfer - upkeepPremium) / discretionary;
     };
 
     const epsilon = 0.0001;
@@ -184,7 +190,11 @@ describe('V2 finance and research', () => {
     expect(borrowed.ceasefirePayment).toBeCloseTo(revenue + 1, 6);
     expect(receiver.ceasefireIncome).toBeCloseTo(revenue + 1, 6);
     expect(borrowed.newBorrowing).toBeGreaterThan(1);
-    expect(borrowed.debtPremium).toBeCloseTo(borrowed.newBorrowing * 0.10, 6);
+    // Finance projections expose six-decimal values. The premium is calculated
+    // before that final rounding, while this expectation reconstructs it from
+    // the already-rounded principal.
+    expect(Math.abs(borrowed.debtPremium - borrowed.newBorrowing * 0.10))
+      .toBeLessThanOrEqual(0.000001);
     expect(borrowed.closingTreasury).toBeCloseTo(-borrowed.newBorrowing * 1.10, 5);
 
     state.ceasefireObligations = [];

@@ -135,17 +135,17 @@ globalScore = max(0, CombatPower)
 
 Living nations sort by descending live Combat Power, then stable country ID. Controlled economy remains visible and affects combat only through the explicitly documented GDP-per-capita system layer; it is never multiplied into rank a second time. The country picker, header badge and ranking drawer all use this same order.
 
-Every content nation has exactly one immutable country trait keyed by its original 2026 nation ID. Trait names, mechanical effects, conditions and identity copy are English. Every trait declares an audited opening weakness and at least one modifier directly improves that weakness; bonuses grow materially toward the bottom of the immutable opening military order. Greenland is the extreme case: +1,200% Army capacity, +150% recruitment throughput and −80% upkeep give the smallest opening army room to become playable. Human amplification may never reduce its final upkeep factor below the hard 0.10 floor, so the force remains paid rather than free.
+Every content nation has exactly one immutable country trait keyed by its original 2026 nation ID. Trait names, mechanical effects, conditions and identity copy are English. Every trait declares an audited opening weakness and at least one modifier directly improves that weakness. Greenland's authored AI identity is deliberately restrained at +9% Army capacity, +5% recruitment throughput, +4% population-recruitment research and −12.5% Arctic research cost. Its separate temporary underdog opening-force curve—not its permanent trait—provides the exceptional early-game aid.
 
 Conquest, integration, revolution, capitulation and defensive federation never copy, donate or combine catalog entries: an empire always evaluates only its leader's original trait, while a restored 2026 nation resumes only its own. Human control multiplies each signed modifier's distance from neutral, and each fixed replacement's distance from its source, without adding another trait:
 
 ```text
-r = (openingMilitaryRank − 1) / 165
+r = (openingMilitaryRank − 1) / (countryCount − 1)
 smoothRank = r² × (3 − 2r)
-humanTraitMultiplier = 1.08 + 0.72 × smoothRank
+humanTraitMultiplier = 1 + 2 × smoothRank
 ```
 
-The strongest opening country therefore receives 1.08× of its published signed percentages and the weakest receives 1.80×. Greenland's +1,200% capacity becomes +2,160% when human-controlled. Internal IDs and modifier mechanics remain unchanged.
+The strongest opening country therefore receives 1× of its authored signed percentages and the weakest receives 3×. Greenland's permanent human identity becomes +27% Army capacity, +15% recruitment throughput and +12% population-recruitment research; its fixed Arctic affinity stays unamplified at −12.5%. Its x50 opening-force endpoint remains temporary, separately displayed and returns toward x1 over thirty years. Internal IDs and modifier mechanics remain unchanged.
 
 ## 5. Tick order and determinism
 

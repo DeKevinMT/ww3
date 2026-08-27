@@ -1,15 +1,76 @@
 import { describe, expect, it, vi } from 'vitest';
+import worldUiSource from './WorldUIV2.ts?raw';
 import { WorldEngineV2 } from '../sim/v2/WorldEngineV2';
 import { WORLD_CONTENT_V2 } from '../sim/v2/content';
-import { humanStartingArmyMultiplierForContentV2 } from '../sim/v2/traits';
+import {
+  humanOpeningTrainedReserveTermsForContentV2,
+  humanStartingArmyMultiplierForContentV2,
+} from '../sim/v2/traits';
 import { nationIdV2 } from '../sim/v2/types';
 import {
   compareIntroNationMetricsV2,
   INTRO_SORT_OPTIONS,
+  introMetricColorV2,
+  introMetricPercentileV2,
+  introRelativeStatSourcesV2,
   IntroOpeningMetricsCacheV2,
 } from './WorldUIV2';
 
 describe('intro opening metrics cache', () => {
+  it('maps the worst, median and best neutral openings to red, orange and green', () => {
+    const values = [10, 20, 30];
+    expect(introMetricPercentileV2(10, values)).toBe(0);
+    expect(introMetricPercentileV2(20, values)).toBe(0.5);
+    expect(introMetricPercentileV2(30, values)).toBe(1);
+    expect(introMetricPercentileV2(20, [20, 20, 20])).toBe(0.5);
+    expect(introMetricColorV2(0)).toBe('rgb(239 109 103)');
+    expect(introMetricColorV2(0.5)).toBe('rgb(240 173 98)');
+    expect(introMetricColorV2(1)).toBe('rgb(110 211 155)');
+  });
+
+  it('colors displayed Army, Reserve and Treasury from neutral raw sources only', () => {
+    const previewStats = worldUiSource.slice(
+      worldUiSource.indexOf('  const renderPreviewStats ='),
+      worldUiSource.indexOf('  const query =', worldUiSource.indexOf('  const renderPreviewStats =')),
+    );
+    expect(worldUiSource).toContain('army: metrics.army.deployed');
+    expect(worldUiSource).toContain('reserve: metrics.player.trainedReserves');
+    expect(worldUiSource).toContain('treasury: metrics.player.treasury');
+    expect(previewStats).toContain("relativeStat('army'");
+    expect(previewStats).toContain("relativeStat('reserve'");
+    expect(previewStats).toContain("relativeStat('treasury'");
+    expect(previewStats).toContain('people(startingArmy)');
+    expect(previewStats).toContain('people(startingTrainedReserve)');
+    expect(previewStats).not.toContain("relativeStat('aggressiveness'");
+    expect(previewStats).not.toContain('AGGRESSIVENESS');
+    expect(worldUiSource).toContain('data-intro-source="neutral-opening"');
+    expect(worldUiSource).toContain('humanOpeningTrainedReserveTermsForContentV2(');
+  });
+
+  it('shows the canonical underdog reserve floor while its percentile source stays raw', () => {
+    const engine = new WorldEngineV2(12_006);
+    const opening = new IntroOpeningMetricsCacheV2().read(engine);
+    const weakest = opening.ranking.at(-1);
+    const candidate = weakest ? opening.byNation.get(weakest.player.id) : undefined;
+    expect(candidate).toBeDefined();
+    const zeroReserveCandidate = {
+      ...candidate!,
+      player: { ...candidate!.player, trainedReserves: 0 },
+    };
+    expect(introRelativeStatSourcesV2(zeroReserveCandidate).reserve).toBe(0);
+    const neutralCapacity = candidate!.finance.trainedReserveCapacity;
+    const displayed = humanOpeningTrainedReserveTermsForContentV2(
+      WORLD_CONTENT_V2,
+      candidate!.player.id,
+      0,
+      neutralCapacity,
+      neutralCapacity * Math.min(1, humanStartingArmyMultiplierForContentV2(
+        WORLD_CONTENT_V2,
+        candidate!.player.id,
+      )),
+    ).trainedReserves;
+    expect(displayed).toBeGreaterThan(0);
+  });
   it('builds one bounded hypothetical-human batch and reuses it', () => {
     const engine = new WorldEngineV2(12_001);
     const preview = vi.spyOn(engine, 'openingCandidatePreviewSnapshot');
@@ -46,10 +107,22 @@ describe('intro opening metrics cache', () => {
 
   it('offers one unambiguous pure military ranking choice', () => {
     expect(INTRO_SORT_OPTIONS.map((option) => option.value)).toEqual([
-      'power', 'aggressiveness', 'attack', 'defense', 'iq', 'manpower',
+      'power', 'attack', 'defense', 'iq', 'manpower',
       'economy', 'gdp-per-capita', 'economic-growth', 'tax', 'population', 'growth',
     ]);
+    expect(INTRO_SORT_OPTIONS.map((option) => option.value)).not.toContain('aggressiveness');
     expect(INTRO_SORT_OPTIONS[0]?.label).toBe('Military ranking');
+  });
+
+  it('offers optional browser fullscreen before a solo campaign starts', () => {
+    expect(worldUiSource).toContain('We recommend playing Frontier Command in fullscreen');
+    expect(worldUiSource).toContain('data-action="fullscreen-windowed"');
+    expect(worldUiSource).toContain('data-action="fullscreen-enter"');
+    expect(worldUiSource).toContain("document.documentElement.requestFullscreen?.()");
+    expect(worldUiSource).toContain("document.addEventListener('fullscreenchange', this.onFullscreenChange)");
+    expect(worldUiSource).toContain('You can leave fullscreen at any time with <kbd>Esc</kbd>');
+    expect(worldUiSource).toContain('Fullscreen was blocked by the browser. You can still continue normally.');
+    expect(worldUiSource).not.toContain('country-preview__fullscreen');
   });
 
   it('sorts GDP per capita from the same neutral AI opening snapshot', () => {
@@ -101,6 +174,10 @@ describe('intro opening metrics cache', () => {
     expect(opening.ranking.map((entry) => entry.player.id)).toEqual(
       engine.openingCandidatePreviewSnapshot().ranking.map((entry) => entry.player.id),
     );
+    const neutralRelative = introRelativeStatSourcesV2(preview!);
+    expect(neutralRelative.army).toBe(preview!.army.deployed);
+    expect(neutralRelative.reserve).toBe(preview!.player.trainedReserves);
+    expect(neutralRelative.treasury).toBe(preview!.player.treasury);
 
     expect(engine.chooseCountry(greenland)).toEqual({ accepted: true });
     engine.stopClock();
@@ -112,5 +189,6 @@ describe('intro opening metrics cache', () => {
       6,
     );
     expect(engine.currentPower(greenland)).toBeGreaterThan(preview!.combatPower);
+    expect(neutralRelative.army).not.toBe(actualArmy.deployed);
   });
 });

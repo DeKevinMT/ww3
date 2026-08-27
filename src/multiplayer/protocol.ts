@@ -38,6 +38,13 @@ const RESEARCH_BRANCHES = [
 ] as const satisfies readonly ResearchBranchV2[];
 
 const RESEARCH_BRANCH_SET = new Set<string>(RESEARCH_BRANCHES);
+const ARCTIC_PROJECT_SET = new Set([
+  'polar-demography', 'cryogenic-logistics', 'strategic-mobilisation', 'deep-ice-signals',
+]);
+const ANTARCTIC_SECTOR_SET = new Set([
+  'drake-entry', 'maud-entry', 'ross-entry', 'weddell-forge', 'queen-maud-grid',
+  'ross-array', 'sentinel-labyrinth', 'transantarctic-vault', 'zero-point-core',
+]);
 
 export type ProtocolErrorCode =
   | 'invalid-message'
@@ -340,7 +347,26 @@ function validateWorldCommand(value: unknown): WorldCommandV2 {
       break;
     case 'rapid-recruitment':
     case 'launch-propaganda':
+    case 'acknowledge-polar-warning':
       requirePlayerId(command.playerId, 'command.playerId');
+      break;
+    case 'start-arctic-project':
+      requirePlayerId(command.playerId, 'command.playerId');
+      if (typeof command.projectId !== 'string' || !ARCTIC_PROJECT_SET.has(command.projectId)) {
+        fail('command.projectId is invalid.');
+      }
+      break;
+    case 'deploy-antarctic-expedition':
+      requirePlayerId(command.playerId, 'command.playerId');
+      if (typeof command.sectorId !== 'string' || !ANTARCTIC_SECTOR_SET.has(command.sectorId)) {
+        fail('command.sectorId is invalid.');
+      }
+      {
+        const manpower = requireFiniteNumber(command.manpower, 'command.manpower');
+        if (manpower <= 0) {
+          fail('command.manpower is out of range.');
+        }
+      }
       break;
     case 'research-surge':
       requirePlayerId(command.playerId, 'command.playerId');

@@ -2,6 +2,7 @@ import type {
   PlayerId,
   TerritoryId,
   WorldEventKindV2,
+  WorldEventV2,
   WorldStateV2,
 } from './types';
 import { selectHumanPlayerIdsV2 } from './humanPlayers';
@@ -13,6 +14,7 @@ export function addWorldEventV2(
   message: string,
   territoryId?: TerritoryId,
   playerId?: PlayerId,
+  metadata?: Pick<WorldEventV2, 'polarRegion' | 'polarSectorId'>,
 ): void {
   const humanPlayerIds = new Set(selectHumanPlayerIdsV2(state));
   const territoryOwner = territoryId ? state.territories[territoryId]?.owner : undefined;
@@ -25,6 +27,7 @@ export function addWorldEventV2(
     message,
     territoryId,
     playerId,
+    ...metadata,
     unread: severity !== 'info'
       && (Boolean(playerId && humanPlayerIds.has(playerId)) || humanOwnsTerritory),
   });

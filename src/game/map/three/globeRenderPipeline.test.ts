@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import globeBordersSource from './globeBorders.ts?raw';
 import globeSceneSource from './ThreeGlobeScene.ts?raw';
 import globeTextureSource from './globeTexture.ts?raw';
 
@@ -9,10 +10,12 @@ describe('globe render pipeline performance contract', () => {
       .toHaveLength(1);
     expect(globeSceneSource).not.toContain('politicalDetail');
     expect(globeSceneSource).not.toContain('updatePoliticalDetailLayer');
+    expect(globeSceneSource).toContain('buildGlobeBorderBuffer');
     expect(globeSceneSource).not.toContain('buildGlobeBorderPositions');
     expect(globeSceneSource).not.toContain('updateGlobeBorderVisibility');
     expect(globeSceneSource).not.toContain('highlightGroup');
-    expect(globeSceneSource).not.toContain('THREE.LineSegments');
+    expect(globeSceneSource.match(/new LineSegments2\(/g)).toHaveLength(1);
+    expect(globeSceneSource).not.toContain('new THREE.LineSegments(');
   });
 
   it('never redraws or upgrades flags because the camera zoomed or moved', () => {
@@ -36,7 +39,7 @@ describe('globe render pipeline performance contract', () => {
   });
 
   it('caps close zoom around Belgium scale and skips idle label layout work', () => {
-    expect(globeSceneSource).toContain('const MIN_CAMERA_DISTANCE = 7.2;');
+    expect(globeSceneSource).toContain('const MIN_CAMERA_DISTANCE = 6.9;');
     expect(globeSceneSource).toContain('const MAX_CAMERA_DISTANCE = 16.75;');
     expect(globeSceneSource).not.toContain('DEEP_VIEW_DISTANCE');
     expect(globeSceneSource).not.toContain('MAX_DEEP_LABELS');
@@ -51,17 +54,30 @@ describe('globe render pipeline performance contract', () => {
     expect(globeTextureSource).toContain('terrainLayers.flagTintAlpha');
     expect(globeTextureSource).toContain('context.globalAlpha = prepared.terrainLayers.flagTintAlpha;');
     expect(globeTextureSource).not.toContain("globalCompositeOperation = 'multiply'");
-    expect(globeTextureSource).toContain('terrainLayers.borderColor');
+    expect(globeTextureSource).not.toContain('terrainLayers.borderColor');
     expect(globeTextureSource).not.toContain('drawDominantTerrainTint');
   });
 
-  it('bakes thin antialiased borders without a second outline stroke', () => {
-    expect(globeTextureSource).toContain(
-      '(integrating ? 0.88 : owner?.isHuman ? 0.9 : 0.72)',
-    );
-    expect(globeTextureSource).not.toContain('terrainBorderStyle');
-    expect(globeTextureSource).not.toContain('terrainBorderWidth +');
-    expect(globeTextureSource).not.toContain("context.strokeStyle = 'rgba(3, 15, 24, 0.96)'");
+  it('uses exactly one antialiased screen-space border layer at every zoom', () => {
+    expect(globeSceneSource).toContain("from 'three/examples/jsm/lines/LineMaterial.js'");
+    expect(globeSceneSource).toContain("from 'three/examples/jsm/lines/LineSegments2.js'");
+    expect(globeSceneSource).toContain('worldUnits: false');
+    expect(globeSceneSource).toContain('alphaToCoverage: true');
+    expect(globeSceneSource).toContain('const BORDER_LINEWIDTH_CLOSE = 1.45;');
+    expect(globeSceneSource).toContain('const BORDER_LINEWIDTH_FAR = 0.95;');
+    expect(globeSceneSource).toContain('this.updateGlobeBorderPresentation(this.camera.position.length());');
+    expect(globeSceneSource).not.toContain('borderDetail.visible');
+    expect(globeSceneSource).not.toContain('BORDER_DETAIL_MAX_CAMERA_DISTANCE');
+  });
+
+  it('never bakes a political or integration perimeter into the globe atlas', () => {
+    expect(globeTextureSource).toContain('Political borders are intentionally absent from this atlas.');
+    expect(globeTextureSource).not.toContain('traceCountryRealmBorder');
+    expect(globeTextureSource).not.toContain('terrainBorderWidth');
+    expect(globeTextureSource).not.toContain('(integrating ? 0.88 : owner?.isHuman ? 0.9 : 0.72)');
+    expect(globeTextureSource).not.toContain("context.strokeStyle = integrating ? 'rgba(244, 201, 106, 0.96)'");
+    // Morocco / Western Sahara cannot regain a divergent atlas outline.
+    expect(globeTextureSource).not.toContain('BORDER_EDGE_COUNTRIES');
   });
 
   it('caches the immutable pick canvas instead of reading it during every hover', () => {
@@ -93,13 +109,14 @@ describe('globe render pipeline performance contract', () => {
     expect(globeTextureSource).toContain("context.fillStyle = 'rgba(218, 239, 242, 0.96)';");
   });
 
-  it('bakes a fixed integration cue over the core flag and removes completed inner borders', () => {
+  it('bakes only the fixed integration fill cue while geometry owns its gold perimeter', () => {
     expect(globeTextureSource).toContain('nationIds.add(globeTerritoryFlagOwnerId(territory));');
     expect(globeTextureSource).toContain('drawIntegrationOverlay(context, prepared.flagRings');
     expect(globeTextureSource).toContain('const fade = context.createLinearGradient(');
     expect(globeTextureSource).toContain("context.strokeStyle = 'rgba(255, 225, 150, 0.26)';");
-    expect(globeTextureSource).toContain('if (internalRealmEdge) {');
-    expect(globeTextureSource).toContain('let tracingVisibleRun = false;');
+    expect(globeBordersSource).toContain('const INTEGRATION_BORDER_COLOR: UnitColor = [244 / 255, 201 / 255, 106 / 255];');
+    expect(globeBordersSource).toContain('edgeIsIntegrating(edge, engine)');
+    expect(globeBordersSource).toContain('if (edge.internalCanonicalEdge) return true;');
     const overlaySource = globeTextureSource.slice(
       globeTextureSource.indexOf('function drawIntegrationOverlay('),
       globeTextureSource.indexOf('export function globeTextureSelectionSignature('),
@@ -114,6 +131,39 @@ describe('globe render pipeline performance contract', () => {
     expect(globeSceneSource).toContain('const IDLE_RENDER_INTERVAL_MS = 1000 / 20;');
     expect(globeSceneSource).toContain('const renderInterval = cameraActive || presentationActive');
     expect(globeSceneSource).toContain('? ACTIVE_RENDER_INTERVAL_MS');
+    const cadenceSource = globeSceneSource.slice(
+      globeSceneSource.indexOf('const presentationActive'),
+      globeSceneSource.indexOf('const renderInterval'),
+    );
+    expect(cadenceSource).not.toContain('focusedPolarRegion');
+    expect(cadenceSource).not.toContain('hoveredPolarRegion');
+  });
+
+  it('uses one instanced polar overlay and revision-gated visual sync', () => {
+    expect(globeSceneSource.match(/new THREE\.InstancedMesh\(/g)).toHaveLength(1);
+    expect(globeSceneSource).toContain('polar.visualRevision');
+    expect(globeSceneSource).toContain("mapBridge.onPolarRegionClick?.(pick.kind)");
+    expect(globeSceneSource).toContain('mapBridge.onPolarSectorClick(pick.sectorId)');
+    expect(globeSceneSource).toContain('clearPolarFocus(): void');
+    expect(globeSceneSource).toContain('this.clearPolarFocus();');
+    expect(globeSceneSource).toContain('new THREE.Vector3(0, -1, 0)');
+    expect(globeSceneSource).toContain('const ANTARCTICA_OVERVIEW_DISTANCE = 14.5;');
+    const routeRebuildSource = globeSceneSource.slice(
+      globeSceneSource.indexOf('private rebuildRoutes(): void'),
+      globeSceneSource.indexOf('private bindInput(): void'),
+    );
+    expect(routeRebuildSource).not.toContain('operation.momentum');
+  });
+
+  it('bakes irregular Antarctic ice detail without concentric latitude hatching', () => {
+    expect(globeTextureSource).toContain('const binWidth = 1;');
+    expect(globeTextureSource).toContain('context.bezierCurveTo(controlOneX');
+    const antarcticaSource = globeTextureSource.slice(
+      globeTextureSource.indexOf('function drawAntarctica('),
+      globeTextureSource.indexOf('interface PreparedTextureBounds'),
+    );
+    expect(antarcticaSource).not.toContain('for (let y =');
+    expect(antarcticaSource).not.toContain('context.lineTo(width, y');
   });
 
   it('keeps one moderately dense globe and uses the available fixed-texture anisotropy', () => {
@@ -136,6 +186,31 @@ describe('globe render pipeline performance contract', () => {
   it('keeps local readiness in DOM nameplates instead of the WebGL graph', () => {
     expect(globeSceneSource).toContain('globeTerritoryReadinessPresentation(territory.army)');
     expect(globeSceneSource).toContain('globe-map__territory-readiness');
-    expect(globeSceneSource).toContain("if (absorbed && owner.id !== state.humanPlayerId) continue;");
+    expect(globeSceneSource).toContain('const viewerOwnedAbsorbed = absorbed && owner.id === state.humanPlayerId;');
+    expect(globeSceneSource).toContain('if (absorbed && !viewerOwnedAbsorbed) continue;');
+    expect(globeSceneSource).toContain('function compactNameplateCombatPower(power: number): string');
+    expect(globeSceneSource).toContain("replace(/^(\\d+\\.\\d)\\d([KMBT]?)$/, '$1$2')");
+    expect(globeSceneSource).toContain('`INT ${integratingPercent}% · LOCAL ${integratingLocalPower}`');
+    expect(globeSceneSource).toContain('`Integrating ${integratingPercent}% · Local power ${compactMapCombatPower(territory.army.power)}`');
+    expect(globeSceneSource).toContain("territory.coreOwnerId !== territory.ownerId ? compactNameplateCombatPower(territory.army.power) : ''");
+    expect(globeSceneSource).toContain("viewerOwnedAbsorbed ? 'is-local-absorbed' : ''");
+    expect(globeSceneSource).toContain('viewerOwnedAbsorbed\n          ? \'\'\n          : `<strong>');
+    expect(globeSceneSource).toContain('width: opening ? 154 : integrating ? 112 : viewerOwnedAbsorbed ? 72 : 122');
+    expect(globeSceneSource).toContain('return `${engine.state.humanPlayerId}|${territorySignature}');
+  });
+
+  it('keeps country cards compact while zooming out', () => {
+    expect(globeSceneSource).toContain('const COUNTRY_LABEL_FAR_SCALE = 0.74;');
+    expect(globeSceneSource).toContain('function countryLabelScaleForDistance(cameraDistance: number): number');
+    expect(globeSceneSource).toContain('label.width * countryLabelScale');
+    expect(globeSceneSource).toContain('scale(${countryLabelScale.toFixed(3)})');
+  });
+
+  it('updates the one border geometry in place and never rebuilds it from the frame loop', () => {
+    expect(globeSceneSource).toContain('(position.data.array as Float32Array).set(buffer.positions);');
+    expect(globeSceneSource).toContain('(color.data.array as Float32Array).set(buffer.colors);');
+    expect(globeSceneSource).toContain('position.data.needsUpdate = true;');
+    const frameSource = globeSceneSource.slice(globeSceneSource.indexOf('private readonly renderFrame'));
+    expect(frameSource).not.toContain('buildGlobeBorderBuffer(');
   });
 });

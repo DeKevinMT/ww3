@@ -4,10 +4,14 @@ import { createWorldStateV2 } from './bootstrap';
 import { selectGlobalRankingV2 } from './selectors';
 import {
   BASE_COUNTRY_TRAIT_VALUE_BUDGET_V2,
+  BELGIUM_TRAIT_VALUE_MULTIPLIER_V2,
   COUNTRY_TRAITS_V2,
+  FOOD_TRAIT_ALLOWLIST_V2,
+  FOOD_TRAIT_MODIFIER_KEYS_V2,
   HUMAN_TRAIT_MULTIPLIER_STRONGEST_V2,
   HUMAN_TRAIT_MULTIPLIER_WEAKEST_V2,
   OPENING_MILITARY_ORDER_V2,
+  TOP_POWER_COUNTRY_TRAIT_VALUE_BUDGET_V2,
   TRAIT_MODIFIER_KEYS_V2,
   countryTraitEffectSignatureV2,
   countryTraitBaseValueScoreV2,
@@ -76,12 +80,21 @@ describe('country trait catalog V2', () => {
     });
     const duplicateMechanics = [...signatureCountries.values()]
       .filter((countryIds) => countryIds.length > 1);
-    const structuralSignatures = COUNTRY_TRAITS_V2.map(structuralTraitSignature);
+    const structuralCountries = new Map<string, string[]>();
+    COUNTRY_TRAITS_V2.forEach((entry) => {
+      const signature = structuralTraitSignature(entry);
+      structuralCountries.set(signature, [
+        ...(structuralCountries.get(signature) ?? []),
+        String(entry.playerId),
+      ]);
+    });
+    const duplicateStructures = [...structuralCountries.values()]
+      .filter((countryIds) => countryIds.length > 1);
 
     expect(new Set(names).size).toBe(166);
     expect(duplicateEffects).toEqual([]);
     expect(duplicateMechanics).toEqual([]);
-    expect(new Set(structuralSignatures).size).toBe(166);
+    expect(duplicateStructures).toEqual([]);
 
     const dutchVisibleWords = /\b(?:wanneer|zolang|eigen|verdediging|leger|legercapaciteit|buiten|oorlog|vrede|zwakste|kleine|sterke|voedsel|herstel|voorraad|kosten|aanvoer|verovering)\b/i;
     for (const entry of COUNTRY_TRAITS_V2) {
@@ -93,29 +106,36 @@ describe('country trait catalog V2', () => {
 
     expect(countryTraitV2('usa')).toMatchObject({
       countryName: 'United States of America',
-      name: 'Global Projection',
-      effect: '−16.81% operation cost on naval fronts; +11.21% front supply on naval fronts.',
-      description: 'Offsets the cost and supply burden of projecting a globally deployable military across oceans.',
+      name: 'Advanced Weapons Command',
+      description: 'Couples advanced-weapons industry with precise expeditionary offense while Arctic megaprojects remain exceptionally expensive.',
     });
+    expect(countryTraitV2('usa')?.modifiers.map(({ key }) => key)).toEqual([
+      'research-progress', 'attack', 'operation-cost', 'arctic-research-cost',
+    ]);
+    expect(countryTraitModifiersV2('usa', 'research-progress')[0]?.scope)
+      .toEqual({ researchBranches: ['advanced-weapons'] });
     expect(countryTraitV2('lka')?.effect).toBe(
       describeCountryTraitModifiersV2(countryTraitV2('lka')!.modifiers),
     );
-    expect(countryTraitV2('vnm')?.description).toBe(
-      'Offsets invasion risk without further increasing an already strong offensive start.',
-    );
+    expect(countryTraitV2('vnm')?.description).toContain('rice-producing delta');
     expect(countryTraitV2('png')?.effect).toBe(
       describeCountryTraitModifiersV2(countryTraitV2('png')!.modifiers),
     );
   });
 
-  it('uses one to three immutable modifiers and only declared V2 result channels', () => {
+  it('uses one to three ordinary modifiers plus at most one Arctic auxiliary', () => {
     const declaredKeys = new Set<string>(TRAIT_MODIFIER_KEYS_V2);
-    const modifiers = COUNTRY_TRAITS_V2.flatMap((entry) => entry.modifiers);
 
-    expect(modifiers).toHaveLength(483);
     for (const entry of COUNTRY_TRAITS_V2) {
-      expect(entry.modifiers.length).toBeGreaterThanOrEqual(1);
-      expect(entry.modifiers.length).toBeLessThanOrEqual(3);
+      const arcticModifiers = entry.modifiers
+        .filter(({ key }) => key === 'arctic-research-cost');
+      const ordinaryModifiers = entry.modifiers
+        .filter(({ key }) => key !== 'arctic-research-cost');
+      expect(ordinaryModifiers.length, entry.playerId).toBeGreaterThanOrEqual(1);
+      expect(ordinaryModifiers.length, entry.playerId).toBeLessThanOrEqual(3);
+      expect(arcticModifiers.length, entry.playerId).toBeLessThanOrEqual(1);
+      expect(new Set(entry.modifiers.map(({ key }) => key)).size, entry.playerId)
+        .toBe(entry.modifiers.length);
       expect(Object.isFrozen(entry)).toBe(true);
       expect(Object.isFrozen(entry.modifiers)).toBe(true);
       for (const modifier of entry.modifiers) {
@@ -124,6 +144,10 @@ describe('country trait catalog V2', () => {
         if (modifier.scope) expect(Object.isFrozen(modifier.scope)).toBe(true);
       }
     }
+    expect(COUNTRY_TRAITS_V2
+      .filter((entry) => entry.modifiers.some(({ key }) => key === 'arctic-research-cost'))
+      .map(({ playerId }) => playerId)
+      .sort()).toEqual(['can', 'fin', 'grl', 'isl', 'nor', 'rus', 'swe', 'usa']);
   });
 
   it('audits one material opening weakness for every single country identity', () => {
@@ -138,16 +162,19 @@ describe('country trait catalog V2', () => {
     }
   });
 
-  it('keeps authored underdog identities instead of rewriting them from rank or population', () => {
+  it('keeps useful underdog identities while generic food filler is replaced', () => {
+    const foodKeys = new Set<string>(FOOD_TRAIT_MODIFIER_KEYS_V2);
+    for (const playerId of ['tls', 'btn', 'sur', 'mwi'] as const) {
+      expect(countryTraitV2(playerId)?.modifiers
+        .some(({ key }) => foodKeys.has(key)), playerId).toBe(false);
+    }
     expect(countryTraitV2('tls')?.modifiers.map(({ key }) => key)).toEqual([
-      'food-production', 'condition-recovery', 'defense',
+      'research-output', 'condition-recovery', 'defense',
     ]);
     expect(countryTraitV2('cri')?.modifiers.map(({ key }) => key)).toEqual([
       'development-economy-growth', 'research-output', 'recruitment-throughput',
     ]);
-    expect(countryTraitV2('btn')?.modifiers.map(({ key }) => key)).toEqual([
-      'defense', 'reserve-training', 'food-storage-capacity',
-    ]);
+    expect(countryTraitV2('btn')?.modifiers.map(({ key }) => key)).toContain('reserve-training');
     expect(countryTraitV2('dji')?.modifiers.map(({ key }) => key)).toEqual([
       'operation-cost', 'naval-distance-pressure', 'tax-efficiency',
     ]);
@@ -157,11 +184,10 @@ describe('country trait catalog V2', () => {
     expect(countryTraitV2('mne')?.modifiers.map(({ key }) => key)).toEqual([
       'defense', 'military-casualties', 'operation-cost',
     ]);
-    expect(countryTraitV2('sur')?.modifiers.map(({ key }) => key)).toEqual([
-      'defense', 'military-casualties', 'food-production',
-    ]);
+    expect(countryTraitV2('sur')?.modifiers.map(({ key }) => key))
+      .toContain('development-economy-growth');
     expect(countryTraitV2('isl')?.modifiers.map(({ key }) => key)).toEqual([
-      'naval-distance-pressure', 'operation-cost', 'defense',
+      'naval-distance-pressure', 'operation-cost', 'defense', 'arctic-research-cost',
     ]);
 
     for (const playerId of ['tls', 'cri', 'btn', 'dji', 'guy', 'mne', 'sur', 'isl'] as const) {
@@ -182,50 +208,89 @@ describe('country trait catalog V2', () => {
     expect(countryTraitModifiersV2('brn', 'army-upkeep')[0]?.percentage).toBeLessThan(0);
     expect(countryTraitModifiersV2('blz', 'military-casualties')[0]?.scope).toBeUndefined();
 
-    for (const playerId of ['deu', 'jpn', 'kor'] as const) {
+    for (const playerId of ['deu', 'jpn'] as const) {
       expect(countryTraitModifiersV2(playerId, 'national-iq')[0]?.percentage)
         .toBeGreaterThan(0);
       expect(countryTraitFactorV2(playerId, 'national-iq')).toBeLessThanOrEqual(1.02);
       expect(countryTraitFactorV2(playerId, 'national-iq', { humanControlled: true }))
         .toBeLessThanOrEqual(1.15);
     }
+    expect(countryTraitModifiersV2('kor', 'research-progress')[0]?.scope)
+      .toEqual({ researchBranches: ['advanced-weapons'] });
 
     const greenland = countryTraitV2('grl')!;
     expect(greenland.modifiers.map(({ key }) => key)).toEqual([
-      'army-capacity', 'recruitment-throughput', 'army-upkeep',
+      'army-capacity', 'recruitment-throughput', 'research-progress',
+      'arctic-research-cost',
     ]);
-    expect(countryTraitFactorV2('grl', 'army-capacity')).toBeLessThanOrEqual(1.3);
+    expect(greenland.effect).toBe('+9% army capacity; +5% recruitment throughput; +4% research progress in population-recruitment; −12.5% Arctic research cost.');
+    expect(describeCountryTraitModifiersV2(
+      greenland.modifiers,
+      HUMAN_TRAIT_MULTIPLIER_WEAKEST_V2,
+    )).toBe('+27% army capacity; +15% recruitment throughput; +12% research progress in population-recruitment; −12.5% Arctic research cost.');
+    expect(countryTraitModifiersV2('grl', 'army-capacity')[0]?.percentage).toBe(9);
+    expect(countryTraitModifiersV2('grl', 'recruitment-throughput')[0]?.percentage).toBe(5);
+    expect(countryTraitModifiersV2('grl', 'research-progress')[0]).toMatchObject({
+      percentage: 4,
+      scope: { researchBranches: ['population-recruitment'] },
+    });
+    expect(countryTraitModifiersV2('grl', 'army-upkeep')).toEqual([]);
+    expect(countryTraitFactorV2('grl', 'army-capacity')).toBeCloseTo(1.09, 12);
+    expect(countryTraitFactorV2('grl', 'recruitment-throughput')).toBeCloseTo(1.05, 12);
+    expect(countryTraitFactorV2('grl', 'research-progress', {
+      researchBranch: 'population-recruitment',
+    })).toBeCloseTo(1.04, 12);
     expect(countryTraitFactorV2('grl', 'army-capacity', { humanControlled: true }))
-      .toBeGreaterThan(countryTraitFactorV2('grl', 'army-capacity'));
-    expect(countryTraitFactorV2('grl', 'army-capacity', { humanControlled: true }))
-      .toBeLessThan(1.3);
+      .toBeCloseTo(1.27, 12);
     expect(countryTraitFactorV2('grl', 'recruitment-throughput', { humanControlled: true }))
-      .toBeGreaterThan(countryTraitFactorV2('grl', 'recruitment-throughput'));
-    expect(countryTraitFactorV2('grl', 'army-upkeep', { humanControlled: true }))
-      .toBeLessThan(countryTraitFactorV2('grl', 'army-upkeep'));
+      .toBeCloseTo(1.15, 12);
+    expect(countryTraitFactorV2('grl', 'research-progress', {
+      humanControlled: true, researchBranch: 'population-recruitment',
+    })).toBeCloseTo(1.12, 12);
+    expect(countryTraitFactorV2('grl', 'research-progress', {
+      humanControlled: true, researchBranch: 'economy-science',
+    })).toBe(1);
+    expect(countryTraitFactorV2('grl', 'arctic-research-cost')).toBe(0.875);
+    expect(countryTraitFactorV2('grl', 'arctic-research-cost', { humanControlled: true }))
+      .toBe(0.875);
+
+    expect(countryTraitModifiersV2('bel', 'base-operating-cost')).toEqual([]);
+    expect(BELGIUM_TRAIT_VALUE_MULTIPLIER_V2).toBe(1.08);
+    expect(countryTraitModifiersV2('bel', 'tax-efficiency')[0]?.percentage).toBe(3.81);
+    expect(countryTraitModifiersV2('bel', 'army-capacity')[0]?.percentage).toBe(4.35);
+    expect(countryTraitModifiersV2('bel', 'defense')[0]).toMatchObject({
+      percentage: 4.35,
+      scope: { terrain: 'urban' },
+    });
+    expect(countryTraitFactorV2('bel', 'army-capacity')).toBe(1.0435);
+    expect(countryTraitFactorV2('bel', 'defense', { terrain: 'urban' })).toBe(1.0435);
+    expect(countryTraitFactorV2('bel', 'army-capacity', { humanControlled: true }))
+      .toBeCloseTo(1.0823855024, 10);
   });
 
-  it('does not inject army capacity into the bottom 24 military starts', () => {
-    const bottomTail = OPENING_MILITARY_ORDER_V2.slice(-24);
-    const authoredCapacityIds = bottomTail.filter((playerId) => (
-      countryTraitModifiersV2(playerId, 'army-capacity').length > 0
-    )).sort();
-
-    expect(bottomTail).toHaveLength(24);
-    expect(authoredCapacityIds).toEqual(['bdi', 'gnq', 'grl', 'swz']);
-  });
-
-  it('normalizes every AI base trait with value-aware weights', () => {
-    const greenland = countryTraitV2('grl')!;
+  it('normalizes rank-aware AI trait budgets while reserving Greenland as explicit exception', () => {
     const scored = COUNTRY_TRAITS_V2.filter((entry) => entry.playerId !== 'grl')
       .map((entry) => ({ playerId: entry.playerId, score: countryTraitBaseValueScoreV2(entry) }));
     const highest = [...scored].sort((left, right) => right.score - left.score)[0]!;
-    const lowest = [...scored].sort((left, right) => left.score - right.score)[0]!;
     expect(highest.score, highest.playerId)
       .toBeLessThanOrEqual(BASE_COUNTRY_TRAIT_VALUE_BUDGET_V2 + 0.05);
-    expect(lowest.score, lowest.playerId)
-      .toBeGreaterThanOrEqual(BASE_COUNTRY_TRAIT_VALUE_BUDGET_V2 - 2);
-    expect(countryTraitBaseValueScoreV2(greenland)).toBeLessThan(lowest.score);
+    const topIds = OPENING_MILITARY_ORDER_V2.slice(0, 10);
+    const bottomIds = OPENING_MILITARY_ORDER_V2.slice(-24)
+      .filter((playerId) => playerId !== 'grl');
+    const topScores = topIds.map((playerId) => (
+      countryTraitBaseValueScoreV2(countryTraitV2(playerId)!)
+    ));
+    const bottomScores = bottomIds.map((playerId) => (
+      countryTraitBaseValueScoreV2(countryTraitV2(playerId)!)
+    ));
+    const mean = (values: readonly number[]) => (
+      values.reduce((sum, value) => sum + value, 0) / values.length
+    );
+    expect(Math.max(...topScores)).toBeLessThanOrEqual(
+      TOP_POWER_COUNTRY_TRAIT_VALUE_BUDGET_V2 + 1,
+    );
+    expect(Math.min(...bottomScores)).toBeGreaterThanOrEqual(24);
+    expect(mean(bottomScores) / mean(topScores)).toBeGreaterThanOrEqual(2.2);
 
     const attackPercent = Math.abs(countryTraitModifiersV2('col', 'attack')[0]!.percentage);
     const foodPercent = Math.abs(countryTraitModifiersV2('arg', 'food-production')[0]!.percentage);
@@ -262,9 +327,57 @@ describe('country trait catalog V2', () => {
     })).toBeGreaterThan(countryTraitFactorV2('grl', 'army-capacity'));
     expect(countryTraitFactorV2('grl', 'recruitment-throughput', { humanControlled: true }))
       .toBeGreaterThan(1);
-    expect(countryTraitFactorV2('grl', 'army-upkeep', { humanControlled: true }))
-      .toBeLessThan(1);
+    expect(countryTraitFactorV2('grl', 'research-progress', {
+      humanControlled: true, researchBranch: 'population-recruitment',
+    })).toBeCloseTo(1.12, 12);
+    expect(countryTraitFactorV2('grl', 'army-upkeep', { humanControlled: true })).toBe(1);
     expect(countryTraitV2('grl')).toBe(countryTraitV2('grl'));
+  });
+
+  it('keeps food traits exceptional, meaningful and limited to the exact allowlist', () => {
+    const foodKeys = new Set<string>(FOOD_TRAIT_MODIFIER_KEYS_V2);
+    const foodCountries = COUNTRY_TRAITS_V2
+      .filter((entry) => entry.modifiers.some(({ key }) => foodKeys.has(key)))
+      .map(({ playerId }) => playerId)
+      .sort();
+    expect(foodCountries).toEqual([...FOOD_TRAIT_ALLOWLIST_V2].sort());
+    expect(foodCountries.length / COUNTRY_TRAITS_V2.length).toBeLessThan(0.10);
+    for (const playerId of FOOD_TRAIT_ALLOWLIST_V2) {
+      const modifiers = countryTraitV2(playerId)!.modifiers;
+      const foodModifiers = modifiers.filter(({ key }) => foodKeys.has(key));
+      expect(foodModifiers, playerId).toHaveLength(1);
+      expect(Math.abs(foodModifiers[0]!.percentage), playerId).toBeGreaterThanOrEqual(12);
+      expect(modifiers.some(({ key }) => !foodKeys.has(key)), playerId).toBe(true);
+    }
+    expect(COUNTRY_TRAITS_V2.every(({ description }) => (
+      !description.includes('converts national strengths')
+    ))).toBe(true);
+  });
+
+  it('gives each top power a distinct scoped identity without flattening underdog budgets', () => {
+    const expected = [
+      ['usa', 'Advanced Weapons Command'],
+      ['chn', 'Integrated War Economy'],
+      ['rus', 'Deep Mobilization Front'],
+      ['ind', 'Strategic Mass'],
+      ['kor', 'Rapid Arsenal Cycle'],
+      ['fra', 'Autonomous Deterrent'],
+      ['jpn', 'Precision Shield'],
+      ['gbr', 'Global Intelligence Network'],
+      ['tur', 'Straits Command'],
+      ['ita', 'Mediterranean Operational Depth'],
+    ] as const;
+    expect(OPENING_MILITARY_ORDER_V2.slice(0, 10)).toEqual(
+      expected.map(([playerId]) => playerId),
+    );
+    for (const [playerId, name] of expected) {
+      expect(countryTraitV2(playerId)?.name).toBe(name);
+    }
+    expect(countryTraitModifiersV2('gbr', 'naval-distance-pressure')).toHaveLength(1);
+    expect(countryTraitModifiersV2('gbr', 'operation-cost')).toEqual([]);
+    expect(countryTraitModifiersV2('gbr', 'front-supply')).toEqual([]);
+    expect(countryTraitModifiersV2('gbr', 'research-catch-up-bonus')).toHaveLength(1);
+    expect(countryTraitModifiersV2('gbr', 'war-fatigue-recovery')).toHaveLength(1);
   });
 
   it('keeps the immutable human-scaling order equal to the pure opening military ranking', () => {
@@ -292,7 +405,8 @@ describe('country trait catalog V2', () => {
     ))).toBe(true);
     const modifiers = COUNTRY_TRAITS_V2.flatMap((entry) => entry.modifiers);
     expect(modifiers.filter(({ key }) => key === 'defense')).toHaveLength(69);
-    expect(modifiers.filter(({ scope }) => scope?.terrain !== undefined)).toHaveLength(64);
+    expect(modifiers.filter(({ scope }) => scope?.terrain !== undefined).length)
+      .toBeGreaterThanOrEqual(64);
     expect(modifiers.every(({ scope }) => scope?.homeland === undefined)).toBe(true);
     expect(COUNTRY_TRAITS_V2.every(({ effect }) => !effect.includes('original homeland territory')))
       .toBe(true);

@@ -226,33 +226,6 @@ const PREPARED_COUNTRIES: readonly PreparedCountry[] = COUNTRIES.map((country, i
   };
 });
 
-function borderPointKey([longitude, latitude]: Coordinate): string {
-  const wrappedLongitude = ((longitude + 180) % 360 + 360) % 360 - 180;
-  return `${wrappedLongitude.toFixed(5)}:${latitude.toFixed(5)}`;
-}
-
-function borderEdgeKey(start: Coordinate, end: Coordinate): string {
-  const left = borderPointKey(start);
-  const right = borderPointKey(end);
-  return left < right ? `${left}|${right}` : `${right}|${left}`;
-}
-
-/** Canonical shared edges let conquered neighbours read as one realm. */
-const BORDER_EDGE_COUNTRIES = new Map<string, string[]>();
-for (const country of COUNTRIES) {
-  for (const ring of country.rings) {
-    for (let index = 0; index < ring.length; index += 1) {
-      const start = ring[index];
-      const end = ring[(index + 1) % ring.length];
-      if (!start || !end || borderPointKey(start) === borderPointKey(end)) continue;
-      const key = borderEdgeKey(start, end);
-      const owners = BORDER_EDGE_COUNTRIES.get(key) ?? [];
-      owners.push(country.id);
-      BORDER_EDGE_COUNTRIES.set(key, owners);
-    }
-  }
-}
-
 const COUNTRY_BY_PICK_ID = new Map(PREPARED_COUNTRIES.map((country) => [
   country.pickId,
   country,
@@ -266,11 +239,12 @@ const COUNTRY_BY_PICK_ID = new Map(PREPARED_COUNTRIES.map((country) => [
  * for the globe only, preserving the northernmost coastline in each narrow
  * slice. The canonical flat-map silhouette remains untouched.
  */
-const ANTARCTICA_GLOBE_COASTLINE: readonly Coordinate[] = (() => {
-  const binWidth = 2;
+export const ANTARCTICA_GLOBE_COASTLINE: readonly Coordinate[] = (() => {
+  const binWidth = 1;
+  const binCount = Math.ceil(360 / binWidth);
   const outerCoastByBin = new Map<number, Coordinate>();
   for (const point of ANTARCTICA_COASTLINE) {
-    const bin = Math.min(179, Math.max(0, Math.floor((point[0] + 180) / binWidth)));
+    const bin = Math.min(binCount - 1, Math.max(0, Math.floor((point[0] + 180) / binWidth)));
     const existing = outerCoastByBin.get(bin);
     if (!existing || point[1] > existing[1]) outerCoastByBin.set(bin, point);
   }
@@ -294,12 +268,12 @@ const ANTARCTICA_GLOBE_COASTLINE: readonly Coordinate[] = (() => {
   // Smooth narrow radial spikes introduced by the pole projection while
   // keeping the Peninsula and the major Ross/Weddell Sea sweeps legible.
   let latitudes = rawLatitudes;
-  for (let pass = 0; pass < 3; pass += 1) {
+  for (let pass = 0; pass < 1; pass += 1) {
     latitudes = latitudes.map((_, index) => {
       let total = 0;
       let weightTotal = 0;
-      for (let offset = -4; offset <= 4; offset += 1) {
-        const weight = 5 - Math.abs(offset);
+      for (let offset = -2; offset <= 2; offset += 1) {
+        const weight = 3 - Math.abs(offset);
         const wrappedIndex = (index + offset + rawLatitudes.length) % rawLatitudes.length;
         total += latitudes[wrappedIndex]! * weight;
         weightTotal += weight;
@@ -310,7 +284,7 @@ const ANTARCTICA_GLOBE_COASTLINE: readonly Coordinate[] = (() => {
 
   const coastline: Coordinate[] = latitudes.map((latitude, index) => [
     index - 180,
-    Math.max(-79.5, Math.min(-62.5, latitude)),
+    Math.max(-87.5, Math.min(-61.5, latitude)),
   ] as const);
   coastline.push([180, coastline[0]![1]]);
   return coastline;
@@ -359,45 +333,6 @@ function tracePreparedRings(
   context.beginPath();
   for (const ring of rings) {
     for (const shift of ring.longitudeShifts) tracePreparedRing(context, ring, shift, width, height);
-  }
-}
-
-function traceCountryRealmBorder(
-  context: CanvasRenderingContext2D,
-  country: PreparedCountry,
-  engine: WorldMapEngineContract | undefined,
-  width: number,
-  height: number,
-): void {
-  const currentOwnerId = engine?.state.territories[country.country.id]?.ownerId;
-  context.beginPath();
-  for (const ring of country.rings) {
-    for (const shift of ring.longitudeShifts) {
-      let tracingVisibleRun = false;
-      for (let index = 0; index < ring.points.length; index += 1) {
-        const start = ring.points[index];
-        const end = ring.points[(index + 1) % ring.points.length];
-        if (!start || !end || borderPointKey(start) === borderPointKey(end)) continue;
-        const neighbours = BORDER_EDGE_COUNTRIES.get(borderEdgeKey(start, end)) ?? [];
-        const internalRealmEdge = Boolean(currentOwnerId && neighbours.length > 1
-          && neighbours.every((territoryId) => (
-            engine?.state.territories[territoryId]?.ownerId === currentOwnerId
-          )));
-        if (internalRealmEdge) {
-          tracingVisibleRun = false;
-          continue;
-        }
-        const [startX, startY] = texturePoint(start[0] + shift, start[1], width, height);
-        const [endX, endY] = texturePoint(end[0] + shift, end[1], width, height);
-        // Keep consecutive Natural Earth edges in one canvas subpath. Drawing
-        // every source segment as a separate round-capped line made close-up
-        // borders look like a soft chain of overlapping dots even though the
-        // underlying 1:50m geometry was already detailed enough.
-        if (!tracingVisibleRun) context.moveTo(startX, startY);
-        context.lineTo(endX, endY);
-        tracingVisibleRun = true;
-      }
-    }
   }
 }
 
@@ -578,18 +513,69 @@ function drawAntarctica(
   context.save();
   traceAntarctica(context, width, height);
   context.clip();
-  context.strokeStyle = 'rgba(239, 254, 255, 0.19)';
-  context.lineWidth = 2;
-  for (let y = height * 0.84; y < height; y += 13) {
+
+  // Deterministic facets add close-range ice relief only when the atlas bakes.
+  for (let index = 0; index < 72; index += 1) {
+    const seed = (Math.imul(index + 17, 2_654_435_761) >>> 0) / 4_294_967_296;
+    const longitude = -178 + ((index * 71) % 356);
+    const latitude = -65 - seed * 22;
+    const longitudeSpan = 5 + ((index * 11) % 15);
+    const latitudeSpan = 0.7 + ((index * 7) % 9) * 0.18;
+    const [left, top] = texturePoint(longitude, latitude, width, height);
+    const [right] = texturePoint(longitude + longitudeSpan, latitude, width, height);
+    const [, bottom] = texturePoint(longitude, latitude - latitudeSpan, width, height);
     context.beginPath();
-    context.moveTo(0, y);
-    context.lineTo(width, y + 18);
+    context.moveTo(left, top);
+    context.lineTo(right, top + (index % 3 - 1) * height * 0.0015);
+    context.lineTo(right - width * 0.004, bottom);
+    context.lineTo(left + width * 0.002, bottom + height * 0.001);
+    context.closePath();
+    context.fillStyle = index % 2 === 0
+      ? 'rgba(244, 255, 255, 0.045)'
+      : 'rgba(51, 111, 133, 0.035)';
+    context.fill();
+  }
+
+  // Crooked glacier flow converges on the pole instead of forming latitude rings.
+  context.lineCap = 'round';
+  context.lineWidth = Math.max(0.75, width / 5200);
+  context.strokeStyle = 'rgba(239, 254, 255, 0.23)';
+  for (let longitude = -174; longitude <= 174; longitude += 12) {
+    const [startX, startY] = texturePoint(longitude, -63, width, height);
+    const [endX, endY] = texturePoint(longitude + Math.sin(longitude * 0.17) * 7, -89.2, width, height);
+    const [controlOneX, controlOneY] = texturePoint(longitude + Math.sin(longitude) * 5, -72, width, height);
+    const [controlTwoX, controlTwoY] = texturePoint(longitude - Math.cos(longitude * 0.11) * 8, -82, width, height);
+    context.beginPath();
+    context.moveTo(startX, startY);
+    context.bezierCurveTo(controlOneX, controlOneY, controlTwoX, controlTwoY, endX, endY);
+    context.stroke();
+  }
+
+  context.lineWidth = Math.max(0.65, width / 6200);
+  context.strokeStyle = 'rgba(39, 98, 119, 0.16)';
+  for (let index = 0; index < 38; index += 1) {
+    const longitude = -172 + ((index * 53) % 344);
+    const latitude = -67 - ((index * 7) % 18);
+    const [startX, startY] = texturePoint(longitude, latitude, width, height);
+    const [endX, endY] = texturePoint(longitude + 10 + (index % 5) * 3, latitude - 1.2, width, height);
+    context.beginPath();
+    context.moveTo(startX, startY);
+    context.bezierCurveTo(
+      startX + width * 0.012, startY - height * 0.004,
+      endX - width * 0.009, endY + height * 0.005,
+      endX, endY,
+    );
     context.stroke();
   }
   context.restore();
+
+  traceAntarctica(context, width, height);
+  context.strokeStyle = 'rgba(22, 75, 94, 0.42)';
+  context.lineWidth = Math.max(3, width / 1450);
+  context.stroke();
   traceAntarctica(context, width, height);
   context.strokeStyle = 'rgba(220, 251, 255, 0.94)';
-  context.lineWidth = 2.8;
+  context.lineWidth = Math.max(1.4, width / 3200);
   context.stroke();
 }
 
@@ -1224,35 +1210,9 @@ export class GlobePoliticalTexture {
       }
     }
 
-    // Finally bake one outer realm border per completed territory section.
-    // Shared owner edges are omitted; integrating territory edges stay gold.
-    for (const prepared of PREPARED_COUNTRIES) {
-      const territory = engine?.state.territories[prepared.country.id];
-      const owner = territory ? engine?.player(territory.ownerId) : undefined;
-      const integrating = Boolean(territory && globeTerritoryIsIntegrating(territory));
-      if (integrating) {
-        tracePreparedCountry(context, prepared, width, height);
-      } else {
-        traceCountryRealmBorder(
-          context,
-          prepared,
-          engine,
-          width,
-          height,
-        );
-      }
-      context.strokeStyle = integrating ? 'rgba(244, 201, 106, 0.96)'
-        : colorCss(prepared.terrainLayers.borderColor);
-      const borderScale = width / GLOBE_TEXTURE_WIDTH;
-      const terrainBorderWidth = (integrating ? 0.88 : owner?.isHuman ? 0.9 : 0.72)
-        * borderScale;
-      context.globalAlpha = integrating
-        ? 0.94
-        : Math.min(0.94, prepared.terrainLayers.borderAlpha * 1.14);
-      context.lineWidth = terrainBorderWidth;
-      context.stroke();
-      context.globalAlpha = 1;
-    }
+    // Political borders are intentionally absent from this atlas. The globe's
+    // one screen-space LineSegments2 layer owns coastlines, realm hiding and
+    // gold integration perimeters without a divergent baked duplicate.
   }
 
   private redraw(): void {

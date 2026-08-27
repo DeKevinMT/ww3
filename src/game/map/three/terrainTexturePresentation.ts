@@ -1,11 +1,11 @@
 import type { TerrainProfileEntry } from '../../data/terrainProfiles';
 import { terrainPresentation } from '../../terrainPresentation';
 
-const TERRAIN_TINT_SHARE_ALPHA = 0.27;
-const TERRAIN_FLAG_TINT_SHARE_ALPHA = 0.50;
-const TERRAIN_BORDER_BASE_ALPHA = 0.18;
-const TERRAIN_BORDER_SHARE_ALPHA = 1.35;
-const TERRAIN_BORDER_MAX_ALPHA = 0.82;
+const TERRAIN_TINT_SHARE_ALPHA = 0.36;
+const TERRAIN_FLAG_TINT_SHARE_ALPHA = 0.62;
+const TERRAIN_BORDER_BASE_ALPHA = 0.26;
+const TERRAIN_BORDER_SHARE_ALPHA = 1.60;
+const TERRAIN_BORDER_MAX_ALPHA = 0.96;
 
 export interface TerrainTextureLayerPresentation {
   readonly tintColor: number;

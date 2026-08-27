@@ -122,13 +122,16 @@ describe('temporary human opening-army bonus', () => {
     expect(engine.state.players[usa]!.trainedReserves).toBe(discountedUsReserves);
     expect(engine.chooseCountry(grl)).toEqual({ accepted: true });
     expect(engine.state.players[usa]!.trainedReserves).toBe(ordinaryUsReserves);
-    expect(engine.state.players[grl]!.trainedReserves).toBe(ordinaryGreenlandReserves);
+    const boostedGreenlandReserves = engine.state.players[grl]!.trainedReserves;
+    expect(boostedGreenlandReserves).toBeGreaterThan(ordinaryGreenlandReserves);
     expect(engine.chooseCountry(grl)).toEqual({ accepted: true });
-    expect(engine.state.players[grl]!.trainedReserves).toBe(ordinaryGreenlandReserves);
+    expect(engine.state.players[grl]!.trainedReserves).toBe(boostedGreenlandReserves);
 
     expect(engine.chooseCountry(usa)).toEqual({ accepted: true });
     expect(engine.state.players[usa]!.trainedReserves).toBe(discountedUsReserves);
     expect(engine.state.players[grl]!.trainedReserves).toBe(ordinaryGreenlandReserves);
+    expect(engine.chooseCountry(grl)).toEqual({ accepted: true });
+    expect(engine.state.players[grl]!.trainedReserves).toBe(boostedGreenlandReserves);
   });
 
   it('lets reserve capacity follow the temporary army-cap curve without granting reserves', () => {
@@ -157,7 +160,7 @@ describe('temporary human opening-army bonus', () => {
     expect(state.players[usa]!.trainedReserves).toBe(discountedReserves);
   });
 
-  it('starts both deployed army and capacity at the exact 0.10x–15x endpoints', () => {
+  it('starts deployed army and capacity at the exact 0.05x–50x endpoints', () => {
     const weakEngine = new WorldEngineV2(86_001, WORLD_CONTENT_V2);
     const weakBefore = selectTotalManpowerV2(weakEngine.state, grl);
     const weakTreasuryBefore = weakEngine.state.players[grl]!.treasury;
@@ -168,14 +171,14 @@ describe('temporary human opening-army bonus', () => {
     const weakMultiplier = humanStartingArmyMultiplierForContentV2(WORLD_CONTENT_V2, grl);
     const weakOneXCapacity = capacityAtOneXHumanOpeningV2(weakEngine.state, grl);
     const weakBonus = weakEngine.state.players[grl]!.openingArmyBonus;
-    expect(weakMultiplier).toBe(15);
+    expect(weakMultiplier).toBe(50);
     expect(openingArmyCapacityMultiplierV2(weakEngine.state, WORLD_CONTENT_V2, grl))
-      .toBe(15);
+      .toBe(50);
     expect(weakAfter.deployed).toBeCloseTo(weakBefore.deployed * weakMultiplier, 7);
     // Per-territory capacity is rounded before national aggregation.
     expect(weakAfter.capacity).toBeCloseTo(weakOneXCapacity * weakMultiplier, 4);
     expect(weakEngine.state.players[grl]!.treasury).toBe(weakTreasuryBefore);
-    expect(weakEngine.state.players[grl]!.trainedReserves).toBe(weakReservesBefore);
+    expect(weakEngine.state.players[grl]!.trainedReserves).toBeGreaterThan(weakReservesBefore);
     expect(weakBonus).not.toBeNull();
     expect(weakBonus!.initialManpower).toBeCloseTo(
       weakAfter.deployed - weakBefore.deployed,
@@ -190,7 +193,7 @@ describe('temporary human opening-army bonus', () => {
     expect(strongEngine.configureHumanPlayers([usa], usa)).toEqual({ accepted: true });
     const strongMultiplier = humanStartingArmyMultiplierForContentV2(WORLD_CONTENT_V2, usa);
     const strongOneXCapacity = capacityAtOneXHumanOpeningV2(strongEngine.state, usa);
-    expect(strongMultiplier).toBe(0.1);
+    expect(strongMultiplier).toBe(0.05);
     expect(deployedV2(strongEngine.state, usa))
       .toBeCloseTo(usaBefore * strongMultiplier, 6);
     expect(selectTotalManpowerV2(strongEngine.state, usa).capacity)
@@ -244,12 +247,13 @@ describe('temporary human opening-army bonus', () => {
     }
   });
 
-  it('fades deployed surplus and capacity linearly: halfway at week 520, 1x at week 1040', () => {
+  it('fades deployed surplus and capacity linearly: halfway at week 780, 1x at week 1560', () => {
     const engine = createOpeningEngineV2(86_003);
     const state = engine.state;
     const initial = state.players[grl]!.openingArmyBonus!.initialManpower;
     const ordinaryArmy = deployedV2(state, grl) - initial;
-    const ordinaryCapacity = selectTotalManpowerV2(state, grl).capacity / 15;
+    const openingMultiplier = humanStartingArmyMultiplierForContentV2(WORLD_CONTENT_V2, grl);
+    const ordinaryCapacity = selectTotalManpowerV2(state, grl).capacity / openingMultiplier;
 
     state.tick = OPENING_ARMY_BONUS_DURATION_TICKS_V2 / 2;
     expect(processOpeningArmyBonusDecayV2(state, WORLD_CONTENT_V2))
@@ -257,9 +261,11 @@ describe('temporary human opening-army bonus', () => {
     synchronizeArmyCapacityV2(state, WORLD_CONTENT_V2);
     expect(selectOpeningArmyBonusRemainingV2(state, grl)).toBeCloseTo(initial / 2, 7);
     expect(deployedV2(state, grl)).toBeCloseTo(ordinaryArmy + initial / 2, 7);
-    expect(openingArmyCapacityMultiplierV2(state, WORLD_CONTENT_V2, grl)).toBe(8);
+    const halfwayMultiplier = 1 + (openingMultiplier - 1) / 2;
+    expect(openingArmyCapacityMultiplierV2(state, WORLD_CONTENT_V2, grl))
+      .toBe(halfwayMultiplier);
     expect(selectTotalManpowerV2(state, grl).capacity)
-      .toBeCloseTo(ordinaryCapacity * 8, 6);
+      .toBeCloseTo(ordinaryCapacity * halfwayMultiplier, 6);
 
     state.tick = OPENING_ARMY_BONUS_DURATION_TICKS_V2;
     expect(processOpeningArmyBonusDecayV2(state, WORLD_CONTENT_V2))
@@ -369,9 +375,9 @@ describe('temporary human opening-army bonus', () => {
     const engine = createOpeningEngineV2(86_009, usa);
     const state = engine.state;
     const normalCapacity = capacityAtOneXHumanOpeningV2(state, usa);
-    expect(openingArmyCapacityMultiplierV2(state, WORLD_CONTENT_V2, usa)).toBe(0.1);
+    expect(openingArmyCapacityMultiplierV2(state, WORLD_CONTENT_V2, usa)).toBe(0.05);
     expect(selectTotalManpowerV2(state, usa).capacity)
-      .toBeCloseTo(normalCapacity * 0.1, 6);
+      .toBeCloseTo(normalCapacity * 0.05, 6);
 
     const paidTroopTarget = normalCapacity * 0.8;
     addPhysicalManpowerV2(state, usa, paidTroopTarget - deployedV2(state, usa));
@@ -379,9 +385,9 @@ describe('temporary human opening-army bonus', () => {
 
     state.tick = OPENING_ARMY_BONUS_DURATION_TICKS_V2 / 2;
     synchronizeArmyCapacityV2(state, WORLD_CONTENT_V2);
-    expect(openingArmyCapacityMultiplierV2(state, WORLD_CONTENT_V2, usa)).toBe(0.55);
+    expect(openingArmyCapacityMultiplierV2(state, WORLD_CONTENT_V2, usa)).toBe(0.525);
     expect(selectTotalManpowerV2(state, usa).capacity)
-      .toBeCloseTo(normalCapacity * 0.55, 6);
+      .toBeCloseTo(normalCapacity * 0.525, 6);
     expect(deployedV2(state, usa)).toBeCloseTo(paidTroopTarget, 6);
 
     state.tick = OPENING_ARMY_BONUS_DURATION_TICKS_V2;
@@ -448,6 +454,7 @@ describe('temporary human opening-army bonus', () => {
     ) as Record<string, any>;
     legacy.rulesVersion = 'frontier-command-v2.61-random-world';
     delete legacy.firstIntegrationDiscountUsedBy;
+    delete legacy.polarEndgame;
     for (const nation of Object.values(legacy.players) as Array<Record<string, any>>) {
       delete nation.openingArmyBonus;
     }

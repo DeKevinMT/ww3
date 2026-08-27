@@ -11,6 +11,10 @@ import type { WorldContentV2 } from './content';
 import { stateTerritoryArmyCapacityTargetV2 } from './capacity';
 import { isHumanPlayerV2 } from './humanPlayers';
 import { OPENING_ARMY_BONUS_DURATION_TICKS_V2 } from './openingArmyBonus';
+import {
+  ANTARCTIC_SECTOR_IDS_V2,
+  ARCTIC_PROJECT_IDS_V2,
+} from './polarEndgame';
 import { contentVersionForWorldContentV2 } from './scenarios';
 import {
   finiteStateNumbersV2,
@@ -73,6 +77,11 @@ const OFFER_KEYS = ['cashAmount', 'createdTick', 'expiresTick', 'fromId', 'id', 
 const ALLIANCE_KEYS = ['formedTick', 'leftId', 'rightId'];
 const ALLIANCE_OFFER_KEYS = ['createdTick', 'expiresTick', 'fromId', 'toId'];
 const AI_ESCALATION_KEYS = ['coalitionMembers', 'globalThreat', 'lastFederationTick', 'lastHumanPower', 'lastHumanTerritoryCount', 'lastWarStartTick', 'resistanceLevel'];
+const POLAR_ENDGAME_KEYS = ['arcticPrograms', 'bossIntegrity', 'bossPhase', 'contactTick', 'earthDefenseMembers', 'expeditions', 'globalWave', 'nextCounteroffensiveTick', 'nextExpeditionId', 'phase', 'revealedBy', 'sectors', 'suspicionReliefEarned', 'victoryCommanderId', 'victoryTick', 'visualRevision', 'warningAcknowledgedBy', 'warningTick'];
+const ARCTIC_PROGRESS_KEYS = ['activeProject', 'completedProjects', 'playerId'];
+const ARCTIC_RUN_KEYS = ['completesTick', 'costPaid', 'playerId', 'projectId', 'startedTick'];
+const ANTARCTIC_SECTOR_KEYS = ['discoveredTick', 'integrity', 'securedBy', 'securedTick', 'status', 'wave'];
+const ANTARCTIC_EXPEDITION_KEYS = ['damageDealt', 'id', 'initialManpower', 'lastPulseTick', 'manpower', 'playerId', 'sectorId', 'startedTick'];
 const OPTIONAL_CANONICAL_KEYS = ['cause', 'integrationProgram'] as const;
 const allowedKeySetCache = new WeakMap<readonly string[], ReadonlySet<string>>();
 
@@ -142,6 +151,108 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
     || coalitionMembers.some((id) => isHumanPlayerV2(state, id) || !state.players[id])
     || coalitionMembers.join('|') !== [...coalitionMembers].sort((a, b) => a.localeCompare(b)).join('|')) {
     errors.push('AI coalition membership is invalid.');
+  }
+  const polar = state.polarEndgame;
+  const polarPhases = ['dormant', 'arctic-research', 'warning', 'contact', 'counteroffensive', 'core-exposed', 'victory'];
+  if (!polar || !exactKeys(polar, POLAR_ENDGAME_KEYS)
+    || !polarPhases.includes(polar.phase)
+    || ![polar.globalWave, polar.bossPhase, polar.bossIntegrity, polar.suspicionReliefEarned, polar.visualRevision, polar.nextExpeditionId]
+      .every(Number.isFinite)
+    || !Number.isInteger(polar.globalWave) || polar.globalWave < 1
+    || !Number.isInteger(polar.bossPhase) || polar.bossPhase < 0 || polar.bossPhase > 3
+    || polar.bossIntegrity < 0 || polar.bossIntegrity > 100
+    || polar.suspicionReliefEarned < 0
+    || !Number.isInteger(polar.visualRevision) || polar.visualRevision < 0
+    || !Number.isInteger(polar.nextExpeditionId) || polar.nextExpeditionId < 1
+    || polar.revealedBy !== null && !content.nations[polar.revealedBy]
+    || polar.victoryCommanderId !== null && !content.nations[polar.victoryCommanderId]
+    || polar.phase !== 'victory' && polar.victoryCommanderId !== null
+    || ![polar.warningTick, polar.contactTick, polar.victoryTick, polar.nextCounteroffensiveTick]
+      .every((value) => value === null || Number.isInteger(value) && value >= 0 && value <= state.tick + 52)
+    || (polar.phase === 'dormant' || polar.phase === 'arctic-research') && polar.warningTick !== null
+    || !['dormant', 'arctic-research'].includes(polar.phase) && polar.warningTick === null
+    || ['contact', 'counteroffensive', 'core-exposed', 'victory'].includes(polar.phase) && polar.contactTick === null
+    || polar.phase === 'victory' && polar.victoryTick === null) {
+    errors.push('Polar endgame state is invalid.');
+  }
+  if (polar) {
+    if (new Set(polar.warningAcknowledgedBy).size !== polar.warningAcknowledgedBy.length
+      || polar.warningAcknowledgedBy.some((id) => !state.humanPlayerIds.includes(id))
+      || polar.warningAcknowledgedBy.join('|') !== [...polar.warningAcknowledgedBy]
+        .sort((left, right) => left.localeCompare(right)).join('|')) {
+      errors.push('Polar warning acknowledgement ledger is invalid.');
+    }
+    for (const [rawPlayerId, progress] of Object.entries(polar.arcticPrograms)) {
+      const playerId = rawPlayerId as PlayerId;
+      if (!progress || !exactKeys(progress, ARCTIC_PROGRESS_KEYS)
+        || progress.playerId !== playerId || !state.humanPlayerIds.includes(playerId)
+        || new Set(progress.completedProjects).size !== progress.completedProjects.length
+        || progress.completedProjects.some((id) => !ARCTIC_PROJECT_IDS_V2.includes(id))
+        || progress.completedProjects.join('|') !== [...progress.completedProjects]
+          .sort((left, right) => ARCTIC_PROJECT_IDS_V2.indexOf(left) - ARCTIC_PROJECT_IDS_V2.indexOf(right)).join('|')) {
+        errors.push(`Arctic research program ${rawPlayerId} is invalid.`);
+        continue;
+      }
+      const run = progress.activeProject;
+      if (run && (!exactKeys(run, ARCTIC_RUN_KEYS)
+        || run.playerId !== playerId || !ARCTIC_PROJECT_IDS_V2.includes(run.projectId)
+        || progress.completedProjects.includes(run.projectId)
+        || ![run.startedTick, run.completesTick, run.costPaid].every(Number.isFinite)
+        || !Number.isInteger(run.startedTick) || !Number.isInteger(run.completesTick)
+        || run.startedTick < 0 || run.startedTick > state.tick || run.completesTick <= state.tick
+        || run.completesTick <= run.startedTick || run.costPaid <= 0)) {
+        errors.push(`Arctic research run ${rawPlayerId} is invalid.`);
+      }
+    }
+    const sectorKeys = Object.keys(polar.sectors).sort();
+    if (sectorKeys.length !== ANTARCTIC_SECTOR_IDS_V2.length
+      || sectorKeys.some((id, index) => id !== [...ANTARCTIC_SECTOR_IDS_V2].sort()[index])) {
+      errors.push('Antarctic sector record is incomplete.');
+    }
+    for (const sectorId of ANTARCTIC_SECTOR_IDS_V2) {
+      const sector = polar.sectors[sectorId];
+      if (!sector || !exactKeys(sector, ANTARCTIC_SECTOR_KEYS)
+        || !['hidden', 'available', 'contested', 'secured'].includes(sector.status)
+        || !Number.isFinite(sector.integrity) || sector.integrity < 0 || sector.integrity > 100
+        || !Number.isInteger(sector.wave) || sector.wave < 1
+        || ![sector.discoveredTick, sector.securedTick]
+          .every((value) => value === null || Number.isInteger(value) && value >= 0 && value <= state.tick)
+        || sector.securedBy !== null && !content.nations[sector.securedBy]
+        || sector.status === 'secured' && (sector.integrity !== 0 || sector.securedTick === null)
+        || sector.status === 'hidden' && sector.discoveredTick !== null) {
+        errors.push(`Antarctic sector ${sectorId} is invalid.`);
+      }
+    }
+    if (polar.phase === 'victory'
+      && polar.victoryCommanderId !== polar.sectors['zero-point-core']?.securedBy) {
+      errors.push('Polar victory commander does not match the final core strike.');
+    }
+    const expeditionIds = new Set<number>();
+    for (const expedition of polar.expeditions) {
+      expeditionIds.add(expedition.id);
+      if (!exactKeys(expedition, ANTARCTIC_EXPEDITION_KEYS)
+        || !Number.isInteger(expedition.id) || expedition.id < 1
+        || !state.players[expedition.playerId]
+        || !ANTARCTIC_SECTOR_IDS_V2.includes(expedition.sectorId)
+        || polar.sectors[expedition.sectorId]?.status !== 'contested'
+        || ![expedition.manpower, expedition.initialManpower, expedition.startedTick, expedition.lastPulseTick, expedition.damageDealt].every(Number.isFinite)
+        || expedition.manpower <= 0 || expedition.initialManpower < expedition.manpower
+        || expedition.startedTick < 0 || expedition.startedTick > expedition.lastPulseTick || expedition.lastPulseTick > state.tick
+        || expedition.damageDealt < 0) {
+        errors.push(`Antarctic expedition ${expedition.id} is invalid.`);
+      }
+    }
+    if (expeditionIds.size !== polar.expeditions.length
+      || polar.expeditions.some((expedition, index) => index > 0 && polar.expeditions[index - 1]!.id >= expedition.id)
+      || polar.expeditions.some((expedition) => expedition.id >= polar.nextExpeditionId)) {
+      errors.push('Antarctic expedition ordering is invalid.');
+    }
+    if (new Set(polar.earthDefenseMembers).size !== polar.earthDefenseMembers.length
+      || polar.earthDefenseMembers.some((id) => !state.players[id])
+      || polar.earthDefenseMembers.join('|') !== [...polar.earthDefenseMembers]
+        .sort((left, right) => left.localeCompare(right)).join('|')) {
+      errors.push('Earth defense membership is invalid.');
+    }
   }
   const humanNationExists = Boolean(state.players[state.humanPlayerId]);
   if (!humanNationExists && (!state.gameOver || !state.winnerId || !state.players[state.winnerId])) {

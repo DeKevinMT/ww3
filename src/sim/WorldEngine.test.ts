@@ -392,6 +392,8 @@ describe('strategic world simulation', () => {
 
   it('maakt een oorlog tegen een groot land veel duurder dan tegen een klein eiland', () => {
     const engine = new WorldEngine(2036);
+    expect(isValidSeaRoute('gbr', 'can')).toBe(true);
+    expect(isSeaConnection('gbr', 'can')).toBe(true);
     const icelandCost = engine.warMobilizationCost('gbr', 'isl');
     const canadaCost = engine.warMobilizationCost('gbr', 'can');
     expect(Number.isFinite(icelandCost)).toBe(true);

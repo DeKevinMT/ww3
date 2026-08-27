@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { selectAiResearchAllocationsV2 } from './ai';
 import { createWorldStateV2 } from './bootstrap';
 import { synchronizeArmyCapacityV2 } from './capacity';
+import { UPKEEP_OVERFUNDING_MAX_RATIO } from './balance';
 import { WORLD_CONTENT_V2 } from './content';
 import { synchronizeOpeningArmyHumanRosterV2 } from './nationState';
 import { optimizeNationalAiPlanV2 } from './nationalAi';
@@ -63,7 +64,7 @@ describe('V2 authoritative manpower projection', () => {
     const projection = projectFinanceManpowerPhaseV2(state, WORLD_CONTENT_V2, belgium, finance);
 
     expect(finance.excessCashInvestment).toBeGreaterThan(0);
-    expect(finance.mandatoryFundingRatio).toBe(1);
+    expect(finance.mandatoryFundingRatio).toBe(UPKEEP_OVERFUNDING_MAX_RATIO);
     expect(finance.acceleratedDemobilization).toBe(0);
     expect(finance.demobilizationCost).toBe(0);
     expect(projection.demobilized).toBeCloseTo(0, 12);

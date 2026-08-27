@@ -10,7 +10,9 @@ import {
   territoryIntegrationDurationWeeksV2,
 } from './integration';
 import { canonicalStateHashV2, createSaveV2, loadSaveV2 } from './persistence';
+import { createInitialPolarEndgameV2 } from './polarEndgame';
 import { synchronizeOpeningArmyHumanRosterV2 } from './nationState';
+import { OPENING_ARMY_BONUS_DURATION_TICKS_V2 } from './openingArmyBonus';
 import {
   invalidateTerritoryIndexV2,
   selectFoodDomesticCapacityTargetV2,
@@ -23,6 +25,7 @@ function removeSchema22Fields(save: Record<string, any>): void {
   delete save.alliances;
   delete save.allianceOffers;
   delete save.firstIntegrationDiscountUsedBy;
+  delete save.polarEndgame;
   for (const nation of Object.values(save.players) as Array<Record<string, any>>) {
     delete nation.openingArmyBonus;
   }
@@ -168,6 +171,70 @@ function legacySaveV14(): Record<string, any> {
 }
 
 describe('V2 legacy save migration', () => {
+  it('normalizes same-schema polar saves made before final-strike commander credit', () => {
+    const state = createWorldStateV2(8_641);
+    const legacy = structuredClone(createSaveV2(state, WORLD_CONTENT_V2)) as Record<string, any>;
+    delete legacy.polarEndgame.victoryCommanderId;
+    legacy.canonicalStateHash = canonicalStateHashV2(legacy);
+
+    const loaded = loadSaveV2(legacy as never, WORLD_CONTENT_V2);
+    expect(loaded.polarEndgame.victoryCommanderId).toBeNull();
+    expect(() => createSaveV2(loaded, WORLD_CONTENT_V2)).not.toThrow();
+  });
+
+  it('authenticates a V2.64 pre-polar save, initializes a dormant campaign and round-trips it', () => {
+    const state = createWorldStateV2(8_640);
+    const legacy = structuredClone(createSaveV2(state, WORLD_CONTENT_V2)) as Record<string, any>;
+    delete legacy.polarEndgame;
+    legacy.rulesVersion = 'frontier-command-v2.64-war-strain-counterattacks';
+    legacy.canonicalStateHash = canonicalStateHashV2(legacy);
+
+    const migrated = loadSaveV2(legacy as never, WORLD_CONTENT_V2);
+    expect(migrated.rulesVersion).toBe(V2_RULES_VERSION);
+    expect(migrated.polarEndgame).toEqual(createInitialPolarEndgameV2());
+
+    const current = createSaveV2(migrated, WORLD_CONTENT_V2);
+    const reloaded = loadSaveV2(current, WORLD_CONTENT_V2);
+    expect(createSaveV2(reloaded, WORLD_CONTENT_V2)).toEqual(current);
+  });
+
+  it('extends authenticated twenty-year opening pools to thirty years without granting manpower', () => {
+    const greenland = nationIdV2('grl');
+    const state = createWorldStateV2(8_642);
+    synchronizeOpeningArmyHumanRosterV2(
+      state,
+      WORLD_CONTENT_V2,
+      state.humanPlayerIds,
+      [greenland],
+    );
+    state.humanPlayerId = greenland;
+    state.humanPlayerIds = [greenland];
+    state.tick = 137;
+    synchronizeArmyCapacityV2(state, WORLD_CONTENT_V2);
+    const legacy = structuredClone(createSaveV2(state, WORLD_CONTENT_V2)) as Record<string, any>;
+    const legacyBonus = legacy.players[greenland].openingArmyBonus;
+    expect(legacyBonus).not.toBeNull();
+    legacyBonus.expiresTick = legacyBonus.startedTick + 1_040;
+    const remainingBefore = legacyBonus.remainingManpower;
+    const deployedBefore = Object.values(legacy.territories)
+      .filter((territory: any) => territory.owner === greenland)
+      .reduce((sum: number, territory: any) => sum + territory.army.manpower, 0);
+    delete legacy.polarEndgame;
+    legacy.rulesVersion = 'frontier-command-v2.64-war-strain-counterattacks';
+    legacy.canonicalStateHash = canonicalStateHashV2(legacy);
+
+    const loaded = loadSaveV2(legacy as never, WORLD_CONTENT_V2);
+    const loadedBonus = loaded.players[greenland]!.openingArmyBonus!;
+    const deployedAfter = Object.values(loaded.territories)
+      .filter((territory) => territory.owner === greenland)
+      .reduce((sum, territory) => sum + territory.army.manpower, 0);
+    expect(loadedBonus.expiresTick - loadedBonus.startedTick)
+      .toBe(OPENING_ARMY_BONUS_DURATION_TICKS_V2);
+    expect(loadedBonus.remainingManpower).toBe(remainingBefore);
+    expect(deployedAfter).toBeCloseTo(deployedBefore, 9);
+    expect(() => createSaveV2(loaded, WORLD_CONTENT_V2)).not.toThrow();
+  });
+
   it('authenticates schema-22 V2.59 saves before upgrading their rules version', () => {
     const state = createWorldStateV2(8_590);
     synchronizeOpeningArmyHumanRosterV2(state, WORLD_CONTENT_V2, state.humanPlayerIds, []);
@@ -175,6 +242,7 @@ describe('V2 legacy save migration', () => {
     synchronizeArmyCapacityV2(state, WORLD_CONTENT_V2);
     const legacy = structuredClone(createSaveV2(state, WORLD_CONTENT_V2)) as Record<string, any>;
     delete legacy.firstIntegrationDiscountUsedBy;
+    delete legacy.polarEndgame;
     legacy.rulesVersion = 'frontier-command-v2.59-country-traits';
     for (const nation of Object.values(legacy.players) as Array<Record<string, any>>) {
       delete nation.openingArmyBonus;
@@ -198,6 +266,7 @@ describe('V2 legacy save migration', () => {
     synchronizeArmyCapacityV2(state, WORLD_CONTENT_V2);
     const legacy = structuredClone(createSaveV2(state, WORLD_CONTENT_V2)) as Record<string, any>;
     delete legacy.firstIntegrationDiscountUsedBy;
+    delete legacy.polarEndgame;
     legacy.rulesVersion = 'frontier-command-v2.59-country-traits';
     for (const nation of Object.values(legacy.players) as Array<Record<string, any>>) {
       delete nation.openingArmyBonus;

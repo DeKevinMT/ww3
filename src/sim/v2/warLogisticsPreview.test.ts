@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createWorldStateV2 } from './bootstrap';
-import { WORLD_CONTENT_V2 } from './content';
-import { nationIdV2 } from './types';
+import { WORLD_CONTENT_V2, type WorldContentV2 } from './content';
+import { nationIdV2, territoryIdV2 } from './types';
 import { previewWarLogisticsV2 } from './warLogisticsPreview';
 
 describe('attack review logistics preview', () => {
@@ -57,5 +57,51 @@ describe('attack review logistics preview', () => {
     expect(preview.campaignsBefore).toBe(0);
     expect(preview.campaignsAfter).toBe(1);
     expect(state.wars).toHaveLength(0);
+  });
+
+  it('quotes steadily higher real weekly costs at 2k, 6k and 12k naval range', () => {
+    const belgium = nationIdV2('bel');
+    const unitedKingdom = nationIdV2('gbr');
+    const belgiumTerritory = territoryIdV2('bel');
+    const ukTerritory = territoryIdV2('gbr');
+    const contentAtDistance = (distanceKm: number): WorldContentV2 => {
+      const replaceRoute = (sourceId: typeof belgiumTerritory, targetId: typeof ukTerritory) => {
+        const source = WORLD_CONTENT_V2.territories[sourceId]!;
+        const withoutTarget = source.connections.filter((edge) => edge.targetId !== targetId);
+        return {
+          ...source,
+          connections: [...withoutTarget, { targetId, kind: 'sea' as const, distanceKm }],
+        };
+      };
+      return {
+        ...WORLD_CONTENT_V2,
+        territories: {
+          ...WORLD_CONTENT_V2.territories,
+          [belgiumTerritory]: replaceRoute(belgiumTerritory, ukTerritory),
+          [ukTerritory]: replaceRoute(ukTerritory, belgiumTerritory),
+        },
+      };
+    };
+    const quote = (distanceKm: number) => {
+      const state = createWorldStateV2(9_118_203);
+      state.wars = [];
+      state.players[belgium]!.treasury = 10_000;
+      return previewWarLogisticsV2(
+        state,
+        contentAtDistance(distanceKm),
+        belgium,
+        unitedKingdom,
+      );
+    };
+
+    const regional = quote(2_000);
+    const longRange = quote(6_000);
+    const pacific = quote(12_000);
+    expect(longRange.routeOperationMultiplier).toBeGreaterThan(regional.routeOperationMultiplier);
+    expect(pacific.routeOperationMultiplier).toBeGreaterThan(longRange.routeOperationMultiplier);
+    expect(longRange.additionalWeeklyWarOperations)
+      .toBeGreaterThan(regional.additionalWeeklyWarOperations);
+    expect(pacific.additionalWeeklyWarOperations)
+      .toBeGreaterThan(longRange.additionalWeeklyWarOperations);
   });
 });

@@ -1,18 +1,90 @@
 import { describe, expect, it } from 'vitest';
-import { CONQUEST_CAPTURE_GUARD_TICKS } from './balance';
+import {
+  CONQUEST_CAPTURE_GUARD_TICKS,
+  countryInteriorOperationMultiplierV2,
+} from './balance';
 import { createWorldStateV2 } from './bootstrap';
 import {
   stateTerritoryArmySupportCeilingV2,
   synchronizeArmyCapacityV2,
 } from './capacity';
-import { WORLD_CONTENT_V2 } from './content';
+import { WORLD_CONTENT_V2, type WorldContentV2 } from './content';
 import { territoryIntegrationAnnualCostV2 } from './integration';
 import { assertInvariantsV2 } from './invariants';
-import { selectNationalIqViewV2, selectTerritoriesOfV2 } from './selectors';
-import { nationIdV2, type FrontOperationV2, type TerritoryId } from './types';
-import { logisticsThroughputShareV2, redistributeArmiesV2 } from './war';
+import {
+  invalidateTerritoryIndexV2,
+  selectNationalIqViewV2,
+  selectTerritoriesOfV2,
+} from './selectors';
+import {
+  nationIdV2,
+  territoryIdV2,
+  type FrontOperationV2,
+  type TerritoryId,
+  type WorldStateV2,
+} from './types';
+import {
+  internalArmyTransferLogisticsTermsV2,
+  logisticsThroughputShareV2,
+  redistributeArmiesV2,
+} from './war';
 
 const bel = nationIdV2('bel');
+
+function withTestConnectionsV2(
+  connections: Readonly<Record<string, readonly {
+    targetId: TerritoryId;
+    kind: 'land' | 'sea';
+    distanceKm?: number;
+  }[]>>,
+): WorldContentV2 {
+  const territories = { ...WORLD_CONTENT_V2.territories };
+  for (const [id, edges] of Object.entries(connections)) {
+    const territoryId = territoryIdV2(id);
+    territories[territoryId] = {
+      ...territories[territoryId]!,
+      connections: edges.map((edge) => ({ ...edge })),
+    };
+  }
+  return { ...WORLD_CONTENT_V2, territories };
+}
+
+function twoTerritoryLogisticsFixtureV2(
+  kind: 'land' | 'sea',
+  distanceKm: number,
+  treasury = 10_000,
+): { state: WorldStateV2; content: WorldContentV2; sourceId: TerritoryId; targetId: TerritoryId } {
+  const state = createWorldStateV2(4_450);
+  state.wars = [];
+  const targetId = state.players[bel]!.capitalId;
+  const sourceId = territoryIdV2('nld');
+  const edge = kind === 'sea'
+    ? { kind, distanceKm, targetId }
+    : { kind, targetId };
+  const reverse = kind === 'sea'
+    ? { kind, distanceKm, targetId: sourceId }
+    : { kind, targetId: sourceId };
+  const content = withTestConnectionsV2({
+    [sourceId]: [edge],
+    [targetId]: [reverse],
+  });
+  state.territories[sourceId]!.owner = bel;
+  state.territories[sourceId]!.coreOwner = bel;
+  state.territories[sourceId]!.integration = 1;
+  delete state.territories[sourceId]!.integrationProgram;
+  state.players[bel]!.openingArmyBonus = null;
+  state.players[bel]!.treasury = treasury;
+  invalidateTerritoryIndexV2(state);
+  synchronizeArmyCapacityV2(state, content);
+  state.territories[targetId]!.army.manpower = 0;
+  state.territories[sourceId]!.army.manpower = stateTerritoryArmySupportCeilingV2(
+    state,
+    content,
+    sourceId,
+    bel,
+  );
+  return { state, content, sourceId, targetId };
+}
 
 describe('route-aware empire logistics', () => {
   it('gives small armies a larger movable share while large empires retain diminishing absolute throughput', () => {
@@ -148,6 +220,183 @@ describe('route-aware empire logistics', () => {
     expect(redistributeArmiesV2(state, WORLD_CONTENT_V2)).toHaveLength(0);
     expect(frontier.army.manpower).toBe(legacyOvershoot);
     assertInvariantsV2(state, WORLD_CONTENT_V2);
+  });
+
+  it('moves less over longer sea hops, charges exact distance logistics, and leaves land unchanged', () => {
+    const land = twoTerritoryLogisticsFixtureV2('land', 0);
+    const short = twoTerritoryLogisticsFixtureV2('sea', 2_000);
+    const long = twoTerritoryLogisticsFixtureV2('sea', 12_000);
+    const manpowerBefore = (fixture: typeof land): number => (
+      fixture.state.territories[fixture.sourceId]!.army.manpower
+        + fixture.state.territories[fixture.targetId]!.army.manpower
+    );
+    const landTreasury = land.state.players[bel]!.treasury;
+    const shortTreasury = short.state.players[bel]!.treasury;
+    const longTreasury = long.state.players[bel]!.treasury;
+    const landTotal = manpowerBefore(land);
+    const shortTotal = manpowerBefore(short);
+    const longTotal = manpowerBefore(long);
+
+    const landMoves = redistributeArmiesV2(land.state, land.content);
+    const shortMoves = redistributeArmiesV2(short.state, short.content);
+    const longMoves = redistributeArmiesV2(long.state, long.content);
+    const landMoved = landMoves.reduce((sum, move) => sum + move.manpower, 0);
+    const shortMoved = shortMoves.reduce((sum, move) => sum + move.manpower, 0);
+    const longMoved = longMoves.reduce((sum, move) => sum + move.manpower, 0);
+    const shortCost = shortMoves.reduce((sum, move) => sum + move.logisticsCost, 0);
+    const longCost = longMoves.reduce((sum, move) => sum + move.logisticsCost, 0);
+
+    expect(landMoved).toBeGreaterThan(shortMoved);
+    expect(shortMoved).toBeGreaterThan(longMoved);
+    expect(shortCost).toBeGreaterThan(0);
+    expect(longCost).toBeGreaterThan(shortCost);
+    expect(short.state.players[bel]!.treasury).toBeCloseTo(shortTreasury - shortCost, 8);
+    expect(long.state.players[bel]!.treasury).toBeCloseTo(longTreasury - longCost, 8);
+    expect(land.state.players[bel]!.treasury).toBe(landTreasury);
+    expect(landMoves.every((move) => move.access === 'land'
+      && move.distanceKm === 0 && move.logisticsCost === 0)).toBe(true);
+    for (const fixture of [land, short, long]) {
+      expect(manpowerBefore(fixture)).toBeCloseTo(
+        fixture === land ? landTotal : fixture === short ? shortTotal : longTotal,
+        8,
+      );
+    }
+    const quote = internalArmyTransferLogisticsTermsV2(
+      long.state,
+      long.content,
+      bel,
+      long.sourceId,
+      long.targetId,
+      0.25,
+    );
+    expect(quote.access).toBe('naval');
+    expect(quote.distanceKm).toBe(12_000);
+    expect(quote.logisticsCost).toBeCloseTo(quote.costPerMillion * 0.25, 9);
+  });
+
+  it('skips nonurgent long-ocean balancing when cash-poor but funds rich or threatened transfers', () => {
+    const poor = twoTerritoryLogisticsFixtureV2('sea', 12_000, 0.10);
+    const rich = twoTerritoryLogisticsFixtureV2('sea', 12_000, 10_000);
+    expect(redistributeArmiesV2(poor.state, poor.content)).toHaveLength(0);
+    expect(redistributeArmiesV2(rich.state, rich.content)
+      .some((move) => move.manpower > 0 && move.logisticsCost > 0)).toBe(true);
+
+    const urgent = twoTerritoryLogisticsFixtureV2('sea', 12_000, 0.10);
+    const enemyId = nationIdV2('fra');
+    urgent.state.wars = [{
+      id: 'urgent-ocean-logistics',
+      attackerId: enemyId,
+      defenderId: bel,
+      startedTick: 0,
+      lastBattleTick: 0,
+      warScore: 0,
+      battles: 0,
+      attackerLosses: 0,
+      defenderLosses: 0,
+      lastPeaceOfferTick: -1,
+      attackerOperations: [{
+        commanderId: enemyId,
+        sourceId: territoryIdV2('fra'),
+        targetId: urgent.targetId,
+        doctrine: 'pressure',
+        access: 'naval',
+        startedTick: 0,
+        lastBattleTick: 0,
+        holdUntilTick: 12,
+        momentum: 0,
+      }],
+      defenderOperations: [],
+    }];
+    const urgentTreasury = urgent.state.players[bel]!.treasury;
+    const urgentMoves = redistributeArmiesV2(urgent.state, urgent.content);
+    const urgentCost = urgentMoves.reduce((sum, move) => sum + move.logisticsCost, 0);
+    expect(urgentMoves.some((move) => move.manpower > 0)).toBe(true);
+    expect(urgentCost).toBeGreaterThan(0);
+    expect(urgentCost).toBeLessThanOrEqual(urgentTreasury * 0.05 + 1e-9);
+    expect(urgent.state.players[bel]!.treasury).toBeGreaterThanOrEqual(0);
+    expect(urgent.state.players[bel]!.treasury).toBeCloseTo(urgentTreasury - urgentCost, 8);
+  });
+
+  it('prefers the closest land donor over an equally supplied naval donor', () => {
+    const state = createWorldStateV2(4_451);
+    state.wars = [];
+    state.players[bel]!.treasury = 10_000;
+    state.players[bel]!.openingArmyBonus = null;
+    const targetId = state.players[bel]!.capitalId;
+    const landDonorId = territoryIdV2('nld');
+    const navalDonorId = territoryIdV2('deu');
+    const content = withTestConnectionsV2({
+      [targetId]: [
+        { targetId: landDonorId, kind: 'land' },
+        { targetId: navalDonorId, kind: 'sea', distanceKm: 2_000 },
+      ],
+      [landDonorId]: [{ targetId, kind: 'land' }],
+      [navalDonorId]: [{ targetId, kind: 'sea', distanceKm: 2_000 }],
+    });
+    for (const donorId of [landDonorId, navalDonorId]) {
+      state.territories[donorId]!.owner = bel;
+      state.territories[donorId]!.coreOwner = bel;
+      state.territories[donorId]!.integration = 1;
+      delete state.territories[donorId]!.integrationProgram;
+    }
+    invalidateTerritoryIndexV2(state);
+    synchronizeArmyCapacityV2(state, content);
+    state.territories[targetId]!.army.manpower = 0;
+    const equalDonorManpower = Math.min(
+      stateTerritoryArmySupportCeilingV2(state, content, landDonorId, bel),
+      stateTerritoryArmySupportCeilingV2(state, content, navalDonorId, bel),
+    );
+    state.territories[landDonorId]!.army.manpower = equalDonorManpower;
+    state.territories[navalDonorId]!.army.manpower = equalDonorManpower;
+
+    const movements = redistributeArmiesV2(state, content);
+    expect(movements.length).toBeGreaterThan(0);
+    expect(movements[0]!.sourceId).toBe(landDonorId);
+    expect(movements[0]!.targetId).toBe(targetId);
+    expect(movements[0]!.access).toBe('land');
+  });
+
+  it('makes continental Russia materially slower and costlier to traverse than Luxembourg', () => {
+    const targetId = territoryIdV2('bel');
+    const quoteLandInterior = (playerCode: 'rus' | 'lux') => {
+      const playerId = nationIdV2(playerCode);
+      const sourceId = territoryIdV2(playerCode);
+      const state = createWorldStateV2(4_452);
+      state.territories[targetId]!.owner = playerId;
+      state.territories[targetId]!.coreOwner = playerId;
+      state.territories[targetId]!.integration = 1;
+      delete state.territories[targetId]!.integrationProgram;
+      const content = withTestConnectionsV2({
+        [sourceId]: [{ targetId, kind: 'land' }],
+        [targetId]: [{ targetId: sourceId, kind: 'land' }],
+      });
+      return internalArmyTransferLogisticsTermsV2(
+        state,
+        content,
+        playerId,
+        sourceId,
+        targetId,
+        0.1,
+      );
+    };
+    const luxembourg = quoteLandInterior('lux');
+    const russia = quoteLandInterior('rus');
+    const luxembourgArea = WORLD_CONTENT_V2.nations[nationIdV2('lux')]!.real.landArea;
+    const russiaArea = WORLD_CONTENT_V2.nations[nationIdV2('rus')]!.real.landArea;
+
+    expect(russia.interiorDistanceKm).toBeGreaterThan(luxembourg.interiorDistanceKm * 20);
+    expect(russia.interiorOperationMultiplier).toBe(
+      countryInteriorOperationMultiplierV2(russiaArea),
+    );
+    expect(luxembourg.interiorOperationMultiplier).toBe(
+      countryInteriorOperationMultiplierV2(luxembourgArea),
+    );
+    expect(russia.interiorOperationMultiplier).toBeGreaterThan(
+      luxembourg.interiorOperationMultiplier,
+    );
+    expect(russia.throughputMultiplier).toBeLessThan(luxembourg.throughputMultiplier);
+    expect(russia.logisticsCost).toBe(0);
+    expect(luxembourg.logisticsCost).toBe(0);
   });
 
   it('holds a real capture guard for 52 weeks and releases it through normal logistics afterward', () => {

@@ -24,6 +24,41 @@ function setHumanPlayers(state: WorldStateV2, playerIds: readonly PlayerId[]): v
 }
 
 describe('multi-human simulation boundaries', () => {
+  it('gives host and guest APEX the same Suspicion-driven military priority', () => {
+    const lowSuspicion = createWorldStateV2(9_100, WORLD_CONTENT_V2);
+    const host = nationIdV2('bel');
+    const guest = nationIdV2('nld');
+    const rival = nationIdV2('deu');
+    setHumanPlayers(lowSuspicion, [host, guest]);
+    lowSuspicion.tick = 104;
+    lowSuspicion.aiEscalation.globalThreat = 0;
+    for (const playerId of [host, guest, rival]) {
+      lowSuspicion.players[playerId]!.budget = {
+        military: 40,
+        research: 30,
+        development: 30,
+      };
+    }
+    const highSuspicion = structuredClone(lowSuspicion);
+    highSuspicion.aiEscalation.globalThreat = 100;
+
+    const plannedMilitary = (state: WorldStateV2, playerId: PlayerId): number => {
+      const command = planAiCommandsV2(state, WORLD_CONTENT_V2).find((candidate) => (
+        candidate.type === 'set-budget-policy' && candidate.playerId === playerId
+      ));
+      return command?.type === 'set-budget-policy'
+        ? command.budget.military
+        : state.players[playerId]!.budget.military;
+    };
+
+    for (const human of [host, guest]) {
+      expect(plannedMilitary(highSuspicion, human))
+        .toBeGreaterThan(plannedMilitary(lowSuspicion, human));
+    }
+    expect(plannedMilitary(highSuspicion, rival))
+      .toBe(plannedMilitary(lowSuspicion, rival));
+  });
+
   it('keeps APEX economy and research active without choosing a second human war or peace', () => {
     const state = createWorldStateV2(9_101, WORLD_CONTENT_V2);
     const primary = nationIdV2('bel');

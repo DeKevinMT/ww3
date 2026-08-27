@@ -13,6 +13,7 @@ import {
   synchronizeArmyCapacityV2,
 } from './capacity';
 import { createNationStateV2, synchronizeOpeningArmyHumanRosterV2 } from './nationState';
+import { createInitialPolarEndgameV2 } from './polarEndgame';
 import { contentVersionForWorldContentV2 } from './scenarios';
 import { countryTraitFactorV2, registerTraitContentV2 } from './traits';
 import {
@@ -257,6 +258,7 @@ export function createWorldStateV2(
       lastHumanTerritoryCount: Object.values(territories).filter((territory) => territory.owner === humanPlayerId).length,
       lastHumanPower: 0,
     },
+    polarEndgame: createInitialPolarEndgameV2(),
     nextEventId: 1,
     nextWarId: 1,
     nextOfferId: 1,

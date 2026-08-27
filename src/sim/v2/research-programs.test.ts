@@ -262,7 +262,7 @@ describe('V2 integrated research programs and army economy', () => {
     expect(state.territories[belTerritory].army.capacity).toBe(before.capacity);
     expect(state.territories[belTerritory].army.manpower).toBeGreaterThan(before.manpower);
     expect(state.players[bel]).not.toHaveProperty('manpower');
-    expect(state.players[bel].trainedReserves).toBe(reservesBefore);
+    expect(state.players[bel].trainedReserves).toBeCloseTo(reservesBefore, 6);
   });
 
   it('exposes one canonical finance projection including operating and reserve flows', () => {

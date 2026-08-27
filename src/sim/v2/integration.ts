@@ -15,6 +15,10 @@ import { territoryTerrainTypesV2, type WorldContentV2 } from './content';
 import { addWorldEventV2 } from './events';
 import { isHumanPlayerV2, selectHumanPlayerIdsV2 } from './humanPlayers';
 import { createNationStateV2 } from './nationState';
+import {
+  polarEarthUnityActiveV2,
+  retirePolarNationReferencesV2,
+} from './polarEndgame';
 import { invalidateNationIndexV2, invalidateTerritoryIndexV2 } from './selectors';
 import { composeTraitContextV2, traitNationContextV2 } from './traitContext';
 import { countryTraitFactorV2, type TraitEvaluationContextV2 } from './traits';
@@ -663,6 +667,7 @@ export function processTerritoryIntegrationRevolutionsV2(
   state: WorldStateV2,
   content: WorldContentV2,
 ): IntegrationRevolutionV2[] {
+  if (polarEarthUnityActiveV2(state)) return [];
   const revolutions: IntegrationRevolutionV2[] = [];
   const displacedOwners = new Map<PlayerId, PlayerId>();
   // Freeze every risk and trigger before changing any ownership. Simultaneous
@@ -811,6 +816,10 @@ export function retireAbsorbedNationV2(
   ) ?? ownerId;
   const owner = state.players[canonicalSuccessorId] ?? state.players[ownerId];
   if (!former || !owner) return false;
+  const returningPolarManpower = retirePolarNationReferencesV2(state, formerNationId);
+  if (returningPolarManpower > 0) {
+    former.trainedReserves = round(former.trainedReserves + returningPolarManpower);
+  }
   // The final disappearance transfers national stores exactly once. An
   // over-cap reserve pool is preserved under the ordinary reserve rules.
   owner.treasury = round(owner.treasury + former.treasury);

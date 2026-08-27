@@ -170,24 +170,15 @@ for (const country of dataset.countries) {
   SOURCE_IDS_BY_CANONICAL.set(canonicalId, sources);
 }
 
-const TARGET_NAVAL_ROUTES = 8;
-const TARGET_ISLAND_NAVAL_ROUTES = 10;
-const PRIORITY_ARCTIC_NAVAL_ROUTES = 12;
-
-// These long-haul corridors complement the generated regional network and represent
-// established military sea lanes rather than literal ferry services.
-const CORE_SEA_ROUTE_PAIRS: readonly (readonly [TerritoryId, TerritoryId])[] = [
-  ['bel', 'gbr'], ['bel', 'dnk'], ['nld', 'gbr'], ['gbr', 'fra'], ['gbr', 'nor'], ['gbr', 'isl'], ['gbr', 'esp'], ['gbr', 'prt'],
-  ['irl', 'fra'], ['irl', 'esp'], ['isl', 'nor'], ['isl', 'can'], ['prt', 'usa'], ['esp', 'dza'], ['fra', 'dza'], ['fra', 'can'],
-  ['ita', 'tun'], ['ita', 'lby'], ['ita', 'grc'], ['grc', 'egy'], ['tur', 'egy'], ['cyp', 'grc'],
-  ['cyp', 'tur'], ['cyp', 'isr'], ['mar', 'sen'], ['sen', 'bra'], ['bra', 'ago'], ['bra', 'zaf'],
-  ['egy', 'sau'], ['dji', 'yem'], ['som', 'yem'], ['tza', 'mdg'], ['moz', 'mdg'], ['zaf', 'mdg'],
-  ['ind', 'lka'], ['ind', 'omn'], ['ind', 'mys'], ['ind', 'idn'], ['pak', 'omn'], ['irn', 'are'], ['are', 'omn'], ['vnm', 'phl'], ['vnm', 'idn'],
-  ['chn', 'phl'], ['chn', 'jpn'], ['jpn', 'kor'], ['jpn', 'prk'], ['jpn', 'phl'], ['jpn', 'usa'], ['rus', 'jpn'], ['rus', 'usa'],
-  ['phl', 'idn'], ['mys', 'idn'], ['sgp', 'idn'],
-  ['idn', 'aus'], ['idn', 'png'], ['aus', 'png'], ['aus', 'nzl'], ['aus', 'usa'], ['chl', 'nzl'], ['chl', 'aus'],
-  ['cub', 'col'], ['cub', 'mex'], ['cub', 'usa'], ['usa', 'gbr'], ['usa', 'fra'], ['usa', 'jpn'], ['can', 'grl'], ['grl', 'isl'],
-  ['arg', 'zaf'], ['zaf', 'aus'], ['zaf', 'ind'], ['bra', 'prt'],
+const TARGET_REGIONAL_NAVAL_ROUTES = 8;
+const TARGET_TOTAL_NAVAL_ROUTES = 10;
+const GLOBAL_NAVAL_DISTANCE_KM = 6_000;
+const REGIONAL_CANDIDATE_LIMIT = 12;
+const GLOBAL_CANDIDATE_SAMPLE = 12;
+const CANONICAL_LONG_HAUL_CROSSINGS: readonly (readonly [TerritoryId, TerritoryId])[] = [
+  ['can', 'gbr'],
+  ['usa', 'jpn'],
+  ['chl', 'nzl'],
 ];
 
 // The source dataset also contains proximity links across open water. Keep those
@@ -310,21 +301,74 @@ function geographicMidpoint(
   return [longitude, (start[1] + end[1]) / 2];
 }
 
-const COASTAL_ROUTE_ANCHORS = new Map<TerritoryId, CombatRoutePoint[]>();
+/**
+ * Approximate spherical area is sufficient for ranking a country's polygon
+ * rings. The result is deterministic and antimeridian-safe; it is computed
+ * once while the world dataset is prepared, never while a route is drawn.
+ */
+function landRingAreaScore(ring: readonly (readonly [number, number])[]): number {
+  if (ring.length < 3) return 0;
+  const radians = Math.PI / 180;
+  let score = 0;
+  for (let index = 0; index < ring.length; index += 1) {
+    const start = ring[index]!;
+    const end = ring[(index + 1) % ring.length]!;
+    let longitudeDelta = (end[0] - start[0]) * radians;
+    while (longitudeDelta > Math.PI) longitudeDelta -= Math.PI * 2;
+    while (longitudeDelta < -Math.PI) longitudeDelta += Math.PI * 2;
+    score += longitudeDelta * (
+      2 + Math.sin(start[1] * radians) + Math.sin(end[1] * radians)
+    );
+  }
+  return Math.abs(score);
+}
+
+interface PrincipalRouteLandmass {
+  readonly sourceId: TerritoryId;
+  readonly ringIndex: number;
+  readonly ring: readonly (readonly [number, number])[];
+  readonly areaScore: number;
+}
+
+/**
+ * One principal landmass per canonical country prevents naval lines from
+ * jumping to tiny overseas islands. For island nations this naturally picks
+ * their largest main island. Absorbed source records compete under the same
+ * canonical id, so a dependency cannot displace its owner's mainland.
+ */
+const PRINCIPAL_ROUTE_LANDMASS_BY_COUNTRY = new Map<TerritoryId, PrincipalRouteLandmass>();
 for (const country of dataset.countries) {
   const canonicalId = canonicalCountryId(country.id);
   if (!ACTIVE_COUNTRY_IDS.has(canonicalId)) continue;
-  for (const ring of country.rings) {
-    for (let index = 0; index < ring.length; index += 1) {
-      const start = ring[index]!;
-      const end = ring[(index + 1) % ring.length]!;
-      if (RAW_EDGE_OCCURRENCES.get(rawEdgeKey(start, end)) !== 1) continue;
-      const midpoint = geographicMidpoint(start, end);
-      const anchors = COASTAL_ROUTE_ANCHORS.get(canonicalId) ?? [];
-      anchors.push(projectWorldPoint(midpoint[0], midpoint[1]));
-      COASTAL_ROUTE_ANCHORS.set(canonicalId, anchors);
+  country.rings.forEach((ring, ringIndex) => {
+    const candidate: PrincipalRouteLandmass = {
+      sourceId: country.id,
+      ringIndex,
+      ring,
+      areaScore: landRingAreaScore(ring),
+    };
+    const current = PRINCIPAL_ROUTE_LANDMASS_BY_COUNTRY.get(canonicalId);
+    if (!current
+      || candidate.areaScore > current.areaScore
+      || (candidate.areaScore === current.areaScore
+        && (candidate.sourceId.localeCompare(current.sourceId) < 0
+          || (candidate.sourceId === current.sourceId && candidate.ringIndex < current.ringIndex)))) {
+      PRINCIPAL_ROUTE_LANDMASS_BY_COUNTRY.set(canonicalId, candidate);
     }
+  });
+}
+
+const COASTAL_ROUTE_ANCHORS = new Map<TerritoryId, CombatRoutePoint[]>();
+for (const [canonicalId, landmass] of PRINCIPAL_ROUTE_LANDMASS_BY_COUNTRY) {
+  const anchors: CombatRoutePoint[] = [];
+  for (let index = 0; index < landmass.ring.length; index += 1) {
+    const start = landmass.ring[index]!;
+    const end = landmass.ring[(index + 1) % landmass.ring.length]!;
+    if (RAW_EDGE_OCCURRENCES.get(rawEdgeKey(start, end)) !== 1) continue;
+    const midpoint = geographicMidpoint(start, end);
+    anchors.push(projectWorldPoint(midpoint[0], midpoint[1]));
   }
+  COASTAL_ROUTE_ANCHORS.set(canonicalId, anchors);
 }
 
 function unwrapProjectedRing(
@@ -365,14 +409,13 @@ function unwrapProjectedRing(
   };
 }
 
-// Route validation includes every mapped landmass, not only playable countries.
-// Absorbed territories are attributed to their canonical owner so a route may
-// leave/arrive through that owner's own geometry but never cross a third country.
-const PROJECTED_LAND_RINGS: readonly ProjectedLandRing[] = dataset.countries.flatMap((country) => (
-  country.rings
-    .map((ring) => unwrapProjectedRing(canonicalCountryId(country.id), ring))
-    .filter((ring): ring is ProjectedLandRing => Boolean(ring))
-));
+// Strategic validation uses the same principal-landmass abstraction as route
+// endpoints. Tiny dependencies and offshore specks cannot block an ocean-wide
+// lane, while every active country's main landmass remains a hard blocker.
+const PROJECTED_LAND_RINGS: readonly ProjectedLandRing[] = [
+  ...PRINCIPAL_ROUTE_LANDMASS_BY_COUNTRY,
+].map(([canonicalId, landmass]) => unwrapProjectedRing(canonicalId, landmass.ring))
+  .filter((ring): ring is ProjectedLandRing => Boolean(ring));
 
 const LAND_EDGE_BUCKET_SIZE = 32;
 const PROJECTED_LAND_EDGE_BUCKETS = new Map<string, ProjectedLandEdge[]>();
@@ -526,13 +569,19 @@ function coastalAnchorCandidates(
   target: CombatRoutePoint,
 ): readonly CombatRoutePoint[] {
   const anchors = COASTAL_ROUTE_ANCHORS.get(countryId) ?? [];
-  return anchors
-    .map((anchor) => wrappedPointNear(anchor, target.x))
-    .sort((left, right) => (
-      Math.hypot(left.x - target.x, left.y - target.y)
-        - Math.hypot(right.x - target.x, right.y - target.y)
-    ))
-    .slice(0, 3);
+  const nearest: { point: CombatRoutePoint; distanceSquared: number; index: number }[] = [];
+  anchors.forEach((anchor, index) => {
+    const point = wrappedPointNear(anchor, target.x);
+    const distanceSquared = (point.x - target.x) ** 2 + (point.y - target.y) ** 2;
+    const insertionIndex = nearest.findIndex((candidate) => (
+      distanceSquared < candidate.distanceSquared
+        || (distanceSquared === candidate.distanceSquared && index < candidate.index)
+    ));
+    if (insertionIndex >= 0) nearest.splice(insertionIndex, 0, { point, distanceSquared, index });
+    else nearest.push({ point, distanceSquared, index });
+    if (nearest.length > 4) nearest.pop();
+  });
+  return nearest.map((candidate) => candidate.point);
 }
 
 function canonicalSeaRouteGeometry(
@@ -558,7 +607,7 @@ function canonicalSeaRouteGeometry(
     const target = wrappedPointNear(rawTarget, source.x);
     return { source, target, directDistance: Math.hypot(target.x - source.x, target.y - source.y) };
   })).sort((leftPair, rightPair) => leftPair.directDistance - rightPair.directDistance)
-    .slice(0, key === 'bel:dnk' ? 4 : 1);
+    .slice(0, 4);
   const defaultBend = combatRouteBendDirection(pair[0], pair[1]);
   const alternateBend: -1 | 1 = defaultBend === 1 ? -1 : 1;
   for (const endpoints of endpointPairs) {
@@ -632,43 +681,82 @@ export function countrySeaRouteMapGeometry(
 
 function buildStrategicSeaRoutes(): readonly (readonly [TerritoryId, TerritoryId])[] {
   const routes = new Map<string, readonly [TerritoryId, TerritoryId]>();
+  const coastalCountryIds = COUNTRIES
+    .map((country) => country.id)
+    .filter((countryId) => (
+      !LANDLOCKED_COUNTRY_IDS.has(countryId)
+        && (COASTAL_ROUTE_ANCHORS.get(countryId)?.length ?? 0) > 0
+    ))
+    .sort();
+  const landNeighboursByCountry = new Map(coastalCountryIds.map((countryId) => [
+    countryId,
+    new Set(activeNeighbours(countryId)),
+  ]));
   const degree = new Map<TerritoryId, number>();
-  const addRoute = (left: TerritoryId, right: TerritoryId): void => {
-    if (left === right || !ACTIVE_COUNTRY_IDS.has(left) || !ACTIVE_COUNTRY_IDS.has(right)) return;
-    if (LANDLOCKED_COUNTRY_IDS.has(left) || LANDLOCKED_COUNTRY_IDS.has(right)) return;
-    if (activeNeighbours(left).includes(right)) return;
-    if (!isValidSeaRoute(left, right)) return;
-    const pair = [left, right].sort() as [TerritoryId, TerritoryId];
+  const globalDegree = new Map<TerritoryId, number>();
+  const addRoute = (leftId: TerritoryId, rightId: TerritoryId): boolean => {
+    if (landNeighboursByCountry.get(leftId)?.has(rightId)) return false;
+    const pair = [leftId, rightId].sort() as [TerritoryId, TerritoryId];
     const key = pair.join(':');
-    if (routes.has(key)) return;
+    if (routes.has(key)) return true;
+    const geometry = canonicalSeaRouteGeometry(pair[0], pair[1]);
+    if (!geometry) return false;
     routes.set(key, pair);
-    degree.set(left, (degree.get(left) ?? 0) + 1);
-    degree.set(right, (degree.get(right) ?? 0) + 1);
+    degree.set(pair[0], (degree.get(pair[0]) ?? 0) + 1);
+    degree.set(pair[1], (degree.get(pair[1]) ?? 0) + 1);
+    if (geometry.distanceKm >= GLOBAL_NAVAL_DISTANCE_KM) {
+      globalDegree.set(pair[0], (globalDegree.get(pair[0]) ?? 0) + 1);
+      globalDegree.set(pair[1], (globalDegree.get(pair[1]) ?? 0) + 1);
+    }
+    return true;
+  };
+  const sampleEvenly = <T>(values: readonly T[], count: number): readonly T[] => {
+    if (values.length <= count) return values;
+    const samples: T[] = [];
+    const indices = new Set<number>();
+    for (let index = 0; index < count; index += 1) {
+      const sourceIndex = Math.round(index * (values.length - 1) / Math.max(1, count - 1));
+      if (!indices.has(sourceIndex)) samples.push(values[sourceIndex]!);
+      indices.add(sourceIndex);
+    }
+    return samples;
   };
 
-  for (const [left, right] of CORE_SEA_ROUTE_PAIRS) addRoute(left, right);
-  for (const country of [...COUNTRIES].sort((left, right) => left.id.localeCompare(right.id))) {
-    if (LANDLOCKED_COUNTRY_IDS.has(country.id)) continue;
-    const landNeighbours = new Set(activeNeighbours(country.id));
-    const isolated = landNeighbours.size === 0;
-    const desiredRoutes = country.id === 'grl' || country.id === 'isl'
-      ? PRIORITY_ARCTIC_NAVAL_ROUTES
-      : isolated ? TARGET_ISLAND_NAVAL_ROUTES : TARGET_NAVAL_ROUTES;
-    const maximumDistance = isolated ? 9_000 : 6_000;
-    const candidates = COUNTRIES
-      .filter((candidate) => candidate.id !== country.id
-        && !LANDLOCKED_COUNTRY_IDS.has(candidate.id)
-        && !landNeighbours.has(candidate.id))
-      .map((candidate) => ({ id: candidate.id, distance: countryDistanceKm(country.id, candidate.id) }))
-      .filter((candidate) => candidate.distance <= maximumDistance)
-      .sort((left, right) => left.distance - right.distance || left.id.localeCompare(right.id))
-      .slice(0, 16);
-    for (const candidate of candidates) {
-      if ((degree.get(country.id) ?? 0) >= desiredRoutes) break;
-      addRoute(country.id, candidate.id);
+  // These clear principal-landmass arcs guarantee the North Atlantic and both
+  // Pacific halves are represented; remaining lanes use the bounded scan.
+  for (const [leftId, rightId] of CANONICAL_LONG_HAUL_CROSSINGS) addRoute(leftId, rightId);
+
+  for (const countryId of coastalCountryIds) {
+    const candidates = coastalCountryIds
+      .filter((candidateId) => candidateId !== countryId
+        && !landNeighboursByCountry.get(countryId)!.has(candidateId))
+      .map((candidateId) => ({
+        id: candidateId,
+        distance: countryDistanceKm(countryId, candidateId),
+      }))
+      .sort((left, right) => left.distance - right.distance || left.id.localeCompare(right.id));
+
+    for (const candidate of candidates.slice(0, REGIONAL_CANDIDATE_LIMIT)) {
+      if ((degree.get(countryId) ?? 0) >= TARGET_REGIONAL_NAVAL_ROUTES) break;
+      addRoute(countryId, candidate.id);
+    }
+
+    const globalCandidates = candidates.filter((candidate) => (
+      candidate.distance >= GLOBAL_NAVAL_DISTANCE_KM
+    ));
+    for (const candidate of sampleEvenly(globalCandidates, GLOBAL_CANDIDATE_SAMPLE)) {
+      if ((globalDegree.get(countryId) ?? 0) >= 1) break;
+      addRoute(countryId, candidate.id);
+    }
+
+    for (const candidate of sampleEvenly(candidates, GLOBAL_CANDIDATE_SAMPLE)) {
+      if ((degree.get(countryId) ?? 0) >= TARGET_TOTAL_NAVAL_ROUTES) break;
+      addRoute(countryId, candidate.id);
     }
   }
-  return [...routes.values()].sort((left, right) => left[0].localeCompare(right[0]) || left[1].localeCompare(right[1]));
+  return [...routes.values()].sort((left, right) => (
+    left[0].localeCompare(right[0]) || left[1].localeCompare(right[1])
+  ));
 }
 
 export const STRATEGIC_SEA_ROUTE_PAIRS = buildStrategicSeaRoutes();

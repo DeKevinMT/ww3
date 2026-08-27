@@ -1,14 +1,31 @@
 import type { BattleEventV2, WorldChangeV2 } from '../sim/v2/types';
 
 export const FIGHT_AUDIO_MAX_OVERLAP = 2;
+export const RADIO_AUDIO_MAX_OVERLAP = 2;
 export const FIGHT_AUDIO_COOLDOWN_MS = 900;
 export const PLAYER_FIGHT_GAIN_NEAR = 0.82;
 export const PLAYER_FIGHT_GAIN_FAR = 0.09;
 export const AI_FIGHT_GAIN_MAX = 0.065;
 export const AI_FIGHT_MIN_FOCUS = 0.82;
-export const PLAYER_WAR_ACTIVE_COMBAT_DELAY_MS = 3_680;
+/** @deprecated Combat now starts immediately alongside the active radio cue. */
+export const PLAYER_WAR_ACTIVE_COMBAT_DELAY_MS = 0;
 export const PLAYER_LOSS_AUDIO_COOLDOWN_MS = 2_500;
-export const AMBIENT_MUSIC_VOLUME = 0.055;
+export const AMBIENT_MUSIC_VOLUME = 0.2;
+export const GAME_AUDIO_SETTINGS_STORAGE_KEY = 'frontier-command-audio-v1';
+
+export type GameAudioChannel = 'music' | 'effects' | 'voice';
+
+export interface GameAudioMix {
+  readonly music: number;
+  readonly effects: number;
+  readonly voice: number;
+}
+
+export const DEFAULT_GAME_AUDIO_MIX: Readonly<GameAudioMix> = Object.freeze({
+  music: AMBIENT_MUSIC_VOLUME,
+  effects: 1,
+  voice: 1,
+});
 
 export const GAME_AMBIENT_MUSIC = Object.freeze({
   title: 'War Room Drift',
@@ -142,6 +159,7 @@ type RadioCue = Exclude<keyof GameAudioBuffers, 'fight'>;
 
 interface AudioVoice {
   readonly gain: GainNodeLike;
+  baseGain: number;
   active: boolean;
   kind?: 'player' | 'ai' | 'radio';
 }
@@ -188,8 +206,42 @@ export interface GameAudioDependencies {
   fetchArrayBuffer?: (url: string) => Promise<ArrayBuffer>;
   createAudioContext?: () => AudioContextLike;
   createAmbientAudio?: (url: string) => AmbientAudioElementLike;
+  storage?: AudioSettingsStorage | null;
+  /** @deprecated Retained for dependency compatibility; combat is no longer deferred. */
   setTimeout?: (callback: () => void, milliseconds: number) => number;
+  /** @deprecated Retained for dependency compatibility; combat is no longer deferred. */
   clearTimeout?: (timer: number) => void;
+}
+
+interface AudioSettingsStorage {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+}
+
+function defaultAudioSettingsStorage(): AudioSettingsStorage | undefined {
+  if (typeof window === 'undefined') return undefined;
+  try { return window.localStorage; } catch { return undefined; }
+}
+
+function audioVolume(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.max(0, Math.min(1, value)) : fallback;
+}
+
+export function readGameAudioMix(storage?: AudioSettingsStorage): GameAudioMix {
+  if (!storage) return { ...DEFAULT_GAME_AUDIO_MIX };
+  try {
+    const raw = storage.getItem(GAME_AUDIO_SETTINGS_STORAGE_KEY);
+    if (!raw) return { ...DEFAULT_GAME_AUDIO_MIX };
+    const saved = JSON.parse(raw) as Partial<Record<GameAudioChannel, unknown>>;
+    return {
+      music: audioVolume(saved.music, DEFAULT_GAME_AUDIO_MIX.music),
+      effects: audioVolume(saved.effects, DEFAULT_GAME_AUDIO_MIX.effects),
+      voice: audioVolume(saved.voice, DEFAULT_GAME_AUDIO_MIX.voice),
+    };
+  } catch {
+    return { ...DEFAULT_GAME_AUDIO_MIX };
+  }
 }
 
 function defaultAudioContext(): AudioContextLike {
@@ -261,8 +313,8 @@ export class GameAudioController {
   private readonly createAudioContext: () => AudioContextLike;
   private readonly createAmbientAudio: (url: string) => AmbientAudioElementLike;
   private readonly interactionTarget?: EventTarget;
-  private readonly setTimer: (callback: () => void, milliseconds: number) => number;
-  private readonly clearTimer: (timer: number) => void;
+  private readonly storage?: AudioSettingsStorage;
+  private audioMix: GameAudioMix;
   private mountCount = 0;
   private armed = false;
   private activated = false;
@@ -271,9 +323,7 @@ export class GameAudioController {
   private loadPromise?: Promise<GameAudioBuffers | undefined>;
   private buffers?: GameAudioBuffers;
   private readonly fightVoices: AudioVoice[] = [];
-  private radioVoice?: AudioVoice;
-  private readonly radioQueue: Array<{ cue: RadioCue; key: string; onStart?: () => void }> = [];
-  private readonly delayedFightTimers = new Map<string, number>();
+  private readonly radioVoices: AudioVoice[] = [];
   private readonly preparedPlayerMatchups = new Set<string>();
   private readonly seenActivePlayerWars = new Set<string>();
   private readonly lastFightRequestAt: Record<'player' | 'ai', number> = {
@@ -294,15 +344,36 @@ export class GameAudioController {
     this.createAmbientAudio = dependencies.createAmbientAudio ?? defaultAmbientAudio;
     this.interactionTarget = dependencies.interactionTarget
       ?? (typeof window === 'undefined' ? undefined : window);
-    this.setTimer = dependencies.setTimeout
-      ?? ((callback, milliseconds) => window.setTimeout(callback, milliseconds));
-    this.clearTimer = dependencies.clearTimeout ?? ((timer) => window.clearTimeout(timer));
+    this.storage = dependencies.storage === null ? undefined
+      : dependencies.storage ?? defaultAudioSettingsStorage();
+    this.audioMix = readGameAudioMix(this.storage);
   }
 
   get available(): boolean {
     return Object.keys(GAME_AUDIO_SOURCES).every(
       (cue) => Boolean(this.assets[cue as keyof GameAudioAssetUrls]),
     );
+  }
+
+  getAudioMix(): Readonly<GameAudioMix> {
+    return Object.freeze({ ...this.audioMix });
+  }
+
+  setAudioChannelVolume(channel: GameAudioChannel, volume: number): Readonly<GameAudioMix> {
+    this.audioMix = { ...this.audioMix, [channel]: audioVolume(volume, this.audioMix[channel]) };
+    try {
+      this.storage?.setItem(GAME_AUDIO_SETTINGS_STORAGE_KEY, JSON.stringify(this.audioMix));
+    } catch {
+      // Local settings are best-effort; private browsing must never break audio or input.
+    }
+    if (this.ambientAudio) this.ambientAudio.volume = this.audioMix.music;
+    for (const voice of this.fightVoices) {
+      voice.gain.gain.value = voice.baseGain * this.audioMix.effects;
+    }
+    for (const voice of this.radioVoices) {
+      voice.gain.gain.value = voice.baseGain * this.audioMix.voice;
+    }
+    return this.getAudioMix();
   }
 
   mount(): void {
@@ -320,11 +391,8 @@ export class GameAudioController {
   }
 
   resetSession(): void {
-    for (const timer of this.delayedFightTimers.values()) this.clearTimer(timer);
-    this.delayedFightTimers.clear();
     this.preparedPlayerMatchups.clear();
     this.seenActivePlayerWars.clear();
-    this.radioQueue.length = 0;
     this.seenFightKeys.clear();
     this.seenRadioKeys.clear();
     this.lastFightRequestAt.player = Number.NEGATIVE_INFINITY;
@@ -354,14 +422,11 @@ export class GameAudioController {
         this.preparedPlayerMatchups.delete(match);
         if (!this.seenActivePlayerWars.has(battle.warId)) {
           this.remember(this.seenActivePlayerWars, battle.warId);
-          plays.push(this.requestRadio('active', `active:${battle.warId}`, () => {
-            this.scheduleFight(
-              battle,
-              'player',
-              playerFightGain(focus),
-              PLAYER_WAR_ACTIVE_COMBAT_DELAY_MS,
-            );
-          }));
+          // Combat and walkie-talkie lines deliberately use independent voice
+          // pools. Starting both requests here lets GO GO GO overlap the first
+          // attack instead of making combat wait for radio playback.
+          plays.push(this.requestRadio('active', `active:${battle.warId}`));
+          plays.push(this.requestFight(battle, 'player', playerFightGain(focus)));
         } else {
           plays.push(this.requestFight(battle, 'player', playerFightGain(focus)));
         }
@@ -415,7 +480,7 @@ export class GameAudioController {
       const player = this.createAmbientAudio(url);
       player.preload = 'auto';
       player.loop = true;
-      player.volume = AMBIENT_MUSIC_VOLUME;
+      player.volume = this.audioMix.music;
       this.ambientAudio = player;
       void player.play().catch(() => {
         // Autoplay policy or a missing optional ambience asset must never
@@ -506,27 +571,14 @@ export class GameAudioController {
       const gain = context.createGain();
       gain.gain.value = 1;
       gain.connect(context.destination);
-      this.fightVoices.push({ gain, active: false });
+      this.fightVoices.push({ gain, baseGain: 1, active: false });
     }
-    const radioGain = context.createGain();
-    radioGain.gain.value = 1;
-    radioGain.connect(context.destination);
-    this.radioVoice = { gain: radioGain, active: false };
-  }
-
-  private scheduleFight(
-    battle: BattleEventV2,
-    kind: 'player' | 'ai',
-    gain: number,
-    delayMs: number,
-  ): void {
-    const key = battleKey(battle);
-    if (this.seenFightKeys.has(key) || this.delayedFightTimers.has(key)) return;
-    const timer = this.setTimer(() => {
-      this.delayedFightTimers.delete(key);
-      void this.requestFight(battle, kind, gain);
-    }, delayMs);
-    this.delayedFightTimers.set(key, timer);
+    for (let index = 0; index < RADIO_AUDIO_MAX_OVERLAP; index += 1) {
+      const gain = context.createGain();
+      gain.gain.value = 1;
+      gain.connect(context.destination);
+      this.radioVoices.push({ gain, baseGain: 1, active: false });
+    }
   }
 
   private async requestPlayerLoss(key: string): Promise<boolean> {
@@ -558,27 +610,22 @@ export class GameAudioController {
   private async requestRadio(
     cue: RadioCue,
     key: string,
-    onStart?: () => void,
   ): Promise<boolean> {
     if (this.seenRadioKeys.has(key)) return false;
     this.remember(this.seenRadioKeys, key);
     const buffers = this.buffers ?? await this.loadOnce();
-    if (!buffers || !this.radioVoice) return false;
-    if (this.radioVoice.active) {
-      if (this.radioQueue.length < 6) this.radioQueue.push({ cue, key, onStart });
-      return false;
-    }
-    return this.playRadio(cue, onStart);
+    if (!buffers) return false;
+    return this.playRadio(cue);
   }
 
-  private playRadio(cue: RadioCue, onStart?: () => void): boolean {
+  private playRadio(cue: RadioCue): boolean {
     const buffer = this.buffers?.[cue];
-    if (!buffer || !this.radioVoice) return false;
-    onStart?.();
-    return this.playBuffer(this.radioVoice, buffer, 1, 'radio', () => {
-      const next = this.radioQueue.shift();
-      if (next) this.playRadio(next.cue, next.onStart);
-    });
+    if (!buffer) return false;
+    // Radio lines never queue behind combat (or behind another radio line).
+    // The small pool allows natural overlap while dropping bursts beyond its
+    // fixed capacity, so repeated events cannot layer without bound.
+    const voice = this.radioVoices.find((candidate) => !candidate.active);
+    return voice ? this.playBuffer(voice, buffer, 1, 'radio') : false;
   }
 
   private playBuffer(
@@ -596,7 +643,8 @@ export class GameAudioController {
     const source = context.createBufferSource();
     source.buffer = buffer;
     source.connect(voice.gain);
-    voice.gain.gain.value = gain;
+    voice.baseGain = gain;
+    voice.gain.gain.value = gain * (kind === 'radio' ? this.audioMix.voice : this.audioMix.effects);
     voice.active = true;
     voice.kind = kind;
     source.onended = () => {

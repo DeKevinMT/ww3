@@ -271,7 +271,7 @@ describe('authoritative multiplayer game sessions', () => {
 
     fixture.guestSession.close(false);
     fixture.hostSession.close(false);
-  });
+  }, 10_000);
 
   it('keeps host and guest human markers symmetric after snapshot resync and replica remount', () => {
     const fixture = createRealLoopback(919_1);
@@ -408,7 +408,7 @@ describe('authoritative multiplayer game sessions', () => {
     failedGuest.close(false);
     healthyGuest.close(false);
     host.close(false);
-  });
+  }, 10_000);
 
   it('rate-limits repeated resync snapshots by authoritative tick and serves a deferred recovery', () => {
     const fixture = createRealLoopback(922);

@@ -636,22 +636,23 @@ describe('V2 dynamic containment coalition', () => {
   });
 
   it('keeps rare defensive aid available to a human facing an overwhelming aggressor', () => {
-    const human = nationIdV2('ukr');
-    const aggressor = nationIdV2('rus');
-    const supporter = nationIdV2('pol');
-    const state = createWorldStateV2(761);
+    const human = nationIdV2('bel');
+    const aggressor = nationIdV2('deu');
+    const supporter = nationIdV2('nld');
+    const state = createWorldStateV2(52_001);
     state.humanPlayerId = human;
-    state.tick = 104;
+    state.humanPlayerIds = [human];
+    state.tick = 120;
     const war = {
       id: 'war-human-defense',
       attackerId: aggressor,
       defenderId: human,
-      startedTick: 70,
-      lastBattleTick: 104,
+      startedTick: 75,
+      lastBattleTick: 120,
       warScore: 18,
       battles: 12,
-      attackerLosses: 0.08,
-      defenderLosses: 0.22,
+      attackerLosses: 0.02,
+      defenderLosses: 0.05,
       lastPeaceOfferTick: -1_000_000,
       attackerOperations: [],
       defenderOperations: [],
@@ -664,8 +665,8 @@ describe('V2 dynamic containment coalition', () => {
     const viableJointPowers = {
       ...livePowers,
       byNation: new Map(livePowers.byNation).set(aggressor, 100)
-        .set(human, 30)
-        .set(supporter, 65),
+        .set(human, 40)
+        .set(supporter, 85),
       leaderPower: Math.max(100, livePowers.leaderPower),
     };
     const assessment = selectDefensiveAidAssessmentV2(

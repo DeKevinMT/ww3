@@ -8,12 +8,20 @@ import { resolveScenarioV2 } from './scenarios';
 import { selectTotalManpowerV2 } from './selectors';
 import { traitNationContextV2 } from './traitContext';
 import {
+  HUMAN_BROAD_UNDERDOG_ARMY_MULTIPLIER_ENDPOINT_V2,
+  HUMAN_BROAD_UNDERDOG_COUNT_V2,
+  HUMAN_EXTREME_UNDERDOG_COUNT_V2,
   HUMAN_MILITARY_RANK_CURVE_EXPONENT_V2,
+  HUMAN_OPENING_RESERVE_MULTIPLIER_WEAKEST_V2,
+  HUMAN_STARTING_ARMY_BASE_CURVE_WEAKEST_MULTIPLIER_V2,
   HUMAN_STARTING_ARMY_MULTIPLIER_STRONGEST_V2,
   HUMAN_STARTING_ARMY_MULTIPLIER_WEAKEST_V2,
   HUMAN_TRAIT_MULTIPLIER_STRONGEST_V2,
   HUMAN_TRAIT_MULTIPLIER_WEAKEST_V2,
   humanCountryTraitMultiplierForContentV2,
+  humanOpeningReserveMultiplierForContentV2,
+  humanOpeningTrainedReserveTermsForContentV2,
+  humanStartingArmyBaseCurveMultiplierForContentV2,
   humanStartingArmyMultiplierForContentV2,
   openingMilitaryOrderForContentV2,
   openingMilitaryRankForContentV2,
@@ -31,7 +39,7 @@ describe('scenario-aware human trait and opening-force curve', () => {
     expect(normalOpeningManpowerMultiplierV2('nld')).toBe(1);
   });
 
-  it('keeps Standard ranking and exact 1x–2.5x / 0.10x–15x endpoints', () => {
+  it('keeps Standard ranking and exact 1x–3x / 0.05x–50x endpoints', () => {
     const order = openingMilitaryOrderForContentV2(WORLD_CONTENT_V2);
     const strongest = order[0]!;
     const weakest = order.at(-1)!;
@@ -46,10 +54,11 @@ describe('scenario-aware human trait and opening-force curve', () => {
     expect(humanStartingArmyMultiplierForContentV2(WORLD_CONTENT_V2, weakest))
       .toBeCloseTo(HUMAN_STARTING_ARMY_MULTIPLIER_WEAKEST_V2, 12);
     expect(HUMAN_TRAIT_MULTIPLIER_STRONGEST_V2).toBe(1);
-    expect(HUMAN_TRAIT_MULTIPLIER_WEAKEST_V2).toBe(2.5);
+    expect(HUMAN_TRAIT_MULTIPLIER_WEAKEST_V2).toBe(3);
     expect(HUMAN_MILITARY_RANK_CURVE_EXPONENT_V2).toBe(1);
-    expect(HUMAN_STARTING_ARMY_MULTIPLIER_STRONGEST_V2).toBe(0.1);
-    expect(HUMAN_STARTING_ARMY_MULTIPLIER_WEAKEST_V2).toBe(15);
+    expect(HUMAN_STARTING_ARMY_MULTIPLIER_STRONGEST_V2).toBe(0.05);
+    expect(HUMAN_STARTING_ARMY_BASE_CURVE_WEAKEST_MULTIPLIER_V2).toBe(15);
+    expect(HUMAN_STARTING_ARMY_MULTIPLIER_WEAKEST_V2).toBe(50);
     expect(HUMAN_STARTING_ARMY_MULTIPLIER_STRONGEST_V2).toBeLessThan(1);
   });
 
@@ -59,9 +68,9 @@ describe('scenario-aware human trait and opening-force curve', () => {
     const ukTrait = humanCountryTraitMultiplierForContentV2(WORLD_CONTENT_V2, 'gbr');
     const italyTrait = humanCountryTraitMultiplierForContentV2(WORLD_CONTENT_V2, 'ita');
     expect(usaTrait).toBe(1);
-    expect(chinaTrait).toBeCloseTo(1.009091, 6);
-    expect(ukTrait).toBeCloseTo(1.063636, 6);
-    expect(italyTrait).toBeCloseTo(1.081818, 6);
+    expect(chinaTrait).toBeCloseTo(1.012121, 6);
+    expect(ukTrait).toBeCloseTo(1.084848, 6);
+    expect(italyTrait).toBeCloseTo(1.109091, 6);
   });
 
   it('keeps the top-15 great-power restraint, then accelerates player help through the underdog ranks', () => {
@@ -72,38 +81,115 @@ describe('scenario-aware human trait and opening-force curve', () => {
     const multipliers = order.map(armyMultiplier);
     expect(order.filter((playerId) => armyMultiplier(playerId) < 1))
       .toEqual(order.slice(0, 15));
-    expect(armyMultiplier('usa' as PlayerId)).toBe(0.1);
-    expect(armyMultiplier('chn' as PlayerId)).toBeGreaterThan(0.1);
+    expect(armyMultiplier('usa' as PlayerId)).toBe(0.05);
+    expect(armyMultiplier('chn' as PlayerId)).toBeGreaterThan(0.05);
     expect(armyMultiplier('chn' as PlayerId)).toBeLessThan(1);
-    expect(armyMultiplier('gbr' as PlayerId)).toBeCloseTo(0.448510, 6);
-    expect(armyMultiplier('ita' as PlayerId)).toBeCloseTo(0.611195, 6);
+    expect(armyMultiplier('gbr' as PlayerId)).toBeCloseTo(0.417872, 6);
+    expect(armyMultiplier('ita' as PlayerId)).toBeCloseTo(0.589594, 6);
     for (let index = 1; index < multipliers.length; index += 1) {
       expect(multipliers[index]).toBeGreaterThanOrEqual(multipliers[index - 1]!);
     }
     expect(armyMultiplier(order[14]!)).toBeLessThan(1);
     expect(armyMultiplier(order[15]!)).toBeGreaterThanOrEqual(1);
     expect(openingMilitaryRankForContentV2(WORLD_CONTENT_V2, 'bel')).toBe(61);
-    expect(armyMultiplier('bel' as PlayerId)).toBeCloseTo(1.796652, 6);
+    expect(armyMultiplier('aze' as PlayerId)).toBeCloseTo(1.953018, 6);
+    expect(armyMultiplier('bel' as PlayerId)).toBeCloseTo(1.975982, 6);
+    expect(armyMultiplier('bgr' as PlayerId)).toBeCloseTo(1.998292, 6);
     expect(armyMultiplier(order[Math.floor((order.length - 1) / 2)]!))
       .toBeGreaterThan(3);
     expect(armyMultiplier('lux' as PlayerId)).toBeGreaterThan(8);
     expect(armyMultiplier('lux' as PlayerId)).toBeLessThan(10);
     expect(armyMultiplier(order[Math.floor((order.length - 1) * 0.75)]!))
       .toBeCloseTo(9.4, 1);
-    expect(armyMultiplier(order.at(-1)!)).toBe(15);
+    expect(armyMultiplier(order.at(-1)!)).toBe(50);
   });
 
   it('raises both player trait and army help faster immediately after rank 15', () => {
     const order = openingMilitaryOrderForContentV2(WORLD_CONTENT_V2);
     const rank15 = order[14]!;
     const rank16 = order[15]!;
-    const linearRank16Trait = 1 + 1.5 * 15 / (order.length - 1);
+    const linearRank16Trait = 1 + 2 * 15 / (order.length - 1);
     expect(humanCountryTraitMultiplierForContentV2(WORLD_CONTENT_V2, rank15))
-      .toBeCloseTo(1 + 1.5 * 14 / (order.length - 1), 12);
+      .toBeCloseTo(1 + 2 * 14 / (order.length - 1), 12);
     expect(humanCountryTraitMultiplierForContentV2(WORLD_CONTENT_V2, rank16))
       .toBeGreaterThan(linearRank16Trait);
     expect(humanStartingArmyMultiplierForContentV2(WORLD_CONTENT_V2, rank15)).toBeLessThan(1);
     expect(humanStartingArmyMultiplierForContentV2(WORLD_CONTENT_V2, rank16)).toBeGreaterThan(1);
+  });
+
+  it.each([
+    ['Standard', WORLD_CONTENT_V2],
+    ['Alternative', resolveScenarioV2({ mode: 'random-world', seed: 84_102 }).content],
+  ] as const)('applies the two-stage weakest-25 army overlay in %s', (_name, content) => {
+    const order = openingMilitaryOrderForContentV2(content);
+    const count = order.length;
+    const finalQuote = (index: number) => (
+      humanStartingArmyMultiplierForContentV2(content, order[index]!)
+    );
+    const baseQuote = (index: number) => (
+      humanStartingArmyBaseCurveMultiplierForContentV2(content, order[index]!)
+    );
+    const rank26FromWeakestIndex = count - HUMAN_BROAD_UNDERDOG_COUNT_V2 - 1;
+    const rank25FromWeakestIndex = rank26FromWeakestIndex + 1;
+    const rank11FromWeakestIndex = count - HUMAN_EXTREME_UNDERDOG_COUNT_V2 - 1;
+    const rank10FromWeakestIndex = rank11FromWeakestIndex + 1;
+
+    for (let index = 0; index <= rank26FromWeakestIndex; index += 1) {
+      expect(finalQuote(index)).toBe(baseQuote(index));
+    }
+    expect(finalQuote(rank25FromWeakestIndex))
+      .toBeGreaterThan(baseQuote(rank25FromWeakestIndex));
+    expect(finalQuote(rank11FromWeakestIndex))
+      .toBe(HUMAN_BROAD_UNDERDOG_ARMY_MULTIPLIER_ENDPOINT_V2);
+    expect(finalQuote(rank10FromWeakestIndex))
+      .toBeGreaterThan(HUMAN_BROAD_UNDERDOG_ARMY_MULTIPLIER_ENDPOINT_V2);
+    expect(finalQuote(count - 1)).toBe(HUMAN_STARTING_ARMY_MULTIPLIER_WEAKEST_V2);
+
+    const quotes = order.map((_, index) => finalQuote(index));
+    for (let index = 1; index < quotes.length; index += 1) {
+      expect(quotes[index]).toBeGreaterThanOrEqual(quotes[index - 1]!);
+    }
+  });
+
+  it.each([
+    ['Standard', WORLD_CONTENT_V2],
+    ['Alternative', resolveScenarioV2({ mode: 'random-world', seed: 84_103 }).content],
+  ] as const)('quotes bounded opening trained reserves from immutable %s rank', (_name, content) => {
+    const order = openingMilitaryOrderForContentV2(content);
+    const strongest = order[0]!;
+    const weakest = order.at(-1)!;
+    const eleventhWeakest = order.at(-11)!;
+    const tenthWeakest = order.at(-10)!;
+
+    expect(humanOpeningReserveMultiplierForContentV2(content, strongest)).toBe(1);
+    expect(humanOpeningReserveMultiplierForContentV2(content, tenthWeakest))
+      .toBeGreaterThan(humanOpeningReserveMultiplierForContentV2(content, eleventhWeakest));
+    expect(humanOpeningReserveMultiplierForContentV2(content, weakest))
+      .toBe(HUMAN_OPENING_RESERVE_MULTIPLIER_WEAKEST_V2);
+
+    const weakestTerms = humanOpeningTrainedReserveTermsForContentV2(
+      content, weakest, 0, 100, 100,
+    );
+    expect(weakestTerms).toMatchObject({
+      canonicalReserves: 0,
+      neutralReserveCapacity: 100,
+      liveReserveCapacity: 100,
+      reserveMultiplier: 2,
+      minimumBaseReserves: 5,
+      effectiveBaseReserves: 5,
+      trainedReserves: 10,
+    });
+    expect(humanOpeningTrainedReserveTermsForContentV2(
+      content, weakest, 0, 100, 8,
+    ).trainedReserves).toBe(8);
+    expect(humanOpeningTrainedReserveTermsForContentV2(
+      content, weakest, 0, 100, 100, false,
+    )).toMatchObject({
+      reserveMultiplier: 1,
+      minimumBaseReserves: 0,
+      effectiveBaseReserves: 0,
+      trainedReserves: 0,
+    });
   });
 
   it('grants the opening surplus without treasury or reserves and scales capacity with it', () => {
@@ -121,14 +207,14 @@ describe('scenario-aware human trait and opening-force curve', () => {
     oneXState.tick = OPENING_ARMY_BONUS_DURATION_TICKS_V2;
     synchronizeArmyCapacityV2(oneXState, WORLD_CONTENT_V2);
     const oneXCapacity = selectTotalManpowerV2(oneXState, weakest).capacity;
-    expect(after.deployed).toBeCloseTo(before.deployed * 15, 7);
+    expect(after.deployed).toBeCloseTo(before.deployed * 50, 7);
     // Each displayed national capacity is rounded independently. Compare the
     // boosted value after removing its multiplier so that one rounding quantum
     // does not masquerade as a failure of the 15x invariant.
     expect(after.capacity / HUMAN_STARTING_ARMY_MULTIPLIER_WEAKEST_V2)
       .toBeCloseTo(oneXCapacity, 6);
     expect(state.players[weakest]!.treasury).toBe(treasuryBefore);
-    expect(state.players[weakest]!.trainedReserves).toBe(reservesBefore);
+    expect(state.players[weakest]!.trainedReserves).toBeGreaterThan(reservesBefore);
   });
 
   it('uses generated power ranking with deterministic country-id tie breaks', () => {
@@ -142,9 +228,9 @@ describe('scenario-aware human trait and opening-force curve', () => {
     expect(openingMilitaryRankForContentV2(content, order[0]!)).toBe(1);
     expect(openingMilitaryRankForContentV2(content, order.at(-1)!)).toBe(order.length);
     expect(humanCountryTraitMultiplierForContentV2(content, order[0]!)).toBe(1);
-    expect(humanCountryTraitMultiplierForContentV2(content, order.at(-1)!)).toBe(2.5);
-    expect(humanStartingArmyMultiplierForContentV2(content, order[0]!)).toBe(0.1);
-    expect(humanStartingArmyMultiplierForContentV2(content, order.at(-1)!)).toBe(15);
+    expect(humanCountryTraitMultiplierForContentV2(content, order.at(-1)!)).toBe(3);
+    expect(humanStartingArmyMultiplierForContentV2(content, order[0]!)).toBe(0.05);
+    expect(humanStartingArmyMultiplierForContentV2(content, order.at(-1)!)).toBe(50);
   });
 
   it('switches and repeats multiplayer opening seats without stacking any factor', () => {

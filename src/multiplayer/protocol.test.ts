@@ -143,6 +143,63 @@ describe('multiplayer protocol', () => {
     })).toThrow(/every supported research branch/i);
   });
 
+  it('round-trips polar commands and rejects invalid project, sector and manpower payloads', () => {
+    const commands: MultiplayerProtocolMessage[] = [
+      {
+        type: 'command', requestId: 'polar_project_1', clientSequence: 10, baseTick: 50,
+        command: {
+          type: 'start-arctic-project', playerId: nationIdV2('can'), projectId: 'polar-demography',
+        },
+      },
+      {
+        type: 'command', requestId: 'polar_warning_1', clientSequence: 11, baseTick: 51,
+        command: { type: 'acknowledge-polar-warning', playerId: nationIdV2('can') },
+      },
+      {
+        type: 'command', requestId: 'polar_deploy_1', clientSequence: 12, baseTick: 52,
+        command: {
+          type: 'deploy-antarctic-expedition', playerId: nationIdV2('can'),
+          sectorId: 'drake-entry', manpower: 1.25,
+        },
+      },
+    ];
+    for (const message of commands) {
+      expect(decodeProtocolMessage(encodeProtocolMessage(message))).toEqual(message);
+    }
+
+    const envelope = {
+      type: 'command', requestId: 'polar_invalid_1', clientSequence: 13, baseTick: 53,
+    } as const;
+    expect(() => validateProtocolMessage({
+      ...envelope,
+      command: { type: 'start-arctic-project', playerId: 'can', projectId: 'moon-base' },
+    })).toThrow(/projectId is invalid/i);
+    expect(() => validateProtocolMessage({
+      ...envelope,
+      command: { type: 'deploy-antarctic-expedition', playerId: 'can', sectorId: 'south-pole', manpower: 1 },
+    })).toThrow(/sectorId is invalid/i);
+    expect(() => validateProtocolMessage({
+      ...envelope,
+      command: {
+        type: 'deploy-antarctic-expedition', playerId: 'can', sectorId: 'ross-entry',
+        manpower: Number.MAX_SAFE_INTEGER,
+      },
+    })).not.toThrow();
+    for (const manpower of [
+      0,
+      -1,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+    ]) {
+      expect(() => validateProtocolMessage({
+        ...envelope,
+        command: {
+          type: 'deploy-antarctic-expedition', playerId: 'can', sectorId: 'ross-entry', manpower,
+        },
+      })).toThrow(/manpower/i);
+    }
+  });
+
   it('round-trips directed alliance invitations and addressed responses', () => {
     const invitation: MultiplayerProtocolMessage = {
       type: 'command',

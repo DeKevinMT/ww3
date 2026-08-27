@@ -122,7 +122,11 @@ describe('multi-terrain runtime', () => {
       ECONOMY_ANNUAL_GROWTH_MAX,
     );
 
-    expect(finance.annualEconomyGrowthRate).toBeCloseTo(expectedAnnual, 10);
+    // The visible breakdown components and final rate are each rounded to six
+    // decimals, so rebuilding the final from its displayed parts may differ by
+    // one output unit.
+    expect(Math.abs(finance.annualEconomyGrowthRate - expectedAnnual))
+      .toBeLessThanOrEqual(0.0000011);
     expect(finance.annualEconomyGrowthRate).toBeGreaterThanOrEqual(ECONOMY_ANNUAL_GROWTH_MIN);
     expect(finance.annualEconomyGrowthRate).toBeLessThanOrEqual(ECONOMY_ANNUAL_GROWTH_MAX);
 

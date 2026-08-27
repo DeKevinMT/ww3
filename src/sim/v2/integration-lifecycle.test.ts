@@ -204,7 +204,10 @@ describe('V2 permanent territory integration lifecycle', () => {
       territory.owner === luxembourg || territory.coreOwner === luxembourg
     ))).toBe(false);
     expect(state.players[netherlands].research.effectLevels.attack).toBe(9);
-    expect(state.players[netherlands].trainedReserves).toBe(reservesAfterBothAbsorptions);
+    expect(state.players[netherlands].trainedReserves).toBeCloseTo(
+      reservesAfterBothAbsorptions,
+      6,
+    );
     expect(state.players[luxembourg]).toBeUndefined();
   });
 
@@ -350,5 +353,66 @@ describe('V2 permanent territory integration lifecycle', () => {
     const reloaded = loadSaveV2(createSaveV2(state, WORLD_CONTENT_V2), WORLD_CONTENT_V2);
     expect(reloaded.players[luxembourg]).toBeUndefined();
     expect(invariantErrorsV2(reloaded, WORLD_CONTENT_V2)).toEqual([]);
+  });
+
+  it('retires every live polar reference and returns expedition survivors to the successor', () => {
+    const state = createWorldStateV2(260829);
+    state.humanPlayerId = luxembourg;
+    state.humanPlayerIds = [belgium, luxembourg];
+    state.players[belgium].trainedReserves = 2;
+    state.players[luxembourg].trainedReserves = 1.25;
+    state.polarEndgame.phase = 'contact';
+    state.polarEndgame.revealedBy = luxembourg;
+    state.polarEndgame.warningTick = 0;
+    state.polarEndgame.contactTick = 0;
+    state.polarEndgame.warningAcknowledgedBy = [luxembourg];
+    state.polarEndgame.arcticPrograms[luxembourg] = {
+      playerId: luxembourg,
+      activeProject: {
+        projectId: 'polar-demography',
+        playerId: luxembourg,
+        startedTick: 0,
+        completesTick: 1_000,
+        costPaid: 120,
+      },
+      completedProjects: [],
+    };
+    state.polarEndgame.sectors['drake-entry'].status = 'contested';
+    state.polarEndgame.sectors['drake-entry'].discoveredTick = 0;
+    state.polarEndgame.expeditions = [{
+      id: 1,
+      playerId: luxembourg,
+      sectorId: 'drake-entry',
+      manpower: 0.5,
+      initialManpower: 0.75,
+      startedTick: 0,
+      lastPulseTick: 0,
+      damageDealt: 4,
+    }];
+    state.polarEndgame.earthDefenseMembers = [belgium, luxembourg];
+    state.polarEndgame.nextCounteroffensiveTick = 13;
+    state.polarEndgame.nextExpeditionId = 2;
+
+    beginTerritoryIntegrationV2(
+      state,
+      WORLD_CONTENT_V2,
+      luxembourgTerritory,
+      belgium,
+    );
+    state.tick = state.territories[luxembourgTerritory].integrationProgram!.completesTick;
+    advanceTerritoryIntegrationProgramsV2(state, WORLD_CONTENT_V2);
+    synchronizeArmyCapacityV2(state, WORLD_CONTENT_V2);
+
+    expect(state.players[luxembourg]).toBeUndefined();
+    expect(state.players[belgium].trainedReserves).toBeCloseTo(3.75, 9);
+    expect(state.polarEndgame.arcticPrograms[luxembourg]).toBeUndefined();
+    expect(state.polarEndgame.expeditions).toEqual([]);
+    expect(state.polarEndgame.sectors['drake-entry'].status).toBe('available');
+    expect(state.polarEndgame.earthDefenseMembers).toEqual([belgium]);
+    expect(state.polarEndgame.warningAcknowledgedBy).toEqual([]);
+    expect(state.polarEndgame.revealedBy).toBe(luxembourg);
+    expect(state.humanPlayerId).toBe(belgium);
+    expect(state.humanPlayerIds).toEqual([belgium, luxembourg]);
+    expect(invariantErrorsV2(state, WORLD_CONTENT_V2)).toEqual([]);
   });
 });

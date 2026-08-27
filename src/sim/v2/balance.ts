@@ -7,7 +7,7 @@ import type {
   TerrainType,
 } from './types';
 
-export const V2_RULES_VERSION = 'frontier-command-v2.64-war-strain-counterattacks';
+export const V2_RULES_VERSION = 'frontier-command-v2.65-polar-endgame';
 export const V2_CONTENT_VERSION = 'natural-earth-countries-2026-v7-greenland';
 export const V2_MAP_ID = 'natural-earth-countries-2026';
 export const V2_TICK_DURATION_MS = 1_000;
@@ -77,6 +77,10 @@ export const RECRUITMENT_SIZE_SCALING_EXPONENT = 0.10;
 export const RECRUITMENT_SIZE_SPEED_MIN = 0.85;
 export const RECRUITMENT_SIZE_SPEED_MAX = 1.10;
 export const PASSIVE_RECRUITMENT_TRAINING_BONUS = 0.02;
+/** Cash-rich countries can trade a large permanent bill for faster training. */
+export const UPKEEP_OVERFUNDING_MAX_RATIO = 1.25;
+/** The maximum is approached smoothly across twelve revenue-weeks above reserve. */
+export const UPKEEP_OVERFUNDING_FULL_SURPLUS_WEEKS = 12;
 /** A finite trained pool: at most one full active army, built only after the peacetime army is ready. */
 export const TRAINED_RESERVE_CAPACITY_MULTIPLIER = 1;
 export const TRAINED_RESERVE_ACTIVE_READY_RATIO = 0.999999;
@@ -397,9 +401,32 @@ export const WAR_ACCESS_SUPPLY_MULTIPLIER = {
 /** Naval routes remain usable at global range, but distance increasingly taxes fleets and supply. */
 export const NAVAL_ROUTE_BASE_DISTANCE_KM = 1_500;
 export const NAVAL_ROUTE_MAX_DISTANCE_KM = 9_000;
+/** Long deployments acquire an additional, non-plateauing operating-cost tail beyond this point. */
+export const NAVAL_ROUTE_LONG_DISTANCE_THRESHOLD_KM = 5_000;
+export const NAVAL_ROUTE_LONG_DISTANCE_COST_PER_5K_KM = 0.55;
 export const NAVAL_ROUTE_OPERATION_MULTIPLIER_MAX = 2.15;
 /** Even the longest route keeps 90% combat supply; its main penalty is financial. */
 export const NAVAL_ROUTE_SUPPLY_MULTIPLIER_MIN = 0.90;
+
+/**
+ * Equivalent-radius proxy for the domestic distance between a country's
+ * distributed forces and its border/port. Square-root area keeps continental
+ * states meaningfully harder to move through without letting area dominate.
+ */
+export const COUNTRY_INTERIOR_DISTANCE_RADIUS_SHARE_V2 = 0.65;
+export const COUNTRY_INTERIOR_DISTANCE_FULL_PRESSURE_KM_V2 = 1_500;
+export const COUNTRY_INTERIOR_OPERATION_MULTIPLIER_MAX_V2 = 1.25;
+
+export function countryInteriorLogisticsDistanceKmV2(landAreaKm2: number): number {
+  const safeArea = Number.isFinite(landAreaKm2) ? Math.max(0, landAreaKm2) : 0;
+  return round(COUNTRY_INTERIOR_DISTANCE_RADIUS_SHARE_V2 * Math.sqrt(safeArea / Math.PI), 3);
+}
+
+export function countryInteriorOperationMultiplierV2(landAreaKm2: number): number {
+  const distanceKm = countryInteriorLogisticsDistanceKmV2(landAreaKm2);
+  const pressure = smoothstep(25, COUNTRY_INTERIOR_DISTANCE_FULL_PRESSURE_KM_V2, distanceKm);
+  return round(1 + (COUNTRY_INTERIOR_OPERATION_MULTIPLIER_MAX_V2 - 1) * pressure, 9);
+}
 
 export function navalRouteDistancePressureV2(distanceKm?: number): number {
   if (!Number.isFinite(distanceKm) || distanceKm === undefined) return 0;
@@ -417,8 +444,16 @@ export function warAccessOperationMultiplierV2(
 ): number {
   if (access === 'land') return WAR_ACCESS_OPERATION_MULTIPLIER.land;
   const pressure = navalRouteDistancePressureV2(distanceKm);
+  const safeDistanceKm = Number.isFinite(distanceKm) && distanceKm !== undefined
+    ? Math.max(0, distanceKm) : 0;
+  // The original smooth shoulder remains useful for ordinary regional routes,
+  // while a linear global-range tail prevents Pacific operations from becoming
+  // effectively identical once the bounded supply curve reaches 9,000 km.
+  const longDistanceCost = Math.max(0, safeDistanceKm - NAVAL_ROUTE_LONG_DISTANCE_THRESHOLD_KM)
+    / 5_000 * NAVAL_ROUTE_LONG_DISTANCE_COST_PER_5K_KM;
   return round(WAR_ACCESS_OPERATION_MULTIPLIER.naval
-    + (NAVAL_ROUTE_OPERATION_MULTIPLIER_MAX - WAR_ACCESS_OPERATION_MULTIPLIER.naval) * pressure, 9);
+    + (NAVAL_ROUTE_OPERATION_MULTIPLIER_MAX - WAR_ACCESS_OPERATION_MULTIPLIER.naval) * pressure
+    + longDistanceCost, 9);
 }
 
 export function warAccessSupplyMultiplierV2(
@@ -760,6 +795,27 @@ export function round(value: number, digits = 6): number {
 export function smoothstep(edge0: number, edge1: number, value: number): number {
   const unit = clamp((value - edge0) / (edge1 - edge0), 0, 1);
   return unit * unit * (3 - 2 * unit);
+}
+
+/**
+ * Cash at or below the national reserve target never unlocks overfunding.
+ * A deeper buffer raises the upkeep target gradually and deterministically.
+ */
+export function upkeepFundingTargetRatioV2(
+  treasury: number,
+  reserveTarget: number,
+  weeklyRevenue: number,
+): number {
+  const safeTreasury = Math.max(0, Number.isFinite(treasury) ? treasury : 0);
+  const safeTarget = Math.max(0, Number.isFinite(reserveTarget) ? reserveTarget : 0);
+  const safeRevenue = Math.max(0.001, Number.isFinite(weeklyRevenue) ? weeklyRevenue : 0);
+  const surplusWeeks = Math.max(0, safeTreasury - safeTarget) / safeRevenue;
+  const activation = smoothstep(
+    0,
+    UPKEEP_OVERFUNDING_FULL_SURPLUS_WEEKS,
+    surplusWeeks,
+  );
+  return 1 + (UPKEEP_OVERFUNDING_MAX_RATIO - 1) * activation;
 }
 
 export interface ExcessTreasuryInvestmentV2 {

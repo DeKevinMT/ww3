@@ -23,6 +23,7 @@ import {
   selectFoodDomesticCapacityTargetV2,
   selectWeeklyFinanceBreakdownV2,
 } from './selectors';
+import { countryTraitFactorV2 } from './traits';
 import { nationIdV2, territoryIdV2 } from './types';
 
 const belgium = nationIdV2('bel');
@@ -204,7 +205,8 @@ describe('V2 funded food transition and trade', () => {
       const exportUnitPrice = FOOD_DOMESTIC_COST_PER_MILLION
         * FOOD_COST_GLOBAL_MULTIPLIER
         * FOOD_EXPORT_MARKET_PRICE_LEVEL
-        * FOOD_EXPORT_PRICE_MULTIPLIER;
+        * FOOD_EXPORT_PRICE_MULTIPLIER
+        * countryTraitFactorV2(australia, 'food-export-income');
       expect(finance.foodExportIncome / finance.foodExported)
         .toBeCloseTo(exportUnitPrice, 6);
       // FAOSTAT-calibrated exporters can sustain far more than the old 20%

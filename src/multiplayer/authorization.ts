@@ -32,6 +32,9 @@ export function authorizeMultiplayerCommandV2(
     case 'rapid-recruitment':
     case 'research-surge':
     case 'launch-propaganda':
+    case 'start-arctic-project':
+    case 'acknowledge-polar-warning':
+    case 'deploy-antarctic-expedition':
     case 'set-empire-name':
       return command.playerId === seatCountryId
         ? allowed() : rejected('You can only manage your own country.');

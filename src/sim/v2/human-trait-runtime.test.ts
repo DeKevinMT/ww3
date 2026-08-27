@@ -199,6 +199,7 @@ describe('human country-trait runtime propagation', () => {
 
     expect(engine.configureHumanPlayers([luxembourg, greenland], luxembourg))
       .toEqual({ accepted: true });
+    const amplifiedGreenlandCapacity = engine.state.territories[greenlandTerritory]!.army.capacity;
     expect(engine.state.territories[greenlandTerritory]!.army.capacity).toBeCloseTo(
       stateTerritoryArmyCapacityTargetV2(
         engine.state,
@@ -212,6 +213,10 @@ describe('human country-trait runtime propagation', () => {
     expect(engine.configureHumanPlayers([luxembourg, greenland], luxembourg))
       .toEqual({ accepted: true });
     expect(engine.state.players[luxembourg]!.treasury).toBe(amplifiedLuxembourgTreasury);
+    expect(engine.state.territories[greenlandTerritory]!.army.capacity)
+      .toBeCloseTo(amplifiedGreenlandCapacity, 8);
+    expect(countryTraitFactorV2(greenland, 'army-capacity', { humanControlled: true }))
+      .toBeCloseTo(1.27, 12);
 
     expect(engine.chooseCountry(belgium)).toEqual({ accepted: true });
     engine.stopClock();

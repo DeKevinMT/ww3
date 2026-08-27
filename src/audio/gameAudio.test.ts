@@ -7,16 +7,18 @@ import {
   AI_FIGHT_MIN_FOCUS,
   AMBIENT_MUSIC_VOLUME,
   battleScreenFocus,
+  DEFAULT_GAME_AUDIO_MIX,
   FIGHT_AUDIO_COOLDOWN_MS,
   FIGHT_AUDIO_MAX_OVERLAP,
   GameAudioController,
   GAME_AMBIENT_MUSIC,
   GAME_AUDIO_CREDITS,
+  GAME_AUDIO_SETTINGS_STORAGE_KEY,
   GAME_AUDIO_SOURCES,
   PLAYER_LOSS_AUDIO_COOLDOWN_MS,
   PLAYER_FIGHT_GAIN_FAR,
   PLAYER_FIGHT_GAIN_NEAR,
-  PLAYER_WAR_ACTIVE_COMBAT_DELAY_MS,
+  RADIO_AUDIO_MAX_OVERLAP,
 } from './gameAudio';
 
 class FakeSource {
@@ -98,8 +100,6 @@ function setup() {
   const fetches: string[] = [];
   const ambientPlayers: FakeAmbientAudio[] = [];
   let now = 1_000;
-  let nextTimerId = 1;
-  const timers = new Map<number, { due: number; callback: () => void }>();
   const controller = new GameAudioController(
     {
       fight: '/fight.flac', victory: '/victory.wav', prepare: '/prepare.wav',
@@ -123,29 +123,16 @@ function setup() {
         ambientPlayers.push(player);
         return player;
       },
-      setTimeout: (callback, milliseconds) => {
-        const id = nextTimerId++;
-        timers.set(id, { due: now + milliseconds, callback });
-        return id;
-      },
-      clearTimeout: (timer) => { timers.delete(timer); },
     },
   );
   controller.mount();
-  const runDueTimers = () => {
-    for (const [id, timer] of [...timers].sort((left, right) => left[1].due - right[1].due)) {
-      if (timer.due > now) continue;
-      timers.delete(id);
-      timer.callback();
-    }
-  };
   return {
-    controller, context, fetches, ambientPlayers, pendingTimers: () => timers.size,
+    controller, context, fetches, ambientPlayers,
     activate: async () => {
       interactionTarget.dispatchEvent(new Event('pointerdown'));
       await controller.whenLoaded();
     },
-    advance: (milliseconds: number) => { now += milliseconds; runDueTimers(); },
+    advance: (milliseconds: number) => { now += milliseconds; },
   };
 }
 
@@ -179,7 +166,9 @@ function wavDurationSeconds(bytes: Uint8Array): number {
 }
 
 describe('game audio presentation adapter', () => {
-  it('starts one cached, very soft ambient loop after interaction and releases it on unmount', async () => {
+  it('starts one cached ambient loop at the 20% default and releases it on unmount', async () => {
+    expect(AMBIENT_MUSIC_VOLUME).toBe(0.2);
+    expect(DEFAULT_GAME_AUDIO_MIX.music).toBe(0.2);
     const { controller, ambientPlayers, activate } = setup();
     expect(ambientPlayers).toHaveLength(0);
     await activate();
@@ -196,6 +185,24 @@ describe('game audio presentation adapter', () => {
     expect(ambientPlayers[0]).toMatchObject({
       src: '', currentTime: 0, pauseCalls: 1, loadCalls: 1,
     });
+  });
+
+  it('persists independent music, effects and voice controls', () => {
+    const values = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => { values.set(key, value); },
+    };
+    const first = new GameAudioController({}, { storage });
+    first.setAudioChannelVolume('music', 0.35);
+    first.setAudioChannelVolume('effects', 0.6);
+    first.setAudioChannelVolume('voice', 0.45);
+    expect(first.getAudioMix()).toEqual({ music: 0.35, effects: 0.6, voice: 0.45 });
+    expect(JSON.parse(values.get(GAME_AUDIO_SETTINGS_STORAGE_KEY)!)).toEqual({
+      music: 0.35, effects: 0.6, voice: 0.45,
+    });
+    const restored = new GameAudioController({}, { storage });
+    expect(restored.getAudioMix()).toEqual({ music: 0.35, effects: 0.6, voice: 0.45 });
   });
 
   it('loads and decodes all six approved originals once, only after interaction', async () => {
@@ -223,9 +230,8 @@ describe('game audio presentation adapter', () => {
       { reason: 'battle', battle: battle({ tick: 10 }) },
       { viewerPlayerId: 'aaa', humanPlayerIds: ['aaa'] },
     );
-    expect(context.sources.map((source) => source.buffer?.duration)).toEqual([3.28]);
+    expect(context.sources.map((source) => source.buffer?.duration)).toEqual([3.28, 18]);
     context.sources[0]!.finish();
-    advance(PLAYER_WAR_ACTIVE_COMBAT_DELAY_MS);
     advance(FIGHT_AUDIO_COOLDOWN_MS);
     await controller.handleWorldChange(
       { reason: 'battle', battle: battle({ tick: 11, operation: 'naval-invasion' }) },
@@ -257,10 +263,8 @@ describe('game audio presentation adapter', () => {
     await activate();
     const player = { viewerPlayerId: 'aaa', humanPlayerIds: ['aaa'] };
     await controller.handleWorldChange({ reason: 'battle', battle: battle() }, player);
-    expect(context.sources.map((source) => source.buffer?.duration)).toEqual([3.28]);
-    context.sources[0]!.finish();
-    advance(PLAYER_WAR_ACTIVE_COMBAT_DELAY_MS);
     expect(context.sources.map((source) => source.buffer?.duration)).toEqual([3.28, 18]);
+    context.sources[0]!.finish();
     context.sources[1]!.finish();
 
     advance(FIGHT_AUDIO_COOLDOWN_MS);
@@ -292,11 +296,10 @@ describe('game audio presentation adapter', () => {
       { reason: 'battle', battle: battle({ tick: 20 }) },
       { viewerPlayerId: 'aaa', battleFocus: 1 },
     );
-    expect(context.sources[0]!.buffer?.duration).toBe(3.28);
-    context.sources[0]!.finish();
-    advance(PLAYER_WAR_ACTIVE_COMBAT_DELAY_MS);
+    expect(context.sources.map((source) => source.buffer?.duration)).toEqual([3.28, 18]);
     const nearGain = context.gains[0]!.gain.value;
     expect(nearGain).toBeCloseTo(PLAYER_FIGHT_GAIN_NEAR, 4);
+    context.sources[0]!.finish();
     context.sources[1]!.finish();
 
     advance(FIGHT_AUDIO_COOLDOWN_MS);
@@ -363,8 +366,8 @@ describe('game audio presentation adapter', () => {
     expect(context.sources).toHaveLength(0);
   });
 
-  it('plays prepare then GO exclusively and delays only the matching first combat', async () => {
-    const { controller, context, activate, advance, pendingTimers } = setup();
+  it('plays prepare, GO and first combat immediately without a shared queue', async () => {
+    const { controller, context, activate } = setup();
     await activate();
     await controller.handlePlayerWarPrepared('aaa', 'bbb', 'declare-1');
     expect(context.sources.map((source) => source.buffer?.duration)).toEqual([2.293]);
@@ -373,16 +376,31 @@ describe('game audio presentation adapter', () => {
       { reason: 'battle', battle: battle({ warId: 'war-prepared', tick: 40 }) },
       { viewerPlayerId: 'aaa', humanPlayerIds: ['aaa'] },
     );
-    expect(context.sources).toHaveLength(1);
-    expect(pendingTimers()).toBe(0);
-
-    context.sources[0]!.finish();
-    expect(context.sources.map((source) => source.buffer?.duration)).toEqual([2.293, 3.28]);
-    expect(pendingTimers()).toBe(1);
-    advance(PLAYER_WAR_ACTIVE_COMBAT_DELAY_MS - 1);
-    expect(context.sources).toHaveLength(2);
-    advance(1);
     expect(context.sources.map((source) => source.buffer?.duration)).toEqual([2.293, 3.28, 18]);
+    expect(context.sources.every((source) => source.started)).toBe(true);
+  });
+
+  it('caps radio overlap without queueing a third line for later playback', async () => {
+    const { controller, context, activate } = setup();
+    await activate();
+    await controller.handlePlayerWarPrepared('aaa', 'bbb', 'declare-pool');
+    await controller.handleWorldChange(
+      { reason: 'battle', battle: battle({ warId: 'war-pool', tick: 41 }) },
+      { viewerPlayerId: 'aaa', humanPlayerIds: ['aaa'] },
+    );
+    expect(context.sources.filter((source) => source.buffer?.duration !== 18))
+      .toHaveLength(RADIO_AUDIO_MAX_OVERLAP);
+
+    await controller.handleWorldChange({
+      reason: 'war-outcome',
+      warOutcome: {
+        warId: 'war-pool', endedTick: 42, result: 'victory', humanId: 'aaa',
+      } as WarOutcomeV2,
+    }, { viewerPlayerId: 'aaa' });
+    expect(context.sources.filter((source) => source.buffer?.duration === 1.267)).toHaveLength(0);
+
+    context.sources.find((source) => source.buffer?.duration === 2.293)!.finish();
+    expect(context.sources.filter((source) => source.buffer?.duration === 1.267)).toHaveLength(0);
   });
 
   it('keeps elimination cues mutually exclusive for local players and AI-only wars', async () => {
@@ -418,9 +436,8 @@ describe('game audio presentation adapter', () => {
       { reason: 'battle', battle: battle({ warId: 'war-loss', tick: 60 }) },
       presentation,
     );
-    expect(context.sources.map((source) => source.buffer?.duration)).toEqual([3.28]);
+    expect(context.sources.map((source) => source.buffer?.duration)).toEqual([3.28, 18]);
     context.sources[0]!.finish();
-    advance(PLAYER_WAR_ACTIVE_COMBAT_DELAY_MS);
     context.sources[1]!.finish();
 
     advance(FIGHT_AUDIO_COOLDOWN_MS);
@@ -437,19 +454,21 @@ describe('game audio presentation adapter', () => {
     expect(context.sources.filter((source) => source.buffer?.duration === 1.602)).toHaveLength(lossCount);
   });
 
-  it('cancels delayed combat timers on audio session reset', async () => {
-    const { controller, context, activate, advance, pendingTimers } = setup();
+  it('resets event deduplication without scheduling deferred combat', async () => {
+    const { controller, context, activate } = setup();
     await activate();
     await controller.handleWorldChange(
       { reason: 'battle', battle: battle({ warId: 'war-reset', tick: 70 }) },
       { viewerPlayerId: 'aaa', humanPlayerIds: ['aaa'] },
     );
-    expect(context.sources[0]!.buffer?.duration).toBe(3.28);
-    expect(pendingTimers()).toBe(1);
+    expect(context.sources.map((source) => source.buffer?.duration)).toEqual([3.28, 18]);
     controller.resetSession();
-    expect(pendingTimers()).toBe(0);
-    advance(PLAYER_WAR_ACTIVE_COMBAT_DELAY_MS);
-    expect(context.sources).toHaveLength(1);
+    context.sources.forEach((source) => source.finish());
+    await controller.handleWorldChange(
+      { reason: 'battle', battle: battle({ warId: 'war-reset', tick: 70 }) },
+      { viewerPlayerId: 'aaa', humanPlayerIds: ['aaa'] },
+    );
+    expect(context.sources.map((source) => source.buffer?.duration)).toEqual([3.28, 18, 3.28, 18]);
   });
 
   it('derives focus from visible screen-space battle anchors', () => {

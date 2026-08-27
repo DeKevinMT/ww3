@@ -17,7 +17,10 @@ import {
   synchronizeOpeningArmyHumanRosterV2,
   synchronizeOpeningTreasuryHumanRosterV2,
 } from './nationState';
-import { countryTraitFactorV2 } from './traits';
+import {
+  HUMAN_STARTING_ARMY_MULTIPLIER_WEAKEST_V2,
+  countryTraitFactorV2,
+} from './traits';
 import { nationIdV2, territoryIdV2 } from './types';
 
 describe('country trait opening economy and army capacity', () => {
@@ -47,8 +50,7 @@ describe('country trait opening economy and army capacity', () => {
 
     expect(WORLD_CONTENT_V2.nations[greenland].balance.initialManpower)
       .toBeCloseTo(0.001903546, 9);
-    expect(aiFactor).toBeGreaterThan(1);
-    expect(aiFactor).toBeLessThanOrEqual(1.3);
+    expect(aiFactor).toBeCloseTo(1.09, 12);
     expect(army.capacity).toBeCloseTo(rawCapacity * aiFactor, 5);
     expect(army.manpower).toBeCloseTo(rawCapacity * openingFill, 5);
 
@@ -76,7 +78,7 @@ describe('country trait opening economy and army capacity', () => {
       WORLD_CONTENT_V2,
       greenland,
     );
-    expect(openingCapacityMultiplier).toBe(15);
+    expect(openingCapacityMultiplier).toBe(HUMAN_STARTING_ARMY_MULTIPLIER_WEAKEST_V2);
     expect(stateTerritoryArmyCapacityTargetV2(
       state,
       WORLD_CONTENT_V2,
@@ -92,8 +94,7 @@ describe('country trait opening economy and army capacity', () => {
       9,
     );
     expect(state.players[greenland]!.openingArmyBonus?.remainingManpower).toBeGreaterThan(0);
-    expect(humanFactor).toBeGreaterThan(aiFactor);
-    expect(humanFactor).toBeLessThan(1.3);
+    expect(humanFactor).toBeCloseTo(1.27, 12);
   });
 
   it('gives Eswatini capacity instead of an inactive reserve-training identity', () => {

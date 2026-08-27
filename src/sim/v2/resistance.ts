@@ -584,6 +584,14 @@ export function updateGlobalResistanceV2(
   powers: PowerSnapshotV2 = createPowerSnapshotV2(state, content),
 ): 0 | 1 | 2 | undefined {
   updateThreatV2(state, content, powers);
+  if (state.polarEndgame.phase === 'contact'
+    || state.polarEndgame.phase === 'counteroffensive'
+    || state.polarEndgame.phase === 'core-exposed'
+    || state.polarEndgame.phase === 'victory') {
+    state.aiEscalation.coalitionMembers = [];
+    state.aiEscalation.resistanceLevel = 0;
+    return undefined;
+  }
   const previousLevel = state.aiEscalation.resistanceLevel;
   const topology = ownerTopologyV2(state, content);
   const added = recruitCoalitionMembersV2(state, content, topology, powers);

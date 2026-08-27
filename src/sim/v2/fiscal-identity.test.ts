@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createWorldStateV2 } from './bootstrap';
 import { WORLD_CONTENT_V2 } from './content';
+import { OPENING_ARMY_BONUS_DURATION_TICKS_V2 } from './openingArmyBonus';
 import {
   FULL_STRENGTH_WEALTH_PER_PERSON_V2,
   MAX_NORMALIZED_TAX_RATE_V2,
@@ -238,6 +239,10 @@ describe('V2 fiscal identity and population-linked income', () => {
   it('charges the full real army footprint instead of making large forces free above a revenue cap', () => {
     const state = createWorldStateV2(4_204, WORLD_CONTENT_V2);
     state.wars = [];
+    // Isolate paid standing-force upkeep from the selected country's temporary
+    // free opening force/capacity entitlement.
+    state.tick = OPENING_ARMY_BONUS_DURATION_TICKS_V2;
+    state.players[bel].openingArmyBonus = null;
     const before = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, bel);
     const army = state.territories[belTerritory]!.army;
     army.manpower *= 100;

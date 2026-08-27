@@ -1,4 +1,5 @@
 import { MAP_HEIGHT, MAP_WIDTH } from '../data/worldMap';
+import type { MapPolarSectorId } from './bridge';
 
 export type SeaLabelKind = 'ocean' | 'sea';
 
@@ -131,18 +132,75 @@ export type AntarcticaAccessCorridor = 'south-america' | 'south-africa' | 'austr
 export interface AntarcticaAccessAnchor {
   id: 'drake-passage' | 'south-africa-corridor' | 'australia-new-zealand-corridor';
   corridor: AntarcticaAccessCorridor;
+  /** Seaward departure point; routes must never start on a country polygon. */
+  origin: readonly [number, number];
   longitude: number;
   latitude: number;
   mapPosition: readonly [number, number];
-  active: false;
+  entrySectorId: Extract<MapPolarSectorId, 'drake-entry' | 'maud-entry' | 'ross-entry'>;
 }
 
-/** Stable dormant hooks for a future Antarctica mode; no routes use them yet. */
+/** The three authored approaches, including a Drake origin clear of Chile. */
 export const ANTARCTICA_ACCESS_ANCHORS: readonly AntarcticaAccessAnchor[] = [
-  { id: 'drake-passage', corridor: 'south-america', longitude: -63, latitude: -63, mapPosition: projectAntarcticaMapPoint(-63, -63), active: false },
-  { id: 'south-africa-corridor', corridor: 'south-africa', longitude: 20, latitude: -70, mapPosition: projectAntarcticaMapPoint(20, -70), active: false },
-  { id: 'australia-new-zealand-corridor', corridor: 'australia-new-zealand', longitude: 145, latitude: -68, mapPosition: projectAntarcticaMapPoint(145, -68), active: false },
+  { id: 'drake-passage', corridor: 'south-america', origin: [-67.15, -56.0], longitude: -58, latitude: -66, mapPosition: projectAntarcticaMapPoint(-58, -66), entrySectorId: 'drake-entry' },
+  { id: 'south-africa-corridor', corridor: 'south-africa', origin: [18.4, -33.9], longitude: 20, latitude: -70, mapPosition: projectAntarcticaMapPoint(20, -70), entrySectorId: 'maud-entry' },
+  { id: 'australia-new-zealand-corridor', corridor: 'australia-new-zealand', origin: [172.6, -43.5], longitude: 155, latitude: -72, mapPosition: projectAntarcticaMapPoint(155, -72), entrySectorId: 'ross-entry' },
 ] as const;
+
+export interface AntarcticaSectorPresentation {
+  readonly id: MapPolarSectorId;
+  readonly name: string;
+  readonly longitude: number;
+  readonly latitude: number;
+  /** Angular hit proxy; picking stays analytical and never raycasts meshes. */
+  readonly hitRadiusDegrees: number;
+  readonly focusDistance: number;
+}
+
+/** Immutable transforms allow all live sectors to share one instanced draw. */
+export const ANTARCTICA_SECTOR_PRESENTATIONS: readonly AntarcticaSectorPresentation[] = [
+  { id: 'drake-entry', name: 'Drake Beachhead', longitude: -58, latitude: -66, hitRadiusDegrees: 7.5, focusDistance: 8.7 },
+  { id: 'maud-entry', name: 'Maud Beachhead', longitude: 20, latitude: -70, hitRadiusDegrees: 7.5, focusDistance: 8.7 },
+  { id: 'ross-entry', name: 'Ross Beachhead', longitude: 155, latitude: -72, hitRadiusDegrees: 7.5, focusDistance: 8.7 },
+  { id: 'weddell-forge', name: 'Weddell Forge', longitude: -35, latitude: -76, hitRadiusDegrees: 6.5, focusDistance: 8.35 },
+  { id: 'queen-maud-grid', name: 'Queen Maud Grid', longitude: 36, latitude: -78, hitRadiusDegrees: 6.5, focusDistance: 8.35 },
+  { id: 'ross-array', name: 'Ross Array', longitude: 145, latitude: -80, hitRadiusDegrees: 6.5, focusDistance: 8.35 },
+  { id: 'sentinel-labyrinth', name: 'Sentinel Labyrinth', longitude: -91, latitude: -82, hitRadiusDegrees: 5.8, focusDistance: 8.05 },
+  { id: 'transantarctic-vault', name: 'Transantarctic Vault', longitude: 78, latitude: -84, hitRadiusDegrees: 5.8, focusDistance: 8.05 },
+  { id: 'zero-point-core', name: 'Zero Point Core', longitude: 0, latitude: -89, hitRadiusDegrees: 5.2, focusDistance: 7.8 },
+] as const;
+
+export const ANTARCTICA_SECTOR_PRESENTATION_BY_ID: ReadonlyMap<MapPolarSectorId, AntarcticaSectorPresentation> = new Map(
+  ANTARCTICA_SECTOR_PRESENTATIONS.map((sector) => [sector.id, sector] as const),
+);
+
+/** Finds a visible sector with one spherical-distance pass and no allocations. */
+export function antarcticaSectorAtCoordinates(
+  longitude: number,
+  latitude: number,
+  visibleSectorIds: ReadonlySet<MapPolarSectorId>,
+): MapPolarSectorId | undefined {
+  const latitudeRadians = latitude * Math.PI / 180;
+  const sinLatitude = Math.sin(latitudeRadians);
+  const cosLatitude = Math.cos(latitudeRadians);
+  let nearestId: MapPolarSectorId | undefined;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+  for (const sector of ANTARCTICA_SECTOR_PRESENTATIONS) {
+    if (!visibleSectorIds.has(sector.id)) continue;
+    const sectorLatitude = sector.latitude * Math.PI / 180;
+    const longitudeDelta = (longitude - sector.longitude) * Math.PI / 180;
+    const cosine = Math.max(-1, Math.min(1,
+      sinLatitude * Math.sin(sectorLatitude)
+        + cosLatitude * Math.cos(sectorLatitude) * Math.cos(longitudeDelta),
+    ));
+    const distance = Math.acos(cosine) * 180 / Math.PI;
+    if (distance <= sector.hitRadiusDegrees && distance < nearestDistance) {
+      nearestId = sector.id;
+      nearestDistance = distance;
+    }
+  }
+  return nearestId;
+}
 
 /**
  * A renderer-only identity for the neutral polar research site. It deliberately

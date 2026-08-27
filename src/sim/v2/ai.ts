@@ -122,6 +122,24 @@ export function aiHumanAttackSuspicionFactorV2(globalThreat: number): number {
   return 1.35 * Math.pow(suspicion, 2.15);
 }
 
+/** Extra APEX military-planning weight created by visible player Suspicion. */
+export function aiSuspicionMilitaryPriorityV2(globalThreat: number): number {
+  const suspicion = clamp(globalThreat / 100, 0, 1);
+  return 3.1 * (0.35 * suspicion + 0.65 * suspicion * suspicion);
+}
+
+/** Shared existential-war budget weight after the first Antarctic contact. */
+export const AI_EARTH_DEFENSE_MILITARY_PRIORITY_V2 = 8;
+
+export function aiEarthDefenseMilitaryPriorityV2(
+  state: Pick<WorldStateV2, 'polarEndgame'>,
+): number {
+  return ['contact', 'counteroffensive', 'core-exposed']
+    .includes(state.polarEndgame.phase)
+    ? AI_EARTH_DEFENSE_MILITARY_PRIORITY_V2
+    : 0;
+}
+
 /** Suspicion modestly amplifies an existing human-neighbour opening but creates none by itself. */
 export function aiCounterattackPressureWithSuspicionV2(
   strainPressure: number,
@@ -740,16 +758,22 @@ function aiBudgetTargetV2(
     debtStress,
     integrationStress,
   );
+  const earthDefenseMilitaryPriority = aiEarthDefenseMilitaryPriorityV2(state);
+  const suspicionMilitaryPriority = earthDefenseMilitaryPriority <= 0
+    && selectHumanPlayerIdsV2(state).includes(playerId)
+    ? aiSuspicionMilitaryPriorityV2(state.aiEscalation.globalThreat)
+    : 0;
   if (wars.length === 0 && survivalStress > 0.02) {
     return weightedBudgetPolicyV2({
-      military: 0.40 + 0.30 * (1 - army.fillRatio),
+      military: 0.40 + 0.30 * (1 - army.fillRatio)
+        + suspicionMilitaryPriority + earthDefenseMilitaryPriority,
       research: 0.80 + 0.85 * researchGap + 0.90 * foodStress,
       development: 2.80 + 3.20 * survivalStress + 1.20 * (1 - condition) + 0.80 * poverty,
     });
   }
   return weightedBudgetPolicyV2({
     military: 1.15 + wars.length * 1.25 + 1.65 * (1 - army.fillRatio)
-      + 0.45 * nation.ambition,
+      + 0.45 * nation.ambition + suspicionMilitaryPriority + earthDefenseMilitaryPriority,
     research: 0.85 + 1.30 * researchGap + 0.80 * researchStrength
       + 0.65 * foodStress,
     development: 1.10 + 1.65 * foodStress + 1.10 * (1 - condition)
@@ -1007,6 +1031,9 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
     if (!sameResearchAllocationsV2(player.research.allocations, allocations)) {
       commands.push({ type: 'set-research-allocations', playerId, allocations });
     }
+    if (state.polarEndgame.phase === 'contact'
+      || state.polarEndgame.phase === 'counteroffensive'
+      || state.polarEndgame.phase === 'core-exposed') continue;
     // Recurring budgets, research and the reserve-training pipeline are the
     // complete AI spending path. Manual one-off purchase commands stay
     // player-facing, so neither selected-country APEX nor rivals can turn a

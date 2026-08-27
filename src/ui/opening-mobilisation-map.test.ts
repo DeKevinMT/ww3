@@ -11,7 +11,7 @@ import {
 } from './WorldUIV2';
 
 describe('opening mobilisation on the map', () => {
-  it('projects only active human opening phases and follows the 20-year curve', () => {
+  it('projects only active human opening phases and follows the 30-year curve', () => {
     const greenland = nationIdV2('grl');
     const usa = nationIdV2('usa');
     const engine = new WorldEngineV2(95_201, WORLD_CONTENT_V2);
@@ -23,8 +23,8 @@ describe('opening mobilisation on the map', () => {
     expect(adapter.state.openingMobilisations[greenland]).toMatchObject({
       playerId: greenland,
       remainingRatio: 1,
-      initialMultiplier: 15,
-      currentMultiplier: 15,
+      initialMultiplier: 50,
+      currentMultiplier: 50,
       remainingTicks: OPENING_ARMY_BONUS_DURATION_TICKS_V2,
       direction: 'boost',
     });
@@ -34,7 +34,7 @@ describe('opening mobilisation on the map', () => {
     adapter.refreshSnapshot?.();
     expect(adapter.state.openingMobilisations[greenland]).toMatchObject({
       remainingRatio: 0.5,
-      currentMultiplier: 8,
+      currentMultiplier: 25.5,
       remainingTicks: OPENING_ARMY_BONUS_DURATION_TICKS_V2 / 2,
     });
 
@@ -50,9 +50,9 @@ describe('opening mobilisation on the map', () => {
     expect(engine.configureHumanPlayers([greenland, usa], greenland)).toEqual({ accepted: true });
 
     expect(mapOpeningMobilisationStateV2(engine.state, engine.content, greenland))
-      .toMatchObject({ direction: 'boost', initialMultiplier: 15 });
+      .toMatchObject({ direction: 'boost', initialMultiplier: 50 });
     expect(mapOpeningMobilisationStateV2(engine.state, engine.content, usa))
-      .toMatchObject({ direction: 'limit', initialMultiplier: 0.1, remainingRatio: 1 });
+      .toMatchObject({ direction: 'limit', initialMultiplier: 0.05, remainingRatio: 1 });
     expect(mapOpeningMobilisationStateV2(
       engine.state,
       engine.content,

@@ -14,11 +14,13 @@ interface MutableBorderEdge {
   start: Coordinate;
   end: Coordinate;
   territoryIds: Set<string>;
+  occurrenceCount: number;
 }
 
 interface PreparedBorderEdge {
   points: readonly UnitPosition[];
   territoryIds: readonly string[];
+  internalCanonicalEdge: boolean;
   color: UnitColor;
 }
 
@@ -41,6 +43,7 @@ const BORDER_RADIUS_SCALE = 1.00008;
  * keeping the cached buffer compact enough for a single border draw call.
  */
 const MAX_BORDER_ARC_RADIANS = 0.22 * Math.PI / 180;
+const INTEGRATION_BORDER_COLOR: UnitColor = [244 / 255, 201 / 255, 106 / 255];
 
 /**
  * LineBasicMaterial has one opacity for the complete draw call. Premultiply
@@ -144,12 +147,14 @@ const PREPARED_BORDER_EDGES: readonly PreparedBorderEdge[] = (() => {
         const existing = edgesByKey.get(key);
         if (existing) {
           existing.territoryIds.add(country.id);
+          existing.occurrenceCount += 1;
           continue;
         }
         edgesByKey.set(key, {
           start,
           end,
           territoryIds: new Set([country.id]),
+          occurrenceCount: 1,
         });
       }
     }
@@ -160,16 +165,36 @@ const PREPARED_BORDER_EDGES: readonly PreparedBorderEdge[] = (() => {
     return {
       points: sphericalArcPoints(edge.start, edge.end),
       territoryIds,
+      // Absorbed source polygons such as Morocco / Western Sahara can retain
+      // the same edge twice inside one canonical territory. It is not a coast.
+      internalCanonicalEdge: edge.occurrenceCount > territoryIds.length,
       color: terrainBorderColor(territoryIds),
     };
   });
 })();
 
+function isIntegratingTerritory(territoryId: string, engine: WorldMapEngineContract): boolean {
+  const territory = engine.state.territories[territoryId];
+  return Boolean(territory
+    && territory.coreOwnerId !== territory.ownerId
+    && territory.integration < 0.999999);
+}
+
+function edgeIsIntegrating(edge: PreparedBorderEdge, engine?: WorldMapEngineContract): boolean {
+  return Boolean(engine && edge.territoryIds.some((territoryId) => (
+    isIntegratingTerritory(territoryId, engine)
+  )));
+}
+
 function isHiddenInternalBorder(
   edge: PreparedBorderEdge,
   engine: WorldMapEngineContract | undefined,
 ): boolean {
+  if (edge.internalCanonicalEdge) return true;
   if (!engine || edge.territoryIds.length < 2) return false;
+  // An unfinished conquest keeps its complete perimeter readable, even where
+  // both sides are already controlled by the conqueror. Completion removes it.
+  if (edgeIsIntegrating(edge, engine)) return false;
   const firstTerritoryId = edge.territoryIds[0];
   if (!firstTerritoryId) return false;
   const ownerId = engine.state.territories[firstTerritoryId]?.ownerId;
@@ -185,9 +210,11 @@ function isHiddenInternalBorder(
 /** Stable key for caching border buffers between otherwise frequent map syncs. */
 export function globeBorderOwnershipSignature(engine?: WorldMapEngineContract): string {
   if (!engine) return 'canonical';
-  return COUNTRIES.map((country) => (
-    engine.state.territories[country.id]?.ownerId ?? '-'
-  )).join('|');
+  return COUNTRIES.map((country) => {
+    const territory = engine.state.territories[country.id];
+    if (!territory) return '-';
+    return `${territory.ownerId}:${territory.coreOwnerId}:${isIntegratingTerritory(country.id, engine) ? 1 : 0}`;
+  }).join('|');
 }
 
 /**
@@ -212,6 +239,9 @@ export function buildGlobeBorderBuffer(
   let offset = 0;
   for (const edge of PREPARED_BORDER_EDGES) {
     if (isHiddenInternalBorder(edge, engine)) continue;
+    const edgeColor = edgeIsIntegrating(edge, engine)
+      ? INTEGRATION_BORDER_COLOR
+      : edge.color;
     for (let index = 0; index < edge.points.length - 1; index += 1) {
       const start = edge.points[index]!;
       const end = edge.points[index + 1]!;
@@ -221,12 +251,12 @@ export function buildGlobeBorderBuffer(
       positions[offset + 3] = end[0] * lineRadius;
       positions[offset + 4] = end[1] * lineRadius;
       positions[offset + 5] = end[2] * lineRadius;
-      colors[offset] = edge.color[0];
-      colors[offset + 1] = edge.color[1];
-      colors[offset + 2] = edge.color[2];
-      colors[offset + 3] = edge.color[0];
-      colors[offset + 4] = edge.color[1];
-      colors[offset + 5] = edge.color[2];
+      colors[offset] = edgeColor[0];
+      colors[offset + 1] = edgeColor[1];
+      colors[offset + 2] = edgeColor[2];
+      colors[offset + 3] = edgeColor[0];
+      colors[offset + 4] = edgeColor[1];
+      colors[offset + 5] = edgeColor[2];
       offset += 6;
     }
   }

@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { WAR_OPERATION_COST_PER_MILLION, WAR_OPERATION_REVENUE_SHARE } from './balance';
+import {
+  countryInteriorOperationMultiplierV2,
+  WAR_OPERATION_COST_PER_MILLION,
+  WAR_OPERATION_REVENUE_SHARE,
+} from './balance';
 import { createWorldStateV2 } from './bootstrap';
 import {
   WORLD_CONTENT_V2,
@@ -66,8 +70,14 @@ describe('GDP-per-capita military costs', () => {
     );
     const expectedOneLandFrontCost = finance.revenue * WAR_OPERATION_REVENUE_SHARE
       + deployed * WAR_OPERATION_COST_PER_MILLION * factor;
+    const sourceInteriorCost = countryInteriorOperationMultiplierV2(
+      WORLD_CONTENT_V2.territories[territoryIdV2('prk')].baseline.landArea,
+    );
 
     expect(finance.warOperations).toBeGreaterThan(0);
-    expect(finance.warOperations).toBeCloseTo(expectedOneLandFrontCost * targetTerrainCost, 5);
+    expect(finance.warOperations).toBeCloseTo(
+      expectedOneLandFrontCost * targetTerrainCost * sourceInteriorCost,
+      5,
+    );
   });
 });

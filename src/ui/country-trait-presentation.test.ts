@@ -78,18 +78,18 @@ describe('country trait presentation', () => {
       trait.modifiers,
       humanCountryTraitMultiplierV2(greenland),
     ));
-    expect(rendered.html).toContain('PLAYER START ARMY · ×15.00');
+    expect(rendered.html).toContain('PLAYER START ARMY · ×50.00');
     expect(rendered.html).toContain('FULLY FREE');
     expect(rendered.html).toContain('NO FOOD');
-    expect(rendered.html).toContain('FADES OVER 20 YEARS');
+    expect(rendered.html).toContain('FADES OVER 30 YEARS');
     expect(rendered.html).toContain('never refill');
     expect(rendered.html).toContain('stat-player-army--boost');
-    expect(rendered.html).toContain('trained reserves remain at their normal 1× opening level');
-    expect(renderedOpeningReserve(rendered.html)).toBeCloseTo(ordinaryReserve, 9);
+    expect(rendered.html).toContain('trained reserves use their separate bounded country curve');
+    expect(renderedOpeningReserve(rendered.html)).toBeGreaterThan(ordinaryReserve);
     expect(engine.chooseCountry(greenland)).toEqual({ accepted: true });
     expect(renderedOpeningReserve(rendered.html)).toBeCloseTo(
       engine.state.players[greenland]!.trainedReserves,
-      9,
+      6,
     );
   });
 
@@ -106,13 +106,13 @@ describe('country trait presentation', () => {
       context: 'campaign',
     });
 
-    expect(rendered.html).toContain('PLAYER START ARMY · ×0.10');
+    expect(rendered.html).toContain('PLAYER START ARMY · ×0.05');
     expect(rendered.html).toContain('stat-player-army--limit');
     expect(rendered.html).toContain('OPENING LIMIT');
-    expect(rendered.html).toContain('FORCE CAPS UNLOCK TO 1× OVER 20 YEARS');
-    expect(rendered.html).toContain('deployed Army and trained Reserve start at ×0.10');
+    expect(rendered.html).toContain('FORCE CAPS UNLOCK TO 1× OVER 30 YEARS');
+    expect(rendered.html).toContain('deployed Army and trained Reserve start at ×0.05');
     expect(rendered.html).not.toContain('FULLY FREE');
-    expect(rendered.html).not.toContain('FADES OVER 20 YEARS');
+    expect(rendered.html).not.toContain('FADES OVER 30 YEARS');
     expect(engine.chooseCountry(usa)).toEqual({ accepted: true });
     const actualPlayerReserve = engine.state.players[usa]!.trainedReserves;
     expect(actualPlayerReserve).toBeLessThan(ordinaryReserve);

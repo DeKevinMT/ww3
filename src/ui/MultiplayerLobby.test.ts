@@ -153,7 +153,7 @@ describe('multiplayer lobby launch recovery', () => {
     expect(rendered.html).toContain('Military ranking');
     expect(rendered.html).toContain('GDP / capita');
     expect(rendered.html).toContain('MILITARY POWER');
-    expect(rendered.html).toContain('Aggressiveness');
+    expect(rendered.html).not.toContain('Aggressiveness');
     expect(rendered.html).toContain('data-mp-action="continent-filter"');
     expect(rendered.html).toContain('data-mp-action="select-country"');
     expect(rendered.html).toContain('CLAIMED');

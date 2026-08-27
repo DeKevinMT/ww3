@@ -24,6 +24,12 @@ import {
   synchronizeOpeningArmyHumanRosterV2,
   trackExistingOpeningArmyHumanRosterV2,
 } from './nationState';
+import { OPENING_ARMY_BONUS_DURATION_TICKS_V2 } from './openingArmyBonus';
+import {
+  clonePolarEndgameV2,
+  createInitialPolarEndgameV2,
+  selectPolarVictoryWinnerV2,
+} from './polarEndgame';
 import { contentVersionForWorldContentV2 } from './scenarios';
 import { selectFoodDomesticCapacityTargetV2 } from './selectors';
 import { registerTraitContentV2 } from './traits';
@@ -37,6 +43,7 @@ import type {
   NationStateV2,
   PeaceOfferV2,
   PlayerId,
+  PolarEndgameStateV2,
   TerritoryId,
   TerritoryStateV2,
   TruceStateV2,
@@ -65,6 +72,7 @@ export interface SaveGameV2 {
   alliances: AllianceV2[];
   allianceOffers: AllianceOfferV2[];
   aiEscalation: AiEscalationStateV2;
+  polarEndgame: PolarEndgameStateV2;
   nextEventId: number;
   nextWarId: number;
   nextOfferId: number;
@@ -89,6 +97,9 @@ const LEGACY_RULES_VERSION_V22_PRE_RANDOM = 'frontier-command-v2.60-revolutions-
 const LEGACY_RULES_VERSION_V22_RANDOM = 'frontier-command-v2.61-random-world';
 /** Temporary opening-army release whose free surplus still faded over ten years. */
 const LEGACY_RULES_VERSION_V22_TEMPORARY = 'frontier-command-v2.62-temporary-opening-armies';
+const LEGACY_OPENING_ARMY_BONUS_DURATION_TICKS_V2 = 1_040;
+/** Last authenticated schema-22 release before the Arctic/Antarctic campaign. */
+const LEGACY_RULES_VERSION_V22_PRE_POLAR = 'frontier-command-v2.64-war-strain-counterattacks';
 const LEGACY_CONTENT_VERSION_V16 = 'natural-earth-countries-2026-v6-naval';
 const LEGACY_CONTENT_VERSION_V17 = 'natural-earth-countries-2026-v7-greenland';
 const LEGACY_BOT_MANPOWER_PER_UNIT = 0.10;
@@ -155,9 +166,10 @@ type LegacyPeaceOfferV20 = Omit<PeaceOfferV2, 'settlement'> & {
   territoryId?: TerritoryId;
 };
 type LegacyWarStateV21 = Omit<WarStateV2, 'revenge'>;
+type LegacySaveGameV22PrePolar = Omit<SaveGameV2, 'polarEndgame'>;
 interface LegacySaveGameV21 extends Omit<SaveGameV2,
   'schemaVersion' | 'rulesVersion' | 'alliances' | 'allianceOffers'
-  | 'firstIntegrationDiscountUsedBy' | 'players' | 'wars'> {
+  | 'firstIntegrationDiscountUsedBy' | 'players' | 'polarEndgame' | 'wars'> {
   schemaVersion: 21;
   rulesVersion: typeof LEGACY_RULES_VERSION_V21;
   players: Record<PlayerId, LegacyNationV21>;
@@ -240,7 +252,8 @@ export interface LegacySaveGameV13 extends Omit<LegacySaveGameV14,
 
 interface LegacyWorldStateV17 extends Omit<WorldStateV2,
   'schemaVersion' | 'rulesVersion' | 'contentVersion' | 'humanPlayerIds'
-  | 'firstIntegrationDiscountUsedBy' | 'players' | 'territories' | 'alliances' | 'allianceOffers'> {
+  | 'firstIntegrationDiscountUsedBy' | 'players' | 'territories' | 'alliances' | 'allianceOffers'
+  | 'polarEndgame'> {
   schemaVersion: 17;
   rulesVersion: typeof LEGACY_RULES_VERSION_V17;
   contentVersion: typeof LEGACY_CONTENT_VERSION_V17;
@@ -274,9 +287,10 @@ interface LegacyWorldStateV15 extends Omit<LegacyWorldStateV16,
 const SAVE_KEYS = [
   'actionSequence', 'aiEscalation', 'allianceOffers', 'alliances', 'canonicalStateHash', 'ceasefireObligations', 'contentVersion', 'firstIntegrationDiscountUsedBy', 'humanPlayerId', 'humanPlayerIds', 'mapId',
   'nextEventId', 'nextOfferId', 'nextWarId', 'offers', 'players', 'rngState', 'rulesVersion', 'schemaVersion',
-  'seed', 'territories', 'tick', 'truces', 'wars',
+  'polarEndgame', 'seed', 'territories', 'tick', 'truces', 'wars',
 ].sort();
-const PRE_V263_SAVE_KEYS = SAVE_KEYS.filter((key) => key !== 'firstIntegrationDiscountUsedBy');
+const PRE_POLAR_SAVE_KEYS = SAVE_KEYS.filter((key) => key !== 'polarEndgame');
+const PRE_V263_SAVE_KEYS = PRE_POLAR_SAVE_KEYS.filter((key) => key !== 'firstIntegrationDiscountUsedBy');
 const SCHEMA_21_SAVE_KEYS = PRE_V263_SAVE_KEYS.filter((key) => key !== 'alliances' && key !== 'allianceOffers');
 const LEGACY_SAVE_KEYS = SCHEMA_21_SAVE_KEYS.filter((key) => key !== 'humanPlayerIds');
 
@@ -387,6 +401,7 @@ export function createSaveV2(state: WorldStateV2, content: WorldContentV2): Save
       .sort((left, right) => left.fromId.localeCompare(right.fromId) || left.toId.localeCompare(right.toId))
       .map((offer) => ({ ...offer })),
     aiEscalation: { ...state.aiEscalation, coalitionMembers: [...state.aiEscalation.coalitionMembers] },
+    polarEndgame: clonePolarEndgameV2(state.polarEndgame),
     nextEventId: state.nextEventId,
     nextWarId: state.nextWarId,
     nextOfferId: state.nextOfferId,
@@ -991,6 +1006,7 @@ function migrateLegacyStateV17(
     firstIntegrationDiscountUsedBy: [],
     alliances: [],
     allianceOffers: [],
+    polarEndgame: createInitialPolarEndgameV2(),
     players,
     territories,
     wars: legacyState.wars.map((war) => ({
@@ -1014,7 +1030,7 @@ function migrateLegacyStateV17(
 }
 
 function currentStateFromSave(
-  save: SaveGameV2 | LegacySaveGameV21 | LegacySaveGameV20 | LegacySaveGameV19 | LegacySaveGameV18,
+  save: SaveGameV2 | LegacySaveGameV22PrePolar | LegacySaveGameV21 | LegacySaveGameV20 | LegacySaveGameV19 | LegacySaveGameV18,
   content: WorldContentV2,
   retireLegacyCombatExperience = false,
 ): WorldStateV2 {
@@ -1100,6 +1116,9 @@ function currentStateFromSave(
     firstIntegrationDiscountUsedBy: Array.isArray(serializedDiscountLedger)
       ? [...serializedDiscountLedger] as PlayerId[]
       : serializedDiscountLedger === undefined ? [] : serializedDiscountLedger as never,
+    polarEndgame: 'polarEndgame' in save
+      ? clonePolarEndgameV2(save.polarEndgame as PolarEndgameStateV2)
+      : createInitialPolarEndgameV2(),
     players,
     territories,
     alliances: 'alliances' in save
@@ -1261,7 +1280,7 @@ function migrateRetiredSystemsV2(state: WorldStateV2): void {
 }
 
 export function loadSaveV2(
-  input: string | SaveGameV2 | LegacySaveGameV21 | LegacySaveGameV20 | LegacySaveGameV19 | LegacySaveGameV18 | LegacySaveGameV17 | LegacySaveGameV16 | LegacySaveGameV15 | LegacySaveGameV14 | LegacySaveGameV13,
+  input: string | SaveGameV2 | LegacySaveGameV22PrePolar | LegacySaveGameV21 | LegacySaveGameV20 | LegacySaveGameV19 | LegacySaveGameV18 | LegacySaveGameV17 | LegacySaveGameV16 | LegacySaveGameV15 | LegacySaveGameV14 | LegacySaveGameV13,
   content: WorldContentV2,
 ): WorldStateV2 {
   registerTraitContentV2(content);
@@ -1283,6 +1302,7 @@ export function loadSaveV2(
                 : LEGACY_RULES_VERSION_V13;
   const supportedRules = schemaVersion === 22
     ? parsed.rulesVersion === V2_RULES_VERSION
+      || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_PRE_POLAR
       || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_TEMPORARY
       || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_RANDOM
       || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_PRE_RANDOM
@@ -1297,7 +1317,11 @@ export function loadSaveV2(
   if (!supportedRules) throw new Error(`Unsupported V2 rulesVersion: ${String(parsed.rulesVersion)}.`);
   const keys = Object.keys(parsed).sort();
   const expectedSaveKeys = schemaVersion === 22
-    ? parsed.rulesVersion === V2_RULES_VERSION ? SAVE_KEYS : PRE_V263_SAVE_KEYS
+    ? parsed.rulesVersion === V2_RULES_VERSION
+      ? SAVE_KEYS
+      : parsed.rulesVersion === LEGACY_RULES_VERSION_V22_PRE_POLAR
+        ? PRE_POLAR_SAVE_KEYS
+        : PRE_V263_SAVE_KEYS
     : schemaVersion === 21 ? SCHEMA_21_SAVE_KEYS : LEGACY_SAVE_KEYS;
   if (keys.length !== expectedSaveKeys.length || keys.some((key, index) => key !== expectedSaveKeys[index])) {
     throw new Error('V2 save has missing or extra top-level keys.');
@@ -1308,6 +1332,7 @@ export function loadSaveV2(
   if (parsed.contentVersion !== expectedContent) throw new Error(`Unsupported V2 contentVersion: ${String(parsed.contentVersion)}.`);
   if (schemaVersion === 22 && parsed.contentVersion !== V2_CONTENT_VERSION
     && parsed.rulesVersion !== V2_RULES_VERSION
+    && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_PRE_POLAR
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_TEMPORARY
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_RANDOM) {
     throw new Error('Alternative Universe saves require the current rules version.');
@@ -1323,7 +1348,7 @@ export function loadSaveV2(
   }
 
   const state = schemaVersion === 22
-    ? currentStateFromSave(parsed as unknown as SaveGameV2, content)
+    ? currentStateFromSave(parsed as unknown as SaveGameV2 | LegacySaveGameV22PrePolar, content)
     : schemaVersion === 21
       ? currentStateFromSave(parsed as unknown as LegacySaveGameV21, content)
       : schemaVersion === 20
@@ -1346,6 +1371,17 @@ export function loadSaveV2(
               )), content), content);
   if (parsed.rulesVersion !== V2_RULES_VERSION) {
     migrateRetiredSystemsV2(state);
+    // V2.62–V2.64 persisted the temporary opening pool with a twenty-year
+    // expiry. Extend only the authenticated metadata to the current thirty-
+    // year horizon. Remaining physical manpower is never increased, so an old
+    // save cannot mint troops while its future decay follows the new calendar.
+    for (const nation of Object.values(state.players)) {
+      const bonus = nation.openingArmyBonus;
+      if (bonus && bonus.expiresTick - bonus.startedTick
+        === LEGACY_OPENING_ARMY_BONUS_DURATION_TICKS_V2) {
+        bonus.expiresTick = bonus.startedTick + OPENING_ARMY_BONUS_DURATION_TICKS_V2;
+      }
+    }
     // Supported older rule sets predate the current trait-capacity curve.
     // Capacity is derived, so preserving an obsolete stored value would make
     // an otherwise authentic save fail current invariants (notably Greenland).
@@ -1383,8 +1419,16 @@ export function loadSaveV2(
     }
   }
   assertInvariantsV2(state, content);
+  if (state.polarEndgame.phase === 'victory') {
+    state.winnerId = selectPolarVictoryWinnerV2(state);
+    state.gameOver = true;
+    state.speed = 0;
+    return state;
+  }
   const owners = [...new Set(Object.values(state.territories).map((territory) => territory.owner))];
-  if (owners.length === 1 && Object.keys(state.territories).length === content.territoryIds.length) {
+  if (owners.length === 1
+    && !state.humanPlayerIds.includes(owners[0]!)
+    && Object.keys(state.territories).length === content.territoryIds.length) {
     state.winnerId = owners[0];
     state.gameOver = true;
   }

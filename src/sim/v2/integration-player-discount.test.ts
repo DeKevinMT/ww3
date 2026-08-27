@@ -361,6 +361,7 @@ describe('V2 one-time human conquest integration discount', () => {
       createSaveV2(state, WORLD_CONTENT_V2),
     ) as unknown as Record<string, unknown>;
     delete legacy.firstIntegrationDiscountUsedBy;
+    delete legacy.polarEndgame;
     legacy.rulesVersion = 'frontier-command-v2.62-temporary-opening-armies';
     legacy.canonicalStateHash = canonicalStateHashV2(legacy);
 

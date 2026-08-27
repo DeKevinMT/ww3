@@ -281,4 +281,30 @@ describe('V2 rare deterministic integration revolutions', () => {
         * TERRITORY_REVOLUTION_LOCAL_ARMY_MIN_CAP_SHARE_V2)).toBeCloseTo(0.01, 5);
     assertInvariantsV2(engine.state, WORLD_CONTENT_V2);
   });
+
+  it('keeps a destined integration revolution dormant during Earth unity', () => {
+    const state = createWorldStateV2(71_006);
+    beginTerritoryIntegrationV2(state, WORLD_CONTENT_V2, luxTerritory, bel);
+    const program = state.territories[luxTerritory]!.integrationProgram!;
+    const scheduled = findDestinedSeed(program);
+    state.seed = scheduled.seed;
+    state.tick = scheduled.tick;
+    state.polarEndgame.phase = 'counteroffensive';
+    state.polarEndgame.revealedBy = state.humanPlayerId;
+    state.polarEndgame.warningTick = 0;
+    state.polarEndgame.contactTick = 0;
+    state.polarEndgame.earthDefenseMembers = [state.humanPlayerId];
+    state.polarEndgame.nextCounteroffensiveTick = state.tick + 13;
+
+    expect(processTerritoryIntegrationRevolutionsV2(
+      state,
+      WORLD_CONTENT_V2,
+    )).toEqual([]);
+    expect(state.territories[luxTerritory]).toMatchObject({
+      owner: bel,
+      coreOwner: lux,
+      integrationProgram: program,
+    });
+    expect(state.wars).toEqual([]);
+  });
 });
