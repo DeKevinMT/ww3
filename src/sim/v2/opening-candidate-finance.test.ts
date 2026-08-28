@@ -29,17 +29,23 @@ describe('V2 opening candidate finance projections', () => {
   });
 
   it('limits the human multiplier to the controlled country\'s own applicable trait', () => {
-    const belgiumState = createWorldStateV2(8_229);
-    const usaState = { ...belgiumState, humanPlayerId: nationIdV2('usa') };
-    const belgiumPlans = selectOpeningCandidateFinancePlansV2(belgiumState, WORLD_CONTENT_V2);
+    const ireland = nationIdV2('irl');
+    const irelandState = createWorldStateV2(8_229);
+    irelandState.humanPlayerId = ireland;
+    irelandState.humanPlayerIds = [ireland];
+    const usaState = {
+      ...irelandState,
+      humanPlayerId: nationIdV2('usa'),
+      humanPlayerIds: [nationIdV2('usa')],
+    };
+    const irelandPlans = selectOpeningCandidateFinancePlansV2(irelandState, WORLD_CONTENT_V2);
     const usaPlans = selectOpeningCandidateFinancePlansV2(usaState, WORLD_CONTENT_V2);
 
-    const belgium = nationIdV2('bel');
-    for (const playerId of WORLD_CONTENT_V2.nationIds.filter((id) => id !== belgium)) {
+    for (const playerId of WORLD_CONTENT_V2.nationIds.filter((id) => id !== ireland)) {
       expect(usaPlans.get(playerId)?.annualEconomyGrowthRate, String(playerId))
-        .toBeCloseTo(belgiumPlans.get(playerId)?.annualEconomyGrowthRate ?? 0, 9);
+        .toBeCloseTo(irelandPlans.get(playerId)?.annualEconomyGrowthRate ?? 0, 9);
     }
-    expect(belgiumPlans.get(belgium)!.annualEconomyGrowthRate)
-      .toBeGreaterThan(usaPlans.get(belgium)!.annualEconomyGrowthRate);
+    expect(irelandPlans.get(ireland)!.annualEconomyGrowthRate)
+      .toBeGreaterThan(usaPlans.get(ireland)!.annualEconomyGrowthRate);
   });
 });

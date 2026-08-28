@@ -35,6 +35,7 @@ import {
   ATTACKER_CIVILIAN_LOSS_POPULATION_CAP,
   AI_EXHAUSTION_CEASEFIRE_COST_MULTIPLIER,
   AI_OFFENSIVE_EXHAUSTION_ARMY_FILL_RATIO,
+  aiBorderPreSupplyPriorityV2,
   DEFENDER_CIVILIAN_LOSS_INTENSITY,
   DEFENDER_CIVILIAN_LOSS_POPULATION_CAP,
   DEFENDER_COUNTERFIRE_MULTIPLIER,
@@ -53,6 +54,11 @@ import {
   warAccessOperationMultiplierV2,
   warAccessSupplyMultiplierV2,
   WAR_DECLARATION_ATTACKER_LOSS_SHARE,
+  WAR_CAMPAIGN_CONSOLIDATE_FATIGUE,
+  WAR_CAMPAIGN_MAX_TICKS,
+  WAR_CAMPAIGN_MIN_CONTINUE_FILL_RATIO,
+  WAR_CAMPAIGN_MULTI_WAR_MIN_CONTINUE_FILL_RATIO,
+  WAR_CAPTURE_CONSOLIDATION_TICKS,
   WAR_MOBILIZATION_TICKS,
   WAR_REVENGE_WINDOW_TICKS,
   clamp,
@@ -128,6 +134,7 @@ import type {
   PlayerId,
   TerritoryId,
   TruceStateV2,
+  WarCampaignStateV2,
   WarStateV2,
   WarDeclarationStatusV2,
   WarForecastV2,
@@ -524,6 +531,44 @@ function applyWarDeclarationAttackerLossV2(
   return loss;
 }
 
+/** Small empires can be decided in one gain; large ones expose at most three objectives. */
+export function warCampaignCaptureObjectiveV2(opponentTerritoryCount: number): number {
+  const count = Math.max(0, Math.floor(opponentTerritoryCount));
+  return count <= 1 ? 1 : count <= 4 ? 2 : 3;
+}
+
+function createWarCampaignStateV2(
+  state: WorldStateV2,
+  attackerId: PlayerId,
+  defenderId: PlayerId,
+  startedTick: number,
+): WarCampaignStateV2 {
+  return {
+    attackerObjective: warCampaignCaptureObjectiveV2(
+      selectTerritoriesOfV2(state, defenderId).length,
+    ),
+    // A counteroffensive is restorative, not a second unbounded invasion.
+    defenderObjective: 1,
+    attackerCaptures: 0,
+    defenderCaptures: 0,
+    consolidationUntilTick: startedTick,
+    expiresTick: startedTick + WAR_CAMPAIGN_MAX_TICKS,
+  };
+}
+
+function ensureWarCampaignStateV2(
+  state: WorldStateV2,
+  war: WarStateV2,
+): WarCampaignStateV2 {
+  war.campaign ??= createWarCampaignStateV2(
+    state,
+    war.attackerId,
+    war.defenderId,
+    war.startedTick,
+  );
+  return war.campaign;
+}
+
 export function declareWarV2(
   state: WorldStateV2,
   content: WorldContentV2,
@@ -580,6 +625,12 @@ export function declareWarV2(
       defenderCivilianLosses: 0,
       lastPeaceOfferTick: -1_000_000,
       revenge: null,
+      campaign: createWarCampaignStateV2(
+        state,
+        newAttackerId,
+        newDefenderId,
+        state.tick,
+      ),
       attackerOperations: [],
       defenderOperations: [],
     });
@@ -666,6 +717,12 @@ export function beginIndependenceWarV2(
     defenderCivilianLosses: 0,
     lastPeaceOfferTick: -1_000_000,
     revenge: null,
+    campaign: createWarCampaignStateV2(
+      state,
+      restoredOwnerId,
+      displacedOwnerId,
+      state.tick,
+    ),
     attackerOperations: [],
     defenderOperations: [],
   });
@@ -1361,14 +1418,6 @@ function chooseInitiativeOperationsV2(
   // AI attacker stands down, including while its surrender offer is pending.
   if (aiAttackerMustStandDownV2(state, war)) return defenderOperations;
   const attackerOperations = ensureOperationsV2(state, content, war, war.attackerId);
-  if (war.revenge && war.revenge.expiresTick > state.tick) {
-    const claimantOperations = war.revenge.claimantId === war.attackerId
-      ? attackerOperations : defenderOperations;
-    // The victim gets one bounded campaign window with the initiative. A
-    // recapture may open the route to an enemy core, but the opponent cannot
-    // repeatedly flip that same border territory while retaliation is active.
-    if (claimantOperations.length > 0) return claimantOperations;
-  }
   if (attackerOperations.length === 0) return defenderOperations;
   if (defenderOperations.length === 0) return attackerOperations;
   const operationIsViable = (operation: FrontOperationV2): boolean => {
@@ -1585,6 +1634,7 @@ export function resolveBattlePulseV2(
   const attackerId = source.owner;
   const defenderId = target.owner;
   if (attackerId === defenderId || operation.commanderId !== attackerId) return undefined;
+  const campaign = ensureWarCampaignStateV2(state, war);
   const attackerTraitContext = traitOperationContextV2(
     state, content, war, operation, attackerId,
   );
@@ -1737,6 +1787,12 @@ export function resolveBattlePulseV2(
   if (conquered) {
     war.attackerOperations = [];
     war.defenderOperations = [];
+    if (attackerFormal) campaign.attackerCaptures += 1;
+    else campaign.defenderCaptures += 1;
+    campaign.consolidationUntilTick = Math.min(
+      campaign.expiresTick,
+      state.tick + WAR_CAPTURE_CONSOLIDATION_TICKS,
+    );
     if (!capture.defeatedId && !war.revenge) {
       war.revenge = {
         claimantId: defenderId,
@@ -1747,7 +1803,7 @@ export function resolveBattlePulseV2(
         state,
         'war',
         'action',
-        `${content.nations[defenderId]?.name ?? defenderId} began a one-year retaliation campaign after losing ${content.territories[operation.targetId]?.name ?? operation.targetId}.`,
+        `${content.nations[defenderId]?.name ?? defenderId} gained a one-year counteroffensive priority after losing ${content.territories[operation.targetId]?.name ?? operation.targetId}.`,
         operation.targetId,
         defenderId,
       );
@@ -2346,10 +2402,14 @@ export function redistributeArmiesV2(state: WorldStateV2, content: WorldContentV
       / Math.max(0.001, nationalEconomy.weeklyRevenue);
     let remainingNavalLogisticsBudget = Math.max(0, state.players[playerId]?.treasury ?? 0)
       * INTERNAL_NAVAL_TRANSFER_WEEKLY_TREASURY_SHARE_MAX_V2;
-    const hostile = new Set(selectWarsOfV2(state, playerId).map((war) => war.attackerId === playerId ? war.defenderId : war.attackerId));
+    const ownerWars = selectWarsOfV2(state, playerId);
+    const borderPreSupplyPriority = isHumanPlayerV2(state, playerId)
+      ? 0
+      : aiBorderPreSupplyPriorityV2(state.aiEscalation.globalThreat, ownerWars.length);
+    const hostile = new Set(ownerWars.map((war) => war.attackerId === playerId ? war.defenderId : war.attackerId));
     const ownOperationSources = new Set<TerritoryId>();
     const threatenedTargets = new Set<TerritoryId>();
-    for (const war of selectWarsOfV2(state, playerId)) {
+    for (const war of ownerWars) {
       for (const operation of [...war.attackerOperations, ...war.defenderOperations]) {
         if (operation.commanderId === playerId && state.territories[operation.sourceId]?.owner === playerId) {
           ownOperationSources.add(operation.sourceId);
@@ -2395,9 +2455,16 @@ export function redistributeArmiesV2(state: WorldStateV2, content: WorldContentV
         const attacked = threatenedTargets.has(id);
         const attackBase = ownOperationSources.has(id);
         const capital = state.players[playerId]?.capitalId === id;
-        const weight = attacked ? 18 : attackBase ? 16 : activeBorder ? 12 : peaceBorder ? 6.5 : capital ? 1.5 : 0.2;
-        const desiredFill = attacked ? 0.98 : attackBase ? 0.95 : activeBorder ? 0.88
-          : peaceBorder ? 0.45 : capital ? 0.08 : 0.015;
+        const weight = attacked ? 18 + 2 * borderPreSupplyPriority
+          : attackBase ? 16 + 2 * borderPreSupplyPriority
+            : activeBorder ? 12 + 4 * borderPreSupplyPriority
+              : peaceBorder ? 6.5 + 4.5 * borderPreSupplyPriority
+                : capital ? 1.5 : 0.2;
+        const desiredFill = attacked ? 0.98
+          : attackBase ? 0.95 + 0.03 * borderPreSupplyPriority
+            : activeBorder ? 0.88 + 0.08 * borderPreSupplyPriority
+              : peaceBorder ? 0.45 + 0.25 * borderPreSupplyPriority
+                : capital ? 0.08 : 0.015;
         return {
           id,
           weight,
@@ -2588,6 +2655,38 @@ export function redistributeArmiesV2(state: WorldStateV2, content: WorldContentV
     || left.targetId.localeCompare(right.targetId));
 }
 
+function campaignConquestStopReasonV2(
+  state: WorldStateV2,
+  war: WarStateV2,
+  battle: BattleEventV2,
+): string | undefined {
+  const campaign = ensureWarCampaignStateV2(state, war);
+  const formalAttackerCaptured = battle.attackerId === war.attackerId;
+  const captures = formalAttackerCaptured
+    ? campaign.attackerCaptures : campaign.defenderCaptures;
+  const objective = formalAttackerCaptured
+    ? campaign.attackerObjective : campaign.defenderObjective;
+  if (captures >= objective) {
+    return formalAttackerCaptured
+      ? `Campaign objective completed after ${captures} territorial conquest${captures === 1 ? '' : 's'}; both empires consolidated.`
+      : 'The defending empire completed its counteroffensive objective and secured a ceasefire.';
+  }
+  const victorId = battle.attackerId;
+  const manpower = selectTotalManpowerV2(state, victorId);
+  const fillRatio = manpower.capacity > 0 ? manpower.deployed / manpower.capacity : 0;
+  const activeWars = selectWarsOfV2(state, victorId).length;
+  if ((state.players[victorId]?.warFatigue ?? 0) >= WAR_CAMPAIGN_CONSOLIDATE_FATIGUE) {
+    return 'Severe war fatigue forced the victor to consolidate its latest territorial gain.';
+  }
+  if (fillRatio < WAR_CAMPAIGN_MIN_CONTINUE_FILL_RATIO) {
+    return 'Field-army exhaustion forced the victor to consolidate its latest territorial gain.';
+  }
+  if (activeWars > 1 && fillRatio < WAR_CAMPAIGN_MULTI_WAR_MIN_CONTINUE_FILL_RATIO) {
+    return 'Multiple active wars forced the victor to consolidate its latest territorial gain.';
+  }
+  return undefined;
+}
+
 export function processWarsV2(
   state: WorldStateV2,
   content: WorldContentV2,
@@ -2606,6 +2705,7 @@ export function processWarsV2(
   for (const war of [...state.wars].sort((a, b) => a.lastBattleTick - b.lastBattleTick
     || a.id.localeCompare(b.id))) {
     if (!state.wars.some((candidate) => candidate.id === war.id)) continue;
+    const campaign = ensureWarCampaignStateV2(state, war);
     if (selectIsEliminatedV2(state, war.attackerId)) {
       endWarsForEliminatedNationV2(state, war.attackerId, 'War ended after national elimination.', endedWars);
       continue;
@@ -2614,11 +2714,12 @@ export function processWarsV2(
       endWarsForEliminatedNationV2(state, war.defenderId, 'War ended after national elimination.', endedWars);
       continue;
     }
-    if (war.revenge && state.tick >= war.revenge.expiresTick) {
+    if (war.revenge && state.tick >= war.revenge.expiresTick) war.revenge = null;
+    if (state.tick >= campaign.expiresTick) {
       endWarV2(
         state,
         war,
-        'The one-year retaliation window ended; both empires accepted a ceasefire.',
+        'The three-year campaign window ended; both empires consolidated their positions.',
         TRUCE_TICKS,
         endedWars,
       );
@@ -2641,6 +2742,7 @@ export function processWarsV2(
     }
     const warAge = state.tick - war.startedTick;
     if (warAge < WAR_MOBILIZATION_TICKS) continue;
+    if (state.tick < campaign.consolidationUntilTick) continue;
     if ((warAge - WAR_MOBILIZATION_TICKS) % BATTLE_INTERVAL_TICKS !== 0) continue;
     const operations = chooseInitiativeOperationsV2(state, content, war);
     if (operations.length === 0) continue;
@@ -2663,27 +2765,21 @@ export function processWarsV2(
       const attackerAfter = nationalCombatManpowerV2(state, war.attackerId);
       const defenderAfter = nationalCombatManpowerV2(state, war.defenderId);
       const conquestBattle = warBattles.find((battle) => battle.conquered);
-      const revengeOpponentId = war.revenge?.claimantId === war.attackerId
-        ? war.defenderId : war.attackerId;
-      const revengeFulfilled = Boolean(war.revenge && conquestBattle
-        && conquestBattle.attackerId === war.revenge.claimantId
-        && state.territories[conquestBattle.targetId]?.coreOwner === revengeOpponentId);
+      const campaignStopReason = conquestBattle
+        ? campaignConquestStopReasonV2(state, war, conquestBattle)
+        : undefined;
       if (selectIsEliminatedV2(state, war.attackerId)) {
         endWarsForEliminatedNationV2(state, war.attackerId, 'War ended after national elimination.', endedWars);
       } else if (selectIsEliminatedV2(state, war.defenderId)) {
         endWarsForEliminatedNationV2(state, war.defenderId, 'War ended after national elimination.', endedWars);
-      } else if (revengeFulfilled) {
+      } else if (campaignStopReason) {
         endWarV2(
           state,
           war,
-          'Retaliation succeeded after one enemy core territory was conquered.',
+          campaignStopReason,
           TRUCE_TICKS,
           endedWars,
         );
-      } else if (conquered && !war.revenge) {
-        // Defensive fallback for malformed legacy state. Canonical campaigns
-        // always arm a single revenge window on the first non-terminal capture.
-        endWarV2(state, war, 'War ended after one territory was conquered.', TRUCE_TICKS, endedWars);
       } else if (attackerAfter <= 0.000001 && defenderAfter <= 0.000001) {
         endWarV2(state, war, 'Mutual army exhaustion ended the war without absorption.', TRUCE_TICKS, endedWars);
       }

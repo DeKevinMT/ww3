@@ -43,6 +43,13 @@ describe('shared national-AI spending discipline', () => {
     }
     expect(aiSuspicionMilitaryPriorityV2(-100)).toBe(priorities[0]);
     expect(aiSuspicionMilitaryPriorityV2(1_000)).toBe(priorities.at(-1));
+    expect(aiSuspicionMilitaryPriorityV2(80)).toBeGreaterThan(
+      aiSuspicionMilitaryPriorityV2(75) * 1.25,
+    );
+    expect(aiSuspicionMilitaryPriorityV2(80, 2))
+      .toBeGreaterThan(aiSuspicionMilitaryPriorityV2(80, 1));
+    expect(aiSuspicionMilitaryPriorityV2(80, 1))
+      .toBeGreaterThan(aiSuspicionMilitaryPriorityV2(80));
   });
 
   it('switches every active country to strong Suspicion-independent Earth Defense budgets', () => {
@@ -74,7 +81,7 @@ describe('shared national-AI spending discipline', () => {
     expect(plannedMilitary(highSuspicion, human))
       .toBeGreaterThan(plannedMilitary(lowSuspicion, human));
     expect(plannedMilitary(highSuspicion, rival))
-      .toBe(plannedMilitary(lowSuspicion, rival));
+      .toBeGreaterThan(plannedMilitary(lowSuspicion, rival));
     expect(aiEarthDefenseMilitaryPriorityV2(lowSuspicion)).toBe(0);
 
     const lowContact = structuredClone(lowSuspicion);

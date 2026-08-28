@@ -81,11 +81,14 @@ describe('live rapid-expansion response', () => {
     }
     expect(factors[1]).toBeLessThan(0.05);
     expect(factors.at(-1)).toBeGreaterThan(1);
+    expect(aiHumanAttackSuspicionFactorV2(80))
+      .toBeGreaterThan(aiHumanAttackSuspicionFactorV2(75) * 1.25);
   });
 
   it('blocks every autonomous human-target declaration at zero Suspicion but permits bounded reactions when high', () => {
     let zeroSuspicionAttacks = 0;
     let highSuspicionAttacks = 0;
+    let extremeSuspicionAttacks = 0;
     const samples = 24;
     for (let index = 0; index < samples; index += 1) {
       const safe = rapidExpansionState(55_100 + index, 0);
@@ -101,16 +104,22 @@ describe('live rapid-expansion response', () => {
         .filter((command) => command.type === 'declare-war'
           && command.defenderId === belgium).length;
 
-      const exposed = rapidExpansionState(55_100 + index, 100);
+      const exposed = rapidExpansionState(55_100 + index, 80);
       const declarations = planAiCommandsV2(exposed, WORLD_CONTENT_V2)
         .filter((command) => command.type === 'declare-war');
       expect(declarations.every((command) => command.type === 'declare-war'
         && command.defenderId === belgium)).toBe(true);
       highSuspicionAttacks += declarations.length;
+
+      const extreme = rapidExpansionState(55_100 + index, 100);
+      extremeSuspicionAttacks += planAiCommandsV2(extreme, WORLD_CONTENT_V2)
+        .filter((command) => command.type === 'declare-war'
+          && command.defenderId === belgium).length;
     }
 
     expect(zeroSuspicionAttacks).toBe(0);
     expect(highSuspicionAttacks).toBeGreaterThan(0);
     expect(highSuspicionAttacks).toBeLessThan(samples);
+    expect(extremeSuspicionAttacks).toBeGreaterThanOrEqual(highSuspicionAttacks);
   }, 30_000);
 });

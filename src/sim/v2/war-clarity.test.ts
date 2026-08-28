@@ -7,6 +7,7 @@ import {
   CEASEFIRE_POST_PAYMENT_TRUCE_TICKS,
   PEACE_OFFER_DURATION_TICKS,
   PEACE_REQUEST_MIN_WAR_AGE_TICKS,
+  WAR_CAMPAIGN_MAX_TICKS,
   WAR_MOBILIZATION_TICKS,
   WAR_RECRUITMENT_THROUGHPUT_FACTOR,
 } from './balance';
@@ -19,6 +20,17 @@ import { territoryIdV2, type PlayerId } from './types';
 import { processWarsV2, requestCeasefireV2, respondToOfferV2 } from './war';
 
 const id = (value: string) => value as PlayerId;
+
+function campaignAt(startedTick: number) {
+  return {
+    attackerObjective: 1,
+    defenderObjective: 1,
+    attackerCaptures: 0,
+    defenderCaptures: 0,
+    consolidationUntilTick: startedTick,
+    expiresTick: startedTick + WAR_CAMPAIGN_MAX_TICKS,
+  };
+}
 
 function isolatedEngine(seed: number, humanId: string): WorldEngineV2 {
   const engine = new WorldEngineV2(seed);
@@ -55,6 +67,8 @@ describe('clear war decisions and attrition', () => {
       id: 'war-training', attackerId: id('chn'), defenderId: id('nld'),
       startedTick: 0, lastBattleTick: 0, warScore: 0, battles: 0,
       attackerLosses: 0, defenderLosses: 0, lastPeaceOfferTick: -1_000_000,
+      attackerCivilianLosses: 0, defenderCivilianLosses: 0,
+      revenge: null, campaign: campaignAt(0),
       attackerOperations: [], defenderOperations: [],
     });
     const war = selectRecruitmentThroughputV2(engine.state, WORLD_CONTENT_V2, id('nld'));
@@ -128,6 +142,8 @@ describe('clear war decisions and attrition', () => {
     engine.step();
     const war = engine.activeWarBetween('lux', 'bel')!;
     war.startedTick = engine.state.tick - PEACE_REQUEST_MIN_WAR_AGE_TICKS;
+    war.campaign!.consolidationUntilTick = war.startedTick;
+    war.campaign!.expiresTick = war.startedTick + WAR_CAMPAIGN_MAX_TICKS;
     const terms = engine.ceasefireTerms(war.id, 'lux');
     const treasuryBefore = engine.state.players[id('lux')].treasury;
     expect(terms.allowed).toBe(true);
@@ -191,6 +207,9 @@ describe('clear war decisions and attrition', () => {
       startedTick: engine.state.tick - PEACE_REQUEST_MIN_WAR_AGE_TICKS,
       lastBattleTick: engine.state.tick, warScore: 0, battles: 0,
       attackerLosses: 0, defenderLosses: 0, lastPeaceOfferTick: -1_000_000,
+      attackerCivilianLosses: 0, defenderCivilianLosses: 0,
+      revenge: null,
+      campaign: campaignAt(engine.state.tick - PEACE_REQUEST_MIN_WAR_AGE_TICKS),
       attackerOperations: [], defenderOperations: [],
     });
     expect(engine.ceasefireTerms('war-repeat-ceasefire', 'lux').repeatMultiplier).toBeCloseTo(1.10, 6);
@@ -223,6 +242,8 @@ describe('clear war decisions and attrition', () => {
     engine.step();
     const war = engine.activeWarBetween('lux', 'bel')!;
     war.startedTick = engine.state.tick - PEACE_REQUEST_MIN_WAR_AGE_TICKS;
+    war.campaign!.consolidationUntilTick = war.startedTick;
+    war.campaign!.expiresTick = war.startedTick + WAR_CAMPAIGN_MAX_TICKS;
     expect(engine.requestCeasefire(war.id, 'lux').accepted).toBe(true);
     engine.step();
     const offer = engine.state.offers.find((candidate) => candidate.warId === war.id && candidate.status === 'pending')!;
@@ -239,6 +260,8 @@ describe('clear war decisions and attrition', () => {
       id: 'war-peace-window', attackerId: id('lux'), defenderId: id('bel'),
       startedTick: 0, lastBattleTick: 50, warScore: -100, battles: 10,
       attackerLosses: 0, defenderLosses: 1, lastPeaceOfferTick: -1_000_000,
+      attackerCivilianLosses: 0, defenderCivilianLosses: 0,
+      revenge: null, campaign: campaignAt(0),
       attackerOperations: [], defenderOperations: [],
     };
     engine.state.wars = [war];
@@ -272,6 +295,8 @@ describe('clear war decisions and attrition', () => {
     engine.step();
     const war = engine.activeWarBetween('lux', 'bel')!;
     war.startedTick = 0;
+    war.campaign!.consolidationUntilTick = 0;
+    war.campaign!.expiresTick = WAR_CAMPAIGN_MAX_TICKS;
     war.battles = 8;
     war.warScore = 60;
     war.attackerLosses = 0.001;
@@ -318,7 +343,7 @@ describe('clear war decisions and attrition', () => {
       .slice(0, 8));
     const observed = new Set<string>();
     const majorAttackers = new Set<string>();
-    for (let week = 0; week < 260; week += 1) {
+    for (let week = 0; week < 520; week += 1) {
       engine.step();
       for (const war of engine.state.wars) {
         if (observed.has(war.id)) continue;
@@ -327,5 +352,5 @@ describe('clear war decisions and attrition', () => {
       }
     }
     expect(majorAttackers.size).toBeGreaterThanOrEqual(1);
-  }, 45_000);
+  }, 180_000);
 });

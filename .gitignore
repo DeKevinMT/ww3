@@ -4,6 +4,7 @@ dist/
 .wrangler-dist/
 .local-modules/
 work/
+.asset-work/
 
 *.zip
 coverage/

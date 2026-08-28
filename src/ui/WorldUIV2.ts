@@ -128,7 +128,6 @@ import type {
   AllianceOfferV2,
   AllianceProposalStatusV2,
   ArcticProjectIdV2,
-  BattleEventV2,
   CeasefireTermsV2,
   CommandResultV2,
   ConquestForecastV2,
@@ -1771,7 +1770,6 @@ export class WorldUIV2 {
   private introSearchTimer?: number;
   private readonly warOutcomeQueue: WarOutcomeV2[] = [];
   private warOutcomeResumeSpeed?: WorldSpeedV2;
-  private readonly conquestTransferTimers = new Set<number>();
   private suppressMapUntil = 0;
   private readonly uiPointerIds = new Set<number>();
   private readonly locallyReadEventIds = new Set<number>();
@@ -1881,7 +1879,6 @@ export class WorldUIV2 {
     if (this.renderTimer !== undefined) window.clearTimeout(this.renderTimer);
     if (this.renderFrame !== undefined) window.cancelAnimationFrame(this.renderFrame);
     if (this.introSearchTimer !== undefined) window.clearTimeout(this.introSearchTimer);
-    this.clearConquestTransferEffects();
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('pointerup', this.onWindowPointerRelease, true);
     window.removeEventListener('pointercancel', this.onWindowPointerRelease, true);
@@ -1980,10 +1977,6 @@ export class WorldUIV2 {
     } : audioBasePresentation;
     void worldGameAudio.handleWorldChange(change, audioPresentation);
     if (change.warOutcome) {
-      // A concluded war replaces the tactical HUD with the outcome report. Any
-      // delayed conquest chips would animate behind that modal while also forcing
-      // layout reads during the heaviest political-map update. Drop them here.
-      this.clearConquestTransferEffects();
       const outcome = change.warOutcome;
       if (enqueueWarOutcomeV2(this.warOutcomeQueue, outcome)) {
         if (!this.options.multiplayer) {
@@ -2023,16 +2016,7 @@ export class WorldUIV2 {
       );
     }
     if (change.battle) {
-      const humanId = this.viewerPlayerId();
       mapBridge.scene?.playBattle(change.battle);
-      if (change.battle.conquered && change.battle.attackerId === humanId) {
-        const battle = change.battle;
-        const timer = window.setTimeout(() => {
-          this.conquestTransferTimers.delete(timer);
-          this.playConquestTransfer(battle);
-        }, 420);
-        this.conquestTransferTimers.add(timer);
-      }
     }
     if (change.reason === 'conquest' || change.reason === 'nation-defeated'
       || change.reason === 'integration-complete') this.rankingCache = undefined;
@@ -2044,7 +2028,7 @@ export class WorldUIV2 {
       return;
     }
     const atWar = this.humanWars().length > 0;
-    this.scheduleRender(atWar ? 620 : 1_050);
+    this.scheduleRender(change.reason === 'conquest' ? 0 : (atWar ? 620 : 1_050));
   }
 
   /**
@@ -2333,70 +2317,6 @@ export class WorldUIV2 {
     }, toastVisibilityDuration(tone));
   }
 
-  private playConquestTransfer(battle: BattleEventV2): void {
-    const origin = mapBridge.scene?.territoryScreenPosition?.(battle.targetId) ?? {
-      x: window.innerWidth * 0.52,
-      y: window.innerHeight * 0.46,
-    };
-    const captured = this.engine.state.territories[battle.targetId];
-    const unlockedShare = captured?.integration ?? 1;
-    const gains = [
-      battle.capturedEconomy > 0.0001
-        ? { target: 'economy', label: `+${cash(battle.capturedEconomy * unlockedShare)} NOW`, tone: 'economy' } : undefined,
-      battle.treasurySeized > 0.0001
-        ? { target: 'cash', label: `+${cash(battle.treasurySeized)}`, tone: 'cash' } : undefined,
-      battle.capturedPopulation > 0.0001
-        ? { target: 'people', label: `+${people(battle.capturedPopulation * unlockedShare)} NOW`, tone: 'people' } : undefined,
-      { target: 'food', label: `+${format(unlockedShare * 100)}% FOOD NETWORK`, tone: 'food' },
-      captured && captured.army.capacity > 0.000001
-        ? { target: 'army', label: `+${people(captured.army.capacity)} CAP`, tone: 'army' } : undefined,
-    ].filter((gain): gain is { target: string; label: string; tone: string } => Boolean(gain));
-    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    gains.forEach((gain, index) => {
-      const timer = window.setTimeout(() => {
-        this.conquestTransferTimers.delete(timer);
-        const destination = this.hud.querySelector<HTMLElement>(`[data-stat-target="${gain.target}"]`);
-        if (!destination) return;
-        const end = destination.getBoundingClientRect();
-        const chip = document.createElement('div');
-        chip.className = `conquest-transfer-chip conquest-transfer-chip--${gain.tone}`;
-        chip.textContent = gain.label;
-        chip.style.left = `${Math.max(16, Math.min(window.innerWidth - 120, origin.x))}px`;
-        chip.style.top = `${Math.max(80, Math.min(window.innerHeight - 80, origin.y))}px`;
-        document.body.append(chip);
-        if (reducedMotion) {
-          destination.classList.add('is-receiving-gain');
-          window.setTimeout(() => destination.classList.remove('is-receiving-gain'), 500);
-          chip.remove();
-          return;
-        }
-        const dx = end.left + end.width / 2 - origin.x;
-        const dy = end.top + end.height / 2 - origin.y;
-        const animation = chip.animate([
-          { opacity: 0, transform: 'translate(-50%,-50%) scale(.78)' },
-          { opacity: 1, transform: 'translate(-50%,-62%) scale(1)', offset: 0.18 },
-          { opacity: 0.92, transform: `translate(calc(-50% + ${dx * 0.65}px), calc(-50% + ${dy * 0.65 - 18}px)) scale(.92)`, offset: 0.72 },
-          { opacity: 0, transform: `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px)) scale(.55)` },
-        ], { duration: 1_050, easing: 'cubic-bezier(.2,.72,.22,1)', fill: 'forwards' });
-        animation.onfinish = () => {
-          chip.remove();
-          destination.classList.add('is-receiving-gain');
-          window.setTimeout(() => destination.classList.remove('is-receiving-gain'), 520);
-        };
-      }, index * 135);
-      this.conquestTransferTimers.add(timer);
-    });
-  }
-
-  private clearConquestTransferEffects(): void {
-    for (const timer of this.conquestTransferTimers) window.clearTimeout(timer);
-    this.conquestTransferTimers.clear();
-    document.querySelectorAll<HTMLElement>('.conquest-transfer-chip').forEach((chip) => chip.remove());
-    this.hud.querySelectorAll<HTMLElement>('.is-receiving-gain').forEach((target) => {
-      target.classList.remove('is-receiving-gain');
-    });
-  }
-
   private render(): void {
     const introSearch = this.hud.querySelector<HTMLInputElement>('#country-search');
     const restoreIntroSearchFocus = introSearch === document.activeElement;
@@ -2499,11 +2419,11 @@ export class WorldUIV2 {
           <span class="country-flag" aria-hidden="true">${countryFlagHtml(human.id, human.sigil, true)}</span><div class="coalition-chip__body"><small>${worldDateLabel(state.tick)}</small><div class="command-identity__line"><strong title="${escapeHtml(human.name)}">${escapeHtml(human.shortName)}</strong><button class="v2-rank-badge" data-action="ranking" aria-label="Open global military ranking; ${escapeHtml(human.name)} is military rank ${humanRank} of ${ranking.length} active countries">#${humanRank}/${ranking.length}</button></div></div>
         </div>
         <nav class="strategic-metrics v2-metrics simple-metrics topbar-status" style="display:grid;grid-template-columns:repeat(6,minmax(88px,1fr));gap:4px;overflow-x:auto" aria-label="National status shortcuts">
-          <button type="button" class="top-metric top-metric--economy" data-action="panel" data-panel="economy" data-stat-target="economy" title="Total economic output and yearly growth. Below: output per person and its independent yearly trend." aria-label="Open Economy. Output ${cash(economy.controlledOutput)}; output per person ${cash(economy.wealthPerPerson / 1e6)}; annual output per person change ${signed(topbarGdpPerCapitaAnnualGrowth * 100, 2)} percent; total economy annual growth ${signed(finance.annualEconomyGrowthRate * 100, 2)} percent"><span>ECONOMY</span><strong>${cash(economy.controlledOutput)} <i class="${finance.annualEconomyGrowthRate >= 0 ? 'is-positive' : 'is-negative'}">${signed(finance.annualEconomyGrowthRate * 100, 2)}%</i></strong><small><b class="${topbarGdpPerCapitaAnnualGrowth >= 0 ? 'is-positive' : 'is-negative'}">${cash(economy.wealthPerPerson / 1e6)}/person ${signed(topbarGdpPerCapitaAnnualGrowth * 100, 2)}%</b></small></button>
-          <button type="button" class="top-metric ${treasuryTopbar.className}" data-action="panel" data-panel="economy" data-stat-target="cash" title="Available national cash and how much of the APEX reserve target is filled. Below: projected net cashflow per year." aria-label="Open Economy. ${escapeHtml(treasuryTopbar.ariaLabel)}"><span>TREASURY</span><strong>${treasuryTopbar.value} <i class="${treasuryTopbar.reserveFillClassName}">${treasuryTopbar.reserveFill} TARGET</i></strong><small class="weekly-delta ${displayedNet >= 0 ? 'is-positive' : 'is-negative'}">Cashflow ${signedCash(annual(displayedNet))}/yr</small></button>
-          <button type="button" class="top-metric top-metric--military" data-action="panel" data-panel="war" data-stat-target="army" title="Ready force and trained reserves. Below: combat power and APEX military budget priority; actual upkeep funding is shown in War." aria-label="Open War. Army ${people(army.deployed)} of ${people(army.capacity)} capacity; trained reserves ${people(human.trainedReserves)} of ${people(finance.trainedReserveCapacity)} capacity; APEX military budget priority ${human.budget.military} percent; actual upkeep funding ${format((finance.armyUpkeep > 0 ? finance.fundedArmyUpkeep / finance.armyUpkeep : 1) * 100, 1)} percent; combat power ${compactNumber(combatPower)}"><span>MILITARY · RES</span><strong>${format(army.fillRatio * 100)}% · R ${people(human.trainedReserves)}</strong><small>${compactNumber(combatPower)} power · PRIORITY ${human.budget.military}%</small></button>
-          <button type="button" class="top-metric top-metric--people" data-action="panel" data-panel="nation" data-stat-target="people" title="Integrated population and yearly change. Below: live national IQ, including empire fusion and research." aria-label="Open Nation. Integrated population ${format(integratedPopulation, 2)} million; national IQ ${format(topbarIq.score, 1)}; annual population change ${signed(populationDynamics.annualNetRate * 100, 2)} percent"><span>PEOPLE</span><strong>${population(integratedPopulation)} <i class="${populationDynamics.annualNetRate >= 0 ? 'is-positive' : 'is-negative'}">${signed(populationDynamics.annualNetRate * 100, 2)}%</i></strong><small><b>IQ ${format(topbarIq.score, 1)}</b></small></button>
-          <button type="button" class="top-metric top-metric--food" data-action="panel" data-panel="nation" data-stat-target="food" title="Share of national food demand supplied. Below: stored food versus storage capacity." aria-label="Open Nation. Food coverage ${format(finance.foodCoverage * 100, 1)} percent; stock ${people(human.foodStock)} of ${people(finance.foodStorageCapacity)}"><span>FOOD</span><strong class="${finance.foodCoverage >= 0.98 ? 'is-positive' : 'is-negative'}">${format(finance.foodCoverage * 100, 1)}% supplied</strong><small>${people(human.foodStock)} / ${people(finance.foodStorageCapacity)} stored</small></button>
+          <button type="button" class="top-metric top-metric--economy" data-action="panel" data-panel="economy" title="Total economic output and yearly growth. Below: output per person and its independent yearly trend." aria-label="Open Economy. Output ${cash(economy.controlledOutput)}; output per person ${cash(economy.wealthPerPerson / 1e6)}; annual output per person change ${signed(topbarGdpPerCapitaAnnualGrowth * 100, 2)} percent; total economy annual growth ${signed(finance.annualEconomyGrowthRate * 100, 2)} percent"><span>ECONOMY</span><strong>${cash(economy.controlledOutput)} <i class="${finance.annualEconomyGrowthRate >= 0 ? 'is-positive' : 'is-negative'}">${signed(finance.annualEconomyGrowthRate * 100, 2)}%</i></strong><small><b class="${topbarGdpPerCapitaAnnualGrowth >= 0 ? 'is-positive' : 'is-negative'}">${cash(economy.wealthPerPerson / 1e6)}/person ${signed(topbarGdpPerCapitaAnnualGrowth * 100, 2)}%</b></small></button>
+          <button type="button" class="top-metric ${treasuryTopbar.className}" data-action="panel" data-panel="economy" title="Available national cash and how much of the APEX reserve target is filled. Below: projected net cashflow per year." aria-label="Open Economy. ${escapeHtml(treasuryTopbar.ariaLabel)}"><span>TREASURY</span><strong>${treasuryTopbar.value} <i class="${treasuryTopbar.reserveFillClassName}">${treasuryTopbar.reserveFill} TARGET</i></strong><small class="weekly-delta ${displayedNet >= 0 ? 'is-positive' : 'is-negative'}">Cashflow ${signedCash(annual(displayedNet))}/yr</small></button>
+          <button type="button" class="top-metric top-metric--military" data-action="panel" data-panel="war" title="Ready force and trained reserves. Below: combat power and APEX military budget priority; actual upkeep funding is shown in War." aria-label="Open War. Army ${people(army.deployed)} of ${people(army.capacity)} capacity; trained reserves ${people(human.trainedReserves)} of ${people(finance.trainedReserveCapacity)} capacity; APEX military budget priority ${human.budget.military} percent; actual upkeep funding ${format((finance.armyUpkeep > 0 ? finance.fundedArmyUpkeep / finance.armyUpkeep : 1) * 100, 1)} percent; combat power ${compactNumber(combatPower)}"><span>MILITARY · RES</span><strong>${format(army.fillRatio * 100)}% · R ${people(human.trainedReserves)}</strong><small>${compactNumber(combatPower)} power · PRIORITY ${human.budget.military}%</small></button>
+          <button type="button" class="top-metric top-metric--people" data-action="panel" data-panel="nation" title="Integrated population and yearly change. Below: live national IQ, including empire fusion and research." aria-label="Open Nation. Integrated population ${format(integratedPopulation, 2)} million; national IQ ${format(topbarIq.score, 1)}; annual population change ${signed(populationDynamics.annualNetRate * 100, 2)} percent"><span>PEOPLE</span><strong>${population(integratedPopulation)} <i class="${populationDynamics.annualNetRate >= 0 ? 'is-positive' : 'is-negative'}">${signed(populationDynamics.annualNetRate * 100, 2)}%</i></strong><small><b>IQ ${format(topbarIq.score, 1)}</b></small></button>
+          <button type="button" class="top-metric top-metric--food" data-action="panel" data-panel="nation" title="Share of national food demand supplied. Below: stored food versus storage capacity." aria-label="Open Nation. Food coverage ${format(finance.foodCoverage * 100, 1)} percent; stock ${people(human.foodStock)} of ${people(finance.foodStorageCapacity)}"><span>FOOD</span><strong class="${finance.foodCoverage >= 0.98 ? 'is-positive' : 'is-negative'}">${format(finance.foodCoverage * 100, 1)}% supplied</strong><small>${people(human.foodStock)} / ${people(finance.foodStorageCapacity)} stored</small></button>
           <button type="button" class="top-metric top-metric--research" data-action="panel" data-panel="research" title="Completed national upgrades. Below: automatic research funding per year." aria-label="Open Research. ${completedUpgrades} completed upgrades; ${cash(annual(finance.research))} funded per year"><span>RESEARCH</span><strong>${completedUpgrades} upgrades</strong><small>${cash(annual(finance.research))} / year</small></button>
         </nav>
         <div class="top-actions">
@@ -2650,14 +2570,16 @@ export class WorldUIV2 {
     const polar = this.engine.state.polarEndgame;
     const program = polar.arcticPrograms[human.id];
     const completed = program?.completedProjects.length ?? 0;
-    const visibleProjects = ARCTIC_PROJECTS_V2
+    const projectEntries = ARCTIC_PROJECTS_V2
       .map((project, index) => ({
         project,
         index,
         terms: this.engine.arcticProjectTerms(human.id, project.id),
-      }))
-      .filter(({ terms }) => terms.status !== 'locked');
-    const projectCards = visibleProjects.map(({ project, index, terms }) => {
+      }));
+    const focusEntry = projectEntries.find(({ terms }) => terms.status === 'active')
+      ?? projectEntries.find(({ terms }) => terms.status === 'available')
+      ?? [...projectEntries].reverse().find(({ terms }) => terms.status === 'complete');
+    const projectCards = (focusEntry ? [focusEntry] : []).map(({ project, index, terms }) => {
       const progress = terms.status === 'complete' ? 100
         : Math.round(clamp(terms.progress, 0, 1) * 100);
       const remaining = terms.completesTick === undefined
@@ -2682,8 +2604,8 @@ export class WorldUIV2 {
     const activeName = program?.activeProject
       ? ARCTIC_PROJECTS_V2.find((project) => project.id === program.activeProject?.projectId)?.name
       : undefined;
-    const affinityTerms = visibleProjects.find(({ terms }) => terms.status === 'available' || terms.status === 'active')?.terms
-      ?? visibleProjects[visibleProjects.length - 1]?.terms;
+    const affinityTerms = projectEntries.find(({ terms }) => terms.status === 'available' || terms.status === 'active')?.terms
+      ?? projectEntries[projectEntries.length - 1]?.terms;
     const affinityPercent = (affinityTerms?.affinityCostModifier ?? 0) * 100;
     const affinityLabel = affinityPercent === 0
       ? `${human.shortName.toUpperCase()} ARCTIC AFFINITY · NEUTRAL COST`
@@ -2694,7 +2616,7 @@ export class WorldUIV2 {
     return `<aside class="world-panel command-drawer glass-panel command-drawer--clean command-drawer--unified polar-command polar-command--arctic" data-scroll-session="${drawerScrollSessionId('polar:arctic')}">
       <button class="panel-close" data-action="close-panel" aria-label="Close Arctic research">×</button>
       <div class="drawer-heading drawer-heading--compact drawer-heading--single"><div><h2>Arctic research station</h2></div><strong class="${activeName ? 'is-warn' : completed === ARCTIC_PROJECTS_V2.length ? 'is-positive' : ''}">${activeName ? 'IN PROGRESS' : `${completed}/${ARCTIC_PROJECTS_V2.length} COMPLETE`}</strong></div>
-      <section class="polar-hero polar-hero--arctic"><div><span>${deepIceKnown ? 'DEEP-ICE PROGRAM' : 'ARCTIC PROGRAM'}</span><strong>${activeName ? escapeHtml(activeName) : completed === ARCTIC_PROJECTS_V2.length ? 'Antarctica revealed' : 'Awaiting authorisation'}</strong><small>National research continues automatically. These rare projects are paid upfront and run separately.</small><em class="polar-affinity">${escapeHtml(affinityLabel)}</em></div><b>${completed === ARCTIC_PROJECTS_V2.length ? 'SIGNAL FOUND' : 'ARCTIC'}</b></section>
+      <section class="polar-hero polar-hero--arctic"><div><span>${deepIceKnown ? 'DEEP-ICE PROGRAM' : 'ARCTIC PROGRAM'}</span><strong>${activeName ? escapeHtml(activeName) : completed === ARCTIC_PROJECTS_V2.length ? 'Antarctica revealed' : `Phase ${Math.min(completed + 1, ARCTIC_PROJECTS_V2.length)} ready`}</strong><small>One linked four-phase sequence. Only the current phase needs attention; each phase is paid upfront while national research continues.</small><em class="polar-affinity">${escapeHtml(affinityLabel)}</em></div><b>${completed === ARCTIC_PROJECTS_V2.length ? 'SIGNAL FOUND' : `${completed}/${ARCTIC_PROJECTS_V2.length}`}</b></section>
       <div class="polar-project-list">${projectCards}</div>
     </aside>`;
   }

@@ -8,7 +8,28 @@ export interface GlobeTerritoryReadinessPresentation {
   readonly tone: GlobeTerritoryReadinessTone;
 }
 
+export interface GlobeTerritorySupplyNodePresentation {
+  readonly compact: boolean;
+  readonly persistent: boolean;
+  readonly showIntegrationProgress: boolean;
+}
+
 const boundedRatio = (value: number): number => Math.max(0, Math.min(1, value));
+
+/** Player-controlled non-capitals are permanent compact supply nameplates. */
+export function globeTerritorySupplyNodePresentation(
+  ownerId: string,
+  humanPlayerId: string | undefined,
+  empireCapital: boolean,
+  integrating: boolean,
+): GlobeTerritorySupplyNodePresentation {
+  const compact = ownerId === humanPlayerId && !empireCapital;
+  return Object.freeze({
+    compact,
+    persistent: compact,
+    showIntegrationProgress: compact && integrating,
+  });
+}
 
 /**
  * Compact local-force readiness for globe nameplates. The numerator is the

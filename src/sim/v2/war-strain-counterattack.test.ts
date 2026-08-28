@@ -134,7 +134,7 @@ describe('conquest war strain and neighbour counterattacks', () => {
     const strainOnly = aiCounterattackPressureWithSuspicionV2(0.50, 0, true);
     const combined = aiCounterattackPressureWithSuspicionV2(0.50, 100, true);
     expect(strainOnly).toBe(0.50);
-    expect(combined).toBeCloseTo(0.60, 9);
+    expect(combined).toBeCloseTo(0.875, 9);
     expect(aiCounterattackPressureWithSuspicionV2(0, 100, true)).toBe(0);
     expect(aiCounterattackPressureWithSuspicionV2(0.50, 100, false)).toBe(0.50);
     expect(aiCounterattackCooldownV2('critical', combined))

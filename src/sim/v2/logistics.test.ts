@@ -399,6 +399,48 @@ describe('route-aware empire logistics', () => {
     expect(luxembourg.logisticsCost).toBe(0);
   });
 
+  it('pre-supplies an AI outer border more strongly at extreme Suspicion', () => {
+    const low = twoTerritoryLogisticsFixtureV2('land', 0);
+    const frontierId = low.sourceId;
+    const capitalId = low.targetId;
+    const enemyId = territoryIdV2('deu');
+    const content = withTestConnectionsV2({
+      [capitalId]: [{ targetId: frontierId, kind: 'land' }],
+      [frontierId]: [
+        { targetId: capitalId, kind: 'land' },
+        { targetId: enemyId, kind: 'land' },
+      ],
+      [enemyId]: [{ targetId: frontierId, kind: 'land' }],
+    });
+    const high = structuredClone(low.state);
+    for (const state of [low.state, high]) {
+      state.humanPlayerId = nationIdV2('usa');
+      state.humanPlayerIds = [nationIdV2('usa')];
+      // Keep the reserve pool deliberately below both territories' combined
+      // peacetime targets. A fully staffed capital eventually fills the same
+      // hard support ceiling in both worlds and hides the priority difference.
+      state.territories[capitalId]!.army.manpower = 0.20 * (
+        state.territories[capitalId]!.army.capacity
+          + state.territories[frontierId]!.army.capacity
+      );
+      state.territories[frontierId]!.army.manpower = 0;
+    }
+    low.state.aiEscalation.globalThreat = 0;
+    high.aiEscalation.globalThreat = 100;
+
+    for (let week = 0; week < 24; week += 1) {
+      redistributeArmiesV2(low.state, content);
+      redistributeArmiesV2(high, content);
+    }
+
+    expect(high.territories[frontierId]!.army.manpower)
+      .toBeGreaterThan(low.state.territories[frontierId]!.army.manpower);
+    expect(high.territories[frontierId]!.army.manpower)
+      .toBeLessThanOrEqual(stateTerritoryArmySupportCeilingV2(
+        high, content, frontierId, bel,
+      ) + 1e-9);
+  });
+
   it('holds a real capture guard for 52 weeks and releases it through normal logistics afterward', () => {
     const state = createWorldStateV2(4_402);
     state.wars = [];

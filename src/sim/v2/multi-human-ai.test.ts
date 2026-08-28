@@ -56,7 +56,7 @@ describe('multi-human simulation boundaries', () => {
         .toBeGreaterThan(plannedMilitary(lowSuspicion, human));
     }
     expect(plannedMilitary(highSuspicion, rival))
-      .toBe(plannedMilitary(lowSuspicion, rival));
+      .toBeGreaterThan(plannedMilitary(lowSuspicion, rival));
   });
 
   it('keeps APEX economy and research active without choosing a second human war or peace', () => {

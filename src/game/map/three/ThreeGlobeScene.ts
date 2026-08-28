@@ -34,9 +34,17 @@ import { compactMapCombatPower } from '../forcePresentation';
 import { resolveCountryPresentationAnchor } from '../countryPresentation';
 import { sampleCombatRoute, type CombatAccessPresentation } from '../combatPresentation';
 import {
-  GlobePoliticalTexture,
-  type GlobePickResult,
-} from './globeTexture';
+  battleEffectScale,
+  battleProjectileScale,
+  battleTerritoryWaveRadiusDegrees,
+} from '../battleEffectPresentation';
+import {
+  createGlobeBattleProjectile,
+  createGlobeBattleTerritoryWave,
+  orientGlobeBattleProjectile,
+  type GlobeBattleTerritoryWave,
+} from './globeBattleEffects';
+import { GlobePoliticalTexture, type GlobePickResult } from './globeTexture';
 import {
   countryAngularRadiusDegrees,
   isMicrostatePickCandidate,
@@ -44,8 +52,15 @@ import {
   type ProjectedMicrostatePickAnchor,
 } from './globePicking';
 import { groupGlobeLogisticsMovements } from './globeLogisticsPresentation';
-import { globeTerritoryReadinessPresentation } from './globeTerritoryPresentation';
+import {
+  globeTerritoryReadinessPresentation,
+  globeTerritorySupplyNodePresentation,
+} from './globeTerritoryPresentation';
 import { buildGlobeBorderBuffer, globeBorderOwnershipSignature } from './globeBorders';
+import {
+  GLOBE_SPHERE_HEIGHT_SEGMENTS,
+  GLOBE_SPHERE_WIDTH_SEGMENTS,
+} from './globeSurfacePresentation';
 import {
   globeRotateSpeedForDistance,
   isFrontSideVisible,
@@ -56,23 +71,21 @@ import {
 
 const GLOBE_RADIUS = 5;
 const DEFAULT_CAMERA_DISTANCE = 14.5;
-// Let the player inspect terrain and borders roughly 14% closer to the globe
-// surface without entering the mesh or making labels/picking unstable.
-const MIN_CAMERA_DISTANCE = 6.9;
-const MAX_CAMERA_DISTANCE = 16.75;
+// The flat globe leaves enough safe room for a closer inspection view while a
+// wider overview exposes the complete empire and celestial backdrop.
+const MIN_CAMERA_DISTANCE = 6.6;
+const MAX_CAMERA_DISTANCE = 20;
 const ACTIVE_RENDER_INTERVAL_MS = 1000 / 60;
 const IDLE_RENDER_INTERVAL_MS = 1000 / 20;
 const CAMERA_ACTIVITY_HOLD_MS = 280;
 const DRAG_THRESHOLD = 7;
 const FRONT_VISIBILITY_DOT = 0.045;
-const BATTLE_IMPACT_INNER_RADIUS = 0.034;
-const BATTLE_IMPACT_OUTER_RADIUS = 0.062;
-const BATTLE_IMPACT_SCALE = 2.15;
 const ANTARCTICA_OVERVIEW_DISTANCE = 14.5;
 const BORDER_CLOSE_PRESENTATION_DISTANCE = 11.15;
 const BORDER_LINEWIDTH_FAR = 0.95;
-const BORDER_LINEWIDTH_CLOSE = 1.45;
+const BORDER_LINEWIDTH_CLOSE = 1.20;
 const COUNTRY_LABEL_FULL_SCALE_DISTANCE = 9.4;
+const COUNTRY_LABEL_MIN_SCALE_DISTANCE = 16.75;
 const COUNTRY_LABEL_FAR_SCALE = 0.74;
 const OPEN_ANTARCTICA_PHASES = new Set<MapPolarEndgamePhase>([
   'warning', 'contact', 'counteroffensive', 'core-exposed', 'victory',
@@ -94,7 +107,7 @@ function countryLabelScaleForDistance(cameraDistance: number): number {
   const progress = THREE.MathUtils.smoothstep(
     cameraDistance,
     COUNTRY_LABEL_FULL_SCALE_DISTANCE,
-    MAX_CAMERA_DISTANCE,
+    COUNTRY_LABEL_MIN_SCALE_DISTANCE,
   );
   return THREE.MathUtils.lerp(1, COUNTRY_LABEL_FAR_SCALE, progress);
 }
@@ -139,8 +152,8 @@ interface BattleEffect {
   route: THREE.Line<THREE.BufferGeometry, THREE.LineDashedMaterial>;
   projectile?: THREE.Group;
   projectileMaterials: readonly THREE.MeshBasicMaterial[];
-  impactRing: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
-  impactFlash: THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasicMaterial>;
+  impactWave?: GlobeBattleTerritoryWave;
+  projectileScale: number;
   path: readonly THREE.Vector3[];
   startedAt: number;
   duration: number;
@@ -259,6 +272,26 @@ function presentationAnchor(territoryId: string): readonly [number, number] | un
   return [point.x, point.y] as const;
 }
 
+function createSunGlowTexture(): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 256;
+  const context = canvas.getContext('2d');
+  if (context) {
+    const glow = context.createRadialGradient(128, 128, 0, 128, 128, 128);
+    glow.addColorStop(0, 'rgba(255, 250, 222, 1)');
+    glow.addColorStop(0.055, 'rgba(255, 226, 145, 0.98)');
+    glow.addColorStop(0.13, 'rgba(255, 171, 78, 0.58)');
+    glow.addColorStop(0.36, 'rgba(225, 82, 34, 0.13)');
+    glow.addColorStop(1, 'rgba(30, 66, 105, 0)');
+    context.fillStyle = glow;
+    context.fillRect(0, 0, 256, 256);
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
 /**
  * Build the small-country hit-proxy set once. Larger countries always use
  * exact political-texture polygon picking.
@@ -319,7 +352,7 @@ function greatCirclePath(
   for (let index = 0; index <= segments; index += 1) {
     const progress = index / segments;
     const direction = startDirection.clone().applyAxisAngle(cross, angle * progress);
-    const elevation = 1 + Math.sin(Math.PI * progress) * lift;
+    const elevation = 1.024 + Math.sin(Math.PI * progress) * lift;
     points.push(direction.multiplyScalar(GLOBE_RADIUS * elevation));
   }
   return points;
@@ -351,7 +384,7 @@ function routeBetween(
         return vectorFor(
           longitude,
           latitude,
-          GLOBE_RADIUS * (1.008 + Math.sin(Math.PI * progress) * lift),
+          GLOBE_RADIUS * (1.027 + Math.sin(Math.PI * progress) * lift),
         );
       });
     }
@@ -400,6 +433,7 @@ export class ThreeGlobeScene implements MapSceneAdapter {
   private readonly polarCorridors: PolarCorridorVisual[] = [];
   private readonly visiblePolarSectorIds = new Set<MapPolarSectorId>();
   private readonly battleEffects: BattleEffect[] = [];
+  private readonly backdropTextures: THREE.Texture[] = [];
   private readonly onBeforeUnload = (): void => this.destroy();
   private engine?: WorldMapEngineContract;
   private selection: MapSelectionState = { legalTargetIds: [] };
@@ -458,7 +492,7 @@ export class ThreeGlobeScene implements MapSceneAdapter {
     this.renderer.domElement.className = 'globe-map__canvas';
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.06;
+    this.renderer.toneMappingExposure = 0.92;
     this.renderer.setClearColor(0x020914, 1);
     this.host.append(this.renderer.domElement);
 
@@ -531,15 +565,19 @@ export class ThreeGlobeScene implements MapSceneAdapter {
 
     const globeMaterial = new THREE.MeshStandardMaterial({
       map: this.politicalTexture,
-      roughness: 0.91,
-      metalness: 0.025,
+      roughness: 0.94,
+      metalness: 0.01,
       emissive: new THREE.Color(0x03121b),
-      emissiveIntensity: 0.28,
+      emissiveIntensity: 0.10,
     });
     // A moderately denser single sphere keeps coastlines stable at the fixed
     // close-range camera limit. It remains one mesh and one draw call; no
     // geometry, texture or material is swapped while zooming.
-    this.globe = new THREE.Mesh(new THREE.SphereGeometry(GLOBE_RADIUS, 256, 160), globeMaterial);
+    this.globe = new THREE.Mesh(new THREE.SphereGeometry(
+      GLOBE_RADIUS,
+      GLOBE_SPHERE_WIDTH_SEGMENTS,
+      GLOBE_SPHERE_HEIGHT_SEGMENTS,
+    ), globeMaterial);
     this.borderDetail = this.createGlobeBorderDetail(mapBridge.engine);
     this.borderOwnershipSignature = globeBorderOwnershipSignature(mapBridge.engine);
     this.polarSectorMarkers = this.createPolarSectorMarkers();
@@ -555,6 +593,7 @@ export class ThreeGlobeScene implements MapSceneAdapter {
     this.addLighting();
     this.addAtmosphere();
     this.addStars();
+    this.addCelestialBackdrop();
     this.addSeaLabels();
     this.addAntarcticaPresentation();
     this.addArcticPresentation();
@@ -643,6 +682,8 @@ export class ThreeGlobeScene implements MapSceneAdapter {
     const group = new THREE.Group();
     const naval = isSeaConnection(result.sourceId, result.targetId);
     const color = result.conquered ? 0xffd36f : naval ? 0x62dfff : 0xff725f;
+    const effectScale = battleEffectScale(result);
+    const projectileScale = battleProjectileScale(effectScale);
     const routeMaterial = new THREE.LineDashedMaterial({
       color,
       transparent: true,
@@ -663,65 +704,40 @@ export class ThreeGlobeScene implements MapSceneAdapter {
     const projectileMaterials: THREE.MeshBasicMaterial[] = [];
     let projectile: THREE.Group | undefined;
     if (!this.reducedMotion) {
-      projectile = new THREE.Group();
-      const haloMaterial = new THREE.MeshBasicMaterial({
-        color,
-        transparent: true,
-        opacity: 0.24,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-      });
-      const coreMaterial = new THREE.MeshBasicMaterial({
-        color: result.conquered ? 0xfff0ad : 0xffffff,
-        transparent: true,
-        opacity: 0.96,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-      });
-      projectileMaterials.push(haloMaterial, coreMaterial);
-      projectile.add(
-        new THREE.Mesh(new THREE.SphereGeometry(0.046, 10, 6), haloMaterial),
-        new THREE.Mesh(new THREE.SphereGeometry(0.019, 10, 6), coreMaterial),
-      );
+      const projectilePresentation = createGlobeBattleProjectile(color, result.conquered);
+      projectile = projectilePresentation.group;
+      projectileMaterials.push(...projectilePresentation.materials);
       projectile.position.copy(path[0]!);
+      projectile.scale.setScalar(projectileScale);
+      orientGlobeBattleProjectile(projectile, path[0]!, path[1] ?? path[0]!);
       group.add(projectile);
     }
-    const impactRing = new THREE.Mesh(
-      new THREE.RingGeometry(BATTLE_IMPACT_INNER_RADIUS, BATTLE_IMPACT_OUTER_RADIUS, 24),
-      new THREE.MeshBasicMaterial({
-        color,
-        transparent: true,
-        opacity: 0,
-        side: THREE.DoubleSide,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-      }),
-    );
-    impactRing.position.copy(path[path.length - 1]!);
-    impactRing.lookAt(impactRing.position.clone().multiplyScalar(2));
-    const impactFlash = new THREE.Mesh(
-      new THREE.SphereGeometry(0.031, 12, 7),
-      new THREE.MeshBasicMaterial({
-        color: result.conquered ? 0xffefae : color,
-        transparent: true,
-        opacity: 0,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-      }),
-    );
-    impactFlash.position.copy(path[path.length - 1]!);
-    group.add(impactRing, impactFlash);
+    const targetCountry = COUNTRY_BY_ID_MAP.get(result.targetId);
+    const targetAnchor = presentationAnchor(result.targetId);
+    const waveRadiusDegrees = targetCountry && targetAnchor
+      ? battleTerritoryWaveRadiusDegrees(targetAnchor, targetCountry.rings)
+      : 0.8;
+    const impactWave = targetCountry
+      ? createGlobeBattleTerritoryWave(
+        targetCountry,
+        path[path.length - 1]!,
+        GLOBE_RADIUS,
+        THREE.MathUtils.degToRad(waveRadiusDegrees),
+        effectScale,
+      )
+      : undefined;
+    if (impactWave) group.add(impactWave.mesh);
     this.globeGroup.add(group);
     this.battleEffects.push({
       group,
       route,
       projectile,
       projectileMaterials,
-      impactRing,
-      impactFlash,
+      impactWave,
+      projectileScale,
       path,
       startedAt: performance.now(),
-      duration: this.reducedMotion ? 560 : 980,
+      duration: this.reducedMotion ? 620 : 1_260 + Math.min(360, waveRadiusDegrees * 5),
     });
   }
 
@@ -755,8 +771,11 @@ export class ThreeGlobeScene implements MapSceneAdapter {
     this.controls.removeEventListener('change', this.onControlsChange);
     this.controls.dispose();
     this.unbindInput();
+    for (const effect of this.battleEffects) effect.impactWave?.maskTexture.dispose();
+    this.globeTexture.destroy();
     disposeObject(this.scene);
     this.politicalTexture.dispose();
+    for (const texture of this.backdropTextures) texture.dispose();
     this.renderer.dispose();
     this.renderer.domElement.remove();
     this.labelLayer.remove();
@@ -766,16 +785,16 @@ export class ThreeGlobeScene implements MapSceneAdapter {
   }
 
   private addLighting(): void {
-    const hemisphere = new THREE.HemisphereLight(0xbcefff, 0x1a2d3d, 1.15);
-    const ambient = new THREE.AmbientLight(0x7f9fb2, 0.55);
+    const hemisphere = new THREE.HemisphereLight(0xa7dcf0, 0x08131c, 0.58);
+    const ambient = new THREE.AmbientLight(0x6f8e9f, 0.20);
     this.scene.add(hemisphere, ambient, this.camera);
 
     // Camera-local lights keep the entire visible hemisphere readable while
     // retaining a gentle upper-right key and cool opposite rim for depth.
-    const key = new THREE.DirectionalLight(0xf2fcff, 2.35);
+    const key = new THREE.DirectionalLight(0xfff2d2, 2.72);
     key.position.set(5.2, 4.1, 3.4);
     key.target.position.set(0, 0, -4.5);
-    const rim = new THREE.DirectionalLight(0x5aa7d4, 0.62);
+    const rim = new THREE.DirectionalLight(0x4d9bc7, 0.32);
     rim.position.set(-4.2, 1.1, 1.8);
     rim.target.position.set(0, 0, -4.5);
     this.camera.add(key, key.target, rim, rim.target);
@@ -783,7 +802,7 @@ export class ThreeGlobeScene implements MapSceneAdapter {
     // Keep the polar endgame landmass readable when the camera crosses into
     // the southern hemisphere. This is presentation-only lighting; it does
     // not alter terrain, combat, ownership or any simulation value.
-    const polarFill = new THREE.DirectionalLight(0xcff8ff, 0.55);
+    const polarFill = new THREE.DirectionalLight(0xbfe8f0, 0.26);
     polarFill.position.set(-2, -9, 4);
     this.scene.add(polarFill);
   }
@@ -804,13 +823,14 @@ export class ThreeGlobeScene implements MapSceneAdapter {
       fragmentShader: `
         varying vec3 vNormal;
         void main() {
-          float rim = pow(max(0.0, 0.74 - dot(vNormal, vec3(0.0, 0.0, 1.0))), 2.1);
-          gl_FragColor = vec4(0.15, 0.70, 0.96, rim * 0.58);
+          float facing = abs(dot(normalize(vNormal), vec3(0.0, 0.0, 1.0)));
+          float rim = pow(max(0.0, 1.0 - facing), 3.25);
+          gl_FragColor = vec4(0.10, 0.55, 0.91, rim * 0.46);
         }
       `,
     });
     this.globeGroup.add(new THREE.Mesh(
-      new THREE.SphereGeometry(GLOBE_RADIUS * 1.055, 80, 52),
+      new THREE.SphereGeometry(GLOBE_RADIUS * 1.032, 80, 52),
       atmosphereMaterial,
     ));
   }
@@ -823,22 +843,51 @@ export class ThreeGlobeScene implements MapSceneAdapter {
       return ((seed ^ (seed >>> 14)) >>> 0) / 4_294_967_296;
     };
     const positions = new Float32Array(1350 * 3);
+    const colors = new Float32Array(1350 * 3);
     for (let index = 0; index < 1350; index += 1) {
       const direction = new THREE.Vector3(random() * 2 - 1, random() * 2 - 1, random() * 2 - 1).normalize();
       direction.multiplyScalar(30 + random() * 80);
       positions[index * 3] = direction.x;
       positions[index * 3 + 1] = direction.y;
       positions[index * 3 + 2] = direction.z;
+      const temperature = random();
+      const color = new THREE.Color(
+        temperature < 0.07 ? 0xffd3a1 : temperature < 0.28 ? 0xf2f4ff : 0x9ed9f5,
+      );
+      colors[index * 3] = color.r;
+      colors[index * 3 + 1] = color.g;
+      colors[index * 3 + 2] = color.b;
     }
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     this.scene.add(new THREE.Points(geometry, new THREE.PointsMaterial({
-      color: 0xb9ecff,
+      vertexColors: true,
       size: 0.042,
       transparent: true,
-      opacity: 0.64,
+      opacity: 0.72,
       depthWrite: false,
+      fog: false,
     })));
+  }
+
+  private addCelestialBackdrop(): void {
+    const sunTexture = createSunGlowTexture();
+    this.backdropTextures.push(sunTexture);
+    const sun = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: sunTexture,
+      transparent: true,
+      opacity: 0.88,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      depthTest: true,
+      fog: false,
+      toneMapped: false,
+    }));
+    sun.position.set(11.5, 5.2, -46);
+    sun.scale.set(13.5, 13.5, 1);
+    sun.renderOrder = -10;
+    this.camera.add(sun);
   }
 
   private addSeaLabels(): void {
@@ -880,6 +929,7 @@ export class ThreeGlobeScene implements MapSceneAdapter {
       vertexColors: true,
       transparent: true,
       opacity: 0.7,
+      depthTest: true,
       depthWrite: false,
       worldUnits: false,
       alphaToCoverage: true,
@@ -1171,19 +1221,25 @@ export class ThreeGlobeScene implements MapSceneAdapter {
       const empireCapital = ownerLabelTerritory.get(owner.id) === country.id;
       const integrating = territory.coreOwnerId !== territory.ownerId && territory.integration < 0.999999;
       const opening = empireCapital ? state.openingMobilisations[owner.id] : undefined;
-      const persistent = (integrating && owner.isHuman)
+      const absorbed = !integrating
+        && !empireCapital
+        && (territoriesByOwner.get(owner.id)?.length ?? 0) > 1;
+      const supplyNode = globeTerritorySupplyNodePresentation(
+        owner.id,
+        state.humanPlayerId,
+        empireCapital,
+        integrating,
+      );
+      const compactSupplyNode = supplyNode.compact;
+      const persistent = supplyNode.persistent
         || frontTerritories.has(country.id)
         || (empireCapital && (owner.isHuman || topTenOwners.has(owner.id) || warOwners.has(owner.id) || Boolean(opening)));
       const rank = rankByOwner.get(owner.id);
       const originalOwner = integrating ? this.engine.player(territory.coreOwnerId) : undefined;
-      const absorbed = !integrating
-        && !empireCapital
-        && (territoriesByOwner.get(owner.id)?.length ?? 0) > 1;
-      const viewerOwnedAbsorbed = absorbed && owner.id === state.humanPlayerId;
       // Once integration is complete, the old nation ceases to exist on the
-      // strategic map. The selected-land panel remains the source of local
-      // territory detail, matching the established renderer.
-      if (absorbed && !viewerOwnedAbsorbed) continue;
+      // strategic map for rivals. Player-owned supply nodes remain compact and
+      // persistent so their local readiness can always be followed.
+      if (absorbed && !compactSupplyNode) continue;
       const name = integrating
         ? originalOwner?.name ?? country.englishName
         : empireCapital ? owner.name : country.englishName;
@@ -1194,8 +1250,10 @@ export class ThreeGlobeScene implements MapSceneAdapter {
         ? compactNameplateCombatPower(territory.army.power)
         : '';
       const detail = integrating
-        ? `INT ${integratingPercent}% · LOCAL ${integratingLocalPower}`
-        : viewerOwnedAbsorbed
+        ? compactSupplyNode
+          ? `INT ${integratingPercent}% · ${integratingLocalPower}`
+          : `INT ${integratingPercent}% · LOCAL ${integratingLocalPower}`
+        : compactSupplyNode
           ? compactNameplateCombatPower(territory.army.power)
         : empireCapital
           ? `${controllerLabel ? `${controllerLabel} · ` : ''}⚔ ${compactMapCombatPower(empirePower.get(owner.id) ?? territory.army.power)}`
@@ -1220,7 +1278,7 @@ export class ThreeGlobeScene implements MapSceneAdapter {
         : document.createElement('div');
       const semanticTitle = integrating
         ? `Integrating ${integratingPercent}% · Local power ${compactMapCombatPower(territory.army.power)}`
-        : viewerOwnedAbsorbed
+        : compactSupplyNode
           ? `Local power ${compactMapCombatPower(territory.army.power)}`
           : '';
       if (element.title !== semanticTitle) element.title = semanticTitle;
@@ -1230,14 +1288,14 @@ export class ThreeGlobeScene implements MapSceneAdapter {
         'globe-map__country-label',
         owner.id === state.humanPlayerId ? 'is-human is-local-human'
           : owner.isHuman ? 'is-human is-other-human' : '',
-        integrating ? 'is-integrating' : '',
-        viewerOwnedAbsorbed ? 'is-local-absorbed' : '',
+        integrating && !compactSupplyNode ? 'is-integrating' : '',
+        compactSupplyNode ? 'is-local-absorbed' : '',
         warOwners.has(owner.id) || frontTerritories.has(country.id) ? 'is-active' : '',
         readinessVisible ? 'has-readiness' : '',
         opening ? `has-opening is-opening-${opening.direction}` : '',
       ].filter(Boolean).join(' ');
       const markup = [
-        viewerOwnedAbsorbed
+        compactSupplyNode
           ? ''
           : `<strong>${compactCountryName(name).toUpperCase()}${empireCapital && rank ? ` <em>#${rank}</em>` : ''}</strong>`,
         `<span>${detail}</span>`,
@@ -1263,12 +1321,13 @@ export class ThreeGlobeScene implements MapSceneAdapter {
           ? element.querySelector<HTMLElement>('span') ?? undefined
           : existingLabel?.detailElement,
         persistent,
-        priority: integrating ? 2
+        priority: compactSupplyNode ? 2
+          : integrating ? 3
           : frontTerritories.has(country.id) ? 3
             : owner.isHuman ? 4
               : topTenOwners.has(owner.id) ? 10 + (rank ?? 10)
                 : 55 + country.labelRank,
-        width: opening ? 154 : integrating ? 112 : viewerOwnedAbsorbed ? 72 : 122,
+        width: opening ? 154 : compactSupplyNode ? integrating ? 92 : 72 : integrating ? 112 : 122,
         height: opening ? 58 : readinessVisible ? 43 : 36,
         className,
         markup,
@@ -1887,16 +1946,17 @@ export class ThreeGlobeScene implements MapSceneAdapter {
       const progress = (now - effect.startedAt) / effect.duration;
       if (progress >= 1) {
         this.globeGroup.remove(effect.group);
+        effect.impactWave?.maskTexture.dispose();
         disposeObject(effect.group);
         this.battleEffects.splice(index, 1);
         continue;
       }
-      const travelProgress = THREE.MathUtils.smoothstep(progress, 0, 0.68);
+      const travelProgress = THREE.MathUtils.smoothstep(progress, 0, 0.58);
       const visibleRoutePoints = Math.max(2, Math.ceil(
         2 + travelProgress * Math.max(0, effect.path.length - 2),
       ));
       if (!this.reducedMotion) effect.route.geometry.setDrawRange(0, visibleRoutePoints);
-      const routeFade = 1 - THREE.MathUtils.smoothstep(progress, 0.68, 1);
+      const routeFade = 1 - THREE.MathUtils.smoothstep(progress, 0.60, 0.94);
       effect.route.material.opacity = (this.reducedMotion ? 0.72 : 0.46) * routeFade;
 
       if (effect.projectile) {
@@ -1909,22 +1969,30 @@ export class ThreeGlobeScene implements MapSceneAdapter {
           effect.path[Math.min(effect.path.length - 1, pathIndex + 1)]!,
           localProgress,
         );
-        const projectileFade = 1 - THREE.MathUtils.smoothstep(progress, 0.62, 0.76);
-        const pulse = 0.96 + Math.sin(progress * Math.PI * 8) * 0.07;
-        effect.projectile.scale.setScalar(pulse);
+        const nextPathIndex = Math.min(effect.path.length - 1, pathIndex + 1);
+        orientGlobeBattleProjectile(
+          effect.projectile,
+          effect.path[pathIndex]!,
+          effect.path[nextPathIndex]!,
+        );
+        const projectileFade = 1 - THREE.MathUtils.smoothstep(progress, 0.54, 0.64);
+        const pulse = 0.985 + Math.sin(progress * Math.PI * 8) * 0.025;
+        effect.projectile.scale.setScalar(effect.projectileScale * pulse);
         effect.projectile.visible = projectileFade > 0.01;
-        const [haloMaterial, coreMaterial] = effect.projectileMaterials;
-        if (haloMaterial) haloMaterial.opacity = 0.24 * projectileFade;
-        if (coreMaterial) coreMaterial.opacity = 0.96 * projectileFade;
+        const [trailMaterial, bodyMaterial, coreMaterial] = effect.projectileMaterials;
+        if (trailMaterial) trailMaterial.opacity = 0.11 * projectileFade;
+        if (bodyMaterial) bodyMaterial.opacity = 0.52 * projectileFade;
+        if (coreMaterial) coreMaterial.opacity = 0.68 * projectileFade;
       }
 
-      const impactProgress = THREE.MathUtils.clamp((progress - 0.62) / 0.38, 0, 1);
-      const impactEnvelope = Math.sin(impactProgress * Math.PI);
-      effect.impactRing.scale.setScalar(0.62 + impactProgress * BATTLE_IMPACT_SCALE);
-      effect.impactRing.material.opacity = impactEnvelope * 0.88;
-      effect.impactFlash.scale.setScalar(0.72 + impactProgress * 1.18);
-      effect.impactFlash.material.opacity = Math.min(1, impactProgress * 5)
-        * (1 - impactProgress) * 0.78;
+      const impactProgress = THREE.MathUtils.clamp((progress - 0.54) / 0.46, 0, 1);
+      if (effect.impactWave) {
+        effect.impactWave.progressUniform.value = THREE.MathUtils.smoothstep(
+          impactProgress,
+          0,
+          1,
+        );
+      }
     }
   }
 

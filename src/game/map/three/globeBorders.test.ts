@@ -13,6 +13,10 @@ import {
   globeBorderOwnershipSignature,
 } from './globeBorders';
 import { lonLatToUnitXyz } from './globeMath';
+import {
+  GLOBE_SURFACE_CLEARANCE,
+  globeOverlayRadius,
+} from './globeSurfacePresentation';
 import { terrainTextureLayerPresentation } from './terrainTexturePresentation';
 
 type Coordinate = readonly [number, number];
@@ -60,7 +64,7 @@ function sharedShortEdge(leftId: string, rightId: string): readonly [Coordinate,
 
 function scaledPosition(coordinate: Coordinate, radius: number): readonly [number, number, number] {
   const point = lonLatToUnitXyz(coordinate[0], coordinate[1]);
-  const lineRadius = radius * 1.00008;
+  const lineRadius = globeOverlayRadius(radius);
   return [point.x * lineRadius, point.y * lineRadius, point.z * lineRadius];
 }
 
@@ -143,8 +147,9 @@ describe('globe border geometry', () => {
       minimumRadius = Math.min(minimumRadius, length);
       maximumRadius = Math.max(maximumRadius, length);
     }
-    expect(minimumRadius).toBeGreaterThan(radius * 1.00005);
-    expect(maximumRadius).toBeLessThan(radius * 1.00011);
+    expect(minimumRadius).toBeGreaterThan(radius);
+    expect(minimumRadius).toBeCloseTo(radius + GLOBE_SURFACE_CLEARANCE, 5);
+    expect(maximumRadius).toBeCloseTo(radius + GLOBE_SURFACE_CLEARANCE, 5);
     let colorsAreBounded = true;
     let segmentEndpointsMatch = true;
     let minimumColor = 1;
@@ -217,6 +222,25 @@ describe('globe border geometry', () => {
     const buffer = buildGlobeBorderBuffer(undefined, 5);
     expect([...positions.slice(0, 120)]).toEqual([...buffer.positions.slice(0, 120)]);
     expect(positions.length).toBe(buffer.positions.length);
+  });
+
+  it('keeps subdivided border chords above the flat surface with sub-pixel clearance', () => {
+    const radius = 5;
+    const { positions } = buildGlobeBorderBuffer(undefined, radius);
+    let minimumSurfaceClearance = Number.POSITIVE_INFINITY;
+    for (let offset = 0; offset < positions.length; offset += 6) {
+      const midpointRadius = Math.hypot(
+        (positions[offset]! + positions[offset + 3]!) * 0.5,
+        (positions[offset + 1]! + positions[offset + 4]!) * 0.5,
+        (positions[offset + 2]! + positions[offset + 5]!) * 0.5,
+      );
+      minimumSurfaceClearance = Math.min(
+        minimumSurfaceClearance,
+        midpointRadius - radius,
+      );
+    }
+    expect(minimumSurfaceClearance).toBeGreaterThan(0.00015);
+    expect(minimumSurfaceClearance).toBeLessThanOrEqual(GLOBE_SURFACE_CLEARANCE + 1e-6);
   });
 
   it('produces a stable ownership-only cache signature', () => {

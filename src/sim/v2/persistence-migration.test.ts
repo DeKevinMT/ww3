@@ -13,6 +13,7 @@ import { canonicalStateHashV2, createSaveV2, loadSaveV2 } from './persistence';
 import { createInitialPolarEndgameV2 } from './polarEndgame';
 import { synchronizeOpeningArmyHumanRosterV2 } from './nationState';
 import { OPENING_ARMY_BONUS_DURATION_TICKS_V2 } from './openingArmyBonus';
+import { createRandomWorldContentV2 } from './randomWorld';
 import {
   invalidateTerritoryIndexV2,
   selectFoodDomesticCapacityTargetV2,
@@ -171,6 +172,39 @@ function legacySaveV14(): Record<string, any> {
 }
 
 describe('V2 legacy save migration', () => {
+  it('authenticates complete V2.65 schema-22 saves for standard and alternative content', () => {
+    const fixtures = [
+      { seed: 8_650, content: WORLD_CONTENT_V2 },
+      { seed: 8_651, content: createRandomWorldContentV2(8_651) },
+    ];
+
+    for (const { seed, content } of fixtures) {
+      const state = createWorldStateV2(seed, content);
+      const humanPlayerId = state.humanPlayerId;
+      const legacy = structuredClone(createSaveV2(state, content)) as Record<string, any>;
+      const openingBonusBefore = structuredClone(legacy.players[humanPlayerId].openingArmyBonus);
+      const deployedBefore = Object.values(legacy.territories)
+        .filter((territory: any) => territory.owner === humanPlayerId)
+        .reduce((sum: number, territory: any) => sum + territory.army.manpower, 0);
+      legacy.rulesVersion = 'frontier-command-v2.65-polar-endgame';
+      legacy.canonicalStateHash = canonicalStateHashV2(legacy);
+
+      const loaded = loadSaveV2(legacy as never, content);
+      const deployedAfter = Object.values(loaded.territories)
+        .filter((territory) => territory.owner === humanPlayerId)
+        .reduce((sum, territory) => sum + territory.army.manpower, 0);
+      expect(loaded.rulesVersion).toBe(V2_RULES_VERSION);
+      expect(loaded.contentVersion).toBe(state.contentVersion);
+      expect(loaded.polarEndgame).toEqual(state.polarEndgame);
+      expect(loaded.players[humanPlayerId]!.openingArmyBonus).toEqual(openingBonusBefore);
+      expect(deployedAfter).toBeCloseTo(deployedBefore, 9);
+
+      const current = createSaveV2(loaded, content);
+      expect(current.rulesVersion).toBe(V2_RULES_VERSION);
+      expect(createSaveV2(loadSaveV2(current, content), content)).toEqual(current);
+    }
+  });
+
   it('normalizes same-schema polar saves made before final-strike commander credit', () => {
     const state = createWorldStateV2(8_641);
     const legacy = structuredClone(createSaveV2(state, WORLD_CONTENT_V2)) as Record<string, any>;

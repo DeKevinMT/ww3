@@ -271,6 +271,16 @@ export interface WarRevengeStateV2 {
   expiresTick: number;
 }
 
+/** Persisted, bounded territorial goals for one bilateral war. */
+export interface WarCampaignStateV2 {
+  attackerObjective: number;
+  defenderObjective: number;
+  attackerCaptures: number;
+  defenderCaptures: number;
+  consolidationUntilTick: number;
+  expiresTick: number;
+}
+
 export interface WarStateV2 {
   id: string;
   attackerId: PlayerId;
@@ -291,6 +301,8 @@ export interface WarStateV2 {
   defenderOperations: FrontOperationV2[];
   /** Canonical bounded retaliation window; absent legacy inputs normalize to null in saves. */
   revenge?: WarRevengeStateV2 | null;
+  /** Absent legacy fixtures initialize deterministically on first simulation use. */
+  campaign?: WarCampaignStateV2;
 }
 
 export interface TruceStateV2 {

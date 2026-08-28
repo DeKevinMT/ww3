@@ -10,6 +10,7 @@ export const AI_FIGHT_MIN_FOCUS = 0.82;
 /** @deprecated Combat now starts immediately alongside the active radio cue. */
 export const PLAYER_WAR_ACTIVE_COMBAT_DELAY_MS = 0;
 export const PLAYER_LOSS_AUDIO_COOLDOWN_MS = 2_500;
+export const WAR_END_FIGHT_FADE_SECONDS = 1.35;
 export const AMBIENT_MUSIC_VOLUME = 0.2;
 export const GAME_AUDIO_SETTINGS_STORAGE_KEY = 'frontier-command-audio-v1';
 
@@ -121,6 +122,9 @@ interface AudioBufferLike {
 
 interface AudioParamLike {
   value: number;
+  cancelScheduledValues(time: number): void;
+  setValueAtTime(value: number, time: number): void;
+  linearRampToValueAtTime(value: number, endTime: number): void;
 }
 
 interface GainNodeLike {
@@ -135,11 +139,13 @@ interface BufferSourceNodeLike {
   connect(destination: unknown): unknown;
   disconnect(): void;
   start(when?: number): void;
+  stop(when?: number): void;
 }
 
 interface AudioContextLike {
   readonly destination: unknown;
   readonly state: string;
+  readonly currentTime: number;
   createGain(): GainNodeLike;
   createBufferSource(): BufferSourceNodeLike;
   decodeAudioData(data: ArrayBuffer): Promise<AudioBufferLike>;
@@ -162,6 +168,8 @@ interface AudioVoice {
   baseGain: number;
   active: boolean;
   kind?: 'player' | 'ai' | 'radio';
+  warId?: string;
+  source?: BufferSourceNodeLike;
 }
 
 export interface GameAudioPresentationContext {
@@ -410,6 +418,9 @@ export class GameAudioController {
   ): Promise<void> {
     if (this.mountCount === 0 || !this.activated || !this.available) return;
     const plays: Promise<boolean>[] = [];
+    if (change.reason === 'war-outcome' && change.warOutcome) {
+      this.fadeFightVoicesForWar(change.warOutcome.warId);
+    }
     if (change.battle) {
       const battle = change.battle;
       const playerWar = presentation.viewerPlayerId
@@ -604,7 +615,7 @@ export class GameAudioController {
     if (!buffers) return false;
     if (kind === 'ai' && this.fightVoices.some((voice) => voice.active && voice.kind === 'ai')) return false;
     const voice = this.fightVoices.find((candidate) => !candidate.active);
-    return voice ? this.playBuffer(voice, buffers.fight, gain, kind) : false;
+    return voice ? this.playBuffer(voice, buffers.fight, gain, kind, undefined, battle.warId) : false;
   }
 
   private async requestRadio(
@@ -634,6 +645,7 @@ export class GameAudioController {
     gain: number,
     kind: AudioVoice['kind'],
     onEnded?: () => void,
+    warId?: string,
   ): boolean {
     const context = this.context;
     if (!context) return false;
@@ -644,18 +656,40 @@ export class GameAudioController {
     source.buffer = buffer;
     source.connect(voice.gain);
     voice.baseGain = gain;
-    voice.gain.gain.value = gain * (kind === 'radio' ? this.audioMix.voice : this.audioMix.effects);
+    const voiceGain = gain * (kind === 'radio' ? this.audioMix.voice : this.audioMix.effects);
+    voice.gain.gain.cancelScheduledValues(context.currentTime);
+    voice.gain.gain.setValueAtTime(voiceGain, context.currentTime);
     voice.active = true;
     voice.kind = kind;
+    voice.warId = warId;
+    voice.source = source;
     source.onended = () => {
       voice.active = false;
       voice.kind = undefined;
+      voice.warId = undefined;
+      voice.source = undefined;
       source.onended = null;
       source.disconnect();
       onEnded?.();
     };
     source.start(0);
     return true;
+  }
+
+  private fadeFightVoicesForWar(warId: string): void {
+    const context = this.context;
+    if (!context) return;
+    const fadeEndsAt = context.currentTime + WAR_END_FIGHT_FADE_SECONDS;
+    for (const voice of this.fightVoices) {
+      if (!voice.active || voice.warId !== warId || !voice.source) continue;
+      const gain = voice.gain.gain;
+      const currentGain = gain.value;
+      gain.cancelScheduledValues(context.currentTime);
+      gain.setValueAtTime(currentGain, context.currentTime);
+      gain.linearRampToValueAtTime(0, fadeEndsAt);
+      voice.baseGain = 0;
+      try { voice.source.stop(fadeEndsAt + 0.05); } catch { /* source already ended */ }
+    }
   }
 
   private remember(collection: Set<string>, value: string): void {

@@ -5,6 +5,7 @@ import {
 import type { WorldMapEngineContract } from '../bridge';
 import { lonLatToUnitXyz } from './globeMath';
 import { terrainTextureLayerPresentation } from './terrainTexturePresentation';
+import { globeOverlayRadius } from './globeSurfacePresentation';
 
 type Coordinate = readonly [number, number];
 type UnitPosition = readonly [number, number, number];
@@ -30,12 +31,6 @@ export interface GlobeBorderBuffer {
 }
 
 /**
- * Lift the lines just above the political sphere. This is deliberately much
- * smaller than the route/highlight lift: enough to avoid z-fighting without
- * making coastlines appear detached at the horizon.
- */
-const BORDER_RADIUS_SCALE = 1.00008;
-/**
  * A LineSegments edge is a straight chord. Long chords sink through the globe
  * between their endpoints and start to flicker or disappear at close range.
  * Subdivide once at module load so every visible segment follows the sphere.
@@ -43,7 +38,6 @@ const BORDER_RADIUS_SCALE = 1.00008;
  * keeping the cached buffer compact enough for a single border draw call.
  */
 const MAX_BORDER_ARC_RADIANS = 0.22 * Math.PI / 180;
-const INTEGRATION_BORDER_COLOR: UnitColor = [244 / 255, 201 / 255, 106 / 255];
 
 /**
  * LineBasicMaterial has one opacity for the complete draw call. Premultiply
@@ -228,29 +222,33 @@ export function buildGlobeBorderBuffer(
   engine: WorldMapEngineContract | undefined,
   radius: number,
 ): GlobeBorderBuffer {
+  const borderRadius = globeOverlayRadius(radius);
+  const visibleEdges: Array<{
+    edge: PreparedBorderEdge;
+    points: readonly UnitPosition[];
+  }> = [];
   let visibleSegmentCount = 0;
   for (const edge of PREPARED_BORDER_EDGES) {
-    if (!isHiddenInternalBorder(edge, engine)) visibleSegmentCount += edge.points.length - 1;
+    if (isHiddenInternalBorder(edge, engine)) continue;
+    const points = edge.points;
+    visibleEdges.push({ edge, points });
+    visibleSegmentCount += points.length - 1;
   }
 
   const positions = new Float32Array(visibleSegmentCount * 6);
   const colors = new Float32Array(visibleSegmentCount * 6);
-  const lineRadius = radius * BORDER_RADIUS_SCALE;
   let offset = 0;
-  for (const edge of PREPARED_BORDER_EDGES) {
-    if (isHiddenInternalBorder(edge, engine)) continue;
-    const edgeColor = edgeIsIntegrating(edge, engine)
-      ? INTEGRATION_BORDER_COLOR
-      : edge.color;
-    for (let index = 0; index < edge.points.length - 1; index += 1) {
-      const start = edge.points[index]!;
-      const end = edge.points[index + 1]!;
-      positions[offset] = start[0] * lineRadius;
-      positions[offset + 1] = start[1] * lineRadius;
-      positions[offset + 2] = start[2] * lineRadius;
-      positions[offset + 3] = end[0] * lineRadius;
-      positions[offset + 4] = end[1] * lineRadius;
-      positions[offset + 5] = end[2] * lineRadius;
+  for (const { edge, points } of visibleEdges) {
+    const edgeColor = edge.color;
+    for (let index = 0; index < points.length - 1; index += 1) {
+      const start = points[index]!;
+      const end = points[index + 1]!;
+      positions[offset] = start[0] * borderRadius;
+      positions[offset + 1] = start[1] * borderRadius;
+      positions[offset + 2] = start[2] * borderRadius;
+      positions[offset + 3] = end[0] * borderRadius;
+      positions[offset + 4] = end[1] * borderRadius;
+      positions[offset + 5] = end[2] * borderRadius;
       colors[offset] = edgeColor[0];
       colors[offset + 1] = edgeColor[1];
       colors[offset + 2] = edgeColor[2];

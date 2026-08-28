@@ -31,83 +31,6 @@ body { user-select: none; }
 button, input { font: inherit; }
 button { color: inherit; }
 
-#startup-loader {
-  position: fixed;
-  inset: 0;
-  z-index: 100;
-  display: grid;
-  place-content: center;
-  gap: 18px;
-  background: radial-gradient(circle at 50% 42%, #102b3c 0%, #071522 42%, #030a12 100%);
-  opacity: 1;
-  transition: opacity 220ms ease;
-}
-
-#startup-loader.is-hidden { display: none; }
-#startup-loader.is-ready { opacity: 0; pointer-events: none; }
-
-.startup-loader__identity {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  color: #dffaff;
-}
-
-.startup-loader__identity > span {
-  width: 44px;
-  height: 44px;
-  display: grid;
-  place-items: center;
-  border: 1px solid rgba(107, 221, 242, 0.62);
-  border-radius: 9px;
-  background: rgba(107, 221, 242, 0.09);
-  color: #a7effb;
-  font-size: 13px;
-  font-weight: 900;
-  letter-spacing: 1px;
-}
-
-.startup-loader__identity div { display: grid; gap: 3px; }
-.startup-loader__identity strong { font-size: 14px; letter-spacing: 2.2px; }
-.startup-loader__identity small { color: #7397a9; font-size: 9px; letter-spacing: 1.45px; }
-
-.startup-loader__track {
-  width: min(310px, 72vw);
-  height: 4px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: rgba(126, 190, 207, 0.13);
-}
-
-.startup-loader__track i {
-  display: block;
-  width: 100%;
-  height: 100%;
-  border-radius: inherit;
-  background: linear-gradient(90deg, #5bbed1, #9df1ff);
-  box-shadow: 0 0 14px rgba(107, 221, 242, 0.45);
-  transform: scaleX(0.16);
-  transform-origin: left;
-  animation: startup-map-progress 2.4s cubic-bezier(.18, .74, .28, 1) forwards;
-}
-
-#startup-loader.is-ready .startup-loader__track i {
-  animation: none;
-  transform: scaleX(1);
-  transition: transform 120ms ease-out;
-}
-
-@keyframes startup-map-progress {
-  0% { transform: scaleX(0.08); }
-  55% { transform: scaleX(0.64); }
-  100% { transform: scaleX(0.88); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  #startup-loader { transition-duration: 1ms; }
-  .startup-loader__track i { animation: none; transform: scaleX(0.88); }
-}
-
 #game-canvas {
   position: absolute;
   inset: 0;
@@ -4450,36 +4373,6 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
   font-size: 9px;
 }
 .world-ui-v2 .war-outcome-actions button { min-width: 150px; }
-
-.conquest-transfer-chip {
-  position: fixed;
-  z-index: 1200;
-  pointer-events: none;
-  padding: 6px 9px;
-  border: 1px solid rgba(132, 240, 205, .34);
-  border-radius: 999px;
-  background: rgba(6, 23, 31, .92);
-  box-shadow: 0 0 18px rgba(96, 235, 196, .18);
-  color: #baffdf;
-  font-size: 9px;
-  font-weight: 900;
-  letter-spacing: .45px;
-  white-space: nowrap;
-  will-change: transform, opacity;
-}
-.conquest-transfer-chip--economy { border-color: rgba(105, 215, 239, .38); color: #a9efff; }
-.conquest-transfer-chip--cash { border-color: rgba(240, 189, 104, .42); color: #f7d8a4; }
-.conquest-transfer-chip--people { border-color: rgba(181, 156, 255, .42); color: #d7c9ff; }
-.conquest-transfer-chip--food { border-color: rgba(111, 226, 157, .42); color: #b9f4ca; }
-.conquest-transfer-chip--army { border-color: rgba(255, 132, 118, .42); color: #ffc2ba; }
-.world-ui-v2 [data-stat-target] {
-  transition: border-color .3s ease, background-color .3s ease, box-shadow .3s ease;
-}
-.world-ui-v2 [data-stat-target].is-receiving-gain {
-  border-color: rgba(128, 242, 201, .55) !important;
-  background: rgba(76, 206, 165, .105) !important;
-  box-shadow: inset 0 0 16px rgba(82, 224, 181, .12), 0 0 13px rgba(82, 224, 181, .12);
-}
 
 @media (max-width: 840px) {
   .world-ui-v2 .command-dock { right: 8px; left: 8px; width: auto; }

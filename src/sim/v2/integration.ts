@@ -45,8 +45,8 @@ const SMALL_COUNTRY_INTEGRATION_YEARS = 12.5;
 const INTEGRATION_LINEAR_YEARS = 25;
 const INTEGRATION_QUADRATIC_YEARS = 50;
 const INTEGRATION_LARGE_COUNTRY_YEARS = 100;
-/** New captures complete 15% faster than the preceding 1.2x calendar. */
-export const INTEGRATION_DURATION_MULTIPLIER_V2 = 1.02;
+/** New captures use a calendar about 20% shorter than the v2.65 release. */
+export const INTEGRATION_DURATION_MULTIPLIER_V2 = 0.82;
 /** Voluntary defensive unions complete four times faster than conquest. */
 export const FEDERATION_INTEGRATION_DURATION_FACTOR_V2 = 0.25;
 /** Exactly one keyed roll is made for each frozen integration program. */
@@ -291,8 +291,8 @@ export function territoryIntegrationDurationWeeksV2(
   territoryId: TerritoryId,
 ): number {
   // The underlying size curve remains unchanged; new captures receive the
-  // universal 1.02x calendar after its old whole-week promise is calculated.
-  // This makes the current speed-up exact for every territory and avoids changing
+  // universal 0.82x calendar after its old whole-week promise is calculated.
+  // This makes the current speed-up consistent for every territory and avoids changing
   // the relative ordering through fractional-week rounding.
   const luxembourgId = territoryIdV2('lux');
   const luxembourgSize = content.territories[luxembourgId]

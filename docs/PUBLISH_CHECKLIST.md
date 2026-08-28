@@ -1,4 +1,4 @@
-# v2.65 publish checklist
+# v2.66 publish checklist
 
 ## Required gates
 
@@ -10,7 +10,7 @@
 - [ ] Release commit is based on the current remote `main` without overwriting remote history.
 - [ ] GitHub Pages workflow completes successfully.
 - [ ] Published page loads its versioned JavaScript, CSS, map data and audio assets.
-- [ ] Published UI reports `v2.65` and opens the country picker.
+- [ ] Published UI reports `v2.66` and opens the country picker.
 
 ## Manual smoke test
 

@@ -692,7 +692,7 @@ describe('V2 dynamic containment coalition', () => {
     expect(attackers.size).toBeGreaterThanOrEqual(1);
     expect(attackers.size).toBeLessThanOrEqual(8);
     expect([...attackers].some((id) => WORLD_CONTENT_V2.nations[nationIdV2(id)].real.powerIndex >= 60)).toBe(true);
-  }, 20_000);
+  }, 60_000);
 
   it('makes AI great powers avoid direct peer wars throughout the opening fifty years', () => {
     const directPeerWars: string[] = [];

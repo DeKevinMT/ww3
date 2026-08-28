@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   TRAINED_RESERVE_DEPLOYMENT_THROUGHPUT_MULTIPLIER,
+  TRAINED_RESERVE_PEACETIME_TRICKLE_FACTOR,
   TRAINED_RESERVE_TRAINING_COST_MULTIPLIER,
   TRAINED_RESERVE_WARTIME_TRAINING_FACTOR,
 } from './balance';
@@ -148,24 +149,30 @@ describe('finite trained reserves', () => {
     );
   });
 
-  it('uses only a one-millionth rounding tolerance at the full-active boundary', () => {
-    expect(activeArmyReadyForReserveTrainingV2(0.999998, 1)).toBe(false);
-    expect(activeArmyReadyForReserveTrainingV2(0.999999, 1)).toBe(true);
+  it('opens paid peacetime reserve training at 85% active fill', () => {
+    expect(activeArmyReadyForReserveTrainingV2(0.849999, 1)).toBe(false);
+    expect(activeArmyReadyForReserveTrainingV2(0.85, 1)).toBe(true);
   });
 
-  it('restores the active army first and starts peace reserves only at a full cap', () => {
+  it('keeps a small reserve trickle from 85% and scales it to the full peace pipeline', () => {
     const state = fundedState(71_001);
-    const pipeline = selectRecruitmentTrainingPipelineV2(state, WORLD_CONTENT_V2, belgium);
-    const capacity = selectTotalManpowerV2(state, belgium).capacity;
-    setActiveFill(state, belgium, (capacity - 2 * pipeline) / capacity);
-
+    setActiveFill(state, belgium, 0.80);
     const restoring = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, belgium);
     expect(restoring.passiveRecruitment + restoring.acceleratedRecruitment).toBeGreaterThan(0);
     expect(restoring.reserveTraining).toBe(0);
 
+    setActiveFill(state, belgium, 0.85);
+    state.players[belgium]!.trainedReserves = 0;
+    const trickle = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, belgium);
     setActiveFill(state, belgium, 1);
     state.players[belgium]!.trainedReserves = 0;
     const full = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, belgium);
+    expect(trickle.reserveTraining).toBeGreaterThan(0);
+    // Finance manpower is rounded to the canonical simulation precision.
+    expect(trickle.reserveTraining).toBeCloseTo(
+      full.reserveTraining * TRAINED_RESERVE_PEACETIME_TRICKLE_FACTOR,
+      5,
+    );
     expect(full.reserveTraining).toBeGreaterThan(0);
     expect(full.trainedReservesAfter).toBe(full.reserveTraining);
   });

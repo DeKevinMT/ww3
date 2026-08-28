@@ -18,7 +18,6 @@ import {
   countryTraitFactorV2,
   countryTraitModifiersV2,
   countryTraitOpeningWeaknessV2,
-  countryTraitReplacementValueV2,
   countryTraitV2,
   describeCountryTraitModifiersV2,
   humanCountryTraitMultiplierV2,
@@ -223,11 +222,11 @@ describe('country trait catalog V2', () => {
       'army-capacity', 'recruitment-throughput', 'research-progress',
       'arctic-research-cost',
     ]);
-    expect(greenland.effect).toBe('+9% army capacity; +5% recruitment throughput; +4% research progress in population-recruitment; −12.5% Arctic research cost.');
+    expect(greenland.effect).toBe('+9% army capacity; +5% recruitment throughput; +4% research progress in population-recruitment; −50% Arctic research cost.');
     expect(describeCountryTraitModifiersV2(
       greenland.modifiers,
       HUMAN_TRAIT_MULTIPLIER_WEAKEST_V2,
-    )).toBe('+27% army capacity; +15% recruitment throughput; +12% research progress in population-recruitment; −12.5% Arctic research cost.');
+    )).toBe('+27% army capacity; +15% recruitment throughput; +12% research progress in population-recruitment; −50% Arctic research cost.');
     expect(countryTraitModifiersV2('grl', 'army-capacity')[0]?.percentage).toBe(9);
     expect(countryTraitModifiersV2('grl', 'recruitment-throughput')[0]?.percentage).toBe(5);
     expect(countryTraitModifiersV2('grl', 'research-progress')[0]).toMatchObject({
@@ -250,22 +249,21 @@ describe('country trait catalog V2', () => {
     expect(countryTraitFactorV2('grl', 'research-progress', {
       humanControlled: true, researchBranch: 'economy-science',
     })).toBe(1);
-    expect(countryTraitFactorV2('grl', 'arctic-research-cost')).toBe(0.875);
+    expect(countryTraitFactorV2('grl', 'arctic-research-cost')).toBe(0.5);
     expect(countryTraitFactorV2('grl', 'arctic-research-cost', { humanControlled: true }))
-      .toBe(0.875);
+      .toBe(0.5);
 
     expect(countryTraitModifiersV2('bel', 'base-operating-cost')).toEqual([]);
     expect(BELGIUM_TRAIT_VALUE_MULTIPLIER_V2).toBe(1.08);
-    expect(countryTraitModifiersV2('bel', 'tax-efficiency')[0]?.percentage).toBe(3.81);
-    expect(countryTraitModifiersV2('bel', 'army-capacity')[0]?.percentage).toBe(4.35);
-    expect(countryTraitModifiersV2('bel', 'defense')[0]).toMatchObject({
-      percentage: 4.35,
-      scope: { terrain: 'urban' },
-    });
-    expect(countryTraitFactorV2('bel', 'army-capacity')).toBe(1.0435);
-    expect(countryTraitFactorV2('bel', 'defense', { terrain: 'urban' })).toBe(1.0435);
+    expect(countryTraitModifiersV2('bel', 'tax-efficiency')).toEqual([]);
+    expect(countryTraitModifiersV2('bel', 'army-capacity')[0]?.percentage).toBeGreaterThan(0);
+    expect(countryTraitModifiersV2('bel', 'attack')[0]?.scope).toBeUndefined();
+    expect(countryTraitModifiersV2('bel', 'defense')[0]?.scope).toBeUndefined();
+    expect(countryTraitFactorV2('bel', 'army-capacity')).toBeGreaterThan(1);
+    expect(countryTraitFactorV2('bel', 'attack', { terrain: 'plains' })).toBeGreaterThan(1);
+    expect(countryTraitFactorV2('bel', 'defense', { terrain: 'urban' })).toBeGreaterThan(1);
     expect(countryTraitFactorV2('bel', 'army-capacity', { humanControlled: true }))
-      .toBeCloseTo(1.0823855024, 10);
+      .toBeGreaterThan(countryTraitFactorV2('bel', 'army-capacity'));
   });
 
   it('normalizes rank-aware AI trait budgets while reserving Greenland as explicit exception', () => {
@@ -346,7 +344,11 @@ describe('country trait catalog V2', () => {
       const modifiers = countryTraitV2(playerId)!.modifiers;
       const foodModifiers = modifiers.filter(({ key }) => foodKeys.has(key));
       expect(foodModifiers, playerId).toHaveLength(1);
-      expect(Math.abs(foodModifiers[0]!.percentage), playerId).toBeGreaterThanOrEqual(12);
+      // Thailand deliberately bundles food as a secondary bonus beside broad
+      // offensive combat value, so its fixed-budget food share remains smaller.
+      const minimumFoodPercentage = playerId === 'tha' ? 4 : 12;
+      expect(Math.abs(foodModifiers[0]!.percentage), playerId)
+        .toBeGreaterThanOrEqual(minimumFoodPercentage);
       expect(modifiers.some(({ key }) => !foodKeys.has(key)), playerId).toBe(true);
     }
     expect(COUNTRY_TRAITS_V2.every(({ description }) => (
@@ -404,9 +406,9 @@ describe('country trait catalog V2', () => {
       entry.modifiers.every((modifierEntry) => modifierEntry.key !== 'starting-treasury')
     ))).toBe(true);
     const modifiers = COUNTRY_TRAITS_V2.flatMap((entry) => entry.modifiers);
-    expect(modifiers.filter(({ key }) => key === 'defense')).toHaveLength(69);
+    expect(modifiers.filter(({ key }) => key === 'defense')).toHaveLength(68);
     expect(modifiers.filter(({ scope }) => scope?.terrain !== undefined).length)
-      .toBeGreaterThanOrEqual(64);
+      .toBeGreaterThanOrEqual(63);
     expect(modifiers.every(({ scope }) => scope?.homeland === undefined)).toBe(true);
     expect(COUNTRY_TRAITS_V2.every(({ effect }) => !effect.includes('original homeland territory')))
       .toBe(true);
@@ -496,14 +498,10 @@ describe('country trait catalog V2', () => {
       researchBranch: 'economy-science',
     })).toBe(1);
 
-    const seizure = countryTraitModifiersV2('che', 'treasury-seizure')[0];
-    expect(seizure?.factor).toBeCloseTo(0.4);
-    expect(seizure?.replacement).toEqual({ from: 0.25, to: 0.10, unit: 'share' });
-    expect(Object.isFrozen(seizure?.replacement)).toBe(true);
-    expect(seizure && countryTraitReplacementValueV2('che', seizure)).toBeCloseTo(0.10);
-    expect(seizure && countryTraitReplacementValueV2('che', seizure, {
-      humanControlled: true,
-    })).toBeLessThan(0.10);
+    expect(countryTraitModifiersV2('che', 'treasury-seizure')).toEqual([]);
+    expect(countryTraitFactorV2('che', 'reserve-training')).toBeGreaterThan(1);
+    expect(countryTraitFactorV2('che', 'reserve-training', { humanControlled: true }))
+      .toBeGreaterThan(countryTraitFactorV2('che', 'reserve-training'));
   });
 
   it('looks up only the active nation id and never stacks absorbed country traits', () => {

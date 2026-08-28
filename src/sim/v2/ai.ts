@@ -6,6 +6,7 @@ import {
   AI_DEFENSIVE_AID_MIN_BATTLES,
   AI_FIRST_WAR_TICK,
   AI_GLOBAL_WAR_COOLDOWN,
+  AI_HIGH_SUSPICION_REACTION_THRESHOLD,
   AI_MAJOR_POWER_AVOIDANCE_TICKS,
   AI_REGIONAL_ESCALATION_COOLDOWN,
   AI_REGIONAL_ESCALATION_EXTRA_WAR_CAP,
@@ -13,6 +14,7 @@ import {
   AI_REGIONAL_ESCALATION_MIN_BATTLES,
   NATIONAL_IQ_EFFECTIVE_SCORE_MAX,
   NATIONAL_IQ_SCORE_MIN,
+  aiHighSuspicionAlertV2,
   aiActiveWarCapV2,
   PEACE_REQUEST_MIN_WAR_AGE_TICKS,
   RESEARCH_BRANCHES,
@@ -119,13 +121,20 @@ export const AI_COUNTERATTACK_EXTRA_WAR_CAP = 1;
 export function aiHumanAttackSuspicionFactorV2(globalThreat: number): number {
   const suspicion = clamp(globalThreat / 100, 0, 1);
   if (suspicion <= 0) return 0;
-  return 1.35 * Math.pow(suspicion, 2.15);
+  return 1.35 * Math.pow(suspicion, 2.15)
+    * (1 + 0.65 * aiHighSuspicionAlertV2(globalThreat));
 }
 
 /** Extra APEX military-planning weight created by visible player Suspicion. */
-export function aiSuspicionMilitaryPriorityV2(globalThreat: number): number {
+export function aiSuspicionMilitaryPriorityV2(
+  globalThreat: number,
+  activeWarCount = 0,
+): number {
   const suspicion = clamp(globalThreat / 100, 0, 1);
-  return 3.1 * (0.35 * suspicion + 0.65 * suspicion * suspicion);
+  const highAlert = aiHighSuspicionAlertV2(globalThreat);
+  const warSynergy = Math.min(3, Math.max(0, Math.floor(activeWarCount)));
+  return Math.min(10, 3.1 * (0.35 * suspicion + 0.65 * suspicion * suspicion)
+    + 3 * highAlert + 1.6 * highAlert * warSynergy);
 }
 
 /** Shared existential-war budget weight after the first Antarctic contact. */
@@ -148,7 +157,8 @@ export function aiCounterattackPressureWithSuspicionV2(
 ): number {
   const pressure = clamp(strainPressure, 0, 1);
   if (!humanTarget || pressure <= 0) return pressure;
-  return clamp(pressure * (1 + 0.20 * clamp(globalThreat / 100, 0, 1)), 0, 1);
+  return clamp(pressure * (1 + 0.20 * clamp(globalThreat / 100, 0, 1)
+    + 0.55 * aiHighSuspicionAlertV2(globalThreat)), 0, 1);
 }
 
 export function aiCounterattackCooldownV2(
@@ -760,8 +770,7 @@ function aiBudgetTargetV2(
   );
   const earthDefenseMilitaryPriority = aiEarthDefenseMilitaryPriorityV2(state);
   const suspicionMilitaryPriority = earthDefenseMilitaryPriority <= 0
-    && selectHumanPlayerIdsV2(state).includes(playerId)
-    ? aiSuspicionMilitaryPriorityV2(state.aiEscalation.globalThreat)
+    ? aiSuspicionMilitaryPriorityV2(state.aiEscalation.globalThreat, wars.length)
     : 0;
   if (wars.length === 0 && survivalStress > 0.02) {
     return weightedBudgetPolicyV2({
@@ -1002,6 +1011,19 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
       }
     }
   }
+  // At extreme visible Suspicion, every land neighbour reviews the human now.
+  // The ordinary single-roll, global cooldown and war caps remain unchanged.
+  const highSuspicionResponders = new Set<PlayerId>();
+  if (state.aiEscalation.globalThreat >= AI_HIGH_SUSPICION_REACTION_THRESHOLD) {
+    for (const targetId of humanPlayerIds) {
+      for (const supporterId of living) {
+        if (humanPlayerIds.has(supporterId) || supporterId === targetId) continue;
+        if (warAccessIndex.get(supporterId)?.get(targetId) === 'land') {
+          highSuspicionResponders.add(supporterId);
+        }
+      }
+    }
+  }
   const counterattackWarCap = activeWarCap + AI_COUNTERATTACK_EXTRA_WAR_CAP;
   let warPlanned = false;
   let expansionRollsUsed = 0;
@@ -1149,8 +1171,9 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
     // initiative. This preserves rare defensive help without increasing the
     // frequency of ordinary wars.
     const hasCounterattackOpportunity = counterattackSupporters.has(playerId);
+    const hasHighSuspicionOpportunity = highSuspicionResponders.has(playerId);
     if (!warInitiative.has(playerId) && !defensiveAidSupporters.has(playerId)
-      && !hasCounterattackOpportunity) continue;
+      && !hasCounterattackOpportunity && !hasHighSuspicionOpportunity) continue;
     const coalitionMember = resistance.memberIds.includes(playerId);
     const federation = isDefensiveFederationV2(state, playerId);
     const nation = content.nations[playerId]!;
@@ -1248,6 +1271,9 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
       const humanAttackSuspicionFactor = humanPlayerIds.has(targetId)
         ? aiHumanAttackSuspicionFactorV2(state.aiEscalation.globalThreat)
         : 1;
+      const humanHighAlertPriority = humanPlayerIds.has(targetId)
+        ? 14 * aiHighSuspicionAlertV2(state.aiEscalation.globalThreat)
+        : 0;
       // A country already under attack is not discounted as a free prize: a
       // new invader still prices in rival armies. Only a critically strained
       // land neighbour softens that caution, and never removes it completely.
@@ -1304,6 +1330,7 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
           + (humanPlayerIds.has(targetId)
             ? 18 * Math.log(Math.max(0.01, humanAttackSuspicionFactor))
             : 0)
+          + humanHighAlertPriority
           + (regionalEscalation?.priority ?? 0)
           - majorPeerWarRisk
           - nuclearDeterrence

@@ -100,6 +100,8 @@ const LEGACY_RULES_VERSION_V22_TEMPORARY = 'frontier-command-v2.62-temporary-ope
 const LEGACY_OPENING_ARMY_BONUS_DURATION_TICKS_V2 = 1_040;
 /** Last authenticated schema-22 release before the Arctic/Antarctic campaign. */
 const LEGACY_RULES_VERSION_V22_PRE_POLAR = 'frontier-command-v2.64-war-strain-counterattacks';
+/** Complete polar schema-22 release before the V2.66 strategic rebalance. */
+const LEGACY_RULES_VERSION_V22_POLAR = 'frontier-command-v2.65-polar-endgame';
 const LEGACY_CONTENT_VERSION_V16 = 'natural-earth-countries-2026-v6-naval';
 const LEGACY_CONTENT_VERSION_V17 = 'natural-earth-countries-2026-v7-greenland';
 const LEGACY_BOT_MANPOWER_PER_UNIT = 0.10;
@@ -388,6 +390,7 @@ export function createSaveV2(state: WorldStateV2, content: WorldContentV2): Save
         attackerOperations: war.attackerOperations.map((operation) => ({ ...operation })),
         defenderOperations: war.defenderOperations.map((operation) => ({ ...operation })),
         revenge: war.revenge ? { ...war.revenge } : null,
+        ...(war.campaign ? { campaign: { ...war.campaign } } : {}),
       })),
     truces: [...state.truces].sort((a, b) => a.leftId.localeCompare(b.leftId) || a.rightId.localeCompare(b.rightId)),
     ceasefireObligations: [...state.ceasefireObligations]
@@ -1142,6 +1145,9 @@ function currentStateFromSave(
         : typeof war.revenge === 'object' && !Array.isArray(war.revenge)
           ? { ...war.revenge }
           : war.revenge as never,
+      ...('campaign' in war && war.campaign
+        ? { campaign: { ...war.campaign } }
+        : {}),
     })),
     // Legacy schema-20 land offers are filtered only after their authenticated
     // payload has been reconstructed below.
@@ -1302,6 +1308,7 @@ export function loadSaveV2(
                 : LEGACY_RULES_VERSION_V13;
   const supportedRules = schemaVersion === 22
     ? parsed.rulesVersion === V2_RULES_VERSION
+      || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_POLAR
       || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_PRE_POLAR
       || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_TEMPORARY
       || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_RANDOM
@@ -1318,6 +1325,7 @@ export function loadSaveV2(
   const keys = Object.keys(parsed).sort();
   const expectedSaveKeys = schemaVersion === 22
     ? parsed.rulesVersion === V2_RULES_VERSION
+      || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_POLAR
       ? SAVE_KEYS
       : parsed.rulesVersion === LEGACY_RULES_VERSION_V22_PRE_POLAR
         ? PRE_POLAR_SAVE_KEYS
@@ -1332,6 +1340,7 @@ export function loadSaveV2(
   if (parsed.contentVersion !== expectedContent) throw new Error(`Unsupported V2 contentVersion: ${String(parsed.contentVersion)}.`);
   if (schemaVersion === 22 && parsed.contentVersion !== V2_CONTENT_VERSION
     && parsed.rulesVersion !== V2_RULES_VERSION
+    && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_POLAR
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_PRE_POLAR
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_TEMPORARY
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_RANDOM) {
@@ -1387,7 +1396,8 @@ export function loadSaveV2(
     // an otherwise authentic save fail current invariants (notably Greenland).
     synchronizeArmyCapacityV2(state, content);
     if (schemaVersion === 22 && state.tick === 0
-      && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_TEMPORARY) {
+      && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_TEMPORARY
+      && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_POLAR) {
       if (parsed.rulesVersion === LEGACY_RULES_VERSION_V22_RANDOM) {
         trackExistingOpeningArmyHumanRosterV2(state, content);
       } else if (parsed.contentVersion === V2_CONTENT_VERSION) {

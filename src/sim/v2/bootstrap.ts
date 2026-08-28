@@ -29,6 +29,9 @@ import type {
   WorldStateV2,
 } from './types';
 
+/** Belgium begins with a modest ordinary-force head start, independent of human underdog scaling. */
+export const BELGIUM_OPENING_MANPOWER_MULTIPLIER_V2 = 1.20;
+
 function defaultHumanPlayerId(content: WorldContentV2): PlayerId {
   const belgium = content.nationIds.find((id) => String(id) === 'bel');
   if (belgium) return belgium;
@@ -53,6 +56,9 @@ function createTerritoryState(id: TerritoryId, content: WorldContentV2): Territo
   const capacity = round(unmodifiedCapacity
     * countryTraitFactorV2(definition.initialOwnerId, 'army-capacity'));
   const openingFill = initialArmyCapacityRatioV2(content, definition.initialOwnerId);
+  const openingManpowerMultiplier = String(definition.initialOwnerId) === 'bel'
+    ? BELGIUM_OPENING_MANPOWER_MULTIPLIER_V2
+    : 1;
   return {
     owner: definition.initialOwnerId,
     coreOwner: definition.initialOwnerId,
@@ -62,7 +68,10 @@ function createTerritoryState(id: TerritoryId, content: WorldContentV2): Territo
     integration: 1,
     army: {
       // Capacity traits create future room, not a free opening army.
-      manpower: round(unmodifiedCapacity * openingFill),
+      manpower: round(Math.min(
+        capacity,
+        unmodifiedCapacity * openingFill * openingManpowerMultiplier,
+      )),
       capacity,
       baseAttack: origin.militaryAttackRating ?? origin.militaryQuality ?? 1,
       baseDefense: origin.militaryDefenseRating ?? origin.militaryQuality ?? 1,

@@ -5,6 +5,7 @@ import {
   RESEARCH_BRANCHES,
   V2_MAP_ID,
   V2_RULES_VERSION,
+  WAR_CAMPAIGN_MAX_TICKS,
   WAR_REVENGE_WINDOW_TICKS,
 } from './balance';
 import type { WorldContentV2 } from './content';
@@ -68,8 +69,9 @@ const ARMY_KEYS = ['baseAttack', 'baseDefense', 'capacity', 'manpower'];
 const PROPAGANDA_PROGRAM_KEYS = ['endsTick', 'startedTick', 'totalSuspicionReduction', 'weeklySuspicionReduction'];
 const OPENING_ARMY_BONUS_KEYS = ['expiresTick', 'initialManpower', 'remainingManpower', 'startedTick'];
 const INTEGRATION_PROGRAM_KEYS = ['annualCost', 'cause', 'completesTick', 'fromCoreOwnerId', 'fromOwnerId', 'startedTick', 'toOwnerId'];
-const WAR_KEYS = ['attackerCivilianLosses', 'attackerId', 'attackerLosses', 'attackerOperations', 'battles', 'defenderCivilianLosses', 'defenderId', 'defenderLosses', 'defenderOperations', 'id', 'lastBattleTick', 'lastPeaceOfferTick', 'revenge', 'startedTick', 'warScore'];
+const WAR_KEYS = ['attackerCivilianLosses', 'attackerId', 'attackerLosses', 'attackerOperations', 'battles', 'campaign', 'defenderCivilianLosses', 'defenderId', 'defenderLosses', 'defenderOperations', 'id', 'lastBattleTick', 'lastPeaceOfferTick', 'revenge', 'startedTick', 'warScore'];
 const WAR_REVENGE_KEYS = ['claimantId', 'expiresTick', 'triggeredTick'];
+const WAR_CAMPAIGN_KEYS = ['attackerCaptures', 'attackerObjective', 'consolidationUntilTick', 'defenderCaptures', 'defenderObjective', 'expiresTick'];
 const OPERATION_KEYS = ['access', 'commanderId', 'doctrine', 'holdUntilTick', 'lastBattleTick', 'momentum', 'sourceId', 'startedTick', 'targetId'];
 const TRUCE_KEYS = ['expiresTick', 'leftId', 'rightId'];
 const CEASEFIRE_OBLIGATION_KEYS = ['expiresTick', 'payeeId', 'payerId', 'startsTick', 'warId', 'weeklyCost'];
@@ -439,6 +441,32 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
           || claim.expiresTick - claim.triggeredTick !== WAR_REVENGE_WINDOW_TICKS
           || claim.expiresTick <= state.tick) {
           errors.push(`War ${war.id} has invalid revenge state.`);
+        }
+      }
+    }
+    const campaign = war.campaign as unknown;
+    if (campaign !== undefined) {
+      if (!campaign || typeof campaign !== 'object' || Array.isArray(campaign)) {
+        errors.push(`War ${war.id} has invalid campaign state.`);
+      } else {
+        const objective = campaign as NonNullable<typeof war.campaign>;
+        const integerValues = [
+          objective.attackerObjective,
+          objective.defenderObjective,
+          objective.attackerCaptures,
+          objective.defenderCaptures,
+          objective.consolidationUntilTick,
+          objective.expiresTick,
+        ];
+        if (!exactKeys(objective, WAR_CAMPAIGN_KEYS)
+          || !integerValues.every(Number.isInteger)
+          || objective.attackerObjective < 1 || objective.attackerObjective > 3
+          || objective.defenderObjective !== 1
+          || objective.attackerCaptures < 0 || objective.defenderCaptures < 0
+          || objective.consolidationUntilTick < war.startedTick
+          || objective.consolidationUntilTick > objective.expiresTick
+          || objective.expiresTick - war.startedTick !== WAR_CAMPAIGN_MAX_TICKS) {
+          errors.push(`War ${war.id} has invalid campaign state.`);
         }
       }
     }

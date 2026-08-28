@@ -40,7 +40,10 @@ describe('polar command UI', () => {
 
   it('renders the sequential manual Arctic program from canonical definitions and terms', () => {
     const panel = methodSource('  private renderArcticPanel(', '  private renderPolarSectorCard(');
-    expect(panel).toContain(".filter(({ terms }) => terms.status !== 'locked')");
+    expect(panel).toContain("projectEntries.find(({ terms }) => terms.status === 'active')");
+    expect(panel).toContain("projectEntries.find(({ terms }) => terms.status === 'available')");
+    expect(panel).toContain('(focusEntry ? [focusEntry] : [])');
+    expect(panel).toContain('One linked four-phase sequence');
     expect(panel).toContain('this.engine.arcticProjectTerms(human.id, project.id)');
     expect(panel).toContain('data-action="start-arctic-project"');
     expect(panel).toContain('polar-project-progress');

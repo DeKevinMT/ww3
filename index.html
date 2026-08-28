@@ -3,17 +3,134 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#07111f" />
+    <meta name="theme-color" content="#030a12" />
+    <meta name="color-scheme" content="dark" />
+    <style id="startup-critical-css">
+      :root {
+        color-scheme: dark;
+        background: #030a12;
+        font-family: "Segoe UI Variable Text", "Segoe UI", Arial, sans-serif;
+        font-synthesis: none;
+      }
+
+      html, body, #app {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        background: #030a12;
+      }
+
+      #startup-loader,
+      #startup-loader * { box-sizing: border-box; }
+
+      #startup-loader {
+        position: fixed;
+        inset: 0;
+        z-index: 100;
+        min-height: 100dvh;
+        display: grid;
+        place-content: center;
+        gap: 18px;
+        isolation: isolate;
+        contain: layout paint;
+        background: radial-gradient(circle at 50% 42%, #102b3c 0%, #071522 42%, #030a12 100%);
+        color: #dffaff;
+        opacity: 1;
+        user-select: none;
+        transition: opacity 220ms ease;
+      }
+
+      #startup-loader.is-hidden { display: none; }
+      #startup-loader.is-ready { opacity: 0; pointer-events: none; }
+
+      .startup-loader__sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+      }
+
+      .startup-loader__identity {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        color: #dffaff;
+      }
+
+      .startup-loader__identity > span {
+        width: 44px;
+        height: 44px;
+        display: grid;
+        place-items: center;
+        border: 1px solid rgba(107, 221, 242, 0.62);
+        border-radius: 9px;
+        background: rgba(107, 221, 242, 0.09);
+        color: #a7effb;
+        font-size: 13px;
+        font-weight: 900;
+        letter-spacing: 1px;
+      }
+
+      .startup-loader__identity div { display: grid; gap: 3px; }
+      .startup-loader__identity strong { font-size: 14px; letter-spacing: 2.2px; }
+      .startup-loader__identity small { color: #7397a9; font-size: 9px; letter-spacing: 1.45px; }
+
+      .startup-loader__track {
+        width: min(310px, 72vw);
+        height: 4px;
+        overflow: hidden;
+        border-radius: 999px;
+        background: rgba(126, 190, 207, 0.13);
+      }
+
+      .startup-loader__track i {
+        display: block;
+        width: 100%;
+        height: 100%;
+        border-radius: inherit;
+        background: linear-gradient(90deg, #5bbed1, #9df1ff);
+        box-shadow: 0 0 14px rgba(107, 221, 242, 0.45);
+        transform: scaleX(0.16);
+        transform-origin: left;
+        animation: startup-map-progress 2.4s cubic-bezier(.18, .74, .28, 1) forwards;
+      }
+
+      #startup-loader.is-ready .startup-loader__track i {
+        animation: none;
+        transform: scaleX(1);
+        transition: transform 120ms ease-out;
+      }
+
+      @keyframes startup-map-progress {
+        0% { transform: scaleX(0.08); }
+        55% { transform: scaleX(0.64); }
+        100% { transform: scaleX(0.88); }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        #startup-loader { transition-duration: 1ms; }
+        .startup-loader__track i { animation: none; transform: scaleX(0.88); }
+        #startup-loader.is-ready .startup-loader__track i { transition-duration: 1ms; }
+      }
+    </style>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2307111f'/%3E%3Cpath d='M15 17h34v9H26v7h19v9H26v15H15z' fill='%236bdef2'/%3E%3C/svg%3E" />
     <meta
       name="description"
       content="Frontier Command — a modern real-time territorial war game with stat-based units."
     />
     <title>Frontier Command</title>
+    <script type="module" src="/src/main.ts"></script>
   </head>
   <body>
     <div id="app">
-      <div id="startup-loader" role="status" aria-live="polite" aria-hidden="false" aria-label="Loading Frontier Command">
+      <div id="startup-loader" role="status" aria-live="polite" aria-atomic="true" aria-hidden="false">
+        <span class="startup-loader__sr-only">Loading Frontier Command</span>
         <div class="startup-loader__identity" aria-hidden="true">
           <span>FC</span>
           <div><strong>FRONTIER COMMAND</strong><small>DEPLOYING COMMAND MAP</small></div>
@@ -25,6 +142,5 @@
       <div id="tooltip" role="tooltip"></div>
       <div id="toast-layer" aria-live="assertive"></div>
     </div>
-    <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

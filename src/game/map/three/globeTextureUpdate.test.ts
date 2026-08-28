@@ -92,6 +92,33 @@ describe('globe political texture update cache', () => {
     });
   });
 
+  it('never paints a second integration perimeter during the fast capture redraw', () => {
+    const captureBody = globeTextureSource.slice(
+      globeTextureSource.indexOf('private drawCapturedTerritories('),
+      globeTextureSource.indexOf('private drawCountries('),
+    );
+    expect(captureBody).not.toContain('context.stroke()');
+    expect(captureBody).not.toContain('context.strokeStyle');
+  });
+
+  it('restores natural geography and terrain before the capture flag and integration', () => {
+    const captureBody = globeTextureSource.slice(
+      globeTextureSource.indexOf('private drawCapturedTerritories('),
+      globeTextureSource.indexOf('private drawCountries('),
+    );
+    const naturalBaseIndex = captureBody.indexOf('restoreNaturalEarthBaseIntoRings(');
+    const terrainIndex = captureBody.indexOf('drawPreparedTerrainWash(');
+    const flagIndex = captureBody.indexOf('drawFlagIntoProjection(');
+    const integrationIndex = captureBody.indexOf('drawIntegrationOverlay(');
+    expect(naturalBaseIndex).toBeGreaterThanOrEqual(0);
+    expect(terrainIndex).toBeGreaterThan(naturalBaseIndex);
+    expect(flagIndex).toBeGreaterThan(terrainIndex);
+    expect(integrationIndex).toBeGreaterThan(flagIndex);
+    expect(captureBody).toContain('prepared.rings,');
+    expect(captureBody).not.toContain('drawGlobeMountainHillshade');
+    expect(captureBody).not.toContain('drawGlobeSummitSnow');
+  });
+
   it('falls back to a full redraw for every shared-projection or mixed change', () => {
     const before = politicalSnapshot({ a: coreState('a'), c: coreState('c') });
     const capture = { ownerId: 'b', coreOwnerId: 'a', integrating: true, flagOwnerId: 'a' };
@@ -222,7 +249,10 @@ describe('globe political texture update cache', () => {
     expect(globeTextureSource).not.toContain("this.signature = '';");
   });
 
-  it('resolves map readiness only after every relevant flag and the final batch redraw', () => {
+  it('resolves map readiness only after the natural base, every flag and the final batch redraw', () => {
+    expect(globeTextureSource).toContain('private naturalBaseSettled = false;');
+    expect(globeTextureSource).toContain('image.src = naturalEarthTextureUrl;');
+    expect(globeTextureSource).toContain('if (!this.naturalBaseSettled');
     expect(globeTextureSource).toContain('private readonly pendingFlagLoads = new Set<string>();');
     expect(globeTextureSource).toContain('this.pendingFlagLoads.add(nationId);');
     expect(globeTextureSource).toContain('image.onload = () => this.finishFlagLoad(nationId);');
@@ -230,9 +260,10 @@ describe('globe political texture update cache', () => {
     expect(globeTextureSource).toContain(
       'if (this.pendingFlagLoads.size === 0) this.queueRedraw();',
     );
-    expect(globeTextureSource).toContain(
-      'if (this.pendingFlagLoads.size > 0 || this.redrawTimer !== undefined) return;',
-    );
+    expect(globeTextureSource).toContain('this.pendingFlagLoads.size > 0');
+    expect(globeTextureSource).toContain('|| this.redrawTimer !== undefined');
+    expect(globeTextureSource).toContain('|| this.textureUploadFrame !== undefined');
+    expect(globeTextureSource).toContain('|| this.textureUploadTimer !== undefined) return;');
     const batchBody = globeTextureSource.slice(
       globeTextureSource.indexOf('private queueRedraw(): void'),
       globeTextureSource.indexOf('private drawCountries('),

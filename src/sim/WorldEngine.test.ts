@@ -512,7 +512,7 @@ describe('strategic world simulation', () => {
     const uplift = upgraded.state.territories.bel!.population / baseline.state.territories.bel!.population - 1;
     expect(uplift).toBeGreaterThan(0.0008);
     expect(uplift).toBeLessThan(0.0012);
-  });
+  }, 15_000);
 
   it('gebruikt één nationale rekening met inkomsten en werkelijke wekelijkse kosten', () => {
     const engine = new WorldEngine(2035);

@@ -8,15 +8,16 @@ const profile = (...entries: Array<[TerrainProfileEntry['terrain'], number]>): T
 );
 
 describe('terrain texture presentation', () => {
-  it('uses only the largest terrain for the fill and the second largest for the border', () => {
+  it('blends the two largest terrains for the fill and uses the third for the border', () => {
     const layers = terrainTextureLayerPresentation(profile(
       ['coastal', 0.12],
       ['desert', 0.58],
       ['mountain', 0.30],
     ));
 
-    expect(layers.tintColor).toBe(TERRAIN_PRESENTATION.desert.color);
-    expect(layers.borderColor).toBe(TERRAIN_PRESENTATION.mountain.color);
+    expect(layers.tintColor).not.toBe(TERRAIN_PRESENTATION.desert.color);
+    expect(layers.tintColor).not.toBe(TERRAIN_PRESENTATION.mountain.color);
+    expect(layers.borderColor).toBe(TERRAIN_PRESENTATION.coastal.color);
   });
 
   it('makes a larger dominant share visibly stronger', () => {
@@ -28,11 +29,9 @@ describe('terrain texture presentation', () => {
     ));
 
     expect(strong.tintAlpha).toBeGreaterThan(moderate.tintAlpha);
-    expect(strong.tintAlpha - moderate.tintAlpha).toBeGreaterThan(0.06);
-    expect(strong.flagTintAlpha).toBeGreaterThan(moderate.flagTintAlpha);
-    expect(moderate.flagTintAlpha).toBeCloseTo(0.279, 6);
-    expect(strong.flagTintAlpha).toBeCloseTo(0.496, 6);
-    expect(strong.flagTintAlpha).toBeLessThanOrEqual(0.62);
+    expect(strong.tintAlpha - moderate.tintAlpha).toBeGreaterThan(0.005);
+    expect(strong.tintAlpha).toBeLessThanOrEqual(0.055);
+    expect(layersHaveNoSecondFlagTint(strong)).toBe(true);
   });
 
   it('makes a larger secondary share visibly stronger without overpowering gameplay cues', () => {
@@ -44,11 +43,11 @@ describe('terrain texture presentation', () => {
     ));
 
     expect(large.borderAlpha).toBeGreaterThan(small.borderAlpha);
-    expect(large.borderAlpha).toBeLessThanOrEqual(0.96);
+    expect(large.borderAlpha).toBeLessThanOrEqual(0.88);
     expect(small.borderAlpha).toBeGreaterThanOrEqual(0.4);
   });
 
-  it('does not let the third terrain change either map color', () => {
+  it('lets the third terrain change the border without changing the top-two fill', () => {
     const jungleThird = terrainTextureLayerPresentation(profile(
       ['urban', 0.60], ['coastal', 0.25], ['jungle', 0.15],
     ));
@@ -57,6 +56,24 @@ describe('terrain texture presentation', () => {
     ));
 
     expect(arcticThird.tintColor).toBe(jungleThird.tintColor);
-    expect(arcticThird.borderColor).toBe(jungleThird.borderColor);
+    expect(arcticThird.borderColor).not.toBe(jungleThird.borderColor);
+    expect(jungleThird.borderColor).toBe(TERRAIN_PRESENTATION.jungle.color);
+    expect(arcticThird.borderColor).toBe(TERRAIN_PRESENTATION.arctic.color);
+  });
+
+  it('gives mountain-heavy profiles a stronger but bounded terrain wash', () => {
+    const plains = terrainTextureLayerPresentation(profile(
+      ['plains', 0.60], ['coastal', 0.25], ['urban', 0.15],
+    ));
+    const mountain = terrainTextureLayerPresentation(profile(
+      ['mountain', 0.60], ['coastal', 0.25], ['urban', 0.15],
+    ));
+
+    expect(mountain.tintAlpha).toBeGreaterThan(plains.tintAlpha);
+    expect(mountain.tintAlpha).toBeLessThanOrEqual(0.055);
   });
 });
+
+function layersHaveNoSecondFlagTint(layers: ReturnType<typeof terrainTextureLayerPresentation>): boolean {
+  return !('flagTintAlpha' in layers);
+}

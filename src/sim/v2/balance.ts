@@ -7,7 +7,7 @@ import type {
   TerrainType,
 } from './types';
 
-export const V2_RULES_VERSION = 'frontier-command-v2.65-polar-endgame';
+export const V2_RULES_VERSION = 'frontier-command-v2.66-strategic-rebalance';
 export const V2_CONTENT_VERSION = 'natural-earth-countries-2026-v7-greenland';
 export const V2_MAP_ID = 'natural-earth-countries-2026';
 export const V2_TICK_DURATION_MS = 1_000;
@@ -81,9 +81,11 @@ export const PASSIVE_RECRUITMENT_TRAINING_BONUS = 0.02;
 export const UPKEEP_OVERFUNDING_MAX_RATIO = 1.25;
 /** The maximum is approached smoothly across twelve revenue-weeks above reserve. */
 export const UPKEEP_OVERFUNDING_FULL_SURPLUS_WEEKS = 12;
-/** A finite trained pool: at most one full active army, built only after the peacetime army is ready. */
+/** A finite trained pool: at most one full active army, with a paid trickle once the field army is 85% ready. */
 export const TRAINED_RESERVE_CAPACITY_MULTIPLIER = 1;
-export const TRAINED_RESERVE_ACTIVE_READY_RATIO = 0.999999;
+export const TRAINED_RESERVE_ACTIVE_READY_RATIO = 0.85;
+/** At the readiness threshold, only this share of the normal reserve pipeline is available. */
+export const TRAINED_RESERVE_PEACETIME_TRICKLE_FACTOR = 0.15;
 /** Existing trained soldiers mobilise faster than the pipeline can train fresh replacements. */
 export const TRAINED_RESERVE_DEPLOYMENT_THROUGHPUT_MULTIPLIER = 3.44;
 /** War keeps only a paid 5% training trickle while normal replacement draw remains much faster. */
@@ -225,6 +227,16 @@ export const PEACE_OFFER_DURATION_TICKS = 26;
 export const ALLIANCE_OFFER_DURATION_TICKS = 26;
 /** A revenge claim is useful for at most one year after it is triggered. */
 export const WAR_REVENGE_WINDOW_TICKS = 52;
+/** A capture pauses both armies long enough to secure supply before the next objective. */
+export const WAR_CAPTURE_CONSOLIDATION_TICKS = 8;
+/** Even a live, contested campaign must resolve within three campaign years. */
+export const WAR_CAMPAIGN_MAX_TICKS = 156;
+/** A victor this depleted consolidates its gain instead of chaining another assault. */
+export const WAR_CAMPAIGN_MIN_CONTINUE_FILL_RATIO = 0.18;
+/** Multi-war empires need substantially more field strength to keep advancing. */
+export const WAR_CAMPAIGN_MULTI_WAR_MIN_CONTINUE_FILL_RATIO = 0.40;
+/** Severe domestic exhaustion converts the latest conquest into a negotiated endpoint. */
+export const WAR_CAMPAIGN_CONSOLIDATE_FATIGUE = 80;
 /** Ending a war unilaterally creates a material 52-week treaty burden. */
 export const CEASEFIRE_PAYMENT_WEEKS = 52;
 /** Neither signatory may restart the war until two full years after the last instalment. */
@@ -488,6 +500,23 @@ export function nuclearPowerTierCostV2(tier: number): number {
 export const AI_DECISION_INTERVAL = 8;
 /** Existing crises get time to develop before the wider 2026 order starts fracturing. */
 export const AI_FIRST_WAR_TICK = 78;
+/** At this visible Suspicion level every adjacent AI receives an alert review lane. */
+export const AI_HIGH_SUSPICION_REACTION_THRESHOLD = 80;
+
+/** Smooth high-alert signal shared by declaration, budget and logistics planning. */
+export function aiHighSuspicionAlertV2(globalThreat: number): number {
+  return smoothstep(65, 90, clamp(globalThreat, 0, 100));
+}
+
+/** Bounded readiness signal for moving existing troops toward exposed borders. */
+export function aiBorderPreSupplyPriorityV2(
+  globalThreat: number,
+  activeWarCount: number,
+): number {
+  const suspicionAlert = aiHighSuspicionAlertV2(globalThreat);
+  const warLoad = clamp(Math.max(0, activeWarCount) / 2, 0, 1);
+  return clamp(0.85 * suspicionAlert + 0.30 * warLoad, 0, 1);
+}
 /** New expansion wars are meaningful events, not something the world opens every few weeks. */
 export const AI_GLOBAL_WAR_COOLDOWN = 91;
 /** Established great powers strongly prefer proxy/regional expansion over a

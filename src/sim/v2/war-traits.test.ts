@@ -431,8 +431,8 @@ describe('V2 country traits in the canonical war runtime', () => {
     const battle = resolveBattlePulseV2(state, WORLD_CONTENT_V2, activeWar, operation)!;
 
     expect(battle.conquered).toBe(true);
-    expect(battle.treasurySeized).toBe(10);
-    expect(state.players[hungary]!.treasury).toBe(10);
+    expect(battle.treasurySeized).toBe(25);
+    expect(state.players[hungary]!.treasury).toBe(25);
     expect(state.players[switzerland]!.treasury).toBe(0);
     expect(state.territories[switzerlandTerritory]!.integrationProgram?.completesTick)
       .toBe(state.tick + quote.durationWeeks);

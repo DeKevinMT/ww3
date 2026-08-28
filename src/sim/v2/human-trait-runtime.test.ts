@@ -16,14 +16,12 @@ import {
   createPowerSnapshotV2,
   selectResearchCatchUpFactorV2,
   selectResearchPortfolioV2,
-  selectTreasurySeizureShareV2,
   selectWeeklyFinanceBreakdownV2,
 } from './selectors';
 import { applyResearchProgressTraitV2 } from './traitResearch';
 import {
   countryTraitFactorV2,
   countryTraitModifiersV2,
-  countryTraitReplacementValueV2,
   humanStartingArmyMultiplierForContentV2,
 } from './traits';
 import { nationIdV2, territoryIdV2 } from './types';
@@ -145,25 +143,11 @@ describe('human country-trait runtime propagation', () => {
     expect(humanQuote.durationWeeks).toBeLessThan(aiQuote.durationWeeks);
   });
 
-  it('scales a fixed treasury-seizure replacement for its defeated human identity', () => {
-    const state = createWorldStateV2(92_003);
+  it('amplifies Switzerland\'s live reserve training instead of a post-defeat payout', () => {
     const switzerland = nationIdV2('che');
-    const replacementEntry = countryTraitModifiersV2(
-      switzerland,
-      'treasury-seizure',
-    ).find((entry) => entry.replacement?.unit === 'share')!;
-
-    expect(selectTreasurySeizureShareV2(state, switzerland)).toBe(0.10);
-    state.humanPlayerId = switzerland;
-    state.humanPlayerIds = [switzerland];
-    const expected = countryTraitReplacementValueV2(
-      switzerland,
-      replacementEntry,
-      { humanControlled: true },
-    )!;
-
-    expect(selectTreasurySeizureShareV2(state, switzerland)).toBeCloseTo(expected, 12);
-    expect(selectTreasurySeizureShareV2(state, switzerland)).toBeLessThan(0.10);
+    expect(countryTraitModifiersV2(switzerland, 'treasury-seizure')).toEqual([]);
+    expect(countryTraitModifiersV2(switzerland, 'reserve-training')[0]?.percentage)
+      .toBeGreaterThan(0);
   });
 
   it('requotes opening cash and synchronizes army capacity across choose and lobby changes', () => {

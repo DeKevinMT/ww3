@@ -80,6 +80,8 @@ export interface MapBattleEvent {
   defenderId: string;
   attackerLosses?: number;
   defenderLosses?: number;
+  /** Effective committed attack power; optional for legacy renderer events. */
+  attackerPower?: number;
   conquered: boolean;
   operation: string;
 }

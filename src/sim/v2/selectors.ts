@@ -111,6 +111,7 @@ import {
   TRAINED_RESERVE_ACTIVE_READY_RATIO,
   TRAINED_RESERVE_CAPACITY_MULTIPLIER,
   TRAINED_RESERVE_DEPLOYMENT_THROUGHPUT_MULTIPLIER,
+  TRAINED_RESERVE_PEACETIME_TRICKLE_FACTOR,
   TRAINED_RESERVE_TRAINING_COST_MULTIPLIER,
   TRAINED_RESERVE_WARTIME_TRAINING_FACTOR,
   RESERVE_MOBILIZATION_RESEARCH_BONUS_PER_EFFECTIVE_LEVEL,
@@ -2842,6 +2843,18 @@ export function selectWeeklyFinanceBreakdownV2(
     deployedAfterFinanceRecruitment,
     army.capacity,
   );
+  const activeFillAfterRecruitment = army.capacity > 0
+    ? deployedAfterFinanceRecruitment / army.capacity
+    : 0;
+  const peacetimeReservePipelineShare = activeReadyForReserve
+    ? TRAINED_RESERVE_PEACETIME_TRICKLE_FACTOR
+      + (1 - TRAINED_RESERVE_PEACETIME_TRICKLE_FACTOR) * clamp(
+        (activeFillAfterRecruitment - TRAINED_RESERVE_ACTIVE_READY_RATIO)
+          / Math.max(0.000001, 1 - TRAINED_RESERVE_ACTIVE_READY_RATIO),
+        0,
+        1,
+      )
+    : 0;
   const reserveTrainingLevel = diminishingResearchLevelV2(
     nation.research.effectLevels['reserve-training'],
     RESERVE_TRAINING_RESEARCH_EFFECTIVE_CEILING,
@@ -2851,7 +2864,7 @@ export function selectWeeklyFinanceBreakdownV2(
     + RESERVE_TRAINING_RESEARCH_BONUS_PER_EFFECTIVE_LEVEL * reserveTrainingLevel;
   const reserveTrainingRequest = (atWar || activeReadyForReserve)
     ? trainingPipeline * mandatoryFundingRatio
-      * (atWar ? TRAINED_RESERVE_WARTIME_TRAINING_FACTOR : 1)
+      * (atWar ? TRAINED_RESERVE_WARTIME_TRAINING_FACTOR : peacetimeReservePipelineShare)
       * reserveTrainingMultiplier
       * countryTraitFactorV2(
         playerId,

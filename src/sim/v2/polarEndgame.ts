@@ -109,12 +109,12 @@ export const ARCTIC_PROJECTS_V2: readonly ArcticProjectDefinitionV2[] = [
     name: 'Polar Habitat Genome',
     kicker: 'Phase I · Human endurance',
     description: 'Closed-loop settlements turn extreme cold into new demographic and medical capacity.',
-    durationTicks: 156,
-    baseCost: 80,
+    durationTicks: 104,
+    baseCost: 40,
     rewards: [
-      { effect: 'population-growth', levels: 3, label: '+3 population growth levels' },
-      { effect: 'recovery', levels: 2, label: '+2 recovery levels' },
-      { effect: 'food-storage', levels: 2, label: '+2 food storage levels' },
+      { effect: 'population-growth', levels: 1, label: '+1 population growth level' },
+      { effect: 'recovery', levels: 1, label: '+1 recovery level' },
+      { effect: 'food-storage', levels: 1, label: '+1 food storage level' },
     ],
     revealsAntarctica: false,
   },
@@ -123,12 +123,12 @@ export const ARCTIC_PROJECTS_V2: readonly ArcticProjectDefinitionV2[] = [
     name: 'Cryogenic Logistics Grid',
     kicker: 'Phase II · Deep supply',
     description: 'Autonomous depots and polar medicine make long, isolated campaigns survivable.',
-    durationTicks: 260,
-    baseCost: 180,
+    durationTicks: 156,
+    baseCost: 90,
     rewards: [
-      { effect: 'supply', levels: 4, label: '+4 supply levels' },
-      { effect: 'casualty-reduction', levels: 3, label: '+3 casualty reduction levels' },
-      { effect: 'research-efficiency', levels: 2, label: '+2 research efficiency levels' },
+      { effect: 'supply', levels: 2, label: '+2 supply levels' },
+      { effect: 'casualty-reduction', levels: 1, label: '+1 casualty reduction level' },
+      { effect: 'research-efficiency', levels: 1, label: '+1 research efficiency level' },
     ],
     revealsAntarctica: false,
   },
@@ -137,12 +137,12 @@ export const ARCTIC_PROJECTS_V2: readonly ArcticProjectDefinitionV2[] = [
     name: 'Strategic Mobilisation Vaults',
     kicker: 'Phase III · Continental readiness',
     description: 'Sub-ice arsenals and hardened training hubs expand the force and reserve ceiling.',
-    durationTicks: 416,
-    baseCost: 385,
+    durationTicks: 260,
+    baseCost: 180,
     rewards: [
-      { effect: 'force-capacity', levels: 4, label: '+4 army-cap levels' },
-      { effect: 'reserve-training', levels: 3, label: '+3 reserve training levels' },
-      { effect: 'reserve-mobilization', levels: 3, label: '+3 reserve mobilisation levels' },
+      { effect: 'force-capacity', levels: 2, label: '+2 army-cap levels' },
+      { effect: 'reserve-training', levels: 2, label: '+2 reserve training levels' },
+      { effect: 'reserve-mobilization', levels: 2, label: '+2 reserve mobilisation levels' },
     ],
     revealsAntarctica: false,
   },
@@ -151,12 +151,12 @@ export const ARCTIC_PROJECTS_V2: readonly ArcticProjectDefinitionV2[] = [
     name: 'Deep-Ice Signal Array',
     kicker: 'Phase IV · The impossible signal',
     description: 'A planet-scale listening array maps an artificial transmission beneath Antarctic ice.',
-    durationTicks: 780,
-    baseCost: 760,
+    durationTicks: 416,
+    baseCost: 360,
     rewards: [
-      { effect: 'attack', levels: 2, label: '+2 attack levels' },
-      { effect: 'defense', levels: 3, label: '+3 defense levels' },
-      { effect: 'research-speed', levels: 2, label: '+2 research speed levels' },
+      { effect: 'attack', levels: 1, label: '+1 attack level' },
+      { effect: 'defense', levels: 1, label: '+1 defense level' },
+      { effect: 'research-speed', levels: 1, label: '+1 research speed level' },
     ],
     revealsAntarctica: true,
   },
@@ -176,7 +176,7 @@ export const ARCTIC_RESEARCH_AFFINITY_COST_MODIFIERS_V2 = Object.freeze(
   ])),
 ) as Readonly<Record<(typeof ARCTIC_RESEARCH_AFFINITY_PLAYER_IDS_V2)[number], number>>;
 
-export const ARCTIC_RESEARCH_RANK_COST_FACTOR_STRONGEST_V2 = 10;
+export const ARCTIC_RESEARCH_RANK_COST_FACTOR_STRONGEST_V2 = 5;
 export const ARCTIC_RESEARCH_RANK_COST_FACTOR_WEAKEST_V2 = 0.5;
 
 export function arcticResearchAffinityCostModifierV2(

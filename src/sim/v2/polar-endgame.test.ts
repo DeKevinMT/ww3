@@ -93,21 +93,21 @@ function secureSector(
 }
 
 describe('V2 polar endgame', () => {
-  it('keeps the four canonical Arctic projects at their exact base durations and costs', () => {
+  it('keeps the four streamlined Arctic projects at their exact base durations and costs', () => {
     expect(ARCTIC_PROJECTS_V2.map(({ durationTicks, baseCost }) => ({
       durationTicks,
       baseCost,
     }))).toEqual([
-      { durationTicks: 156, baseCost: 80 },
+      { durationTicks: 104, baseCost: 40 },
+      { durationTicks: 156, baseCost: 90 },
       { durationTicks: 260, baseCost: 180 },
-      { durationTicks: 416, baseCost: 385 },
-      { durationTicks: 780, baseCost: 760 },
+      { durationTicks: 416, baseCost: 360 },
     ]);
   });
 
   it('derives the exact raw Arctic affinity table without human amplification', () => {
     expect(ARCTIC_RESEARCH_AFFINITY_COST_MODIFIERS_V2).toEqual({
-      grl: -0.125,
+      grl: -0.50,
       isl: -0.35,
       nor: -0.30,
       can: -0.25,
@@ -124,7 +124,7 @@ describe('V2 polar endgame', () => {
     expect(arcticResearchAffinityCostModifierV2('bra')).toBe(0);
   });
 
-  it('prices opening military rank smoothly from x10 to x0.5 in every scenario', () => {
+  it('prices opening military rank smoothly from x5 to x0.5 in every scenario', () => {
     const alternativeContent = resolveScenarioV2({
       mode: 'random-world',
       seed: 72_030,

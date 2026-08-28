@@ -19,20 +19,35 @@ import {
   PLAYER_FIGHT_GAIN_FAR,
   PLAYER_FIGHT_GAIN_NEAR,
   RADIO_AUDIO_MAX_OVERLAP,
+  WAR_END_FIGHT_FADE_SECONDS,
 } from './gameAudio';
 
 class FakeSource {
   buffer: { duration: number } | null = null;
   onended: (() => void) | null = null;
   started = false;
+  stoppedAt: number | undefined;
   connect(): void {}
   disconnect(): void {}
   start(): void { this.started = true; }
+  stop(when?: number): void { this.stoppedAt = when; }
   finish(): void { this.onended?.(); }
 }
 
 class FakeGain {
-  readonly gain = { value: 0 };
+  readonly automation: Array<{ kind: 'cancel' | 'set' | 'ramp'; value?: number; time: number }> = [];
+  readonly gain = {
+    value: 0,
+    cancelScheduledValues: (time: number) => { this.automation.push({ kind: 'cancel', time }); },
+    setValueAtTime: (value: number, time: number) => {
+      this.gain.value = value;
+      this.automation.push({ kind: 'set', value, time });
+    },
+    linearRampToValueAtTime: (value: number, time: number) => {
+      this.gain.value = value;
+      this.automation.push({ kind: 'ramp', value, time });
+    },
+  };
   connect(): void {}
   disconnect(): void {}
 }
@@ -40,6 +55,7 @@ class FakeGain {
 class FakeAudioContext {
   readonly destination = {};
   readonly state = 'suspended';
+  currentTime = 10;
   readonly sources: FakeSource[] = [];
   readonly gains: FakeGain[] = [];
   readonly decodedByteLengths: number[] = [];
@@ -287,6 +303,36 @@ describe('game audio presentation adapter', () => {
       } as WarOutcomeV2,
     }, { viewerPlayerId: 'aaa' });
     expect(context.sources.filter((source) => source.buffer?.duration === 1.267)).toHaveLength(1);
+  });
+
+  it('softly fades only the concluded war combat voice', async () => {
+    const { controller, context, activate, advance } = setup();
+    await activate();
+    const player = { viewerPlayerId: 'aaa', humanPlayerIds: ['aaa'] };
+    await controller.handleWorldChange(
+      { reason: 'battle', battle: battle({ warId: 'war-ending', tick: 20 }) },
+      player,
+    );
+    context.sources[0]!.finish();
+    advance(FIGHT_AUDIO_COOLDOWN_MS);
+    await controller.handleWorldChange(
+      { reason: 'battle', battle: battle({ warId: 'war-continuing', tick: 21 }) },
+      player,
+    );
+
+    await controller.handleWorldChange({
+      reason: 'war-outcome',
+      warOutcome: {
+        warId: 'war-ending', endedTick: 22, result: 'territorial-gain', humanId: 'aaa',
+      } as WarOutcomeV2,
+    }, player);
+
+    expect(context.gains[0]!.automation.at(-1)).toEqual({
+      kind: 'ramp', value: 0, time: context.currentTime + WAR_END_FIGHT_FADE_SECONDS,
+    });
+    expect(context.sources[1]!.stoppedAt)
+      .toBeCloseTo(context.currentTime + WAR_END_FIGHT_FADE_SECONDS + 0.05, 4);
+    expect(context.sources[2]!.stoppedAt).toBeUndefined();
   });
 
   it('attenuates player battles by screen focus without mutating the source asset', async () => {

@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { globeTerritoryReadinessPresentation } from './globeTerritoryPresentation';
+import {
+  globeTerritoryReadinessPresentation,
+  globeTerritorySupplyNodePresentation,
+} from './globeTerritoryPresentation';
 
 describe('globe territory readiness presentation', () => {
   it('uses the empire-support deployment ceiling as its denominator', () => {
@@ -35,5 +38,25 @@ describe('globe territory readiness presentation', () => {
       capacity: 0,
       deploymentCapacity: 0,
     }).tone).toBe('critical');
+  });
+});
+
+describe('globe territory supply-node presentation', () => {
+  it('keeps integrating and completed player territories in one compact persistent style', () => {
+    expect(globeTerritorySupplyNodePresentation('human', 'human', false, true)).toEqual({
+      compact: true,
+      persistent: true,
+      showIntegrationProgress: true,
+    });
+    expect(globeTerritorySupplyNodePresentation('human', 'human', false, false)).toEqual({
+      compact: true,
+      persistent: true,
+      showIntegrationProgress: false,
+    });
+  });
+
+  it('does not collapse capitals or foreign integrating territories', () => {
+    expect(globeTerritorySupplyNodePresentation('human', 'human', true, true).compact).toBe(false);
+    expect(globeTerritorySupplyNodePresentation('rival', 'human', false, true).persistent).toBe(false);
   });
 });

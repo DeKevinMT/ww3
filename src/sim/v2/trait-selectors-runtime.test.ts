@@ -545,15 +545,15 @@ describe('country-trait selector runtime', () => {
       .toBeCloseTo((1 + 0.30 * italyFatigueFactor) / 1.30, 5);
   });
 
-  it('uses the defeated identity for the exact treasury replacement in forecast and runtime helper', () => {
+  it('keeps Switzerland useful before defeat and uses the standard treasury seizure rule', () => {
     const state = createWorldStateV2(82_070);
     const switzerland = nationIdV2('che');
     const france = nationIdV2('fra');
     state.players[switzerland]!.treasury = 1_000;
-    expect(selectTreasurySeizureShareV2(state, switzerland)).toBe(0.10);
+    expect(selectTreasurySeizureShareV2(state, switzerland)).toBe(0.25);
     expect(selectTreasurySeizureShareV2(state, france)).toBe(0.25);
     expect(selectConquestForecastV2(
       state, WORLD_CONTENT_V2, france, switzerland,
-    ).maxTreasurySeized).toBe(100);
+    ).maxTreasurySeized).toBe(250);
   });
 });

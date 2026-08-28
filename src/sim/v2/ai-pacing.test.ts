@@ -56,7 +56,7 @@ describe('quiet but active AI war pacing', () => {
     expect(aiHumanAttackSuspicionFactorV2(25)).toBeLessThan(0.08);
     expect(aiHumanAttackSuspicionFactorV2(50)).toBeGreaterThan(0.28);
     expect(aiHumanAttackSuspicionFactorV2(80)).toBeGreaterThan(0.80);
-    expect(aiHumanAttackSuspicionFactorV2(100)).toBe(1.35);
+    expect(aiHumanAttackSuspicionFactorV2(100)).toBeCloseTo(2.2275, 9);
   });
 
   it('brakes optional AI wars as the world fills while retaining the human-strain opening', () => {
