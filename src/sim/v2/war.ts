@@ -5,7 +5,7 @@ import {
   battleDamageVarianceV2,
   ATTACKER_MILITARY_LOSS_MULTIPLIER,
   CAPTURE_MIN_CONTRIBUTION_SHARE,
-  LOCAL_FORMATION_CAPITULATION_MAX_FILL_V2,
+  localFormationCapitulationThresholdV2,
   COMBAT_DAMAGE_EFFECTIVENESS,
   COMBAT_HIT_EMPIRE_CAP_SHARE_V2,
   COMBAT_POWER_RATIO_EXPONENT,
@@ -2114,6 +2114,72 @@ function operationCandidateKeyV2(operation: Pick<FrontOperationV2, 'sourceId' | 
   return `${operation.sourceId}:${operation.targetId}:${operation.access}`;
 }
 
+function survivalPhysicalAxisKeyV2(
+  operation: Pick<FrontOperationV2, 'sourceId' | 'targetId'>,
+): string {
+  return [operation.sourceId, operation.targetId]
+    .sort((left, right) => left.localeCompare(right))
+    .join(':');
+}
+
+function survivalRogueTerritorySpentV2(
+  state: WorldStateV2,
+  territoryId: TerritoryId,
+): boolean {
+  const territory = state.territories[territoryId];
+  return Boolean(territory
+    && territory.owner === ROGUE_AI_NATION_ID_V2
+    && selectArmyCombatManpowerV2(state, ROGUE_AI_NATION_ID_V2, territory.army)
+      <= localFormationCapitulationThresholdV2(territory.army.capacity));
+}
+
+function reverseSpentSurvivalRogueAxisV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  war: WarStateV2,
+  operation: FrontOperationV2,
+  scorchedIds: ReadonlySet<TerritoryId>,
+): FrontOperationV2 | undefined {
+  if (operation.commanderId !== ROGUE_AI_NATION_ID_V2
+    || operation.lastBattleTick <= operation.startedTick
+    || !scorchedIds.has(operation.sourceId)) return undefined;
+  const rogueTerritory = state.territories[operation.sourceId];
+  const humanTerritory = state.territories[operation.targetId];
+  if (!rogueTerritory || !humanTerritory
+    || rogueTerritory.owner !== ROGUE_AI_NATION_ID_V2
+    || humanTerritory.owner !== war.defenderId) return undefined;
+  if (!survivalRogueTerritorySpentV2(state, operation.sourceId)
+    || selectArmyCombatManpowerV2(state, war.defenderId, humanTerritory.army) <= 1e-9) {
+    return undefined;
+  }
+  const route = selectCoopMilitaryAccessRouteBetweenV2(
+    state,
+    content,
+    war.defenderId,
+    ROGUE_AI_NATION_ID_V2,
+    operation.targetId,
+    operation.sourceId,
+  );
+  if (!route || route.hopCount !== 1) return undefined;
+  return {
+    commanderId: war.defenderId,
+    sourceId: operation.targetId,
+    targetId: operation.sourceId,
+    doctrine: 'counteroffensive',
+    access: route.access,
+    startedTick: state.tick,
+    lastBattleTick: state.tick,
+    holdUntilTick: state.tick + 8,
+    momentum: round(clamp(-operation.momentum, 0, 1)),
+  };
+}
+
+function sortSurvivalOperationsV2(operations: FrontOperationV2[]): FrontOperationV2[] {
+  return operations.sort((left, right) => left.sourceId.localeCompare(right.sourceId)
+    || left.targetId.localeCompare(right.targetId)
+    || left.access.localeCompare(right.access));
+}
+
 /**
  * One bilateral war is one front. Authenticated older saves can contain one
  * operation per border and one for each counterattack direction; collapse
@@ -2125,30 +2191,66 @@ export function canonicalizeWarFrontV2(
   war: WarStateV2,
 ): FrontOperationV2 | undefined {
   if (isSurvivalRogueHumanMultiFrontWarV2(state, war)) {
-    const usedSources = new Set<TerritoryId>();
-    const selected = war.attackerOperations
-      .filter((operation) => operation.commanderId === ROGUE_AI_NATION_ID_V2
-        && operationValidV2(
-          state,
-          content,
-          operation,
-          ROGUE_AI_NATION_ID_V2,
-          war.defenderId,
-        ))
-      .sort((left, right) => left.sourceId.localeCompare(right.sourceId)
-        || left.targetId.localeCompare(right.targetId)
-        || left.access.localeCompare(right.access))
-      .filter((operation, index, all) => index === all.findIndex((candidate) => (
-        operationCandidateKeyV2(candidate) === operationCandidateKeyV2(operation)
-      )))
-      .filter((operation) => {
-        if (usedSources.has(operation.sourceId)) return false;
-        usedSources.add(operation.sourceId);
-        return true;
-      })
-      .slice(0, 2);
-    war.attackerOperations = selected;
-    war.defenderOperations = [];
+    const scorchedIds = new Set(state.runProgression.scorchedWorldTerritoryIds);
+    const reversed = war.attackerOperations
+      .map((operation) => reverseSpentSurvivalRogueAxisV2(
+        state,
+        content,
+        war,
+        operation,
+        scorchedIds,
+      ))
+      .filter((operation): operation is FrontOperationV2 => Boolean(operation));
+    const reversedAxes = new Set(reversed.map(survivalPhysicalAxisKeyV2));
+    const candidates = [
+      ...sortSurvivalOperationsV2([...war.defenderOperations, ...reversed])
+        .filter((operation) => operation.commanderId === war.defenderId
+          && war.battles > 0
+          && scorchedIds.has(operation.targetId)
+          && survivalRogueTerritorySpentV2(state, operation.targetId)
+          && operationValidV2(
+            state,
+            content,
+            operation,
+            war.defenderId,
+            ROGUE_AI_NATION_ID_V2,
+          )),
+      ...sortSurvivalOperationsV2([...war.attackerOperations])
+        .filter((operation) => operation.commanderId === ROGUE_AI_NATION_ID_V2
+          && scorchedIds.has(operation.sourceId)
+          && !reversedAxes.has(survivalPhysicalAxisKeyV2(operation))
+          && operationValidV2(
+            state,
+            content,
+            operation,
+            ROGUE_AI_NATION_ID_V2,
+            war.defenderId,
+          )),
+    ];
+    const usedAxes = new Set<string>();
+    const usedRogueTerritories = new Set<TerritoryId>();
+    const usedHumanTerritories = new Set<TerritoryId>();
+    const selected = candidates.filter((operation) => {
+      const axisKey = survivalPhysicalAxisKeyV2(operation);
+      const rogueTerritoryId = operation.commanderId === ROGUE_AI_NATION_ID_V2
+        ? operation.sourceId : operation.targetId;
+      const humanTerritoryId = operation.commanderId === war.defenderId
+        ? operation.sourceId : operation.targetId;
+      if (usedAxes.has(axisKey)
+        || usedRogueTerritories.has(rogueTerritoryId)
+        || (operation.commanderId === war.defenderId
+          && usedHumanTerritories.has(humanTerritoryId))) return false;
+      usedAxes.add(axisKey);
+      usedRogueTerritories.add(rogueTerritoryId);
+      usedHumanTerritories.add(humanTerritoryId);
+      return true;
+    }).slice(0, 2);
+    war.attackerOperations = sortSurvivalOperationsV2(selected.filter((operation) => (
+      operation.commanderId === ROGUE_AI_NATION_ID_V2
+    )));
+    war.defenderOperations = sortSurvivalOperationsV2(selected.filter((operation) => (
+      operation.commanderId === war.defenderId
+    )));
     return selected[0];
   }
   const liveOperations = [...war.attackerOperations, ...war.defenderOperations];
@@ -2288,69 +2390,113 @@ function synchronizeSurvivalRogueHumanFrontsV2(
   militaryBaseSnapshot?: MilitaryBaseSnapshotV2,
 ): FrontOperationV2[] {
   const scorchedIds = new Set(state.runProgression.scorchedWorldTerritoryIds);
-  const currentOperations = war.attackerOperations
-    .filter((operation) => operationValidV2(
-      state,
-      content,
-      operation,
-      ROGUE_AI_NATION_ID_V2,
-      war.defenderId,
-    ) && scorchedIds.has(operation.sourceId))
-    .sort((left, right) => left.sourceId.localeCompare(right.sourceId)
-      || left.targetId.localeCompare(right.targetId)
-      || left.access.localeCompare(right.access))
-    .filter((operation, index, all) => index === all.findIndex((candidate) => (
-      candidate.sourceId === operation.sourceId
-    )))
-    .slice(0, 2);
+  canonicalizeWarFrontV2(state, content, war);
+  const currentDefenderOperations = [...war.defenderOperations];
+  const currentAttackerOperations = [...war.attackerOperations];
+  const currentOperations = [...currentDefenderOperations, ...currentAttackerOperations];
+  const counterRebuildRequired = war.battles > 0 && currentAttackerOperations.some((operation) => (
+    survivalRogueTerritorySpentV2(state, operation.sourceId)
+      && selectArmyCombatManpowerV2(
+        state,
+        war.defenderId,
+        state.territories[operation.targetId]!.army,
+      ) > 1e-9
+  ));
   // The two stable opening axes remain legal for most of a war. Avoid a full
   // world power snapshot and candidate rescore on every weekly UI sync.
-  if (currentOperations.length === 2) {
-    war.attackerOperations = currentOperations;
-    war.defenderOperations = [];
+  if (currentOperations.length === 2 && !counterRebuildRequired) {
+    war.attackerOperations = sortSurvivalOperationsV2(currentAttackerOperations);
+    war.defenderOperations = sortSurvivalOperationsV2(currentDefenderOperations);
     return currentOperations;
   }
   const currentByKey = new Map(currentOperations
     .map((operation) => [operationCandidateKeyV2(operation), operation]));
-  const candidates = frontCandidatesV2(
+  const snapshot = militaryBaseSnapshot ?? createMilitaryBaseSnapshotV2(state, content);
+  const rogueCandidates = frontCandidatesV2(
     state,
     content,
     ROGUE_AI_NATION_ID_V2,
     war.defenderId,
-    militaryBaseSnapshot ?? createMilitaryBaseSnapshotV2(state, content),
+    snapshot,
   ).filter((candidate) => candidate.routeHopCount === 1
-    && scorchedIds.has(candidate.sourceId));
+    && scorchedIds.has(candidate.sourceId)
+    && (war.battles <= 0 || !survivalRogueTerritorySpentV2(state, candidate.sourceId)));
+  const counterCandidates = war.battles > 0
+    ? frontCandidatesV2(
+        state,
+        content,
+        war.defenderId,
+        ROGUE_AI_NATION_ID_V2,
+        snapshot,
+      ).filter((candidate) => candidate.routeHopCount === 1
+        && scorchedIds.has(candidate.targetId)
+        && survivalRogueTerritorySpentV2(state, candidate.targetId))
+    : [];
   const selected: FrontOperationV2[] = [];
   const selectedKeys = new Set<string>();
-  const selectedSources = new Set<TerritoryId>();
-  const selectedTargets = new Set<TerritoryId>();
+  const selectedRogueTerritories = new Set<TerritoryId>();
+  const selectedHumanTerritories = new Set<TerritoryId>();
+  const selectOperation = (
+    operation: FrontOperationV2,
+    allowSharedHumanTerritory = false,
+  ): boolean => {
+    if (selected.length >= 2) return false;
+    const axisKey = survivalPhysicalAxisKeyV2(operation);
+    const rogueTerritoryId = operation.commanderId === ROGUE_AI_NATION_ID_V2
+      ? operation.sourceId : operation.targetId;
+    const humanTerritoryId = operation.commanderId === ROGUE_AI_NATION_ID_V2
+      ? operation.targetId : operation.sourceId;
+    if (selectedKeys.has(axisKey)
+      || selectedRogueTerritories.has(rogueTerritoryId)
+      || (!allowSharedHumanTerritory
+        && selectedHumanTerritories.has(humanTerritoryId))) return false;
+    selected.push(operation);
+    selectedKeys.add(axisKey);
+    selectedRogueTerritories.add(rogueTerritoryId);
+    selectedHumanTerritories.add(humanTerritoryId);
+    return true;
+  };
+  for (const operation of currentDefenderOperations) selectOperation(operation);
+  for (const candidate of counterCandidates) {
+    if (selected.length >= 2) break;
+    const axisKey = survivalPhysicalAxisKeyV2(candidate);
+    if (selectedKeys.has(axisKey)
+      || selectedRogueTerritories.has(candidate.targetId)
+      || selectedHumanTerritories.has(candidate.sourceId)) continue;
+    const directionalKey = operationCandidateKeyV2(candidate);
+    selectOperation(currentByKey.get(directionalKey) ?? createOperationV2(
+      state,
+      war.defenderId,
+      ROGUE_AI_NATION_ID_V2,
+      true,
+      candidate,
+    ));
+  }
+  for (const operation of currentAttackerOperations) selectOperation(operation, true);
   const selectCandidates = (requireDistinctTarget: boolean): void => {
-    for (const candidate of candidates) {
+    for (const candidate of rogueCandidates) {
       if (selected.length >= 2) break;
-      const key = operationCandidateKeyV2(candidate);
-      if (selectedKeys.has(key) || selectedSources.has(candidate.sourceId)
-        || (requireDistinctTarget && selectedTargets.has(candidate.targetId))) continue;
-      const operation = currentByKey.get(key) ?? createOperationV2(
+      const directionalKey = operationCandidateKeyV2(candidate);
+      if (selectedRogueTerritories.has(candidate.sourceId)
+        || (requireDistinctTarget && selectedHumanTerritories.has(candidate.targetId))) continue;
+      selectOperation(currentByKey.get(directionalKey) ?? createOperationV2(
         state,
         ROGUE_AI_NATION_ID_V2,
         war.defenderId,
         false,
         candidate,
-      );
-      selected.push(operation);
-      selectedKeys.add(key);
-      selectedSources.add(candidate.sourceId);
-      selectedTargets.add(candidate.targetId);
+      ), !requireDistinctTarget);
     }
   };
   selectCandidates(true);
   selectCandidates(false);
-  selected.sort((left, right) => left.sourceId.localeCompare(right.sourceId)
-    || left.targetId.localeCompare(right.targetId)
-    || left.access.localeCompare(right.access));
-  war.attackerOperations = selected;
-  war.defenderOperations = [];
-  return selected;
+  war.attackerOperations = sortSurvivalOperationsV2(selected.filter((operation) => (
+    operation.commanderId === ROGUE_AI_NATION_ID_V2
+  )));
+  war.defenderOperations = sortSurvivalOperationsV2(selected.filter((operation) => (
+    operation.commanderId === war.defenderId
+  )));
+  return [...war.defenderOperations, ...war.attackerOperations];
 }
 
 function chooseInitiativeOperationsV2(
@@ -3519,10 +3665,7 @@ export function resolveBattlePulseV2(
   // manpower to this threshold; a living national attacker must still exist.
   const localFormationCapitulation = targetManpowerBeforeCasualties > EPSILON
     && sourceStrengthAfter > EPSILON
-    && targetStrengthAfter <= round(
-      targetLocalCapacity * LOCAL_FORMATION_CAPITULATION_MAX_FILL_V2,
-      9,
-    );
+    && targetStrengthAfter <= localFormationCapitulationThresholdV2(targetLocalCapacity);
   const formationCapitulated = localFormationCapitulation || decisiveSurrender;
   if (formationCapitulated) {
     // The remaining formation lays down its arms; it is removed from active
@@ -3961,13 +4104,13 @@ function captureGuardActiveV2(
  * Antarctic-origin formation to a live Rogue front. This prevents the opening
  * empire from diffusing every wave through every occupied country each week.
  */
-function survivalRogueTransitRouteIdsV2(
+function survivalRogueTransitRouteDepthsV2(
   state: WorldStateV2,
   content: WorldContentV2,
   ownedIds: readonly TerritoryId[],
   ownerWars: readonly WarStateV2[],
-): ReadonlySet<TerritoryId> {
-  if (!isSurvivalStateV2(state) || ownerWars.length === 0) return new Set();
+): ReadonlyMap<TerritoryId, number> {
+  if (!isSurvivalStateV2(state) || ownerWars.length === 0) return new Map();
   const owned = new Set(ownedIds);
   const opponents = new Set(ownerWars.map((war) => (
     war.attackerId === ROGUE_AI_NATION_ID_V2 ? war.defenderId : war.attackerId
@@ -3980,20 +4123,19 @@ function survivalRogueTransitRouteIdsV2(
         && opponents.has(neighborOwnerId));
     })
   ));
-  if (frontiers.length === 0) return new Set();
+  if (frontiers.length === 0) return new Map();
 
-  const sources = ownedIds.filter((territoryId) => (
-    ANTARCTIC_TERRITORY_IDS_V2.includes(territoryId)
-      || rogueWaveManpowerAtV2(state, territoryId) > 1e-9
-  ));
-  if (sources.length === 0) return new Set();
+  // Every real wave originates at the sovereign machine capital. Seeding this
+  // search from every Antarctic territory made the backtrace stop at the
+  // nearest gateway, so the actual Zero Point convoy was never on its route.
+  const coreId = state.players[ROGUE_AI_NATION_ID_V2]?.capitalId;
+  if (!coreId || !owned.has(coreId)) return new Map();
   const parent = new Map<TerritoryId, TerritoryId | null>();
+  const depthFromCore = new Map<TerritoryId, number>();
   const queue: TerritoryId[] = [];
-  for (const sourceId of sources) {
-    if (parent.has(sourceId)) continue;
-    parent.set(sourceId, null);
-    queue.push(sourceId);
-  }
+  parent.set(coreId, null);
+  depthFromCore.set(coreId, 0);
+  queue.push(coreId);
   for (let index = 0; index < queue.length; index += 1) {
     const sourceId = queue[index]!;
     for (const connection of content.territories[sourceId]?.connections ?? []) {
@@ -4001,20 +4143,22 @@ function survivalRogueTransitRouteIdsV2(
         || parent.has(connection.targetId)
         || !isWorldConnectionOpenV2(state, sourceId, connection.targetId)) continue;
       parent.set(connection.targetId, sourceId);
+      depthFromCore.set(connection.targetId, (depthFromCore.get(sourceId) ?? 0) + 1);
       queue.push(connection.targetId);
     }
   }
 
-  const route = new Set<TerritoryId>();
+  const routeDepths = new Map<TerritoryId, number>();
   for (const frontierId of frontiers) {
     if (!parent.has(frontierId)) continue;
     let cursor: TerritoryId | null = frontierId;
-    while (cursor !== null && !route.has(cursor)) {
-      route.add(cursor);
+    while (cursor !== null) {
+      routeDepths.set(cursor, depthFromCore.get(cursor) ?? 0);
+      if (cursor === coreId) break;
       cursor = parent.get(cursor) ?? null;
     }
   }
-  return route;
+  return routeDepths;
 }
 
 export function redistributeArmiesV2(state: WorldStateV2, content: WorldContentV2): LogisticsMovementV2[] {
@@ -4053,9 +4197,9 @@ export function redistributeArmiesV2(state: WorldStateV2, content: WorldContentV
       ownedIds,
     );
     const ownerWars = selectWarsOfV2(state, playerId);
-    const rogueTransitRouteIds = playerId === ROGUE_AI_NATION_ID_V2
-      ? survivalRogueTransitRouteIdsV2(state, content, ownedIds, ownerWars)
-      : new Set<TerritoryId>();
+    const rogueTransitRouteDepths = playerId === ROGUE_AI_NATION_ID_V2
+      ? survivalRogueTransitRouteDepthsV2(state, content, ownedIds, ownerWars)
+      : new Map<TerritoryId, number>();
     const rogueWavePipeline = playerId === ROGUE_AI_NATION_ID_V2
       ? Object.values(state.polarEndgame.rogueWaveManpowerByTerritory)
         .reduce<number>((sum, manpower) => sum + Math.max(0, manpower ?? 0), 0)
@@ -4094,7 +4238,8 @@ export function redistributeArmiesV2(state: WorldStateV2, content: WorldContentV
       const rogueTransit = playerId === ROGUE_AI_NATION_ID_V2
         && isSurvivalStateV2(state)
         && survivalScorchedIds.has(id);
-      const routedRogueTransit = rogueTransit && rogueTransitRouteIds.has(id);
+      const roguePipelineDepth = rogueTransitRouteDepths.get(id);
+      const routedRoguePipeline = roguePipelineDepth !== undefined;
       const nationalSupportCeiling = stateTerritoryArmySupportCeilingV2(
         state,
         content,
@@ -4108,23 +4253,33 @@ export function redistributeArmiesV2(state: WorldStateV2, content: WorldContentV
       // Occupied countries are staging asphalt, not new national armies. A
       // routed node can hold the complete live Antarctic pipeline regardless
       // of its former country's cap; off-route nodes request no reinforcement.
-      const supportCeiling = routedRogueTransit
+      const supportCeiling = routedRoguePipeline
         ? Math.max(territory.army.manpower, rogueTransitStagingCeiling)
         : rogueTransit ? territory.army.manpower : nationalSupportCeiling;
-      const priority = atWar ? 4 : machineLaunchGateway ? 3
-        : routedRogueTransit ? (exposedBorder ? 3 : 2)
+      // A larger core depth is closer to a live front. Sorting these receivers
+      // first, together with the outward-only edge rule below, prevents verified
+      // formations from oscillating between two full relay nodes.
+      const priority = routedRoguePipeline ? 1_000 + roguePipelineDepth
+        : atWar ? 4 : machineLaunchGateway ? 3
         : exposedBorder ? 2 : integrating ? 1 : 0;
       const desiredFill = atWar ? 1 : machineLaunchGateway ? 0.75
         : exposedBorder ? 0.70 : integrating ? 0.50 : capital ? 0.25 : 0.10;
-      const desired = routedRogueTransit ? supportCeiling
+      const desired = routedRoguePipeline ? supportCeiling
         : rogueTransit ? territory.army.manpower
           : Math.min(supportCeiling, territory.army.capacity * desiredFill);
-      const logisticsCapacity = routedRogueTransit
+      const logisticsCapacity = routedRoguePipeline
         ? supportCeiling
         : playerId === ROGUE_AI_NATION_ID_V2
           ? Math.max(territory.army.capacity, territory.army.manpower)
           : territory.army.capacity;
-      return { id, priority, desired, supportCeiling, logisticsCapacity };
+      return {
+        id,
+        priority,
+        desired,
+        supportCeiling,
+        logisticsCapacity,
+        roguePipelineDepth,
+      };
     });
     const logisticsCapacityById = new Map(plans.map((plan) => [
       plan.id,
@@ -4148,13 +4303,20 @@ export function redistributeArmiesV2(state: WorldStateV2, content: WorldContentV
       return [plan.id, armyCapacitySupplyBudgetV2(plan.logisticsCapacity, 'land')];
     }));
     const receivers = plans
-      .map((plan) => ({
-        ...plan,
-        gap: Math.min(
+      .map((plan) => {
+        const ordinaryGap = Math.min(
           plan.supportCeiling - state.territories[plan.id]!.army.manpower,
           plan.desired - state.territories[plan.id]!.army.manpower,
-        ),
-      }))
+        );
+        // Full Antarctic and occupied-world garrisons still need to exchange
+        // their placeholder personnel for a verified convoy. Giving the routed
+        // node a provenance gap activates the zero-net relay path below.
+        const verifiedGap = plan.roguePipelineDepth !== undefined
+          && plan.roguePipelineDepth > 0
+          ? rogueTransitStagingCeiling - rogueWaveManpowerAtV2(state, plan.id)
+          : 0;
+        return { ...plan, gap: Math.max(ordinaryGap, verifiedGap) };
+      })
       .filter((plan) => plan.gap > 1e-9)
       .sort((left, right) => right.priority - left.priority
         || right.gap / Math.max(1e-9, right.supportCeiling)
@@ -4164,7 +4326,15 @@ export function redistributeArmiesV2(state: WorldStateV2, content: WorldContentV
       let needed = receiver.gap;
       const incoming = (content.territories[receiver.id]?.connections ?? [])
         .filter((edge) => isWorldConnectionOpenV2(state, receiver.id, edge.targetId)
-          && state.territories[edge.targetId]?.owner === playerId)
+          && state.territories[edge.targetId]?.owner === playerId
+          && (() => {
+            if (playerId !== ROGUE_AI_NATION_ID_V2
+              || rogueWaveManpowerAtV2(state, edge.targetId) <= 1e-9) return true;
+            const donorDepth = rogueTransitRouteDepths.get(edge.targetId);
+            return receiver.roguePipelineDepth !== undefined
+              && donorDepth !== undefined
+              && donorDepth + 1 === receiver.roguePipelineDepth;
+          })())
         .map((edge) => ({
           donorId: edge.targetId,
           access: edge.kind === 'sea' ? 'naval' as const : 'land' as const,
@@ -4390,6 +4560,12 @@ export function processWarsV2(
     for (const operation of operations) {
       if (usedSourceIds.has(operation.sourceId)
         || usedAllySupportSourceIds.has(operation.sourceId)) continue;
+      // A newly opened Survival axis must visibly mobilise before contact.
+      // Scorched territories deliberately have no integration record, so this
+      // persisted operation timer is also the bounded anti-ping-pong guard
+      // after either side captures and the physical frontier is rebuilt.
+      if (isSurvivalRogueHumanMultiFrontWarV2(state, war)
+        && state.tick < operation.holdUntilTick) continue;
       const enemyId = operation.commanderId === war.attackerId ? war.defenderId : war.attackerId;
       if (!operationValidV2(state, content, operation, operation.commanderId, enemyId)) continue;
       const battle = resolveBattlePulseV2(

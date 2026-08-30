@@ -4,6 +4,7 @@ import {
   RESEARCH_BRANCHES,
   V2_MAP_ID,
   V2_RULES_VERSION,
+  localFormationCapitulationThresholdV2,
   WAR_CAMPAIGN_MAX_TICKS,
   WAR_REVENGE_WINDOW_TICKS,
 } from './balance';
@@ -1216,10 +1217,8 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
     if (war.attackerOperations.length + war.defenderOperations.length > operationLimit) {
       errors.push(`War ${war.id} has more than one canonical front.`);
     }
-    if (survivalRogueHumanWar && war.defenderOperations.length > 0) {
-      errors.push(`Survival Rogue war ${war.id} has a defender-owned front.`);
-    }
     const usedSources = new Set<TerritoryId>();
+    const usedAxes = new Set<string>();
     for (const [commanderId, opponentId, operations] of [
       [war.attackerId, war.defenderId, war.attackerOperations],
       [war.defenderId, war.attackerId, war.defenderOperations],
@@ -1233,8 +1232,12 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
         if (!exactKeys(operation, OPERATION_KEYS)) errors.push(`War ${war.id} operation has non-canonical keys.`);
         const source = state.territories[operation.sourceId];
         const target = state.territories[operation.targetId];
+        const axisKey = [operation.sourceId, operation.targetId]
+          .sort((left, right) => left.localeCompare(right)).join(':');
         if (usedSources.has(operation.sourceId)) errors.push(`War ${war.id} reuses an army source across fronts.`);
         usedSources.add(operation.sourceId);
+        if (usedAxes.has(axisKey)) errors.push(`War ${war.id} reuses the same physical front.`);
+        usedAxes.add(axisKey);
         if (!source || !target || operation.commanderId !== commanderId
           || source.owner !== commanderId
           || selectArmyCombatManpowerV2(state, commanderId, source.army) <= 0
@@ -1249,6 +1252,15 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
         );
         if (route?.access !== operation.access) {
           errors.push(`War ${war.id} operation has no legal route.`);
+        }
+        if (survivalRogueHumanWar && commanderId === war.defenderId
+          && (war.battles <= 0
+            || !state.runProgression.scorchedWorldTerritoryIds.includes(operation.targetId)
+            || !target
+            || selectArmyCombatManpowerV2(state, ROGUE_AI_NATION_ID_V2, target.army)
+              > localFormationCapitulationThresholdV2(target.army.capacity)
+            || route?.hopCount !== 1)) {
+          errors.push(`Survival Rogue war ${war.id} has an invalid human counterfront.`);
         }
       }
     }

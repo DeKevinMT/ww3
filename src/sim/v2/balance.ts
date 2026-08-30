@@ -835,6 +835,14 @@ export function round(value: number, digits = 6): number {
   return Math.round(value * scale) / scale;
 }
 
+/** Canonical local-force threshold shared by battle resolution and front scheduling. */
+export function localFormationCapitulationThresholdV2(capacity: number): number {
+  return round(
+    Math.max(0, capacity) * LOCAL_FORMATION_CAPITULATION_MAX_FILL_V2,
+    9,
+  );
+}
+
 export function smoothstep(edge0: number, edge1: number, value: number): number {
   const unit = clamp((value - edge0) / (edge1 - edge0), 0, 1);
   return unit * unit * (3 - 2 * unit);

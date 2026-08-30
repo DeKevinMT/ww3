@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { WorldEngineV2 } from './WorldEngineV2';
+import { processAntarcticGatewayBreachesV2 } from './antarcticGateways';
+import { localFormationCapitulationThresholdV2 } from './balance';
 import { ROGUE_AI_NATION_ID_V2 } from './content';
 import { assertInvariantsV2 } from './invariants';
 import { resolveScenarioV2 } from './scenarios';
@@ -20,7 +22,7 @@ import {
 } from './survivalProvenance';
 import { nationIdV2, type TerritoryId } from './types';
 import {
-  frontCapacitySupplyQuoteV2,
+  processWarsV2,
   redistributeArmiesV2,
   synchronizeWarFrontsV2,
 } from './war';
@@ -114,6 +116,118 @@ describe('Survival occupied-world opening', () => {
     ))).toBe(true);
   });
 
+  it('reverses a spent machine axis and captures its empty corridor through the live scheduler', () => {
+    const engine = formedGreenland(81_005);
+    const human = nationIdV2('grl');
+    const war = engine.state.wars.find((candidate) => (
+      candidate.attackerId === ROGUE_AI_NATION_ID_V2
+        && candidate.defenderId === human
+    ))!;
+    const spentAxis = war.attackerOperations[0]!;
+    const untouchedAxis = war.attackerOperations[1]!;
+    const spentTerritory = engine.state.territories[spentAxis.sourceId]!;
+    spentTerritory.army.manpower = 0;
+    spentAxis.lastBattleTick = spentAxis.startedTick + 1;
+    war.battles = 1;
+
+    synchronizeWarFrontsV2(engine.state, engine.content);
+    expect(war.defenderOperations).toEqual([
+      expect.objectContaining({
+        commanderId: human,
+        sourceId: spentAxis.targetId,
+        targetId: spentAxis.sourceId,
+        doctrine: 'counteroffensive',
+      }),
+    ]);
+    expect(war.attackerOperations).toEqual([
+      expect.objectContaining({
+        sourceId: untouchedAxis.sourceId,
+        targetId: untouchedAxis.targetId,
+      }),
+    ]);
+    assertInvariantsV2(engine.state, engine.content);
+
+    let captured = false;
+    for (let week = 0; week < 20 && !captured; week += 1) {
+      engine.state.tick += 1;
+      captured = processWarsV2(engine.state, engine.content).some((battle) => (
+        battle.conquered && battle.targetId === spentAxis.sourceId
+      ));
+    }
+    expect(captured).toBe(true);
+    expect(engine.state.territories[spentAxis.sourceId]!.owner).toBe(human);
+    expect(engine.state.wars.map((candidate) => candidate.id)).toContain(war.id);
+    assertInvariantsV2(engine.state, engine.content);
+  });
+
+  it('does not reverse a machine axis that still fields more than one percent', () => {
+    const engine = formedGreenland(81_006);
+    const human = nationIdV2('grl');
+    const war = engine.state.wars.find((candidate) => (
+      candidate.attackerId === ROGUE_AI_NATION_ID_V2
+        && candidate.defenderId === human
+    ))!;
+    const activeAxis = war.attackerOperations[0]!;
+    const activeTerritory = engine.state.territories[activeAxis.sourceId]!;
+    activeTerritory.army.manpower = localFormationCapitulationThresholdV2(
+      activeTerritory.army.capacity,
+    ) + 1e-9;
+    activeAxis.lastBattleTick = activeAxis.startedTick + 1;
+    war.battles = 1;
+
+    synchronizeWarFrontsV2(engine.state, engine.content);
+    expect(war.defenderOperations).toHaveLength(0);
+    expect(war.attackerOperations.some((operation) => (
+      operation.sourceId === activeAxis.sourceId && operation.targetId === activeAxis.targetId
+    ))).toBe(true);
+    assertInvariantsV2(engine.state, engine.content);
+  });
+
+  it('treats exactly one percent as a spent machine axis', () => {
+    const engine = formedGreenland(81_007);
+    const human = nationIdV2('grl');
+    const war = engine.state.wars.find((candidate) => (
+      candidate.attackerId === ROGUE_AI_NATION_ID_V2
+        && candidate.defenderId === human
+    ))!;
+    const spentAxis = war.attackerOperations[0]!;
+    const spentTerritory = engine.state.territories[spentAxis.sourceId]!;
+    spentTerritory.army.manpower = spentTerritory.army.capacity * 0.01;
+    spentAxis.lastBattleTick = spentAxis.startedTick + 1;
+    war.battles = 1;
+
+    synchronizeWarFrontsV2(engine.state, engine.content);
+    expect(war.defenderOperations).toContainEqual(expect.objectContaining({
+      commanderId: human,
+      sourceId: spentAxis.targetId,
+      targetId: spentAxis.sourceId,
+    }));
+    assertInvariantsV2(engine.state, engine.content);
+  });
+
+  it('does not consume random draws while rejecting duplicate counter axes', () => {
+    const engine = formedGreenland(81_008);
+    const human = nationIdV2('grl');
+    const war = engine.state.wars.find((candidate) => (
+      candidate.attackerId === ROGUE_AI_NATION_ID_V2
+        && candidate.defenderId === human
+    ))!;
+    expect(new Set(war.attackerOperations.map((operation) => operation.targetId)).size).toBe(1);
+    for (const operation of war.attackerOperations) {
+      engine.state.territories[operation.sourceId]!.army.manpower = 0;
+      operation.lastBattleTick = operation.startedTick + 1;
+    }
+    war.battles = 1;
+    engine.state.wars = [war];
+
+    synchronizeWarFrontsV2(engine.state, engine.content);
+    expect(war.defenderOperations).toHaveLength(1);
+    const rngAfterSelection = engine.state.rngState;
+    synchronizeWarFrontsV2(engine.state, engine.content);
+    expect(engine.state.rngState).toBe(rngAfterSelection);
+    assertInvariantsV2(engine.state, engine.content);
+  });
+
   it('unifies three pristine national armies into one bounded Dawnline war', () => {
     const seed = 81_004;
     const { content } = resolveScenarioV2({ mode: 'survival', seed });
@@ -158,45 +272,44 @@ describe('Survival occupied-world opening', () => {
     ))).toHaveLength(2);
   });
 
-  it('routes an Antarctic wave above a former local cap without ordinary supply throttling', () => {
+  it('delivers a material Antarctic wave to a live front through the occupied-world relay', () => {
     const engine = formedGreenland(81_003);
-    const war = engine.state.wars.find((candidate) => (
-      candidate.attackerId === ROGUE_AI_NATION_ID_V2
-    ))!;
-    const frontierId = engine.content.territoryIds.find((territoryId) => (
-      engine.state.territories[territoryId]?.owner === ROGUE_AI_NATION_ID_V2
-        && engine.state.runProgression.scorchedWorldTerritoryIds.includes(territoryId)
-        && (engine.content.territories[territoryId]?.connections ?? []).some((connection) => (
-          engine.state.territories[connection.targetId]?.owner === war.defenderId
-        ))
-    ))!;
-    const donorId = engine.content.territories[frontierId]!.connections
-      .map((connection) => connection.targetId)
-      .find((territoryId) => (
-        engine.state.territories[territoryId]?.owner === ROGUE_AI_NATION_ID_V2
-          && engine.state.runProgression.scorchedWorldTerritoryIds.includes(territoryId)
-      ))!;
-    expect(frontierId).toBeDefined();
-    expect(donorId).toBeDefined();
-
-    const frontier = engine.state.territories[frontierId]!;
-    const donor = engine.state.territories[donorId]!;
-    const formerLocalCap = frontier.army.capacity;
-    const verifiedWave = Math.max(0.10, formerLocalCap * 100);
-    donor.army.manpower = verifiedWave;
-    addRogueWaveManpowerV2(engine.state, donorId, verifiedWave);
+    const gatewayId = engine.state.polarEndgame.gatewayBreachOrder[0]!;
+    const gateway = engine.state.polarEndgame.gatewayBreaches[gatewayId]!;
+    engine.state.tick = gateway.opensTick!;
+    expect(processAntarcticGatewayBreachesV2(engine.state)).toEqual([gatewayId]);
+    const coreId = engine.state.players[ROGUE_AI_NATION_ID_V2]!.capitalId;
+    const verifiedWave = 0.006;
+    engine.state.polarEndgame.rogueWaveManpowerByTerritory = {};
+    addRogueWaveManpowerV2(engine.state, coreId, verifiedWave);
     engine.state.players[ROGUE_AI_NATION_ID_V2]!.treasury = 1_000_000;
 
-    const movements = redistributeArmiesV2(engine.state, engine.content);
-    const reinforcement = movements.find((movement) => (
-      movement.playerId === ROGUE_AI_NATION_ID_V2
-        && movement.sourceId === donorId
-        && movement.targetId === frontierId
-    ));
-    expect(reinforcement).toBeDefined();
-    expect(reinforcement!.manpower).toBeGreaterThan(formerLocalCap);
-    expect(frontier.army.manpower).toBeGreaterThan(formerLocalCap);
-    expect(rogueWaveManpowerAtV2(engine.state, frontierId)).toBeGreaterThan(0);
-    expect(frontCapacitySupplyQuoteV2(engine.state, frontierId, 'land').readiness).toBe(1);
+    const opponents = new Set(engine.state.wars
+      .filter((war) => war.attackerId === ROGUE_AI_NATION_ID_V2)
+      .map((war) => war.defenderId));
+    const liveFrontWave = (): number => engine.content.territoryIds
+      .filter((territoryId) => (
+        engine.state.territories[territoryId]?.owner === ROGUE_AI_NATION_ID_V2
+          && (engine.content.territories[territoryId]?.connections ?? [])
+            .some((connection) => opponents.has(
+              engine.state.territories[connection.targetId]?.owner ?? ROGUE_AI_NATION_ID_V2,
+            ))
+      ))
+      .reduce((sum, territoryId) => sum + rogueWaveManpowerAtV2(
+        engine.state,
+        territoryId,
+      ), 0);
+    let firstArrivalWeek: number | null = null;
+    for (let week = 1; week <= 52; week += 1) {
+      engine.state.tick += 1;
+      redistributeArmiesV2(engine.state, engine.content);
+      if (firstArrivalWeek === null && liveFrontWave() > 1e-9) firstArrivalWeek = week;
+    }
+    const totalVerified = Object.values(
+      engine.state.polarEndgame.rogueWaveManpowerByTerritory,
+    ).reduce((sum, manpower) => sum + (manpower ?? 0), 0);
+    expect(firstArrivalWeek).not.toBeNull();
+    expect(liveFrontWave()).toBeGreaterThanOrEqual(verifiedWave * 0.25);
+    expect(totalVerified).toBeCloseTo(verifiedWave, 9);
   });
 });
