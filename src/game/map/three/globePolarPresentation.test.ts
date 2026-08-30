@@ -23,7 +23,7 @@ describe('globe polar presentation cache', () => {
     expect(new Set(signatures)).toHaveLength(1);
   });
 
-  it('still invalidates for the exact corridor and summary values on screen', () => {
+  it('still invalidates for the exact secured-sector summary shown on screen', () => {
     const before = polarSnapshot(1);
     const next = polarSnapshot(2);
     const after: MapPolarEndgameSnapshot = {

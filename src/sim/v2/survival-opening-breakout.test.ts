@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { WorldEngineV2 } from './WorldEngineV2';
 import {
   antarcticGatewayTerritoryIdV2,
-  deterministicAntarcticGatewayOrderV2,
+  deterministicSurvivalAntarcticGatewayOrderV2,
 } from './antarcticGateways';
 import { ANTARCTIC_TERRITORY_IDS_V2, ROGUE_AI_NATION_ID_V2 } from './content';
 import {
@@ -11,6 +11,7 @@ import {
   stateTerritoryArmySupportCeilingV2,
 } from './capacity';
 import { resolveScenarioV2 } from './scenarios';
+import { rogueWaveManpowerAtV2 } from './survivalProvenance';
 import { territoryIdV2 } from './types';
 
 const GATEWAY_COUNTRY = {
@@ -21,14 +22,14 @@ const GATEWAY_COUNTRY = {
 
 function seedForFirstGateway(gatewayId: keyof typeof GATEWAY_COUNTRY): number {
   for (let seed = 1; seed <= 10_000; seed += 1) {
-    if (deterministicAntarcticGatewayOrderV2(seed)[0] === gatewayId) return seed;
+    if (deterministicSurvivalAntarcticGatewayOrderV2(seed)[0] === gatewayId) return seed;
   }
   throw new Error(`No deterministic seed found for ${gatewayId}.`);
 }
 
 describe('Survival opening machine breakout', () => {
   it.each(Object.keys(GATEWAY_COUNTRY) as Array<keyof typeof GATEWAY_COUNTRY>)(
-    'turns a real %s convoy into a world foothold before the opening stalls',
+    'feeds a real %s convoy into the pre-occupied world before the opening stalls',
     (gatewayId) => {
       const seed = seedForFirstGateway(gatewayId);
       const resolved = resolveScenarioV2({ mode: 'survival', seed });
@@ -38,22 +39,20 @@ describe('Survival opening machine breakout', () => {
 
       const gatewayTerritoryId = antarcticGatewayTerritoryIdV2(gatewayId);
       const gatewayCountryId = GATEWAY_COUNTRY[gatewayId];
+      const maximumBreakoutWeeks = gatewayId === 'ross-entry' ? 104 : 312;
       const openingCountryOwner = engine.state.territories[gatewayCountryId]!.owner;
-      let capturedTick: number | null = null;
-      for (let week = 0; week < 208 && !engine.state.gameOver; week += 1) {
+      let suppliedTick: number | null = null;
+      for (let week = 0; week < maximumBreakoutWeeks && !engine.state.gameOver; week += 1) {
         engine.step(1);
-        if (engine.state.territories[gatewayCountryId]!.owner === ROGUE_AI_NATION_ID_V2) {
-          capturedTick = engine.state.tick;
+        if (rogueWaveManpowerAtV2(engine.state, gatewayCountryId) > 1e-9) {
+          suppliedTick = engine.state.tick;
           break;
         }
       }
 
       expect(engine.state.polarEndgame.gatewayBreaches[gatewayId]?.status).toBe('open');
       expect(engine.state.territories[gatewayTerritoryId]!.owner).toBe(ROGUE_AI_NATION_ID_V2);
-      expect(openingCountryOwner).not.toBe(ROGUE_AI_NATION_ID_V2);
-      const machineWar = engine.state.wars.find((war) => (
-        war.attackerId === ROGUE_AI_NATION_ID_V2 && war.defenderId === openingCountryOwner
-      ));
+      expect(openingCountryOwner).toBe(ROGUE_AI_NATION_ID_V2);
       const diagnostic = JSON.stringify({
         tick: engine.state.tick,
         wave: engine.state.polarEndgame.globalWave,
@@ -84,21 +83,14 @@ describe('Survival opening machine breakout', () => {
           .filter((entry) => entry.wave > 1e-9),
         recentRogueLogistics: engine.recentLogisticsMovements()
           .filter((movement) => movement.playerId === ROGUE_AI_NATION_ID_V2),
-        war: machineWar && {
-          battles: machineWar.battles,
-          score: machineWar.warScore,
-          attackerLosses: machineWar.attackerLosses,
-          defenderLosses: machineWar.defenderLosses,
-          operations: machineWar.attackerOperations.length,
-          attackerOperations: machineWar.attackerOperations,
-          defenderOperations: machineWar.defenderOperations,
-        },
+        wars: engine.state.wars.filter((war) => war.attackerId === ROGUE_AI_NATION_ID_V2),
       });
-      expect(capturedTick, `${gatewayId} must establish a visible world foothold within four years: ${diagnostic}`)
+      expect(suppliedTick, `${gatewayId} must feed verified Antarctic personnel into the occupied world within ${maximumBreakoutWeeks} weeks: ${diagnostic}`)
         .not.toBeNull();
-      expect(capturedTick!).toBeLessThanOrEqual(208);
+      expect(suppliedTick!).toBeGreaterThanOrEqual(1);
+      expect(suppliedTick!).toBeLessThanOrEqual(maximumBreakoutWeeks);
       expect(engine.state.territories[territoryIdV2('grl')]!.owner).toBe(engine.state.humanPlayerId);
     },
-    30_000,
+    45_000,
   );
 });

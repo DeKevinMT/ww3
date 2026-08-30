@@ -31,11 +31,15 @@ describe('opening mobilisation on the map', () => {
     expect(adapter.state.openingMobilisations[usa]).toBeUndefined();
 
     expect(engine.initializeCommanderForce(greenland, {
-      manpower: 0.001,
-      capacity: 0.01,
-      trainedReserves: 0,
-      baseAttack: 4.5,
-      baseDefense: 5,
+      shield: {
+        integrity: 0.001,
+        maxIntegrity: 0.01,
+        rechargeBuffer: 0,
+        rechargeMultiplier: 1,
+        pulseAttack: 0.001,
+      },
+      attackMultiplier: 1.045,
+      defenseMultiplier: 1.05,
       treasury: 0.5,
       annualOutput: 1,
       supplyStock: 0.15,

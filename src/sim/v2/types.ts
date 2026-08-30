@@ -102,17 +102,40 @@ export interface CommanderEconomyPrioritiesV2 {
   development: number;
 }
 
-export interface CommanderArmyStateV2 {
-  /** Compatibility storage for current neural-shield integrity. */
-  manpower: number;
-  /** Compatibility storage for maximum shield integrity. Fresh runs start full. */
-  capacity: number;
-  /** Offline recharge buffer; it never contributes power directly. */
-  trainedReserves: number;
-  /** Dome strike rating while the shield is operational. */
-  baseAttack: number;
-  /** Dome interception/durability rating while the shield is operational. */
-  baseDefense: number;
+/**
+ * APEX is a neural shield and force multiplier, never an army. Keeping these
+ * values in a dedicated record prevents integrity from leaking into national
+ * manpower, defeat, stalemate or casualty accounting.
+ */
+export interface ApexShieldStateV2 {
+  /** Current energy available to intercept incoming national-army damage. */
+  integrity: number;
+  /** Maximum integrity. Fresh campaigns start fully charged. */
+  maxIntegrity: number;
+  /** Offline energy prepared for the next safe recharge step. */
+  rechargeBuffer: number;
+  /** Frozen talent multiplier applied to every safe integrity-recharge step. */
+  rechargeMultiplier: number;
+  /** Multiplies the supported national army's existing attack pressure. */
+  attackMultiplier: number;
+  /** Multiplies the supported national army's existing defensive pressure. */
+  defenseMultiplier: number;
+  /**
+   * Fixed neural pulse damage available to a supported battle. This is energy,
+   * never personnel, and the combat boundary bounds it against both the real
+   * national formation and the hostile force before applying it.
+   */
+  pulseAttack: number;
+  /** Share of Pulse power recovered from the normal multi-front split loss. */
+  pulseProjectionRetention?: number;
+  /** Extra Pulse multiplier contributed by each stored offensive charge. */
+  pulseChargeBonusPerStep?: number;
+  /** Damage blocked by one Energy. Base value is exactly one. */
+  interceptEfficiency?: number;
+  /** Spent interception Energy banked as offline Reserve Energy. */
+  impactRecoveryShare?: number;
+  /** Pulse multiplier used only while the network supports a defending front. */
+  defensivePulseMultiplier?: number;
 }
 
 export interface CommanderEconomyStateV2 {
@@ -131,11 +154,13 @@ export interface CommanderCapabilitiesV2 {
   mobileHeadquarters: boolean;
   /** Emergency Reboot compatibility key: captures bounded impact energy. */
   fieldHospital: boolean;
-  /** Twin Projection only; both 60% projections share one integrity/energy pool. */
+  /** Omnipresence Grid; expands one shared projection budget across live fronts. */
   rapidResponse: boolean;
-  /** Singularity Pulse: every third resolved supported assault gains +60% ATK. */
+  /** Theater Mesh; expands the shared army-buff pool across extra fronts. */
+  forceMultiplier: boolean;
+  /** Overdrive: every third resolved supported assault doubles APEX Pulse only. */
   assaultSpecialist: boolean;
-  /** Mirror Matrix: reflects 20% of damage actually intercepted. */
+  /** Countermeasure: reflects 15% of damage actually intercepted. */
   defenseSpecialist: boolean;
   emergencyExtractionCharges: number;
 }
@@ -144,6 +169,10 @@ export interface CommanderCapabilitiesV2 {
 export interface CommanderEmpireSupportV2 {
   recruitmentMultiplier: number;
   reserveTrainingMultiplier: number;
+  /** National casualty multiplier while the shield is operational. */
+  armyCasualtyMultiplier: number;
+  /** Field-army recovery multiplier during shielded peacetime. */
+  armyPeaceRecoveryMultiplier: number;
   /** Direct APEX food output in million-person-weeks per year. */
   annualFoodOutput: number;
   foodProductionMultiplier: number;
@@ -159,9 +188,9 @@ export interface CommanderFrontAssignmentV2 {
 }
 
 /**
- * Persisted NEXUS split-dome assignment. It carries no integrity, energy or
- * recovery fields: both projections always consume the owning force's one
- * shared `army`/`economy` pool.
+ * Retired NEXUS split-dome assignment retained only to normalize older saves.
+ * Live Omnipresence Grid state is derived from active fronts and never writes
+ * this location-bound sidecar.
  */
 export interface ApexSecondaryProjectionV2 {
   locationId: TerritoryId;
@@ -173,10 +202,12 @@ export interface ApexSecondaryProjectionV2 {
 
 /** Persisted capstone progress with deterministic legacy defaults. */
 export interface ApexDoctrineRuntimeV2 {
-  /** Supported LANCER assaults since the last pulse: exact integer 0, 1 or 2. */
+  /** Supported assaults stored toward the next Overdrive: exact integer 0, 1 or 2. */
   lancerSupportedAssaultCount: number;
-  /** Null unless NEXUS currently maintains a second legal projection. */
+  /** Legacy migration field; canonical live runtime keeps this null. */
   secondaryProjection: ApexSecondaryProjectionV2 | null;
+  /** True after the one Emergency Reboot charge has restored the shield. */
+  emergencyRebootUsed: boolean;
 }
 
 /** Canonical multi-week movement; renderers interpolate this stored route and ETA. */
@@ -188,24 +219,27 @@ export interface CommanderTransitStateV2 {
 }
 
 /**
- * A genuine non-territorial neural-shield platform. The `army` member is a
- * schema-compatibility container for integrity, max integrity and recharge
- * energy; APEX never owns national troops, borders or a TerritoryState army.
+ * A genuine non-territorial neural-shield platform. APEX never owns soldiers,
+ * reserves, recruitment, borders or a TerritoryState army.
  */
 export interface CommanderForceStateV2 {
-  army: CommanderArmyStateV2;
+  shield: ApexShieldStateV2;
   economy: CommanderEconomyStateV2;
   capabilities: CommanderCapabilitiesV2;
   empireSupport: CommanderEmpireSupportV2;
   /** Frozen account progression for this campaign: zero is neutral, one is the full country trait. */
   countryTraitScale: number;
+  /** Legacy save anchor for core recovery; never limits empire-shield coverage. */
   locationId: TerritoryId;
+  /** `standby` while the distributed field is online; `hq-training` while fully recharging. */
   mission: CommanderMissionV2;
   /** Compatibility discriminant. New timelines always normalize APEX to autonomous control. */
   orderSource: 'manual' | 'autonomous';
-  /** Legacy name retained for saves; now stores the next autonomous retarget tick. */
+  /** Legacy name retained for authenticated saves; no live retargeting depends on it. */
   manualHoldUntilTick: number;
+  /** Legacy location-bound assignment; normalized to null by the network runtime. */
   front: CommanderFrontAssignmentV2 | null;
+  /** Legacy movement record; normalized to null by the network runtime. */
   transit: CommanderTransitStateV2 | null;
   /**
    * Optional only at the TypeScript boundary so authenticated legacy saves can
@@ -216,16 +250,25 @@ export interface CommanderForceStateV2 {
 
 /** Immutable profile snapshot supplied once at campaign bootstrap. */
 export interface CommanderForceInitializationV2 {
-  /** Compatibility input for initial neural-dome integrity. */
-  manpower: number;
-  /** Compatibility input for maximum neural-dome integrity. */
-  capacity: number;
-  /** Compatibility input for offline recharge-buffer energy. */
-  trainedReserves?: number;
-  /** Neural strike-support rating. */
-  baseAttack: number;
-  /** Neural interception/durability rating. */
-  baseDefense: number;
+  /** One non-personnel neural-energy pool; this is never national manpower. */
+  shield: {
+    integrity: number;
+    maxIntegrity: number;
+    rechargeBuffer?: number;
+    rechargeMultiplier?: number;
+    pulseAttack: number;
+    pulseProjectionRetention?: number;
+    pulseChargeBonusPerStep?: number;
+    interceptEfficiency?: number;
+    impactRecoveryShare?: number;
+    defensivePulseMultiplier?: number;
+  };
+  /** Multipliers applied to the real national/Empire army while the shield is online. */
+  attackMultiplier: number;
+  defenseMultiplier: number;
+  /** Frozen army modifiers copied into campaign-local Empire support. */
+  armyCasualtyMultiplier?: number;
+  armyPeaceRecoveryMultiplier?: number;
   treasury: number;
   annualOutput: number;
   supplyStock?: number;
@@ -611,12 +654,15 @@ export interface BattleEventV2 {
   /** National-equivalent damage actually intercepted by each neural dome. */
   commanderAttackerInterceptedDamage?: number;
   commanderDefenderInterceptedDamage?: number;
-  /** Real hostile personnel removed by a bounded Mirror Matrix counterpulse. */
+  /** Real hostile personnel removed by a bounded Countermeasure pulse. */
   commanderAttackerCounterpulseDamage?: number;
   commanderDefenderCounterpulseDamage?: number;
-  /** True only on an actually resolved third LANCER-supported offensive pulse. */
+  /** Bounded neural-pulse damage committed by each supporting shield. */
+  commanderAttackerPulseDamage?: number;
+  commanderDefenderPulseDamage?: number;
+  /** True only on an actually resolved third APEX-supported offensive Pulse. */
   commanderAttackerSingularityPulse?: boolean;
-  /** Explicit Twin Projection provenance for compact battle/map effects. */
+  /** Projection order only; all fronts consume one shared integrity pool. */
   commanderAttackerProjection?: 'primary' | 'secondary' | null;
   commanderDefenderProjection?: 'primary' | 'secondary' | null;
   commanderAttackerProjectionShare?: number;
@@ -1267,12 +1313,19 @@ export type ApexForecastStatusV2 = 'absent' | 'ready' | 'delayed' | 'committed' 
 export interface ApexForecastContributionV2 {
   status: ApexForecastStatusV2;
   stagingTerritoryId: TerritoryId | null;
+  /** Retired compatibility fields: APEX never has independent combat power. */
   power: number;
   effectivePower: number;
+  /** Multipliers applied to the existing national formation on this front. */
+  attackMultiplier: number;
+  defenseMultiplier: number;
+  supportBonusPercent: number;
   /** Expected first-pulse APEX pressure after route, readiness and supply availability. */
   projectedAttackPressure: number;
   /** Expected first-pulse APEX protection against counterfire. */
   projectedDefenseShield: number;
+  /** Bounded fixed neural-pulse damage in the expected first battle. */
+  projectedPulseDamage: number;
   chanceDelta: number;
   etaWeeks: number | null;
   readiness: number;
@@ -1397,11 +1450,11 @@ export interface WarOutcomeV2 {
   /** Exact APEX supply delivered and consumed while supporting this conflict. */
   apexSupplyDelivered: number;
   apexSupplySpent: number;
-  /** Actually fired LANCER Singularity Pulses during this conflict. */
+  /** Actually fired Overdrive Pulses during this conflict. */
   apexSingularityPulses?: number;
-  /** Actual hostile personnel removed by AEGIS counterpulses. */
+  /** Actual hostile personnel removed by Countermeasure pulses. */
   apexMirrorCounterpulseDamage?: number;
-  /** Supported battles resolved through an active 60% + 60% Twin split. */
+  /** Legacy counter for reports created before Omnipresence Grid. */
   apexTwinProjectionBattles?: number;
   /** Automatic co-op contingent contribution on this human side. */
   allySupportedBattles?: number;

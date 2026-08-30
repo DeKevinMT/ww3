@@ -10,10 +10,10 @@ export const APEX_INTELLIGENCE_FOG_STYLE = Object.freeze({
   rogueHiddenFill: 0x2b0a20,
   rogueHiddenAlpha: 0.16,
   rogueChartedAlpha: 0.10,
-  /** Antarctica alone retains real cover until the machine begins mobilising. */
+  /** Dormant Antarctica stays ordinary visible ice; only ownership intel is withheld. */
   dormantRogueAntarcticFill: 0x071722,
-  dormantRogueAntarcticAlpha: 0.62,
-  dormantRogueAntarcticCloudAlpha: 0.10,
+  dormantRogueAntarcticAlpha: 0,
+  dormantRogueAntarcticCloudAlpha: 0,
   frontierAlpha: 0,
   rogueFrontierAlpha: 0,
   frontierCloudAlpha: 0,
@@ -123,8 +123,8 @@ export function apexFogTerritoryPresentation(
  * Letting those weekly signals clear patches in the baked atlas forced a full
  * 6K repaint and GPU upload almost every Survival tick. The atlas therefore
  * carries only the durable relevance veil: own land is clear, distant land is
- * lightly tinted, account-known land is softened and dormant Antarctica keeps
- * its authored cover. Transient overlays remain fully live above it.
+ * lightly tinted and account-known land is softened. Dormant Antarctica stays
+ * ordinary ice and is never part of this veil. Transient overlays remain live.
  */
 export function apexPoliticalAtlasFogTerritoryPresentation(
   visibility: ApexIntelligenceVisibility,
@@ -172,7 +172,7 @@ export interface ApexIntelligenceVisibility {
  * Political identity is presentation data, not exact live intelligence. The
  * authored country/empire flag therefore remains visible beneath the light
  * relevance veil in every mode. Dormant Rogue Antarctica is the sole authored
- * exception: its owner identity stays inside the real mist until mobilisation.
+ * exception: its owner identity stays withheld until mobilisation, without fog.
  */
 export function apexTerritoryPoliticalIdentityVisible(
   visibility: ApexIntelligenceVisibility,

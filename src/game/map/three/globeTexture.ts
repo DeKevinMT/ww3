@@ -114,6 +114,15 @@ export function globeTerritoryFlagOwnerId(territory: GlobeFlagTerritoryState): s
   return globeTerritoryIsIntegrating(territory) ? territory.coreOwnerId : territory.ownerId;
 }
 
+/** Resolves political ownership separately from the account-selected flag art. */
+export function globeTerritoryFlagCountryId(
+  engine: WorldMapEngineContract,
+  territory: GlobeFlagTerritoryState,
+): string {
+  const ownerId = globeTerritoryFlagOwnerId(territory);
+  return engine.player(ownerId)?.flagCountryId ?? ownerId;
+}
+
 export function globeFlagProjectionKey(
   territoryId: string,
   territory: GlobeFlagTerritoryState,
@@ -769,7 +778,9 @@ export function globePoliticalStateSignature(engine: WorldMapEngineContract): st
       ? `${territory.ownerId}:${territory.coreOwnerId}:${globeTerritoryIsIntegrating(territory) ? 'integrating' : 'core'}`
       : '';
   }).join(',');
-  const humanSignature = [...engine.state.humanPlayerIds].sort().join(',');
+  const humanSignature = [...engine.state.humanPlayerIds].sort().map((playerId) => (
+    `${playerId}:${engine.player(playerId)?.flagCountryId ?? playerId}`
+  )).join(',');
   return `${humanSignature}|${antarcticaSurfaceSignature(engine)}|${apexIntelligenceAtlasSignature(engine)}|${territorySignature}`;
 }
 
@@ -815,7 +826,9 @@ export function captureGlobePoliticalPaintSnapshot(
     };
   }
   return {
-    humanSignature: [...engine.state.humanPlayerIds].sort().join(','),
+    humanSignature: [...engine.state.humanPlayerIds].sort().map((playerId) => (
+      `${playerId}:${engine.player(playerId)?.flagCountryId ?? playerId}`
+    )).join(','),
     surfaceSignature: `${antarcticaSurfaceSignature(engine)}|${apexIntelligenceAtlasSignature(engine)}`,
     territories,
   };
@@ -1122,10 +1135,10 @@ export class GlobePoliticalTexture {
         territoryId,
         territory.ownerId,
       )) continue;
-      nationIds.add(globeTerritoryFlagOwnerId(territory));
+      nationIds.add(globeTerritoryFlagCountryId(engine, territory));
       // Preload the conquering owner's flag while integration is ongoing so
       // the lifecycle-completion redraw can switch flags without a blank frame.
-      nationIds.add(territory.ownerId);
+      nationIds.add(engine.player(territory.ownerId)?.flagCountryId ?? territory.ownerId);
     }
     for (const nationId of nationIds) this.loadFlag(nationId);
   }
@@ -1251,7 +1264,7 @@ export class GlobePoliticalTexture {
       );
       const territory = engine.state.territories[territoryId];
       if (!prepared || !territory || !globeTerritoryIsIntegrating(territory)) return false;
-      const flag = this.flagImages.get(globeTerritoryFlagOwnerId(territory));
+      const flag = this.flagImages.get(globeTerritoryFlagCountryId(engine, territory));
       if (!flag?.complete || flag.naturalWidth <= 0) return false;
       preparedTerritories.push(prepared);
     }
@@ -1272,7 +1285,8 @@ export class GlobePoliticalTexture {
       drawPreparedTerrainWash(context, prepared, width, height);
 
       const flagOwnerId = globeTerritoryFlagOwnerId(territory);
-      const flag = this.flagImages.get(flagOwnerId)!;
+      const flagCountryId = globeTerritoryFlagCountryId(engine, territory);
+      const flag = this.flagImages.get(flagCountryId)!;
       const flagOwner = engine.player(flagOwnerId);
       drawFlagIntoProjection(
         context,
@@ -1326,6 +1340,7 @@ export class GlobePoliticalTexture {
     // projection key because they still show their original/core flag.
     const flagProjections = new Map<string, {
       flagOwnerId: string;
+      flagCountryId: string;
       rings: PreparedRing[];
       integrating: boolean;
     }>();
@@ -1339,6 +1354,7 @@ export class GlobePoliticalTexture {
         else {
           flagProjections.set(projectionKey, {
             flagOwnerId: globeTerritoryFlagOwnerId(territory),
+            flagCountryId: globeTerritoryFlagCountryId(engine, territory),
             rings: [...prepared.flagRings],
             integrating: globeTerritoryIsIntegrating(territory),
           });
@@ -1347,7 +1363,7 @@ export class GlobePoliticalTexture {
     }
 
     for (const projection of flagProjections.values()) {
-      const flag = this.flagImages.get(projection.flagOwnerId);
+      const flag = this.flagImages.get(projection.flagCountryId);
       if (!flag?.complete || flag.naturalWidth <= 0) continue;
       const flagOwner = engine?.player(projection.flagOwnerId);
       const flagAlpha = globeFlagOverlayAlpha(
@@ -1402,6 +1418,7 @@ export class GlobePoliticalTexture {
 
     const projections = new Map<string, {
       flagOwnerId: string;
+      flagCountryId: string;
       rings: PreparedRing[];
       integrating: boolean;
     }>();
@@ -1425,6 +1442,7 @@ export class GlobePoliticalTexture {
       else {
         projections.set(projectionKey, {
           flagOwnerId: globeTerritoryFlagOwnerId(territory),
+          flagCountryId: globeTerritoryFlagCountryId(engine, territory),
           rings: [...prepared.rings],
           integrating: globeTerritoryIsIntegrating(territory),
         });
@@ -1433,7 +1451,7 @@ export class GlobePoliticalTexture {
 
     context.globalAlpha = 1;
     for (const projection of projections.values()) {
-      const flag = this.flagImages.get(projection.flagOwnerId);
+      const flag = this.flagImages.get(projection.flagCountryId);
       if (!flag?.complete || flag.naturalWidth <= 0) continue;
       const owner = engine.player(projection.flagOwnerId);
       drawFlagIntoProjection(
@@ -1498,24 +1516,18 @@ export class GlobePoliticalTexture {
     const visibility = selectApexIntelligenceVisibility(engine);
     if (!visibility.enabled) return;
 
+    // Antarctica never receives the intelligence mask. Before awakening it is
+    // ordinary unmarked ice; after awakening the political atlas and crimson
+    // stronghold field reveal the machine state directly, without black fog.
     const atlasTerritories: readonly {
       readonly rings: readonly PreparedRing[];
       readonly territoryId: string;
       readonly ownerId: string | undefined;
-    }[] = [
-      ...PREPARED_COUNTRIES
-        .map((prepared) => ({
-          rings: prepared.rings,
-          territoryId: prepared.country.id,
-          ownerId: engine.state.territories[prepared.country.id]?.ownerId,
-        })),
-      ...PREPARED_ANTARCTICA_SECTORS
-          .map((prepared) => ({
-            rings: prepared.rings,
-            territoryId: prepared.id,
-            ownerId: engine.state.territories[prepared.id]?.ownerId,
-          })),
-    ];
+    }[] = PREPARED_COUNTRIES.map((prepared) => ({
+      rings: prepared.rings,
+      territoryId: prepared.country.id,
+      ownerId: engine.state.territories[prepared.country.id]?.ownerId,
+    }));
     const noisePattern = context.createPattern(this.intelligenceFogNoiseCanvas, 'repeat');
     for (const { rings, territoryId, ownerId } of atlasTerritories) {
       const presentation = apexPoliticalAtlasFogTerritoryPresentation(

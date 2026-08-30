@@ -5,8 +5,6 @@ import { createWorldStateV2 } from './bootstrap';
 import { openingArmyCapacityMultiplierV2, synchronizeArmyCapacityV2 } from './capacity';
 import {
   APEX_AUTONOMY_COMMAND_REASON_V2,
-  COMMANDER_FIELD_HOSPITAL_RECOVERY_CAPACITY_SHARE_V2,
-  COMMANDER_FIELD_HOSPITAL_RECOVERY_SHARE_V2,
   COMMANDER_HQ_TRANSFER_CAPACITY_SHARE_V2,
   COMMANDER_MANUAL_IDLE_GRACE_TICKS_V2,
   COMMANDER_TREASURY_RESERVE_WEEKS_V2,
@@ -43,11 +41,14 @@ import {
 import { resolveBattlePulseV2 } from './war';
 
 const commanderProfile: CommanderForceInitializationV2 = {
-  manpower: 0.02,
-  capacity: 0.04,
-  trainedReserves: 0.01,
-  baseAttack: 3.2,
-  baseDefense: 3.6,
+  shield: {
+    integrity: 0.02,
+    maxIntegrity: 0.04,
+    rechargeBuffer: 0.01,
+    pulseAttack: 0.001,
+  },
+  attackMultiplier: 1.32,
+  defenseMultiplier: 1.36,
   treasury: 0,
   annualOutput: 6,
   supplyStock: 2,
@@ -118,11 +119,14 @@ describe('APEX neural dome', () => {
     const playerId = state.humanPlayerId;
     expect(initializeCommanderForceV2(state, WORLD_CONTENT_V2, playerId, {
       ...commanderProfile,
-      manpower: 0.00048,
-      capacity: 0.0009,
-      trainedReserves: 0.00008,
-      baseAttack: 125,
-      baseDefense: 125,
+      shield: {
+        ...commanderProfile.shield,
+        integrity: 0.0009,
+        maxIntegrity: 0.0009,
+        rechargeBuffer: 0.00008,
+      },
+      attackMultiplier: 2.5,
+      defenseMultiplier: 2.5,
     })).toEqual({ accepted: true });
 
     const unsafeState = createWorldStateV2(21_022, WORLD_CONTENT_V2);
@@ -130,7 +134,7 @@ describe('APEX neural dome', () => {
       unsafeState,
       WORLD_CONTENT_V2,
       unsafeState.humanPlayerId,
-      { ...commanderProfile, baseAttack: 160.01 },
+      { ...commanderProfile, attackMultiplier: 2.5001 },
     ).accepted).toBe(false);
   });
 
@@ -356,7 +360,7 @@ describe('APEX neural dome', () => {
     assertInvariantsV2(engine.state, engine.content);
   });
 
-  it('visibly extracts from a captured station without teleporting to surviving territory', () => {
+  it('normalizes a captured legacy station to the empire compatibility anchor', () => {
     const { engine, playerId } = createGlobalSurvivalCommander(21_017);
     const force = engine.state.commanderForces[playerId]!;
     const capitalId = engine.state.players[playerId]!.capitalId;
@@ -375,23 +379,17 @@ describe('APEX neural dome', () => {
       engine.state, engine.content, playerId,
     )).toBe(true);
     expect(engine.state.commanderForces[playerId]).toMatchObject({
-      locationId: exposedStationId,
-      mission: 'evacuate',
+      locationId: capitalId,
+      mission: 'standby',
       orderSource: 'autonomous',
       front: null,
+      transit: null,
     });
-    const extraction = engine.state.commanderForces[playerId]!.transit;
-    expect(extraction?.path[0]).toBe(exposedStationId);
-    expect(engine.state.territories[extraction!.path.at(-1)!]?.owner).toBe(playerId);
-    expect(extraction!.path.slice(1).every((territoryId) => (
-      engine.state.territories[territoryId]?.owner === playerId
-    ))).toBe(true);
-    expect(extraction!.arriveTick).toBeGreaterThan(engine.state.tick);
     assertInvariantsV2(engine.state, engine.content);
     expect(engine.state.territories[capitalId]?.owner).toBe(playerId);
   });
 
-  it('uses only its autonomous assigned front and records dome-integrity loss separately', () => {
+  it('automatically supports an eligible front and records shield-integrity loss separately', () => {
     const state = createWorldStateV2(21_003, WORLD_CONTENT_V2);
     const belgium = nationIdV2('bel');
     const netherlands = nationIdV2('nld');
@@ -438,21 +436,21 @@ describe('APEX neural dome', () => {
     state.wars.push(war);
     expect(selectCommanderBattleSupportV2(
       state, war, operation, WORLD_CONTENT_V2,
-    ).defender).toBeNull();
+    ).defender).not.toBeNull();
     processCommanderForcesV2(state, WORLD_CONTENT_V2);
     expect(state.commanderForces[belgium]).toMatchObject({
-      mission: 'defense',
-      front: { warId: war.id, sourceId: nldTerritory, targetId: belTerritory },
+      mission: 'standby',
+      front: null,
     });
-    const integrityBefore = state.commanderForces[belgium]!.army.manpower;
+    const integrityBefore = state.commanderForces[belgium]!.shield.integrity;
 
     const event = resolveBattlePulseV2(state, WORLD_CONTENT_V2, war, operation)!;
     expect(event.commanderDefenderId).toBe(belgium);
     expect(event.commanderDefenderPower).toBeGreaterThan(0);
-    expect(event.commanderDefenderSupplySpent).toBeGreaterThan(0);
+    expect(event.commanderDefenderSupplySpent).toBe(0);
     expect(event.commanderDefenderLosses).toBeGreaterThan(0);
     expect(event.defenderLosses).toBeCloseTo(event.regularDefenderLosses, 5);
-    expect(state.commanderForces[belgium]!.army.manpower).toBeLessThan(integrityBefore);
+    expect(state.commanderForces[belgium]!.shield.integrity).toBeLessThan(integrityBefore);
   });
 
   it('uses the same neural shield allocation while APEX supports an attacking front', () => {
@@ -476,7 +474,7 @@ describe('APEX neural dome', () => {
     state.wars.push(war);
     processCommanderForcesV2(state, WORLD_CONTENT_V2);
     const force = state.commanderForces[belgium]!;
-    const manpowerBefore = force.army.manpower;
+    const integrityBefore = force.shield.integrity;
     const supplyBefore = force.economy.supplyStock;
     const unsupportedState = structuredClone(state);
     delete unsupportedState.commanderForces[belgium];
@@ -496,10 +494,14 @@ describe('APEX neural dome', () => {
     expect(event.attackerPower).toBeGreaterThan(unsupportedEvent.attackerPower);
     expect(event.defenderLosses).toBeGreaterThan(unsupportedEvent.defenderLosses);
     expect(event.commanderAttackerLosses).toBeGreaterThan(0);
+    // The dome intercepts only half of the already-capped post-DEF hit. The
+    // national formation must therefore still take damage, just less than the
+    // identical unsupported assault.
     expect(event.regularAttackerLosses).toBeGreaterThan(0);
+    expect(event.regularAttackerLosses).toBeLessThan(unsupportedEvent.regularAttackerLosses);
     expect(event.attackerLosses).toBeCloseTo(event.regularAttackerLosses, 5);
-    expect(force.army.manpower).toBeLessThan(manpowerBefore);
-    expect(force.economy.supplyStock).toBeLessThan(supplyBefore);
+    expect(force.shield.integrity).toBeLessThan(integrityBefore);
+    expect(force.economy.supplyStock).toBe(supplyBefore);
   });
 
   it('extracts at true zero and cannot shield a later pulse', () => {
@@ -523,15 +525,18 @@ describe('APEX neural dome', () => {
     state.wars.push(war);
     processCommanderForcesV2(state, WORLD_CONTENT_V2);
     const force = state.commanderForces[belgium]!;
-    force.army.manpower = force.army.capacity * 0.301;
+    force.shield.integrity = force.shield.maxIntegrity * 0.20;
+    const reserveEnergyBefore = force.shield.rechargeBuffer;
     const supplyBefore = force.economy.supplyStock;
 
     const event = resolveBattlePulseV2(state, WORLD_CONTENT_V2, war, operation)!;
 
     expect(event.commanderDefenderLosses).toBeGreaterThan(0);
-    expect(force.army.manpower).toBe(0);
-    expect(force.army.trainedReserves).toBeGreaterThan(commanderProfile.trainedReserves!);
-    expect(force.economy.supplyStock).toBeLessThan(supplyBefore);
+    expect(event.commanderDefenderLosses)
+      .toBeLessThanOrEqual(force.shield.maxIntegrity * 0.20 + 1e-9);
+    expect(force.shield.integrity).toBe(0);
+    expect(force.shield.rechargeBuffer).toBe(reserveEnergyBefore);
+    expect(force.economy.supplyStock).toBe(supplyBefore);
     expect(force).toMatchObject({ mission: 'hq-training', front: null, transit: null });
     expect(selectCommanderBattleSupportV2(
       state, war, operation, WORLD_CONTENT_V2,
@@ -548,11 +553,14 @@ describe('APEX neural dome', () => {
     state.humanPlayerIds = [belgium];
     expect(initializeCommanderForceV2(state, WORLD_CONTENT_V2, belgium, {
       ...commanderProfile,
-      manpower: 0.00048,
-      capacity: 0.0009,
-      trainedReserves: 0,
-      baseAttack: 125,
-      baseDefense: 125,
+      shield: {
+        ...commanderProfile.shield,
+        integrity: 0.00048,
+        maxIntegrity: 0.0009,
+        rechargeBuffer: 0,
+      },
+      attackMultiplier: 2.5,
+      defenseMultiplier: 2.5,
       supplyStock: 0.006,
     }).accepted).toBe(true);
     state.tick = 2;
@@ -580,15 +588,15 @@ describe('APEX neural dome', () => {
     }
 
     expect(shieldedPulses).toBeGreaterThan(0);
-    expect(force.economy.supplyStock).toBeLessThan(openingSupply);
-    expect(force.army.manpower).toBeLessThanOrEqual(force.army.capacity * 0.30 + 1e-9);
+    expect(force.economy.supplyStock).toBe(openingSupply);
+    expect(force.shield.integrity).toBe(0);
     expect(force.front).toBeNull();
     expect(unshieldedNationalLosses).toBeGreaterThan(0);
     expect(conquered).toBe(true);
     expect(state.tick).toBeLessThan(260);
   });
 
-  it('keeps Emergency Reboot energy capture bounded below the full integrity hit', () => {
+  it('restores exactly 20% Energy only when Emergency Reboot catches a collapse', () => {
     const makeForce = (fieldHospital: boolean) => {
       const state = createWorldStateV2(fieldHospital ? 21_003_4 : 21_003_5, WORLD_CONTENT_V2);
       const belgium = nationIdV2('bel');
@@ -596,7 +604,7 @@ describe('APEX neural dome', () => {
       state.humanPlayerIds = [belgium];
       expect(initializeCommanderForceV2(state, WORLD_CONTENT_V2, belgium, {
         ...commanderProfile,
-        trainedReserves: 0,
+        shield: { ...commanderProfile.shield, rechargeBuffer: 0 },
         capabilities: {
           mobileHeadquarters: false,
           fieldHospital,
@@ -612,91 +620,70 @@ describe('APEX neural dome', () => {
     const hospital = makeForce(true);
 
     const baselineLosses = applyCommanderCasualtiesV2(
-      baseline.state, baseline.belgium, 0.015,
+      baseline.state, baseline.belgium, 1,
     );
     const hospitalLosses = applyCommanderCasualtiesV2(
-      hospital.state, hospital.belgium, 0.015,
+      hospital.state, hospital.belgium, 1,
     );
 
-    expect(baselineLosses).toBeCloseTo(0.015, 9);
-    expect(hospital.force.army.manpower).toBeCloseTo(baseline.force.army.manpower, 9);
-    expect(hospital.force.army.trainedReserves).toBeCloseTo(
-      hospital.force.army.capacity * COMMANDER_FIELD_HOSPITAL_RECOVERY_CAPACITY_SHARE_V2,
-      9,
-    );
-    expect(hospitalLosses).toBeCloseTo(
-      0.015 - hospital.force.army.trainedReserves,
-      9,
-    );
-    expect(hospital.force.army.trainedReserves).toBeLessThan(
-      0.015 * COMMANDER_FIELD_HOSPITAL_RECOVERY_SHARE_V2,
-    );
+    expect(baselineLosses).toBe(commanderProfile.shield.integrity);
+    expect(hospitalLosses).toBe(baselineLosses);
+    expect(baseline.force.shield.integrity).toBe(0);
+    expect(baseline.force.mission).toBe('hq-training');
+    expect(hospital.force.shield.integrity)
+      .toBe(hospital.force.shield.maxIntegrity * 0.20);
+    expect(hospital.force.shield.rechargeBuffer).toBe(0);
+    expect(hospital.force.doctrineRuntime?.emergencyRebootUsed).toBe(true);
+    expect(hospital.force.mission).toBe('standby');
   });
 
-  it('lets Emergency Reboot shorten recharge modestly, never skip node downtime', () => {
-    const recoveryWeeks = (fieldHospital: boolean): number => {
-      const state = createWorldStateV2(fieldHospital ? 21_003_6 : 21_003_7, WORLD_CONTENT_V2);
-      const belgium = nationIdV2('bel');
-      state.humanPlayerId = belgium;
-      state.humanPlayerIds = [belgium];
-      expect(initializeCommanderForceV2(state, WORLD_CONTENT_V2, belgium, {
-        ...commanderProfile,
-        manpower: 0.00048,
-        capacity: 0.0009,
-        trainedReserves: 0,
-        baseAttack: 125,
-        baseDefense: 125,
-        supplyStock: 0.006,
-        capabilities: {
-          mobileHeadquarters: false,
-          fieldHospital,
-          rapidResponse: false,
-          assaultSpecialist: false,
-          defenseSpecialist: false,
-          emergencyExtractionCharges: 0,
-        },
-      }).accepted).toBe(true);
-      const force = state.commanderForces[belgium]!;
-      applyCommanderCasualtiesV2(state, belgium, 0.00020);
-      force.mission = 'hq-training';
-      force.front = null;
-      force.transit = null;
-      force.manualHoldUntilTick = 0;
-      let weeks = 0;
-      while (force.army.manpower < force.army.capacity * 0.70 - 1e-9 && weeks < 200) {
-        state.tick += 1;
-        processCommanderForcesV2(state, WORLD_CONTENT_V2);
-        weeks += 1;
-      }
-      return weeks;
-    };
+  it('consumes Emergency Reboot once, then requires a complete node recharge', () => {
+    const state = createWorldStateV2(21_003_6, WORLD_CONTENT_V2);
+    const belgium = nationIdV2('bel');
+    state.humanPlayerId = belgium;
+    state.humanPlayerIds = [belgium];
+    expect(initializeCommanderForceV2(state, WORLD_CONTENT_V2, belgium, {
+      ...commanderProfile,
+      shield: {
+        ...commanderProfile.shield,
+        integrity: 0.00048,
+        maxIntegrity: 0.0009,
+        rechargeBuffer: 0.0001,
+      },
+      capabilities: { fieldHospital: true },
+    }).accepted).toBe(true);
+    const force = state.commanderForces[belgium]!;
 
-    const withoutHospital = recoveryWeeks(false);
-    const withHospital = recoveryWeeks(true);
-    expect(withoutHospital).toBeGreaterThanOrEqual(20);
-    expect(withoutHospital).toBeLessThanOrEqual(40);
-    expect(withHospital).toBeLessThan(withoutHospital);
-    expect(withHospital).toBeGreaterThanOrEqual(15);
-    expect(withoutHospital - withHospital).toBeLessThanOrEqual(5);
+    expect(applyCommanderCasualtiesV2(state, belgium, 1)).toBe(0.00048);
+    expect(force.shield.integrity).toBe(force.shield.maxIntegrity * 0.20);
+    expect(force.doctrineRuntime?.emergencyRebootUsed).toBe(true);
+    expect(force.mission).toBe('standby');
+
+    expect(applyCommanderCasualtiesV2(state, belgium, 1))
+      .toBe(force.shield.maxIntegrity * 0.20);
+    expect(force.shield.integrity).toBe(0);
+    expect(force.mission).toBe('hq-training');
+    force.shield.integrity = force.shield.maxIntegrity * 0.999;
+    force.shield.rechargeBuffer = force.shield.maxIntegrity * 0.01;
+    expect(selectApexShieldPresentationV2(state, belgium)?.operationalState)
+      .toBe('recharging');
+    processCommanderForcesV2(state, WORLD_CONTENT_V2);
+    expect(force.shield.integrity).toBe(force.shield.maxIntegrity);
+    expect(force.mission).toBe('standby');
   });
 
-  it('guarantees a tiny non-lethal human APEX extraction without keeping its front', () => {
+  it('collapses into Energy recovery without creating an APEX personnel army', () => {
     const state = createWorldStateV2(21_003_8, WORLD_CONTENT_V2);
     const belgium = nationIdV2('bel');
     state.humanPlayerId = belgium;
     state.humanPlayerIds = [belgium];
     expect(initializeCommanderForceV2(state, WORLD_CONTENT_V2, belgium, {
       ...commanderProfile,
-      manpower: 0.00048,
-      capacity: 0.0009,
-      trainedReserves: 0,
-      capabilities: {
-        mobileHeadquarters: false,
-        fieldHospital: true,
-        rapidResponse: false,
-        assaultSpecialist: false,
-        defenseSpecialist: false,
-        emergencyExtractionCharges: 0,
+      shield: {
+        ...commanderProfile.shield,
+        integrity: 0.00048,
+        maxIntegrity: 0.0009,
+        rechargeBuffer: 0,
       },
     }).accepted).toBe(true);
     const force = state.commanderForces[belgium]!;
@@ -708,8 +695,9 @@ describe('APEX neural dome', () => {
     };
 
     expect(applyCommanderCasualtiesV2(state, belgium, 1)).toBeCloseTo(0.00048, 9);
-    expect(force.army.manpower).toBe(0);
-    expect(force.army.trainedReserves).toBeCloseTo(0.000025, 9);
+    expect(force.shield.integrity).toBe(0);
+    expect(force.shield.rechargeBuffer).toBe(0);
+    expect(force).not.toHaveProperty('army');
     expect(force).toMatchObject({ mission: 'hq-training', front: null, transit: null });
     expect(selectCommanderBattleSupportV2(
       state,
@@ -724,7 +712,7 @@ describe('APEX neural dome', () => {
     ).defender).toBeNull();
   });
 
-  it('deterministically defends a threatened home front when left on autonomous standby', () => {
+  it('defends a threatened home front without persisting a local assignment', () => {
     const state = createWorldStateV2(21_006, WORLD_CONTENT_V2);
     const belgium = nationIdV2('bel');
     const netherlands = nationIdV2('nld');
@@ -745,16 +733,14 @@ describe('APEX neural dome', () => {
 
     expect(state.commanderForces[belgium]).toMatchObject({
       locationId: belTerritory,
-      mission: 'defense',
+      mission: 'standby',
       orderSource: 'autonomous',
-      manualHoldUntilTick: state.tick + COMMANDER_MANUAL_IDLE_GRACE_TICKS_V2,
-      front: {
-        warId: 'war-auto-defense', sourceId: nldTerritory, targetId: belTerritory,
-      },
+      manualHoldUntilTick: 0,
+      front: null,
     });
   });
 
-  it('normalizes a legacy manual assignment and overrides it for an imminent collapse', () => {
+  it('normalizes a legacy manual assignment into the global network', () => {
     const state = createWorldStateV2(21_007, WORLD_CONTENT_V2);
     const belgium = nationIdV2('bel');
     const netherlands = nationIdV2('nld');
@@ -789,18 +775,14 @@ describe('APEX neural dome', () => {
 
     processCommanderForcesV2(state, WORLD_CONTENT_V2);
     expect(state.commanderForces[belgium]).toMatchObject({
-      mission: 'defense',
+      mission: 'standby',
       orderSource: 'autonomous',
-      front: {
-        warId: 'war-french-front', sourceId: fraTerritory, targetId: belTerritory,
-      },
+      front: null,
     });
-    expect(force.manualHoldUntilTick).toBe(
-      state.tick + COMMANDER_MANUAL_IDLE_GRACE_TICKS_V2,
-    );
+    expect(force.manualHoldUntilTick).toBe(0);
   });
 
-  it('uses supply readiness in scoring while still joining a useful outgoing assault', () => {
+  it('supports an outgoing assault without a local supply assignment', () => {
     const state = createWorldStateV2(21_008, WORLD_CONTENT_V2);
     const belgium = nationIdV2('bel');
     const netherlands = nationIdV2('nld');
@@ -821,15 +803,13 @@ describe('APEX neural dome', () => {
     processCommanderForcesV2(state, WORLD_CONTENT_V2);
 
     expect(state.commanderForces[belgium]).toMatchObject({
-      mission: 'assault-support',
+      mission: 'standby',
       orderSource: 'autonomous',
-      front: {
-        warId: 'war-auto-logistics', sourceId: belTerritory, targetId: nldTerritory,
-      },
+      front: null,
     });
   });
 
-  it('joins a useful outgoing assault when the front is supplied and no home front is threatened', () => {
+  it('keeps an outgoing assault in the distributed network', () => {
     const state = createWorldStateV2(21_009, WORLD_CONTENT_V2);
     const belgium = nationIdV2('bel');
     const netherlands = nationIdV2('nld');
@@ -850,11 +830,9 @@ describe('APEX neural dome', () => {
     processCommanderForcesV2(state, WORLD_CONTENT_V2);
 
     expect(state.commanderForces[belgium]).toMatchObject({
-      mission: 'assault-support',
+      mission: 'standby',
       orderSource: 'autonomous',
-      front: {
-        warId: 'war-auto-assault', sourceId: belTerritory, targetId: nldTerritory,
-      },
+      front: null,
     });
   });
 
@@ -870,12 +848,12 @@ describe('APEX neural dome', () => {
     expect(initializeCommanderForceV2(state, WORLD_CONTENT_V2, belgium, {
       ...commanderProfile,
       capabilities: {
-        mobileHeadquarters: true,
-        fieldHospital: true,
+        mobileHeadquarters: false,
+        fieldHospital: false,
         rapidResponse: false,
         assaultSpecialist: false,
         defenseSpecialist: true,
-        emergencyExtractionCharges: 2,
+        emergencyExtractionCharges: 0,
       },
     }).accepted).toBe(true);
     const force = state.commanderForces[belgium]!;
@@ -891,6 +869,7 @@ describe('APEX neural dome', () => {
 
     const assaultOperation = testOperation(belgium, belTerritory, nldTerritory);
     const assaultWar = testWar('war-specialist-assault', belgium, netherlands, assaultOperation);
+    state.wars = [assaultWar];
     force.locationId = belTerritory;
     force.transit = null;
     force.mission = 'assault-support';
@@ -900,16 +879,17 @@ describe('APEX neural dome', () => {
     const assaultSupport = selectCommanderBattleSupportV2(
       state, assaultWar, assaultOperation, WORLD_CONTENT_V2,
     ).attacker!;
-    expect(assaultSupport.baseAttack).toBe(commanderProfile.baseAttack);
-    expect(assaultSupport.baseDefense).toBe(commanderProfile.baseDefense);
+    expect(assaultSupport.attackMultiplier).toBe(commanderProfile.attackMultiplier);
+    expect(assaultSupport.defenseMultiplier).toBe(commanderProfile.defenseMultiplier);
     expect(assaultSupport.singularityPulseCharged).toBe(false);
     expect(selectApexShieldPresentationV2(state, belgium)).toMatchObject({
-      attack: 3.2,
-      defense: 3.6,
+      attackMultiplier: commanderProfile.attackMultiplier,
+      defenseMultiplier: commanderProfile.defenseMultiplier,
     });
 
     const defenseOperation = testOperation(netherlands, nldTerritory, belTerritory);
     const defenseWar = testWar('war-specialist-defense', netherlands, belgium, defenseOperation);
+    state.wars = [defenseWar];
     force.mission = 'defense';
     force.front = {
       warId: defenseWar.id, sourceId: nldTerritory, targetId: belTerritory,
@@ -917,22 +897,22 @@ describe('APEX neural dome', () => {
     const defenseSupport = selectCommanderBattleSupportV2(
       state, defenseWar, defenseOperation, WORLD_CONTENT_V2,
     ).defender!;
-    expect(defenseSupport.baseAttack).toBe(commanderProfile.baseAttack);
-    expect(defenseSupport.baseDefense).toBe(commanderProfile.baseDefense);
+    expect(defenseSupport.attackMultiplier).toBe(commanderProfile.attackMultiplier);
+    expect(defenseSupport.defenseMultiplier).toBe(commanderProfile.defenseMultiplier);
     expect(defenseSupport.mirrorMatrixEligible).toBe(true);
     expect(selectApexShieldPresentationV2(state, belgium)).toMatchObject({
-      attack: 3.2,
-      defense: 3.6,
+      attackMultiplier: commanderProfile.attackMultiplier,
+      defenseMultiplier: commanderProfile.defenseMultiplier,
     });
 
-    const reservesBefore = force.army.trainedReserves;
-    expect(applyCommanderCasualtiesV2(state, belgium, 0.01)).toBeCloseTo(0.009, 9);
-    expect(force.army.trainedReserves).toBeCloseTo(reservesBefore + 0.001, 9);
-    expect(force.army.manpower).toBeCloseTo(0.01, 9);
+    const reservesBefore = force.shield.rechargeBuffer;
+    expect(applyCommanderCasualtiesV2(state, belgium, 0.01)).toBeCloseTo(0.01, 9);
+    expect(force.shield.rechargeBuffer).toBe(reservesBefore);
+    expect(force.shield.integrity).toBeCloseTo(0.01, 9);
 
     expect(applyCommanderCasualtiesV2(state, belgium, 1)).toBeCloseTo(0.01, 9);
-    expect(force.army.manpower).toBe(0);
-    expect(force.capabilities.emergencyExtractionCharges).toBe(1);
+    expect(force.shield.integrity).toBe(0);
+    expect(force.capabilities.emergencyExtractionCharges).toBe(0);
     expect(force.locationId).toBe(state.players[belgium]!.capitalId);
     expect(force).toMatchObject({ mission: 'hq-training', front: null, transit: null });
   });
@@ -954,7 +934,7 @@ describe('APEX neural dome', () => {
     expect(comparison.defense).toBe(90);
   });
 
-  it('keeps Twin Projection out of travel speed while Projection Relay accelerates movement and recharge', () => {
+  it('keeps all network forecasts instant while Projection Relay accelerates recharge', () => {
     const { engine, playerId } = createGlobalSurvivalCommander(21_017);
     const force = engine.state.commanderForces[playerId]!;
     const regularQuotes = engine.content.territoryIds.map((territoryId) => ({
@@ -963,7 +943,7 @@ describe('APEX neural dome', () => {
         engine.state, engine.content, playerId, territoryId,
       ),
     }));
-    force.capabilities.rapidResponse = true;
+    force.capabilities.forceMultiplier = true;
     const twinQuotes = engine.content.territoryIds.map((territoryId) => ({
       territoryId,
       mobility: selectCommanderForecastMobilityV2(
@@ -972,7 +952,7 @@ describe('APEX neural dome', () => {
     }));
     expect(twinQuotes.map((entry) => entry.mobility.etaWeeks))
       .toEqual(regularQuotes.map((entry) => entry.mobility.etaWeeks));
-    force.capabilities.rapidResponse = false;
+    force.capabilities.forceMultiplier = false;
     force.capabilities.mobileHeadquarters = true;
     const acceleratedQuotes = engine.content.territoryIds.map((territoryId) => ({
       territoryId,
@@ -988,7 +968,7 @@ describe('APEX neural dome', () => {
       return regular.mobility.etaWeeks !== null && accelerated?.etaWeeks !== null
         && accelerated.etaWeeks < regular.mobility.etaWeeks;
     });
-    expect(improved).toBeDefined();
+    expect(improved).toBeUndefined();
 
     const trainingState = createWorldStateV2(21_018, WORLD_CONTENT_V2);
     const trainingPlayer = trainingState.humanPlayerId;
@@ -1000,23 +980,23 @@ describe('APEX neural dome', () => {
     }).accepted).toBe(true);
     const trainingForce = trainingState.commanderForces[trainingPlayer]!;
     trainingForce.mission = 'hq-training';
-    const activeBefore = trainingForce.army.manpower;
-    const reservesBefore = trainingForce.army.trainedReserves;
+    const activeBefore = trainingForce.shield.integrity;
+    const reservesBefore = trainingForce.shield.rechargeBuffer;
     const freeCapacity = selectCommanderEconomyProjectionV2(
       trainingState,
       trainingPlayer,
     )!.trainedReserveGain;
     processCommanderForcesV2(trainingState, WORLD_CONTENT_V2);
-    const mobileHqTransfer = trainingForce.army.capacity
+    const mobileHqTransfer = trainingForce.shield.maxIntegrity
       * COMMANDER_HQ_TRANSFER_CAPACITY_SHARE_V2 * 1.75;
-    expect(trainingForce.army.manpower - activeBefore)
+    expect(trainingForce.shield.integrity - activeBefore)
       .toBeCloseTo(mobileHqTransfer, 9);
-    expect(reservesBefore + freeCapacity - trainingForce.army.trainedReserves)
+    expect(reservesBefore + freeCapacity - trainingForce.shield.rechargeBuffer)
       .toBeCloseTo(mobileHqTransfer, 9);
   });
 
-  it('defends developing threats with or without the Twin Projection capability', () => {
-    const threatenedState = (rapidResponse: boolean) => {
+  it('defends developing threats with or without the Omnipresence Grid capability', () => {
+    const threatenedState = (forceMultiplier: boolean) => {
       const state = createWorldStateV2(21_013, WORLD_CONTENT_V2);
       const belgium = nationIdV2('bel');
       const netherlands = nationIdV2('nld');
@@ -1026,7 +1006,7 @@ describe('APEX neural dome', () => {
       state.humanPlayerIds = [belgium];
       initializeCommanderForceV2(state, WORLD_CONTENT_V2, belgium, {
         ...commanderProfile,
-        capabilities: { rapidResponse },
+        capabilities: { forceMultiplier },
       });
       state.tick = 2;
       state.players[belgium]!.foodSecurity = 1;
@@ -1046,9 +1026,9 @@ describe('APEX neural dome', () => {
 
     for (const force of [threatenedState(false), threatenedState(true)]) {
       expect(force).toMatchObject({
-        mission: 'defense',
+        mission: 'standby',
         orderSource: 'autonomous',
-        front: { warId: 'war-developing-threat' },
+        front: null,
       });
     }
   });
@@ -1114,10 +1094,10 @@ describe('APEX neural dome', () => {
         defenseSpecialist: false,
         emergencyExtractionCharges: 0,
       },
-      mission: 'defense',
+      mission: 'standby',
       orderSource: 'autonomous',
       manualHoldUntilTick: 0,
-      front,
+      front: null,
     });
   });
 

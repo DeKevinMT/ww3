@@ -3473,7 +3473,6 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
 }
 
 .globe-map__country-label,
-.globe-map__sea-label,
 .globe-map__access-label,
 .globe-map__commander-label {
   position: absolute;
@@ -3922,22 +3921,6 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
   color: #cbbfff;
 }
 
-.globe-map__sea-label {
-  color: rgba(123, 181, 197, 0.35);
-  font-size: 10px;
-  font-style: italic;
-  font-weight: 700;
-  letter-spacing: 2.7px;
-  text-shadow: 0 1px 8px rgba(0, 7, 13, 0.72);
-  white-space: nowrap;
-}
-
-.globe-map__sea-label--sea {
-  color: rgba(139, 190, 202, 0.42);
-  font-size: 10px;
-  letter-spacing: 1.8px;
-}
-
 .globe-map__access-label {
   padding: 4px 7px;
   border: 1px solid rgba(164, 230, 241, 0.28);
@@ -4042,7 +4025,6 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
   .globe-map__country-label.is-home-capital { width: 70px; min-width: 70px; max-width: 70px; padding: 3px 5px 4px; }
   .globe-map__commander-label { width: 76px; min-width: 76px; max-width: 76px; }
   .globe-map__commander-label > strong { font-size: 11px; }
-  .globe-map__sea-label { font-size: 10px; letter-spacing: 1.8px; }
   .globe-map__polar-card { min-width: 164px; padding: 8px 10px; }
 }
 
@@ -4425,19 +4407,18 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
 }
 .world-ui-v2 .war-intel-card--compact { min-height: 50px; }
 .world-ui-v2 .war-intel-card--compact > div > small b { font-size: inherit; }
-.world-ui-v2 .war-intel-card--compact > div > .war-intel-card__fusion {
-  margin-top: 3px;
-  display: block;
-  overflow: hidden;
-  color: #91a8ae;
-  font-size: 10px;
-  line-height: 1.2;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.world-ui-v2 .war-intel-card--compact > div > :is(.war-intel-card__decision, .war-intel-card__logistics) {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
-.world-ui-v2 .war-intel-card--compact > div > .war-intel-card__fusion > b {
-  color: #7ddfb0;
-  letter-spacing: .25px;
+.world-ui-v2 .war-intel-card--compact > div > :is(.war-intel-card__decision, .war-intel-card__logistics) > span {
+  flex: none;
+  color: #a9bbc0;
+  font-size: inherit;
+  letter-spacing: 0;
 }
 
 /* The persistent tracker is a glanceable war balance, not a second detail panel. */
@@ -6054,7 +6035,7 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
   min-width: 0;
   padding: 3px 0;
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: minmax(126px, .92fr) minmax(112px, .78fr) minmax(244px, 1.72fr) repeat(2, minmax(108px, .78fr));
   gap: 4px;
   align-self: stretch;
   align-items: stretch;
@@ -6191,7 +6172,7 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
     linear-gradient(180deg, rgba(255, 255, 255, .035), rgba(0, 0, 0, .14));
   content: '';
 }
-.world-ui-v2 .topbar-status .topbar-power-share,
+.world-ui-v2 .topbar-status .topbar-defence-stack,
 .world-ui-v2 .topbar-status .topbar-progress-bar {
   position: absolute;
   z-index: 0;
@@ -6202,27 +6183,50 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
   border-radius: inherit;
   background: rgba(255, 255, 255, .012);
 }
-.world-ui-v2 .topbar-status .topbar-power-share > b,
-.world-ui-v2 .topbar-status .topbar-power-share > em,
+.world-ui-v2 .topbar-status .topbar-defence-stack > b,
+.world-ui-v2 .topbar-status .topbar-defence-stack > em,
 .world-ui-v2 .topbar-status .topbar-progress-bar > b {
   height: 100%;
   display: block;
   flex: none;
 }
-.world-ui-v2 .topbar-status .topbar-power-share > b {
-  background: linear-gradient(135deg, rgba(238, 98, 91, .34), rgba(255, 142, 134, .21));
-  box-shadow: inset -1px 0 rgba(255, 181, 176, .3), 8px 0 18px rgba(255, 100, 91, .08);
+.world-ui-v2 .topbar-status .topbar-defence-stack > b {
+  width: var(--army-ready);
+  background: linear-gradient(135deg, rgba(238, 98, 91, .38), rgba(255, 152, 122, .22));
+  box-shadow: inset -1px 0 rgba(255, 191, 166, .34), 8px 0 18px rgba(255, 100, 91, .08);
 }
-.world-ui-v2 .topbar-status .topbar-power-share > em {
-  background: linear-gradient(135deg, rgba(70, 193, 216, .34), rgba(137, 237, 245, .2));
-  box-shadow: inset 1px 0 rgba(185, 247, 251, .22);
+.world-ui-v2 .topbar-status .topbar-defence-stack > em {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--shield-integrity);
+  overflow: hidden;
+  border-right: 1px solid rgba(174, 247, 255, .7);
+  background:
+    repeating-linear-gradient(126deg, transparent 0 13px, rgba(176, 248, 255, .075) 14px 15px),
+    linear-gradient(105deg, rgba(57, 181, 220, .08), rgba(91, 226, 244, .3));
+  box-shadow: inset -1px 0 rgba(211, 252, 255, .4), 9px 0 24px rgba(84, 225, 245, .16);
 }
+.world-ui-v2 .topbar-status .topbar-defence-stack > em.is-recharging {
+  opacity: .48;
+  filter: saturate(.58);
+}
+.world-ui-v2 .topbar-status .topbar-defence-stack > em > i {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -22%;
+  width: 18%;
+  background: linear-gradient(90deg, transparent, rgba(210, 253, 255, .2), transparent);
+  transform: skewX(-16deg);
+}
+@keyframes topbar-shield-scan { to { transform: translateX(720%) skewX(-16deg); } }
 .world-ui-v2 .topbar-status .topbar-progress-bar > b {
   min-width: 2px;
   background: linear-gradient(135deg, color-mix(in srgb, var(--metric-accent) 30%, transparent), color-mix(in srgb, var(--metric-accent) 17%, transparent));
   box-shadow: inset -1px 0 color-mix(in srgb, var(--metric-accent) 38%, transparent), 8px 0 18px color-mix(in srgb, var(--metric-accent) 7%, transparent);
 }
 .world-ui-v2 .topbar-status .top-metric--logistics { --metric-accent: #69e3a2; }
+.world-ui-v2 .topbar-status .top-metric--logistics.is-idle { --metric-accent: #7895a2; }
 .world-ui-v2 .topbar-status .top-metric--logistics.is-strained { --metric-accent: #f0bd68; }
 .world-ui-v2 .topbar-status .top-metric--logistics.is-critical { --metric-accent: #ff8179; }
 .world-ui-v2 .topbar-status .top-metric--logistics > strong > i {
@@ -6991,7 +6995,7 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
     height: 48px;
     padding: 4px;
     display: grid !important;
-    grid-template-columns: repeat(5, minmax(136px, 1fr)) !important;
+    grid-template-columns: 136px 136px 236px repeat(2, 136px) !important;
     overflow-x: auto !important;
     overflow-y: hidden;
     border: 1px solid rgba(107, 221, 242, .12);
@@ -7054,7 +7058,7 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
     font-size: 11px;
   }
   .world-ui-v2 .unified-topbar .topbar-status {
-    grid-template-columns: repeat(5, minmax(136px, 1fr)) !important;
+    grid-template-columns: 136px 136px 236px repeat(2, 136px) !important;
   }
   .world-ui-v2 .world-panel.command-drawer.command-drawer--unified {
     right: 8px;
@@ -7678,22 +7682,6 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
   border-color: #ffaaa4;
   box-shadow: 0 0 18px rgba(255, 92, 86, .2);
   outline: none;
-}
-.world-ui-v2 .territory-target-command.is-active-front .commander-front-quick {
-  border-color: rgba(207, 145, 255, .62);
-  background: linear-gradient(135deg, rgba(141, 75, 191, .78), rgba(64, 48, 105, .84));
-  box-shadow: 0 0 16px rgba(207, 145, 255, .14);
-  color: #f0dcff;
-}
-.world-ui-v2 .territory-target-command.is-active-front .commander-front-quick:not(:disabled):hover {
-  border-color: #e4bcff;
-  box-shadow: 0 0 20px rgba(207, 145, 255, .24);
-}
-.world-ui-v2 .territory-target-command.is-active-front .commander-front-quick.is-assigned {
-  border-color: rgba(121, 229, 185, .48);
-  background: linear-gradient(135deg, rgba(61, 133, 105, .58), rgba(34, 73, 74, .76));
-  color: #a9edcc;
-  opacity: 1;
 }
 .world-ui-v2 .territory-target-command.is-blocked .territory-target-decision > button {
   border-color: rgba(183, 131, 112, .28);
@@ -8616,7 +8604,9 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
 }
 
 .world-ui-v2 .war-command-overlay.war-tracker--compact {
-  top: 168px;
+  /* The desktop topbar ends at 76px. Keep the live-war glance layer attached
+     to it instead of reserving space for a retired status surface. */
+  top: 84px;
   right: auto;
   left: 12px;
   z-index: 24;
@@ -8886,12 +8876,11 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
 
 @media (max-width: 840px) {
   .world-ui-v2 .war-command-overlay.war-tracker--compact {
-    top: 206px !important;
     right: auto;
     left: 8px;
     width: min(420px, calc(100vw - 16px));
     min-width: 0;
-    max-height: min(350px, calc(100dvh - 334px));
+    max-height: min(300px, calc(100dvh - 216px));
   }
   .world-ui-v2 .war-command-campaigns.war-tracker__wars {
     max-height: min(316px, calc(100dvh - 338px));
@@ -8900,20 +8889,18 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
 
 @media (max-width: 520px) {
   .world-ui-v2 .war-command-overlay.war-tracker--compact {
-    top: 206px !important;
     right: 6px;
     left: 6px;
     width: auto;
-    max-height: min(342px, calc(100dvh - 332px));
+    max-height: min(300px, calc(100dvh - 216px));
   }
   .world-ui-v2 .war-command-campaigns.war-tracker__wars { max-height: min(308px, calc(100dvh - 336px)); }
 }
 
 @media (max-width: 420px) {
   .world-ui-v2 .war-command-overlay.war-tracker--compact {
-    top: 258px !important;
     padding: 6px;
-    max-height: min(298px, calc(100dvh - 398px));
+    max-height: min(280px, calc(100dvh - 216px));
   }
   .world-ui-v2 .war-command-campaigns.war-tracker__wars { max-height: min(266px, calc(100dvh - 392px)); }
   .world-ui-v2 .war-command-header > b { font-size: 10px; }
@@ -8939,7 +8926,7 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
 .world-ui-v2 .war-command-header > span,
 .world-ui-v2 .war-command-header > b { font-size: 11px; }
 .world-ui-v2 .war-command-conflicts.war-tracker__wars {
-  max-height: min(286px, calc(100dvh - 274px));
+  max-height: min(286px, calc(100dvh - 168px));
   display: grid;
   gap: 4px;
   overflow-x: hidden;
@@ -9093,7 +9080,7 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
 }
 @media (max-width: 840px) {
   .world-ui-v2 .war-command-overlay.war-tracker--compact { width: min(390px, calc(100vw - 16px)); }
-  .world-ui-v2 .war-command-conflicts.war-tracker__wars { max-height: min(286px, calc(100dvh - 338px)); }
+  .world-ui-v2 .war-command-conflicts.war-tracker__wars { max-height: min(266px, calc(100dvh - 224px)); }
 }
 @media (max-width: 420px) {
   .world-ui-v2 .war-command-conflict > button { padding: 6px; }
@@ -10630,6 +10617,36 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
 }
 .world-ui-v2 .war-primary-fronts,
 .world-ui-v2 .war-primary-targets { margin-top: 8px; }
+.world-ui-v2 .war-command-lock {
+  margin-top: 8px;
+  padding: 11px 12px;
+  display: grid;
+  gap: 4px;
+  border: 1px solid rgba(111, 210, 229, .16);
+  border-radius: 8px;
+  background: rgba(6, 24, 37, .58);
+}
+.world-ui-v2 .war-command-lock > span {
+  color: #82d9e8;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: .65px;
+}
+.world-ui-v2 .war-command-lock > strong { color: #e7f5f7; font-size: 12px; }
+.world-ui-v2 .war-command-lock > small { color: #9aadb2; font-size: 11px; line-height: 1.35; }
+.world-ui-v2 .war-command-lock > button { justify-self: start; margin-top: 5px; }
+.world-ui-v2 .war-command-lock--compact {
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  border-color: rgba(111, 210, 229, .12);
+  background: rgba(6, 24, 37, .38);
+}
+.world-ui-v2 .war-command-lock--compact > strong {
+  color: #a8c2c8;
+  font-size: 11px;
+  letter-spacing: .35px;
+}
 .world-ui-v2 .war-primary-fronts > header,
 .world-ui-v2 .war-primary-targets > header {
   margin-bottom: 5px;

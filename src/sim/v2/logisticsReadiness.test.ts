@@ -53,22 +53,23 @@ describe('logistics readiness presentation', () => {
     expect(logisticsReadinessStatusV2(0.50)).toBe('strained');
     expect(logisticsReadinessStatusV2(0.499)).toBe('critical');
     expect(presentLogisticsReadinessV2(0.40, 'naval', 7_000).limitingReason)
-      .toBe('Long sea route');
+      .toBe('Front demand mostly unfunded');
     expect(presentLogisticsReadinessV2(1, 'land', 0, false)).toMatchObject({
       percent: 0,
       status: 'critical',
-      limitingReason: 'No supporting army',
+      limitingReason: 'No army available',
     });
   });
 
-  it('shows a fully ready network when no front is active', () => {
+  it('shows zero war supply when no front is active', () => {
     const state = createWorldStateV2(701);
     state.wars = [];
     const readiness = selectEmpireLogisticsReadinessV2(state, WORLD_CONTENT_V2, BEL);
-    expect(readiness.percent).toBe(100);
-    expect(readiness.statusLabel).toBe('READY');
+    expect(readiness.percent).toBe(0);
+    expect(readiness.status).toBe('idle');
+    expect(readiness.statusLabel).toBe('NO WAR');
     expect(readiness.frontCount).toBe(0);
-    expect(readiness.limitingReason).toBe('Network ready');
+    expect(readiness.limitingReason).toBe('No active war supply demand');
   });
 
   it('uses the exact combat supply factors, weights fronts and exposes the weakest', () => {

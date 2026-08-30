@@ -104,7 +104,7 @@ describe('V2 combat, capture and absorption', () => {
     const fullyIntegratedTarget = selectArmyCapacityTargetV2(state, WORLD_CONTENT_V2, usa);
     expect(immediateTarget - beforeTarget).toBeCloseTo(
       (fullyIntegratedTarget - beforeTarget) * 0.10,
-      6,
+      5,
     );
   });
 

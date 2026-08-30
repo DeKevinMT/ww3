@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   NEURAL_FIELD_PULSE_DURATION_MS,
-  APEX_TWIN_PROJECTION_COMBAT_SHARE,
   apexFieldPresentationActive,
   apexProjectionPresentations,
   apexShieldPresentation,
@@ -149,15 +148,17 @@ describe('digital APEX/PRIME field presentation', () => {
     });
   });
 
-  it('presents active APEX strength only as bounded neural-shield integrity', () => {
-    const force = (manpower: number, capacity: number, mission = 'standby') => ({
+  it('presents active APEX strength only as bounded neural-shield Energy', () => {
+    const force = (integrity: number, maxIntegrity: number, mission = 'standby') => ({
       mission,
-      army: {
-        manpower,
-        capacity,
-        trainedReserves: 0,
-        baseAttack: 100,
-        baseDefense: 100,
+      shield: {
+        integrity,
+        maxIntegrity,
+        rechargeBuffer: 0,
+        rechargeMultiplier: 1,
+        attackMultiplier: 1.1,
+        defenseMultiplier: 1.1,
+        pulseAttack: 0.001,
       },
     });
     expect(apexShieldPresentation(force(1, 1))).toEqual({
@@ -196,19 +197,21 @@ describe('digital APEX/PRIME field presentation', () => {
     });
   });
 
-  it('projects one shared integrity pool into at most two distinct 60% domes', () => {
+  it('ignores retired split sidecars and renders one legacy anchor for the grid', () => {
     const force = {
       playerId: 'gnb',
       headquartersId: 'gnb',
       locationId: 'sen',
       mission: 'assault-support',
       front: 'mrt',
-      army: {
-        manpower: 0.73,
-        capacity: 1,
-        trainedReserves: 0,
-        baseAttack: 100,
-        baseDefense: 100,
+      shield: {
+        integrity: 0.73,
+        maxIntegrity: 1,
+        rechargeBuffer: 0,
+        rechargeMultiplier: 1,
+        attackMultiplier: 1.1,
+        defenseMultiplier: 1.1,
+        pulseAttack: 0.001,
       },
       economy: { treasury: 0, annualOutput: 0, supplyStock: 0 },
       transit: null,
@@ -222,15 +225,12 @@ describe('digital APEX/PRIME field presentation', () => {
       },
     };
     const projections = apexProjectionPresentations(force);
-    expect(projections).toHaveLength(2);
-    expect(projections.map((entry) => entry.locationId)).toEqual(['sen', 'gin']);
-    expect(projections.map((entry) => entry.combatShare))
-      .toEqual([APEX_TWIN_PROJECTION_COMBAT_SHARE, APEX_TWIN_PROJECTION_COMBAT_SHARE]);
-    expect(projections.map((entry) => entry.percent)).toEqual([73, 73]);
-    expect(projections.map((entry) => entry.label)).toEqual([
-      'APEX 73% · SPLIT · ◆',
-      'APEX 73% · SPLIT · ◆',
-    ]);
+    expect(projections).toHaveLength(1);
+    expect(projections.map((entry) => entry.locationId)).toEqual(['sen']);
+    expect(projections.map((entry) => entry.combatShare)).toEqual([1]);
+    expect(projections.map((entry) => entry.percent)).toEqual([73]);
+    expect(projections.map((entry) => entry.label)).toEqual(['APEX 73% · ◆']);
+    expect(projections.every((entry) => entry.split === false)).toBe(true);
     expect(projections.every((entry) => entry.singularityCharged)).toBe(true);
 
     expect(apexProjectionPresentations({

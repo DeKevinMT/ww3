@@ -279,7 +279,7 @@ describe('APEX Intelligence Fog visibility', () => {
     }
   });
 
-  it('keeps real static mist over dormant Antarctica until physical mobilisation', () => {
+  it('keeps dormant Antarctica visually clear while withholding machine identity', () => {
     for (const stage of ['dormant', 'observing'] as const) {
       const engine = withRogueAttention(fogEngine('standard-2026', true), stage);
       engine.content!.territories!.gnb!.connections.push({ targetId: 'drake-entry' });
@@ -300,9 +300,8 @@ describe('APEX Intelligence Fog visibility', () => {
       expect(apexFogTerritoryPresentation(visibility, 'drake-entry', 'rai')).toMatchObject({
         frontier: true,
         dormantRogueAntarctic: true,
-        fill: APEX_INTELLIGENCE_FOG_STYLE.dormantRogueAntarcticFill,
-        alpha: APEX_INTELLIGENCE_FOG_STYLE.dormantRogueAntarcticAlpha,
-        cloudAlpha: APEX_INTELLIGENCE_FOG_STYLE.dormantRogueAntarcticCloudAlpha,
+        alpha: 0,
+        cloudAlpha: 0,
       });
     }
 
@@ -335,9 +334,8 @@ describe('APEX Intelligence Fog visibility', () => {
       });
     }
     expect(apexIntelligenceVisibilitySignature(engine)).not.toBe(before);
-    expect(APEX_INTELLIGENCE_FOG_STYLE.dormantRogueAntarcticAlpha).toBeGreaterThan(0.5);
-    expect(APEX_INTELLIGENCE_FOG_STYLE.dormantRogueAntarcticCloudAlpha)
-      .toBeLessThanOrEqual(0.10);
+    expect(APEX_INTELLIGENCE_FOG_STYLE.dormantRogueAntarcticAlpha).toBe(0);
+    expect(APEX_INTELLIGENCE_FOG_STYLE.dormantRogueAntarcticCloudAlpha).toBe(0);
   });
 
   it('keeps account unlocks charted for the visual veil without redacting live information', () => {
@@ -515,7 +513,7 @@ describe('APEX Intelligence Fog visibility', () => {
     expect(isolated.signature).not.toBe(tracked.signature);
   });
 
-  it('uses one cached atlas with no world cloud drift and only restrained static Antarctic mist', () => {
+  it('uses one cached atlas with no world cloud drift or Antarctic mist', () => {
     expect(globeTextureSource).toContain('readonly intelligenceFogMaskCanvas: HTMLCanvasElement;');
     expect(globeTextureSource).toContain('private drawApexIntelligenceFog(');
     expect(threeGlobeSceneSource).toContain('sharedApexFogCloudLayer');
@@ -526,15 +524,18 @@ describe('APEX Intelligence Fog visibility', () => {
     expect(threeGlobeSceneSource).toContain('|| this.intelligenceFogVisualBlend <= 0) return;');
     expect(APEX_INTELLIGENCE_FOG_STYLE.cloudAlpha).toBe(0);
     expect(APEX_INTELLIGENCE_FOG_STYLE.cloudDriftPerSecond).toBe(0);
-    expect(APEX_INTELLIGENCE_FOG_STYLE.dormantRogueAntarcticCloudAlpha)
-      .toBeGreaterThan(0);
+    expect(APEX_INTELLIGENCE_FOG_STYLE.dormantRogueAntarcticCloudAlpha).toBe(0);
     expect(worldMapSceneSource).toContain("'apex-intelligence-fog-atlas'");
     expect(worldMapSceneSource.match(/this\.intelligenceFogImage = this\.add\.image\(/g))
       .toHaveLength(1);
     expect(worldMapSceneSource).toContain('.setDepth(1.4)');
     expect(worldMapSceneSource).toContain('this.ownershipBoundaryGraphics = this.add.graphics().setDepth(2);');
     expect(worldUiSource).toContain('roguePrimeTracking: selectNorthPoleModifiersV2(engine.state, viewerId).primeTracking');
-    expect(globeTextureSource).toContain('...PREPARED_ANTARCTICA_SECTORS');
+    const globeFogBody = globeTextureSource.slice(
+      globeTextureSource.indexOf('private drawApexIntelligenceFog('),
+      globeTextureSource.indexOf('private redraw(): void'),
+    );
+    expect(globeFogBody).not.toContain('PREPARED_ANTARCTICA_SECTORS.map');
     expect(globeTextureSource).toContain('apexPoliticalAtlasFogTerritoryPresentation(');
     expect(worldMapSceneSource).toContain('apexFogTerritoryPresentation(');
   });

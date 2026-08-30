@@ -22,23 +22,30 @@ export function compactMapCombatPower(power: number): string {
   return value.toFixed(2);
 }
 
-export interface CommanderForcePowerSource {
-  readonly manpower: number;
-  readonly baseAttack: number;
-  readonly baseDefense: number;
+export interface CommanderShieldSupportSource {
+  readonly integrity: number;
+  readonly maxIntegrity: number;
+  readonly attackMultiplier: number;
+  readonly defenseMultiplier: number;
 }
 
 /**
- * Commander Corps power uses the same neutral ATK/DEF mix as ordinary map
- * nameplates. Its current deployed manpower and elite quality are the complete
- * comparable signal.
+ * APEX is not an army and therefore never contributes an independent map power
+ * value. This adapter exposes the average national-army bonus while the shield
+ * has integrity, which keeps nameplates truthful and directly comparable.
  */
-export function commanderForceMapCombatPower(army: CommanderForcePowerSource): number {
-  const manpower = Number.isFinite(army.manpower) ? Math.max(0, army.manpower) : 0;
-  const attack = Number.isFinite(army.baseAttack) ? Math.max(0, army.baseAttack) : 0;
-  const defense = Number.isFinite(army.baseDefense) ? Math.max(0, army.baseDefense) : 0;
-  const quality = 0.55 * attack + 0.45 * defense;
-  return Math.round(1_000 * manpower * quality * 1e9) / 1e9;
+export function commanderShieldMapSupportPercent(
+  shield: CommanderShieldSupportSource,
+): number {
+  const integrity = Number.isFinite(shield.integrity) ? Math.max(0, shield.integrity) : 0;
+  const maxIntegrity = Number.isFinite(shield.maxIntegrity)
+    ? Math.max(0, shield.maxIntegrity) : 0;
+  if (integrity <= 0 || maxIntegrity <= 0) return 0;
+  const attackBonus = Math.max(0, (Number.isFinite(shield.attackMultiplier)
+    ? shield.attackMultiplier : 1) - 1);
+  const defenseBonus = Math.max(0, (Number.isFinite(shield.defenseMultiplier)
+    ? shield.defenseMultiplier : 1) - 1);
+  return Math.round((0.55 * attackBonus + 0.45 * defenseBonus) * 100_000) / 1_000;
 }
 
 /** One map-tag line: no ATK/DEF noise, just one prominent comparable value. */

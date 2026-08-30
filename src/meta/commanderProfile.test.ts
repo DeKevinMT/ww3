@@ -13,6 +13,7 @@ import {
   MAX_COUNTRY_MASTERY_LEVEL,
   STARTER_COUNTRY_ID,
   STARTER_COUNTRY_POOL_SIZE,
+  STARTING_COMMAND_CREDITS_V1,
   allocateCountryMasteryPointV1,
   allocateCommanderTalentV1,
   buildCountryUnlockCatalogV1,
@@ -25,6 +26,9 @@ import {
   commanderTalentNextRankEfficiencyV1,
   commanderTalentPointsSpentV1,
   commanderTalentRankLevelRequirementV1,
+  commanderLevelMaxIntegrityBonusV1,
+  commanderMaxIntegrityV1,
+  commanderPulseAttackV1,
   commanderLevelFromXpV1,
   commanderXpForLevelV1,
   countryMasteryOpeningBonusV1,
@@ -43,6 +47,7 @@ import {
   recordCampaignDefeatedCountriesV1,
   recordCampaignSignalPurgedCountriesV1,
   renameEmpireV1,
+  selectEmpireFlagV1,
   respecCommanderTalentsV1,
   respecCountryMasteryV1,
   resolveCommanderForceInitializationV1,
@@ -59,6 +64,7 @@ import {
   loadCampaignSlotV1,
   loadCommanderProfileV1,
   resetCommanderProfileV1,
+  saveCommanderProfileV1,
   saveCampaignSlotV1,
   type KeyValueStorage,
 } from './commanderStorage';
@@ -104,7 +110,7 @@ describe('global commander progression', () => {
     expect(resolveCountryLoadoutV1(rankFive, 'grl').traitScale).toBe(0);
   });
 
-  it('neutralizes legacy credits and preserves every previously earned nation', () => {
+  it('migrates retired credits to the new opening balance and preserves every earned nation', () => {
     const base = createCommanderProfileV1(1, 'retired-rival-scaling');
     const normalized = normalizeCommanderProfileV1({
       ...base,
@@ -116,7 +122,7 @@ describe('global commander progression', () => {
       campaignAdaptation: { bel: 42, usa: 255 },
     }, 2);
     expect(normalized.campaignAdaptation).toEqual({});
-    expect(normalized.commandCredits).toBe(0);
+    expect(normalized.commandCredits).toBe(STARTING_COMMAND_CREDITS_V1);
     expect(normalized.lifetimeCreditsEarned).toBe(0);
     expect(normalized.unlockedCountryIds).toEqual(['bel', 'grl', 'usa']);
     expect(normalized.pendingCountryUnlockNotificationIds).toEqual([]);
@@ -147,7 +153,7 @@ describe('global commander progression', () => {
     expect(granted.accepted).toBe(true);
     expect(granted.profile.unlockedCountryIds).toHaveLength(STARTER_COUNTRY_POOL_SIZE);
     expect(granted.profile.unlockedCountryIds).toEqual([STARTER_COUNTRY_ID]);
-    expect(granted.profile.commandCredits).toBe(0);
+    expect(granted.profile.commandCredits).toBe(STARTING_COMMAND_CREDITS_V1);
     expect(grantStarterCountriesV1(granted.profile, [STARTER_COUNTRY_ID], 3).accepted).toBe(false);
     const missingCanonicalStarter = grantStarterCountriesV1(
       createCommanderProfileV1(1, 'missing-starter'),
@@ -413,7 +419,7 @@ describe('global commander progression', () => {
     expect(recorded.profile.countryMastery).toHaveProperty('usa');
     expect(recorded.profile.countryUpgrades).toHaveProperty('mex');
     expect(recorded.profile.pendingCountryUnlockNotificationIds).toEqual([]);
-    expect(recorded.profile.commandCredits).toBe(0);
+    expect(recorded.profile.commandCredits).toBe(STARTING_COMMAND_CREDITS_V1);
     expect(isCountryAvailableToUnlockV1(recorded.profile, endgameQuote)).toBe(true);
 
     const retry = recordCampaignDefeatedCountriesV1(
@@ -430,12 +436,46 @@ describe('global commander progression', () => {
     delete oldProfile.defeatedCountryIds;
     delete oldProfile.pendingCountryUnlockNotificationIds;
     delete oldProfile.empireName;
+    delete oldProfile.empireFlag;
     delete oldProfile.activeDoctrine;
     const normalized = normalizeCommanderProfileV1(oldProfile, 31);
     expect(normalized.defeatedCountryIds).toEqual([]);
     expect(normalized.pendingCountryUnlockNotificationIds).toEqual([]);
     expect(normalized.empireName).toBe('Frontier Alliance');
+    expect(normalized.empireFlag).toEqual({ kind: 'country', countryId: STARTER_COUNTRY_ID });
     expect(normalized.activeDoctrine).toBeNull();
+  });
+
+  it('selects and persists any authored country flag as account-wide empire identity', () => {
+    const storage = new MemoryStorage();
+    const profile = createCommanderProfileV1(32, 'empire-flag');
+    expect(profile.empireFlag).toEqual({ kind: 'country', countryId: STARTER_COUNTRY_ID });
+
+    const selected = selectEmpireFlagV1(
+      profile,
+      { kind: 'country', countryId: 'JPN' },
+      ['grl', 'jpn', 'usa'],
+      33,
+    );
+    expect(selected.accepted).toBe(true);
+    expect(selected.profile.empireFlag).toEqual({ kind: 'country', countryId: 'jpn' });
+    expect(selected.profile.unlockedCountryIds).not.toContain('jpn');
+    expect(loadCommanderProfileV1(
+      storage,
+      34,
+    ).empireFlag.countryId).toBe(STARTER_COUNTRY_ID);
+    saveCommanderProfileV1(storage, selected.profile);
+    expect(loadCommanderProfileV1(storage, 35).empireFlag)
+      .toEqual({ kind: 'country', countryId: 'jpn' });
+
+    const rejected = selectEmpireFlagV1(
+      selected.profile,
+      { kind: 'country', countryId: 'missing' },
+      ['grl', 'jpn', 'usa'],
+      36,
+    );
+    expect(rejected.accepted).toBe(false);
+    expect(rejected.profile).toBe(selected.profile);
   });
 
   it('persists a normalized account empire identity without spending credits', () => {
@@ -492,12 +532,13 @@ describe('global commander progression', () => {
         highestSurvivalWave: 18, verifiedRogueWaveLosses: 10, militaryLosses: 5,
       } as const,
     },
-  ])('settles $label with XP only', ({ input, active }) => {
+  ])('settles $label with progression pacing', ({ input, active }) => {
     const reward = calculateCampaignRewardV1(input);
     expect(reward).not.toHaveProperty('totalReward');
     expect(reward).not.toHaveProperty('baseReward');
     expect(reward.masteryXp > 0).toBe(active);
     expect(reward.commanderXp > 0).toBe(active);
+    expect(reward.creditsEarned > 0).toBe(active && input.mode === 'standard-2026');
     if (input.campaignId.includes('early')) {
       expect(reward.masteryXp).toBeGreaterThanOrEqual(countryMasteryXpForLevelV1(2));
       expect(reward.masteryXp).toBeLessThan(countryMasteryXpForLevelV1(3));
@@ -520,7 +561,7 @@ describe('global commander progression', () => {
     expect(reward.masteryXp).toBeLessThan(countryMasteryXpForLevelV1(3));
   });
 
-  it('rewards eligible outcomes with APEX XP and Nation Mastery XP only', () => {
+  it('keeps XP in eligible modes but awards Credits only in Campaign', () => {
     const common = {
       campaignId: 'campaign-1',
       countryId: 'bel',
@@ -540,6 +581,8 @@ describe('global commander progression', () => {
     expect(standardDefeat.masteryXp).toBeGreaterThan(0);
     expect(survivalVictory.commanderXp).toBeGreaterThan(0);
     expect(survivalVictory.masteryXp).toBeGreaterThan(0);
+    expect(standardDefeat.creditsEarned).toBeGreaterThan(0);
+    expect(survivalVictory.creditsEarned).toBe(0);
 
     const starterOwned = grantStarterCountriesV1(
       createCommanderProfileV1(1, 'test'),
@@ -549,7 +592,7 @@ describe('global commander progression', () => {
     const owned = { ...starterOwned, unlockedCountryIds: [STARTER_COUNTRY_ID, 'bel'] };
     const claimed = claimCampaignRewardV1(owned, survivalVictory, 3);
     expect(claimed.accepted).toBe(true);
-    expect(claimed.profile.commandCredits).toBe(0);
+    expect(claimed.profile.commandCredits).toBe(STARTING_COMMAND_CREDITS_V1);
     expect(claimed.profile.commanderXp).toBe(survivalVictory.commanderXp);
     expect(claimed.profile.countryMastery.bel?.xp).toBe(survivalVictory.masteryXp);
     expect(claimed.profile.transactions.at(-1)?.campaignId).toBe('campaign-1');
@@ -588,6 +631,7 @@ describe('global commander progression', () => {
     expect(alternative.modeMultiplier).toBe(0);
     expect(alternative.masteryXp).toBe(0);
     expect(alternative.commanderXp).toBe(0);
+    expect(alternative.creditsEarned).toBe(0);
     expect(alternative).not.toHaveProperty('totalReward');
 
     const owned = grantStarterCountriesV1(
@@ -606,11 +650,14 @@ describe('global commander progression', () => {
   it('grants one free shield point per APEX level and keeps capstone protocols exclusive', () => {
     const talents = emptyCommanderTalentsV1();
     talents['elite-vanguard'] = 5;
-    talents['reserve-cadre'] = 5;
-    talents['mobile-logistics'] = 5;
-    talents['frugal-quartermaster'] = 10;
+    talents['volunteer-brigade'] = 3;
+    talents['science-corps'] = 3;
+    talents['treasury-reserve'] = 3;
+    talents['civil-defense'] = 3;
+    talents['frugal-quartermaster'] = 5;
     talents['doctrine-command'] = 5;
-    talents['drill-instructors'] = 3;
+    talents['theater-network'] = 5;
+    talents['reserve-cadre'] = 1;
     const profile = normalizeCommanderProfileV1({
       ...createCommanderProfileV1(40, 'milestones'),
       commanderXp: commanderXpForLevelV1(33),
@@ -618,7 +665,7 @@ describe('global commander progression', () => {
       commandCredits: 777,
     }, 41);
     expect(profile.commanderLevel).toBe(33);
-    expect(profile.commandCredits).toBe(0);
+    expect(profile.commandCredits).toBe(STARTING_COMMAND_CREDITS_V1);
     expect(commanderTalentPointsAvailableV1(profile)).toBe(0);
     expect(profile.activeDoctrine).toBeNull();
 
@@ -628,28 +675,24 @@ describe('global commander progression', () => {
       resolveCountryLoadoutV1(vanguard.profile, 'bel'),
     );
     expect(initialization.capabilities).toEqual({
-      mobileHeadquarters: true,
-      fieldHospital: true,
+      mobileHeadquarters: false,
+      fieldHospital: false,
       rapidResponse: false,
+      forceMultiplier: false,
       assaultSpecialist: true,
       defenseSpecialist: false,
-      emergencyExtractionCharges: 2,
+      emergencyExtractionCharges: 0,
     });
-    expect(initialization.manpower).toBeCloseTo(0.000912369, 9);
-    expect(initialization.trainedReserves).toBeCloseTo(0.000137433, 9);
-    expect(initialization.capacity).toBeCloseTo(0.000912369, 9);
-    expect(initialization.baseAttack).toBeCloseTo(126.691696, 6);
-    expect(initialization.baseDefense).toBeCloseTo(126.226823, 6);
+    expect(initialization.shield.integrity).toBe(initialization.shield.maxIntegrity);
+    expect(initialization.attackMultiplier).toBe(1.12);
+    expect(initialization.defenseMultiplier).toBe(1.07);
     expect(initialization.empireSupport).toMatchObject({
       annualFoodOutput: 0,
       foodProductionMultiplier: 1,
       foodStorageMultiplier: 1,
       foodImportCostMultiplier: 1,
     });
-    expect(resolveCommanderTalentEffectsV1(talents)).toMatchObject({
-      empireRecruitmentBonus: 0,
-      empireReserveTrainingBonus: 0,
-    });
+    expect(resolveCommanderTalentEffectsV1(talents)).not.toHaveProperty('activeManpower');
 
     const bastion = selectCommanderDoctrineV1(profile, 'bastion', 43);
     expect(bastion.accepted).toBe(true);
@@ -665,10 +708,16 @@ describe('global commander progression', () => {
     expect(resolveCommanderForceInitializationV1(
       resolveCountryLoadoutV1(rapidResponse.profile, 'bel'),
     ).capabilities).toMatchObject({
-      rapidResponse: true,
+      fieldHospital: true,
+      rapidResponse: false,
       assaultSpecialist: false,
       defenseSpecialist: false,
     });
+    const forceMultiplier = selectCommanderDoctrineV1(profile, 'force-multiplier', 45);
+    expect(forceMultiplier.accepted).toBe(true);
+    expect(resolveCommanderForceInitializationV1(
+      resolveCountryLoadoutV1(forceMultiplier.profile, 'bel'),
+    ).capabilities).toMatchObject({ forceMultiplier: true });
 
     const lockedDoctrine = selectCommanderDoctrineV1(
       createCommanderProfileV1(45, 'locked-doctrine'),
@@ -676,7 +725,7 @@ describe('global commander progression', () => {
       46,
     );
     expect(lockedDoctrine.accepted).toBe(false);
-    expect(lockedDoctrine.reason).toContain('Requires Aegis Crown Rank 5');
+    expect(lockedDoctrine.reason).toContain('Requires Countermeasure Core Rank 5');
     const forgedLockedDoctrine = selectCommanderDoctrineV1({
       ...createCommanderProfileV1(46, 'forged-doctrine'),
       commanderTalents: {
@@ -685,7 +734,7 @@ describe('global commander progression', () => {
       },
     }, 'bastion', 47);
     expect(forgedLockedDoctrine.accepted).toBe(false);
-    expect(forgedLockedDoctrine.reason).toContain('Requires Aegis Crown Rank 5');
+    expect(forgedLockedDoctrine.reason).toContain('Requires Countermeasure Core Rank 5');
 
     const onePointProfile = normalizeCommanderProfileV1({
       ...createCommanderProfileV1(48, 'free-point'),
@@ -699,64 +748,70 @@ describe('global commander progression', () => {
     });
   });
 
-  it('starts with a 100-Power neural dome and resolves coherent shield packages', () => {
+  it('starts with one full energy shield and resolves only shield and national-Army modifiers', () => {
     const defaultInitialization = resolveCommanderForceInitializationV1(
       resolveCountryLoadoutV1(createCommanderProfileV1(54, 'base-elite'), 'bel'),
     );
     expect(defaultInitialization).toMatchObject({
-      manpower: BASE_COMMANDER_FORCE_V1.activeManpower,
-      capacity: BASE_COMMANDER_FORCE_V1.capacity,
-      trainedReserves: BASE_COMMANDER_FORCE_V1.trainedReserves,
-      baseAttack: BASE_COMMANDER_FORCE_V1.attack,
-      baseDefense: BASE_COMMANDER_FORCE_V1.defense,
+      shield: {
+        integrity: BASE_COMMANDER_FORCE_V1.integrity,
+        maxIntegrity: BASE_COMMANDER_FORCE_V1.maxIntegrity,
+        rechargeBuffer: BASE_COMMANDER_FORCE_V1.rechargeBuffer,
+        rechargeMultiplier: 1,
+        pulseAttack: BASE_COMMANDER_FORCE_V1.pulseAttack,
+      },
+      attackMultiplier: BASE_COMMANDER_FORCE_V1.attackMultiplier,
+      defenseMultiplier: BASE_COMMANDER_FORCE_V1.defenseMultiplier,
+      armyCasualtyMultiplier: 1,
+      armyPeaceRecoveryMultiplier: 1,
     });
-    expect(defaultInitialization.manpower).toBe(0.0008);
-    expect(defaultInitialization.capacity).toBe(0.0008);
-    expect(defaultInitialization.trainedReserves).toBe(0.00008);
-    expect(defaultInitialization.baseAttack).toBe(125);
-    expect(defaultInitialization.baseDefense).toBe(125);
+    expect(defaultInitialization.shield.integrity).toBe(0.001);
+    expect(defaultInitialization.shield.maxIntegrity).toBe(0.001);
+    expect(defaultInitialization.shield.rechargeBuffer).toBe(0.00004);
+    expect(defaultInitialization.shield.pulseAttack).toBe(0.001);
     expect(defaultInitialization.treasury).toBe(0);
     expect(defaultInitialization.annualOutput).toBe(0.015);
-    expect(1_000 * defaultInitialization.manpower * (
-      0.55 * defaultInitialization.baseAttack + 0.45 * defaultInitialization.baseDefense
-    )).toBeCloseTo(100, 3);
-    expect(1_000 * defaultInitialization.manpower * (
-      0.55 * defaultInitialization.baseAttack + 0.45 * defaultInitialization.baseDefense
-    )).toBeGreaterThanOrEqual(99);
-    expect(1_000 * defaultInitialization.manpower * (
-      0.55 * defaultInitialization.baseAttack + 0.45 * defaultInitialization.baseDefense
-    )).toBeLessThanOrEqual(101);
-    expect(defaultInitialization.baseAttack / 4).toBeGreaterThanOrEqual(31);
-    expect(defaultInitialization.baseDefense / 4).toBeGreaterThanOrEqual(31);
-    expect(defaultInitialization.supplyStock / defaultInitialization.manpower).toBe(12.5);
+    expect(defaultInitialization).not.toHaveProperty('army');
+    expect(defaultInitialization).not.toHaveProperty('manpower');
+    expect(defaultInitialization).not.toHaveProperty('capacity');
 
     const allRanks = Object.fromEntries(
       COMMANDER_TALENTS_V1.map((talent) => [talent.id, talent.coreRank]),
     );
     const effects = resolveCommanderTalentEffectsV1(allRanks);
     expect(effects).toMatchObject({
-      activeManpower: 0.000222,
-      capacity: 0.001136,
-      trainedReserves: 0.000374,
-      attack: 24.3,
-      defense: 17.1,
-      supplyStock: 0.0423,
-      empireRecruitmentBonus: 0,
-      empireReserveTrainingBonus: 0,
+      maxIntegrityBonus: 0.36,
+      rechargeBufferBonus: 0.18,
+      rechargeRateBonus: 0.36,
+      armyAttackBonus: 0.099,
+      pulseAttackBonus: 0.36,
+      pulseProjectionRetention: 0.063,
+      pulseChargeBonusPerStep: 0.09,
+      interceptEfficiencyBonus: 0.09,
+      impactRecoveryShare: 0.063,
+      defensivePulseBonus: 0.18,
+      armyDefenseBonus: 0.072,
+      armyCasualtyReduction: 0,
+      armyPeaceRecoveryBonus: 0.225,
     });
     expect(effects).not.toHaveProperty('treasury');
     expect(effects).not.toHaveProperty('annualOutput');
     expect(effects).not.toHaveProperty('empireAnnualFoodOutputBonus');
     expect(effects).not.toHaveProperty('empireFoodProductionBonus');
-    expect(effects.capacity).toBeGreaterThan(effects.activeManpower + effects.trainedReserves);
+    expect(effects).not.toHaveProperty('activeManpower');
+    expect(effects).not.toHaveProperty('capacity');
+    expect(effects).not.toHaveProperty('trainedReserves');
 
-    const infrastructureOnly = resolveCommanderTalentEffectsV1({ 'volunteer-brigade': 5 });
-    expect(infrastructureOnly.activeManpower).toBe(0);
-    expect(infrastructureOnly.trainedReserves).toBe(0);
-    expect(infrastructureOnly.capacity).toBeCloseTo(0.00006719, 8);
-    const recoveryOnly = resolveCommanderTalentEffectsV1({ 'reserve-cadre': 5 });
-    expect(recoveryOnly.trainedReserves).toBeCloseTo(0.000014876, 8);
-    expect(recoveryOnly.capacity).toBe(recoveryOnly.trainedReserves);
+    const interceptionOnly = resolveCommanderTalentEffectsV1({ 'volunteer-brigade': 5 });
+    expect(interceptionOnly.interceptEfficiencyBonus).toBeGreaterThan(0);
+    expect(interceptionOnly.armyDefenseBonus).toBe(0);
+    expect(interceptionOnly.maxIntegrityBonus).toBe(0);
+    const integrityOnly = resolveCommanderTalentEffectsV1({ 'reserve-cadre': 5 });
+    expect(integrityOnly.maxIntegrityBonus).toBeGreaterThan(0);
+    expect(integrityOnly.armyAttackBonus).toBe(0);
+    expect(resolveCommanderTalentEffectsV1({ 'reserve-cadre': 1 }).maxIntegrityBonus)
+      .toBeCloseTo(0.005, 4);
+    expect(integrityOnly.maxIntegrityBonus).toBeCloseTo(0.0372, 4);
 
     const levelSixtySeven = commanderXpForLevelV1(67);
     const sameLevelBase = normalizeCommanderProfileV1({
@@ -767,7 +822,7 @@ describe('global commander progression', () => {
       resolveCountryLoadoutV1(sameLevelBase, 'bel'),
     );
     const forceSizeTalents = emptyCommanderTalentsV1();
-    forceSizeTalents['volunteer-brigade'] = 15;
+    forceSizeTalents['reserve-cadre'] = 15;
     const upgradedForce = resolveCommanderForceInitializationV1(resolveCountryLoadoutV1(
       normalizeCommanderProfileV1({
         ...createCommanderProfileV1(57, 'full-strength-upgraded'),
@@ -776,13 +831,10 @@ describe('global commander progression', () => {
       }, 58),
       'bel',
     ));
-    const power = (force: typeof upgradedForce): number => 1_000 * force.manpower * (
-      0.55 * force.baseAttack + 0.45 * force.baseDefense
-    );
-    expect(sameLevelForce.manpower).toBe(sameLevelForce.capacity);
-    expect(upgradedForce.manpower).toBe(upgradedForce.capacity);
-    expect(upgradedForce.capacity).toBeGreaterThan(sameLevelForce.capacity);
-    expect(power(upgradedForce)).toBeGreaterThan(power(sameLevelForce));
+    expect(sameLevelForce.shield.integrity).toBe(sameLevelForce.shield.maxIntegrity);
+    expect(upgradedForce.shield.integrity).toBe(upgradedForce.shield.maxIntegrity);
+    expect(upgradedForce.shield.maxIntegrity).toBeGreaterThan(sameLevelForce.shield.maxIntegrity);
+    expect(upgradedForce.attackMultiplier).toBe(sameLevelForce.attackMultiplier);
     expect(upgradedForce.annualOutput).toBe(sameLevelForce.annualOutput);
     expect(upgradedForce.treasury).toBe(sameLevelForce.treasury);
 
@@ -795,7 +847,57 @@ describe('global commander progression', () => {
       .toBeCloseTo(0.01545, 9);
   });
 
-  it('authors three shield branches with exact numeric rank and capstone copy', () => {
+  it('grows Energy from a low convex core into a safe endless account-level tail', () => {
+    const noTalents = emptyCommanderTalentsV1();
+    const at = (level: number): number => commanderMaxIntegrityV1(level, noTalents);
+    expect(at(1)).toBe(BASE_COMMANDER_FORCE_V1.maxIntegrity);
+    expect(commanderLevelMaxIntegrityBonusV1(1)).toBe(0);
+    expect(at(2)).toBeGreaterThan(at(1));
+    expect(at(50)).toBeCloseTo(BASE_COMMANDER_FORCE_V1.maxIntegrity * 12, 9);
+
+    const earlyCoreGain = at(3) - at(2);
+    const middleCoreGain = at(26) - at(25);
+    const lateCoreGain = at(50) - at(49);
+    expect(earlyCoreGain).toBeGreaterThan(0);
+    expect(middleCoreGain).toBeGreaterThan(earlyCoreGain);
+    expect(lateCoreGain).toBeGreaterThan(middleCoreGain);
+
+    const checkpoints = [1, 2, 10, 25, 49, 50, 51, 100, 250, 10_000, Number.MAX_SAFE_INTEGER];
+    const integrity = checkpoints.map(at);
+    for (let index = 1; index < integrity.length; index += 1) {
+      expect(integrity[index]).toBeGreaterThan(integrity[index - 1]!);
+    }
+    expect(integrity.every(Number.isFinite)).toBe(true);
+    expect(at(Number.MAX_SAFE_INTEGER))
+      .toBeLessThan(BASE_COMMANDER_FORCE_V1.maxIntegrity * 120);
+
+    const shieldTalents = emptyCommanderTalentsV1();
+    shieldTalents['reserve-cadre'] = 15;
+    expect(commanderMaxIntegrityV1(50, shieldTalents)).toBeGreaterThan(at(50));
+  });
+
+  it('keeps level-one Greenland useful but makes a veteran shield relevant at France scale', () => {
+    // Canonical 2026 openings: Greenland 300 active personnel with its 12x
+    // human challenge start; France 264,000 active personnel.
+    const greenlandOpeningArmy = 0.0003 * 12;
+    const franceOpeningArmy = 0.264;
+    const levelOneShield = commanderMaxIntegrityV1(1, emptyCommanderTalentsV1());
+    const levelFiftyShield = commanderMaxIntegrityV1(50, emptyCommanderTalentsV1());
+
+    expect(levelOneShield).toBeLessThan(greenlandOpeningArmy);
+    expect(levelOneShield / greenlandOpeningArmy).toBeGreaterThan(0.27);
+    expect(levelOneShield / greenlandOpeningArmy).toBeLessThan(0.29);
+    expect(levelFiftyShield / franceOpeningArmy).toBeGreaterThan(0.04);
+    expect(levelFiftyShield / franceOpeningArmy).toBeLessThan(0.05);
+    expect(levelFiftyShield).toBeLessThan(franceOpeningArmy);
+    const levelOnePulse = commanderPulseAttackV1(1, emptyCommanderTalentsV1());
+    const levelFiftyPulse = commanderPulseAttackV1(50, emptyCommanderTalentsV1());
+    expect(levelOnePulse / greenlandOpeningArmy).toBeGreaterThan(0.25);
+    expect(levelFiftyPulse / franceOpeningArmy).toBeGreaterThan(0.06);
+    expect(levelFiftyPulse).toBeLessThan(franceOpeningArmy * 0.10);
+  });
+
+  it('authors three distinct APEX branches and exactly one national-Army branch', () => {
     const copy = JSON.stringify(COMMANDER_TALENTS_V1.map((talent) => ({
       label: talent.label,
       description: talent.description,
@@ -803,36 +905,32 @@ describe('global commander progression', () => {
       milestones: talent.milestones,
       synergy: talent.synergy,
     })));
-    expect(copy).not.toMatch(/soldier|personnel|troop|army|manpower|trained reserve|corps|brigade|cadre|quartermaster|barracks|hospital|recruit|treasury|income|food|research/i);
+    expect(copy).not.toMatch(/soldier|personnel|troop|manpower|trained reserve|corps|brigade|cadre|quartermaster|barracks|hospital|treasury|income|food|research/i);
     expect(COMMANDER_TALENTS_V1.map((talent) => talent.label)).toEqual([
-      'Pulse Calibration',
-      'Targeting Lattice',
-      'Lancer Crown',
-      'Integrity Lattice',
-      'Interception Mesh',
-      'Emergency Reboot',
-      'Aegis Crown',
-      'Projection Relay',
-      'Closed Recharge Loop',
-      'Nexus Crown',
+      'Pulse Output', 'Front Projection', 'Pulse Charge',
+      'Energy Efficiency', 'Impact Recovery', 'Defense Pulse',
+      'Max Energy', 'Energy Recharge', 'Reserve Energy',
+      'Army Attack', 'Army Defense', 'Peace Recovery',
     ]);
     expect(COMMANDER_TALENTS_V1.map(({ branch, tier }) => `${branch}:${tier}`)).toEqual([
-      'lancer:1', 'lancer:2', 'lancer:3',
-      'aegis:1', 'aegis:2', 'aegis:3', 'aegis:4',
-      'nexus:1', 'nexus:2', 'nexus:3',
+      'offensive:1', 'offensive:2', 'offensive:3',
+      'defensive:1', 'defensive:2', 'defensive:3',
+      'shield-core:1', 'shield-core:2', 'shield-core:3',
+      'military-command:1', 'military-command:2', 'military-command:3',
     ]);
     expect(COMMANDER_TALENTS_V1.find((talent) => talent.id === 'science-corps')?.perRank)
-      .toBe('+0.40 Attack per effective rank; the exact next-rank gain follows the live curve.');
+      .toBe('+2% Pulse Attack per effective rank. Shared Pulse ceiling: +200%.');
     expect(COMMANDER_TALENTS_V1.find((talent) => talent.id === 'elite-vanguard')?.milestones[2]?.description)
-      .toBe('+18.75% Shield Integrity · +18.75% Max Integrity · +10.80 Attack total.');
+      .toBe('+9% Pulse per stored charge.');
     expect(COMMANDER_TALENTS_V1.find((talent) => talent.id === 'civil-defense')?.milestones[2]?.description)
-      .toBe('+10.80 Defense · +90% Recharge total.');
-    expect(COMMANDER_TALENTS_V1.find((talent) => talent.id === 'mobile-logistics')?.milestones[0]?.description)
-      .toContain('two legal fronts at 60% projection each, sharing one Shield Integrity and energy pool');
+      .toBe('Recovers 6.30% of spent Energy to Reserve.');
+    expect(COMMANDER_TALENTS_V1.find((talent) => talent.id === 'theater-network')?.milestones[0]?.description)
+      .toContain('+20% shared Army buff pool per extra front, capped at 140%');
     expect(COMMANDER_DOCTRINES_V1.map(({ label, description }) => `${label}: ${description}`)).toEqual([
-      'Singularity Pulse: Every third APEX-supported offensive battle gains +60% dome Attack.',
-      'Mirror Matrix: Returns 20% of damage actually intercepted by the dome as a bounded counterpulse.',
-      'Twin Projection: Supports two distinct legal fronts at 60% projection each, sharing one Shield Integrity and energy pool; both projections recombine when one front ends.',
+      'Overdrive: Every third supported attack doubles APEX Pulse Attack only, then spends 2% Max Energy. Army Attack never changes.',
+      'Countermeasure: Returns 15% of damage actually intercepted by APEX, within the hostile Army’s remaining 10% hit budget.',
+      'Emergency Reboot: Once per campaign, reaching 0% Energy immediately restores 20% after the battle. An Army at zero still loses.',
+      'Theater Mesh: Each additional front adds 20% to the shared national Army buff pool, capped at 140%, then divides it across all fronts.',
     ]);
   });
 
@@ -845,7 +943,7 @@ describe('global commander progression', () => {
       ...createCommanderProfileV1(60, 'rank-gates'),
       commanderXp: commanderXpForLevelV1(15),
     }, 61);
-    for (let rank = 1; rank <= 7; rank += 1) {
+    for (let rank = 1; rank <= 3; rank += 1) {
       const result = allocateCommanderTalentV1(levelFifteen, 'science-corps', 61 + rank);
       expect(result.accepted, result.reason).toBe(true);
       levelFifteen = result.profile;
@@ -853,12 +951,12 @@ describe('global commander progression', () => {
     const blockedDump = allocateCommanderTalentV1(levelFifteen, 'science-corps', 70);
     expect(blockedDump).toMatchObject({
       accepted: false,
-      reason: 'Rank 8 unlocks at APEX level 19.',
+      reason: 'Invest 1 total points in other nodes first (0/1).',
     });
     for (const talentId of [
-      'volunteer-brigade', 'drill-instructors', 'treasury-reserve',
-      'volunteer-brigade', 'drill-instructors', 'treasury-reserve',
-      'volunteer-brigade', 'drill-instructors',
+      'volunteer-brigade', 'science-corps', 'reserve-cadre', 'science-corps',
+      'volunteer-brigade', 'reserve-cadre', 'mobile-logistics', 'volunteer-brigade',
+      'reserve-cadre', 'mobile-logistics', 'science-corps', 'mobile-logistics',
     ] as const) {
       const distributed = allocateCommanderTalentV1(levelFifteen, talentId, 71);
       expect(distributed.accepted, distributed.reason).toBe(true);
@@ -872,6 +970,8 @@ describe('global commander progression', () => {
       commanderTalents: {
         ...emptyCommanderTalentsV1(),
         'science-corps': 3,
+        'volunteer-brigade': 3,
+        'reserve-cadre': 3,
       },
     }, 63);
     for (let rank = 1; rank <= 15; rank += 1) {
@@ -892,12 +992,12 @@ describe('global commander progression', () => {
     expect(legacy.commanderTalents['treasury-reserve']).toBe(25);
   });
 
-  it('opens three useful roots at level one and reports the exact missing branch prerequisite', () => {
+  it('opens four useful roots at level one and reports prerequisite and breadth gates exactly', () => {
     const levelOne = createCommanderProfileV1(66, 'branch-gates');
-    expect(['science-corps', 'volunteer-brigade', 'drill-instructors'].map((talentId) => (
+    expect(['science-corps', 'volunteer-brigade', 'reserve-cadre', 'mobile-logistics'].map((talentId) => (
       commanderTalentAllocationQuoteV1(levelOne, talentId as keyof typeof levelOne.commanderTalents)
         .available
-    ))).toEqual([true, true, true]);
+    ))).toEqual([true, true, true, true]);
 
     const targeting = commanderTalentAllocationQuoteV1(levelOne, 'treasury-reserve');
     expect(targeting).toMatchObject({
@@ -905,9 +1005,9 @@ describe('global commander progression', () => {
       unmetPrerequisite: {
         talentId: 'science-corps',
         rank: 3,
-        label: 'Pulse Calibration',
+        label: 'Pulse Output',
       },
-      reason: 'Requires Pulse Calibration Rank 3 before Targeting Lattice.',
+      reason: 'Requires Pulse Output Rank 3 before Front Projection.',
     });
     const blocked = allocateCommanderTalentV1(levelOne, 'treasury-reserve', 67);
     expect(blocked.accepted).toBe(false);
@@ -924,11 +1024,12 @@ describe('global commander progression', () => {
     expect(migrated.commanderTalents['treasury-reserve']).toBe(12);
     expect(commanderTalentAllocationQuoteV1(migrated, 'treasury-reserve')).toMatchObject({
       targetRank: 13,
-      available: true,
+      available: false,
+      unmetBreadth: { current: 0, required: 5, scope: 'other-nodes' },
     });
   });
 
-  it('uses one convex military curve and maps every legacy talent id to military effects', () => {
+  it('uses one convex curve while keeping all four talent branches mechanically isolated', () => {
     const earlyGeneral = commanderTalentCurveV1(1);
     const middleGeneral = commanderTalentCurveV1(10);
     const coreGeneral = commanderTalentCurveV1(15);
@@ -942,21 +1043,65 @@ describe('global commander progression', () => {
     const earlyTargeting = resolveCommanderTalentEffectsV1({ 'treasury-reserve': 1 });
     const coreTargeting = resolveCommanderTalentEffectsV1({ 'treasury-reserve': 15 });
     const endlessTargeting = resolveCommanderTalentEffectsV1({ 'treasury-reserve': 100 });
-    expect(earlyTargeting.attack).toBeGreaterThan(0);
-    expect(coreTargeting).toMatchObject({ attack: 6.3, defense: 0, supplyStock: 0 });
-    expect(endlessTargeting.attack).toBeGreaterThan(coreTargeting.attack);
+    expect(earlyTargeting.pulseProjectionRetention).toBeGreaterThan(0);
+    expect(coreTargeting).toMatchObject({
+      pulseProjectionRetention: 0.063,
+      armyAttackBonus: 0,
+      pulseAttackBonus: 0,
+      armyDefenseBonus: 0,
+      maxIntegrityBonus: 0,
+    });
+    expect(endlessTargeting.pulseProjectionRetention)
+      .toBeGreaterThan(coreTargeting.pulseProjectionRetention);
     expect(endlessTargeting).not.toHaveProperty('treasury');
     expect(endlessTargeting).not.toHaveProperty('annualOutput');
-    const ultimateMilitary = resolveCommanderTalentEffectsV1({
-      'volunteer-brigade': Number.MAX_SAFE_INTEGER,
-      'science-corps': Number.MAX_SAFE_INTEGER,
-      'treasury-reserve': Number.MAX_SAFE_INTEGER,
-      'civil-defense': Number.MAX_SAFE_INTEGER,
+    const branchEffects = {
+      pulse: resolveCommanderTalentEffectsV1({
+        'science-corps': 15, 'treasury-reserve': 15, 'elite-vanguard': 15,
+      }),
+      interception: resolveCommanderTalentEffectsV1({
+        'volunteer-brigade': 15, 'civil-defense': 15, 'doctrine-command': 15,
+      }),
+      endurance: resolveCommanderTalentEffectsV1({
+        'reserve-cadre': 15, 'drill-instructors': 15, 'frugal-quartermaster': 15,
+      }),
+      army: resolveCommanderTalentEffectsV1({
+        'mobile-logistics': 15, 'combat-recovery': 15, 'theater-network': 15,
+      }),
+    };
+    expect(branchEffects.pulse).toMatchObject({
+      pulseAttackBonus: 0.36,
+      pulseProjectionRetention: 0.063,
+      pulseChargeBonusPerStep: 0.09,
+      interceptEfficiencyBonus: 0,
+      maxIntegrityBonus: 0,
+      armyAttackBonus: 0,
     });
-    expect(Object.values(ultimateMilitary).every(Number.isFinite)).toBe(true);
-    expect(ultimateMilitary.capacity).toBeGreaterThan(0);
-    expect(ultimateMilitary.attack).toBeGreaterThan(0);
-    expect(ultimateMilitary.defense).toBeGreaterThan(0);
+    expect(branchEffects.interception).toMatchObject({
+      interceptEfficiencyBonus: 0.09,
+      impactRecoveryShare: 0.063,
+      defensivePulseBonus: 0.18,
+      pulseAttackBonus: 0,
+      maxIntegrityBonus: 0,
+      armyDefenseBonus: 0,
+    });
+    expect(branchEffects.endurance).toMatchObject({
+      maxIntegrityBonus: 0.36,
+      rechargeRateBonus: 0.36,
+      rechargeBufferBonus: 0.18,
+      pulseAttackBonus: 0,
+      interceptEfficiencyBonus: 0,
+      armyAttackBonus: 0,
+    });
+    expect(branchEffects.army).toMatchObject({
+      armyAttackBonus: 0.099,
+      armyDefenseBonus: 0.072,
+      armyPeaceRecoveryBonus: 0.225,
+      maxIntegrityBonus: 0,
+      pulseAttackBonus: 0,
+      interceptEfficiencyBonus: 0,
+    });
+    expect(Object.values(branchEffects).flatMap(Object.values).every(Number.isFinite)).toBe(true);
   });
 
   it('continues levels and repeatable talents beyond the authored core with diminishing value', () => {
@@ -976,15 +1121,18 @@ describe('global commander progression', () => {
       commanderTalents: {
         ...emptyCommanderTalentsV1(),
         'elite-vanguard': deepRank,
+        'science-corps': 3,
+        'volunteer-brigade': 3,
+        'reserve-cadre': 3,
       },
       activeDoctrine: 'vanguard',
       commandCredits: 9_876,
     }, 51);
     expect(deep.commanderLevel).toBe(250);
-    expect(deep.commandCredits).toBe(0);
+    expect(deep.commandCredits).toBe(STARTING_COMMAND_CREDITS_V1);
     expect(deep.commanderTalents['elite-vanguard']).toBe(deepRank);
-    expect(commanderTalentPointsSpentV1(deep)).toBe(deepRank);
-    expect(commanderTalentPointsAvailableV1(deep)).toBe(250 - deepRank);
+    expect(commanderTalentPointsSpentV1(deep)).toBe(deepRank + 9);
+    expect(commanderTalentPointsAvailableV1(deep)).toBe(250 - deepRank - 9);
 
     const firstDeepGain = commanderTalentNextRankEfficiencyV1(15);
     const laterDeepGain = commanderTalentNextRankEfficiencyV1(100);
@@ -997,15 +1145,17 @@ describe('global commander progression', () => {
     const firstDeepEffects = resolveCommanderTalentEffectsV1({ 'elite-vanguard': 16 });
     const laterDeepEffects = resolveCommanderTalentEffectsV1({ 'elite-vanguard': 100 });
     const nextLaterDeepEffects = resolveCommanderTalentEffectsV1({ 'elite-vanguard': 101 });
-    expect(firstDeepEffects.attack - coreEffects.attack).toBeGreaterThan(0);
-    expect(firstDeepEffects.attack - coreEffects.attack).toBeLessThan(0.60);
-    expect(nextLaterDeepEffects.attack - laterDeepEffects.attack)
-      .toBeLessThan(firstDeepEffects.attack - coreEffects.attack);
+    expect(firstDeepEffects.pulseChargeBonusPerStep - coreEffects.pulseChargeBonusPerStep)
+      .toBeGreaterThan(0);
+    expect(firstDeepEffects.pulseChargeBonusPerStep - coreEffects.pulseChargeBonusPerStep)
+      .toBeLessThan(0.01);
+    expect(nextLaterDeepEffects.pulseChargeBonusPerStep - laterDeepEffects.pulseChargeBonusPerStep)
+      .toBeLessThan(firstDeepEffects.pulseChargeBonusPerStep - coreEffects.pulseChargeBonusPerStep);
 
     const allocated = allocateCommanderTalentV1(deep, 'elite-vanguard', 52);
     expect(allocated.accepted).toBe(true);
     expect(allocated.profile.commanderTalents['elite-vanguard']).toBe(deepRank + 1);
-    expect(commanderTalentPointsAvailableV1(allocated.profile)).toBe(250 - deepRank - 1);
+    expect(commanderTalentPointsAvailableV1(allocated.profile)).toBe(250 - deepRank - 10);
 
     const respec = respecCommanderTalentsV1(allocated.profile, 53);
     expect(respec.accepted).toBe(true);
@@ -1044,7 +1194,9 @@ describe('global commander progression', () => {
     });
     expect(idleSurrender.masteryXp).toBe(0);
     expect(idleSurrender.commanderXp).toBe(0);
+    expect(idleSurrender.creditsEarned).toBe(0);
     expect(surrender.masteryXp).toBeGreaterThan(0);
+    expect(surrender.creditsEarned).toBe(0);
     expect(surrender).toMatchObject({
       masteryXp: defeat.masteryXp,
       commanderXp: defeat.commanderXp,
@@ -1062,7 +1214,7 @@ describe('global commander progression', () => {
     const owned = { ...starterOwned, unlockedCountryIds: [STARTER_COUNTRY_ID, 'bel'] };
     const claimed = claimCampaignRewardV1(owned, surrender, 57);
     expect(claimed.accepted).toBe(true);
-    expect(claimed.profile.commandCredits).toBe(0);
+    expect(claimed.profile.commandCredits).toBe(STARTING_COMMAND_CREDITS_V1);
     expect(claimed.profile.commanderXp).toBe(surrender.commanderXp);
     expect(claimed.profile.countryMastery.bel?.xp).toBe(surrender.masteryXp);
     expect(claimed.profile.completedCampaigns).toBe(1);
@@ -1080,7 +1232,7 @@ describe('global commander progression', () => {
   it('persists a versioned profile and one resumable campaign slot', () => {
     const storage = new MemoryStorage();
     const profile = loadCommanderProfileV1(storage, 100);
-    expect(profile.commandCredits).toBe(0);
+    expect(profile.commandCredits).toBe(STARTING_COMMAND_CREDITS_V1);
     expect(profile.activeDoctrine).toBeNull();
     expect(storage.getItem(COMMANDER_PROFILE_STORAGE_KEY)).not.toBeNull();
     expect(resetCommanderProfileV1(storage, 101).activeDoctrine).toBeNull();

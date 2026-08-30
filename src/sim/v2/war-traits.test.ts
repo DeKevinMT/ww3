@@ -7,13 +7,10 @@ import {
   COMBAT_DAMAGE_EFFECTIVENESS,
   COMBAT_POWER_RATIO_EXPONENT,
   WAR_ACCESS_CASUALTY_MULTIPLIER,
-  WAR_ACCESS_SUPPLY_MULTIPLIER,
-  clamp,
   round,
-  warAccessSupplyMultiplierV2,
 } from './balance';
 import { createWorldStateV2 } from './bootstrap';
-import { territoryTerrainSupplyMultiplierV2, WORLD_CONTENT_V2 } from './content';
+import { WORLD_CONTENT_V2 } from './content';
 import { quoteTerritoryIntegrationV2 } from './integration';
 import { countryTraitFactorV2 } from './traits';
 import {
@@ -21,7 +18,6 @@ import {
   invalidateTerritoryIndexV2,
   selectEffectiveAttackV2,
   selectEffectiveDefenseV2,
-  selectTerritoryRouteDistanceKmV2,
   selectTotalManpowerV2,
 } from './selectors';
 import {
@@ -36,6 +32,7 @@ import {
 import {
   conquestWarFatigueShockV2,
   forecastWarV2,
+  frontCapacitySupplyQuoteV2,
   projectCombatExchangeV2,
   resolveBattlePulseV2,
   supplyFactorV2,
@@ -302,7 +299,7 @@ describe('retired V2 country traits in the canonical war runtime', () => {
     expect(projection.attackerLosses).toBeCloseTo(expected, 9);
   });
 
-  it('keeps front supply, land-hop and naval-distance trait components neutral', () => {
+  it('keeps research, terrain, land-hop and naval-distance supply components neutral', () => {
     const saudiArabia = nationIdV2('sau');
     const russia = nationIdV2('rus');
     const southAfrica = nationIdV2('zaf');
@@ -317,37 +314,18 @@ describe('retired V2 country traits in the canonical war runtime', () => {
     state.wars = [];
 
     expect(WORLD_CONTENT_V2.territories[saudiTerritory]!.terrain).toBe('desert');
-    const saudiResearch = 1 + 0.01 * state.players[saudiArabia]!.research.effectLevels.supply;
+    state.players[saudiArabia]!.research.effectLevels.supply = 100;
     expect(supplyFactorV2(
       state, WORLD_CONTENT_V2, saudiArabia, saudiTerritory, 'land',
-    )).toBeCloseTo(clamp(
-      saudiResearch * countryTraitFactorV2(
-        saudiArabia, 'front-supply', { access: 'land', terrain: 'desert' },
-      ) * territoryTerrainSupplyMultiplierV2(WORLD_CONTENT_V2, saudiTerritory),
-      0.25,
-      1,
-    ), 9);
+    )).toBe(1);
 
     state.territories[ukraineTerritory]!.owner = russia;
     expect(WORLD_CONTENT_V2.territories[russiaTerritory]!.connections
       .some((connection) => connection.targetId === ukraineTerritory)).toBe(true);
-    const russianResearch = 1 + 0.01 * state.players[russia]!.research.effectLevels.supply;
     expect(supplyFactorV2(
       state, WORLD_CONTENT_V2, russia, ukraineTerritory, 'land',
-    )).toBeCloseTo(clamp((1 - 0.035 * countryTraitFactorV2(
-      russia, 'land-hop-pressure', { access: 'land' },
-    )) * russianResearch
-      * territoryTerrainSupplyMultiplierV2(WORLD_CONTENT_V2, ukraineTerritory), 0.25, 1), 9);
+    )).toBe(1);
 
-    const routeDistance = selectTerritoryRouteDistanceKmV2(
-      WORLD_CONTENT_V2, southAfricaTerritory, argentinaTerritory,
-    );
-    expect(routeDistance).toBeGreaterThan(1_500);
-    const rawNavalSupply = warAccessSupplyMultiplierV2('naval', routeDistance);
-    const adjustedNavalSupply = WAR_ACCESS_SUPPLY_MULTIPLIER.naval
-      - (WAR_ACCESS_SUPPLY_MULTIPLIER.naval - rawNavalSupply)
-        * countryTraitFactorV2(southAfrica, 'naval-distance-pressure', { access: 'naval' });
-    const southAfricaResearch = 1 + 0.01 * state.players[southAfrica]!.research.effectLevels.supply;
     expect(supplyFactorV2(
       state,
       WORLD_CONTENT_V2,
@@ -355,18 +333,16 @@ describe('retired V2 country traits in the canonical war runtime', () => {
       southAfricaTerritory,
       'naval',
       argentinaTerritory,
-    )).toBeCloseTo(clamp(clamp(
-      southAfricaResearch
-        * territoryTerrainSupplyMultiplierV2(WORLD_CONTENT_V2, argentinaTerritory),
-      0.25,
-      1,
-    ) * adjustedNavalSupply, 0.25, 1), 9);
+    )).toBe(1);
 
-    const dutchResearch = 1 + 0.01 * state.players[netherlands]!.research.effectLevels.supply;
     expect(supplyFactorV2(
       state, WORLD_CONTENT_V2, netherlands, netherlandsTerritory, 'land',
-    )).toBeCloseTo(clamp(dutchResearch
-      * territoryTerrainSupplyMultiplierV2(WORLD_CONTENT_V2, netherlandsTerritory), 0.25, 1), 9);
+    )).toBe(1);
+
+    const landQuote = frontCapacitySupplyQuoteV2(state, southAfricaTerritory, 'land');
+    const navalQuote = frontCapacitySupplyQuoteV2(state, southAfricaTerritory, 'naval');
+    expect(navalQuote.capacityBudget).toBeCloseTo(landQuote.capacityBudget * 0.5, 9);
+    expect(navalQuote.readiness).toBe(landQuote.readiness);
   });
 
   it('uses neutral defeated-owner treasury handling and forwards capture access', () => {

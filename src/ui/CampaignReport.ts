@@ -56,6 +56,8 @@ export interface CommanderProgressProjectionV1 {
 export interface CampaignReportRenderInputV1 {
   snapshot: CampaignLifecycleSnapshotV1;
   country: CampaignReportCountryV1;
+  /** Account-wide empire flag; the played nation remains the report's command identity. */
+  flagCountryId?: string;
   masteryBeforeSettlement: Pick<CountryMasteryV1, 'xp' | 'level'>;
   commanderBeforeSettlement?: CommanderProgressBeforeSettlementV1;
   unlockedCountries?: readonly {
@@ -186,7 +188,7 @@ export function renderCampaignReportHtmlV1(input: CampaignReportRenderInputV1): 
     snapshot.reward.masteryXp,
   );
   const flag = countryFlagHtml(
-    snapshot.countryId,
+    input.flagCountryId ?? snapshot.countryId,
     escapeHtml(country.sigil ?? country.shortName?.slice(0, 2).toUpperCase() ?? '•'),
     true,
   );
@@ -219,12 +221,23 @@ export function renderCampaignReportHtmlV1(input: CampaignReportRenderInputV1): 
       : '';
   const eligibilityNote = snapshot.rewardEligible
     ? ''
-    : '<p class="campaign-report__eligibility">Alternative Universe grants no Nation Mastery XP, APEX XP or nation unlocks.</p>';
+    : '<p class="campaign-report__eligibility">Alternative Universe grants no Nation Mastery XP, APEX XP, Credits or nation unlocks.</p>';
   const accountFooter = snapshot.outcome === 'defeat' || snapshot.outcome === 'surrender'
     ? '<div class="campaign-report__apex-return"><span>APEX · TEMPORAL RETURN</span><small>“This timeline is lost—not our war. I will take us back with everything we learned. Next time, we arrive stronger.”</small></div>'
     : snapshot.rewardEligible
-      ? '<div><span>TIMELINE INTELLIGENCE SAVED</span><small>APEX returned earned APEX XP and Nation Mastery XP to the origin point.</small></div>'
+      ? `<div><span>TIMELINE INTELLIGENCE SAVED</span><small>${snapshot.mode === 'standard-2026'
+        ? 'APEX returned earned APEX XP, Nation Mastery XP and Credits to the origin point.'
+        : 'APEX returned earned APEX XP and Nation Mastery XP to the origin point.'}</small></div>`
       : '';
+  const creditLabel = snapshot.mode === 'standard-2026'
+    ? `+${whole(snapshot.reward.creditsEarned)}` : '0';
+  const creditNote = snapshot.mode === 'standard-2026'
+    ? snapshot.reward.creditsEarned > 0
+      ? 'Earned from meaningful Campaign activity'
+      : 'No qualifying Campaign activity recorded'
+    : snapshot.mode === 'survival'
+      ? 'Survival awards XP and Mastery, but no Credits'
+      : 'Alternative Universe has no account rewards';
   const unlockedAccess = snapshot.mode === 'standard-2026'
     && (input.unlockedCountries?.length ?? 0) > 0
     ? `<section class="campaign-report__signal-purges" aria-label="New nations unlocked"><div><span>CAMPAIGN VICTORY UNLOCKS</span><strong>${input.unlockedCountries!.length} ${input.unlockedCountries!.length === 1 ? 'NATION' : 'NATIONS'} ADDED</strong></div><ul>${input.unlockedCountries!.map((country) => `<li><b>${escapeHtml(country.name)}</b><span>UNLOCKED · READY IN ALL MODES</span></li>`).join('')}</ul></section>`
@@ -262,6 +275,11 @@ export function renderCampaignReportHtmlV1(input: CampaignReportRenderInputV1): 
           </div>
           ${commander ? `<div class="campaign-report__mastery-track" role="progressbar" aria-label="APEX level progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(commander.progress * 100)}"><i style="width:${Math.round(commander.progress * 100)}%"></i></div>` : '<div class="campaign-report__mastery-track is-unresolved" aria-hidden="true"><i></i></div>'}
           <div class="campaign-report__commander-foot"><small>${commanderTarget}</small>${talentNote}</div>
+        </article>
+        <article class="campaign-report__credits">
+          <span>COMMAND CREDITS</span>
+          <strong>${creditLabel}</strong>
+          <small>${creditNote}</small>
         </article>
       </section>
       ${eligibilityNote}

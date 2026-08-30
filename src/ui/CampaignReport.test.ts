@@ -36,7 +36,7 @@ function reportSnapshot(): CampaignLifecycleSnapshotV1 {
       highestSurvivalWave: 7, militaryLosses: 0.042,
       modeMultiplier: 1.35,
       outcomeMultiplier: 1.25, masteryXp: 640,
-      commanderXp: 480, score: 2_000,
+      commanderXp: 480, creditsEarned: 0, score: 2_000,
     },
   };
 }
@@ -74,7 +74,7 @@ describe('campaign report', () => {
     expect(projection.progress).toBeLessThanOrEqual(1);
   });
 
-  it('renders XP progression and all campaign metrics safely without currency', () => {
+  it('renders XP progression, mode-specific Credits and all campaign metrics safely', () => {
     const html = renderCampaignReportHtmlV1({
       snapshot: reportSnapshot(),
       country: { name: '<script>Bad</script>', shortName: 'ZZ', sigil: 'Z', cssColor: '#123abc' },
@@ -98,7 +98,21 @@ describe('campaign report', () => {
     expect(html).toContain('data-campaign-report-action="main-menu"');
     expect(html).toContain('&lt;script&gt;Bad&lt;/script&gt;');
     expect(html).not.toContain('<script>Bad</script>');
-    expect(html).not.toMatch(/Command Credits|\bCC\b|purchase|price/i);
+    expect(html).toContain('COMMAND CREDITS');
+    expect(html).toContain('Survival awards XP and Mastery, but no Credits');
+    expect(html).not.toMatch(/purchase|price/i);
+  });
+
+  it('uses the account empire flag without changing the played nation report', () => {
+    const common = {
+      snapshot: reportSnapshot(),
+      country: { name: 'Greenland', shortName: 'Greenland', sigil: 'GL' },
+      masteryBeforeSettlement: { xp: 0, level: 0 },
+    };
+    const greenlandFlag = renderCampaignReportHtmlV1({ ...common, flagCountryId: 'grl' });
+    const japanFlag = renderCampaignReportHtmlV1({ ...common, flagCountryId: 'jpn' });
+    expect(japanFlag).not.toBe(greenlandFlag);
+    expect(japanFlag).toContain('<strong>Greenland</strong>');
   });
 
   it('shows earned End Campaign rewards as saved exactly once', () => {
@@ -155,8 +169,8 @@ describe('campaign report', () => {
       masteryBeforeSettlement: { xp: 500, level: 3 },
       commanderBeforeSettlement: { xp: 700, level: 4, talentPointsAvailable: 2 },
     });
-    expect(html).toContain('Alternative Universe grants no Nation Mastery XP, APEX XP or nation unlocks.');
-    expect(html).not.toMatch(/Command Credits|\bCC\b/);
+    expect(html).toContain('Alternative Universe grants no Nation Mastery XP, APEX XP, Credits or nation unlocks.');
+    expect(html).toContain('COMMAND CREDITS');
     expect(html).not.toContain('TIMELINE INTELLIGENCE SAVED');
   });
 
@@ -164,6 +178,7 @@ describe('campaign report', () => {
     const snapshot = reportSnapshot();
     snapshot.mode = 'standard-2026';
     snapshot.reward.mode = 'standard-2026';
+    snapshot.reward.creditsEarned = 18;
     const html = renderCampaignReportHtmlV1({
       snapshot,
       country: { name: 'Greenland', sigil: 'GL' },
@@ -177,6 +192,8 @@ describe('campaign report', () => {
     expect(html).toContain('2 NATIONS ADDED');
     expect(html).toContain('Iceland');
     expect(html).toContain('UNLOCKED · READY IN ALL MODES');
-    expect(html).not.toMatch(/Command Credits|\bCC\b|price|purchase/i);
+    expect(html).toContain('COMMAND CREDITS');
+    expect(html).toContain('+18');
+    expect(html).not.toMatch(/price|purchase/i);
   });
 });

@@ -12,7 +12,6 @@ import { createFinancePlansV2, processFinanceMilitaryV2 } from './economy';
 import {
   invalidateTerritoryIndexV2,
   selectNationalEconomyV2,
-  selectNationalIqViewV2,
   selectRecruitmentBaseManpowerV2,
   selectRecruitmentTrainingPipelineV2,
   selectTerritoriesOfV2,
@@ -29,7 +28,6 @@ import {
   INTERNAL_NAVAL_TRANSFER_WEEKLY_TREASURY_SHARE_MAX_V2,
   internalArmyTransferLogisticsTermsV2,
   internalNavalTransferWillingnessV2,
-  logisticsThroughputShareV2,
   redistributeArmiesV2,
   resolveBattlePulseV2,
 } from './war';
@@ -205,10 +203,12 @@ describe('Greenland to Africa post-conquest replenishment', () => {
     expect(first.recruited).toBeGreaterThan(0);
     expect(second.recruited).toBeGreaterThan(0);
     expect(first.trained + second.trained).toBeGreaterThan(0);
-    expect(week13.readiness).toBeGreaterThan(opening.readiness + 0.08);
+    // The fixed one-percent peace curve remains visibly material even while
+    // the integrating beachhead expands the denominator beneath it.
+    expect(week13.readiness).toBeGreaterThan(opening.readiness + 0.075);
     expect(week26.readiness).toBeGreaterThan(week13.readiness + 0.015);
     expect(week26.home).toBeGreaterThan(opening.home + 0.04);
-    expect(week26.beachhead).toBeGreaterThan(opening.beachhead + 0.15);
+    expect(week26.beachhead).toBeGreaterThan(opening.beachhead + 0.12);
 
     // This remains a real integration and finance simulation. Local capacity
     // expands while recruitment and reserve training stay inside real funding.
@@ -245,25 +245,18 @@ describe('Greenland to Africa post-conquest replenishment', () => {
     expect(quote.throughputMultiplier).toBeGreaterThanOrEqual(0.10);
     expect(quote.throughputMultiplier).toBeLessThan(0.75);
     expect(quote.costPerMillion).toBeGreaterThan(0);
-    // This was the exact stall: a poor post-war empire had zero willingness
-    // for ordinary ocean balancing even though the new bridgehead was exposed.
+    // Cash and distance no longer create a hidden willingness gate.
     expect(internalNavalTransferWillingnessV2(
       quote.distanceKm, treasuryWeeks, false,
-    )).toBe(0);
+    )).toBe(1);
     expect(internalNavalTransferWillingnessV2(
       quote.distanceKm, treasuryWeeks, true,
-    )).toBe(0.75);
+    )).toBe(1);
 
     // Prove the physical path independently from local post-conquest
     // recruitment. This is the exact redistribution phase that used to stall.
-    const manpowerBeforeRoute = selectTerritoriesOfV2(state, GREENLAND)
-      .reduce((sum, territory) => sum + territory.army.manpower, 0);
     const treasuryBeforeRoute = greenland.treasury;
-    const routeCapacity = manpowerBeforeRoute * logisticsThroughputShareV2(
-      manpowerBeforeRoute,
-      greenland.research.effectLevels.supply,
-      selectNationalIqViewV2(state, WORLD_CONTENT_V2, GREENLAND).logisticsMultiplier,
-    ) * quote.throughputMultiplier * 0.75;
+    const routeCapacity = state.territories[GREENLAND_TERRITORY]!.army.capacity * 0.04;
     const openingMoves = redistributeArmiesV2(state, WORLD_CONTENT_V2)
       .filter((movement) => movement.playerId === GREENLAND);
     const openingMoved = openingMoves.reduce((sum, movement) => sum + movement.manpower, 0);

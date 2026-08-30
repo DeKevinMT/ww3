@@ -5,6 +5,7 @@ import {
   CAMPAIGN_FIRST_GATEWAY_BREACH_TICKS_V2,
   antarcticGatewayTerritoryIdV2,
   deterministicAntarcticGatewayOrderV2,
+  deterministicSurvivalAntarcticGatewayOrderV2,
   isWorldConnectionOpenV2,
   processAntarcticGatewayBreachesV2,
   prepareAntarcticGatewayBreachesV2,
@@ -63,7 +64,7 @@ describe('gradual Antarctic gateway breaches', () => {
   it('starts Survival with three closed routes in one deterministic seeded order', () => {
     const engine = survival(80_001);
     expect(engine.state.polarEndgame.gatewayBreachOrder)
-      .toEqual(deterministicAntarcticGatewayOrderV2(80_001));
+      .toEqual(deterministicSurvivalAntarcticGatewayOrderV2(80_001));
     expect(new Set(engine.state.polarEndgame.gatewayBreachOrder))
       .toEqual(new Set(ANTARCTIC_GATEWAY_IDS_V2));
     expect(Object.values(engine.state.polarEndgame.gatewayBreaches)
@@ -83,6 +84,47 @@ describe('gradual Antarctic gateway breaches', () => {
     expect(reloaded.state.polarEndgame.gatewayBreaches)
       .toEqual(engine.state.polarEndgame.gatewayBreaches);
     expect(reloaded.canonicalHash()).toBe(engine.canonicalHash());
+  });
+
+  it('weights roughly seven in ten Survival openings toward New Zealand without forcing it', () => {
+    const sampleSize = 10_000;
+    const firstGateways = Array.from({ length: sampleSize }, (_, seed) => (
+      deterministicSurvivalAntarcticGatewayOrderV2(seed + 1)[0]!
+    ));
+    const newZealandShare = firstGateways.filter((gatewayId) => gatewayId === 'ross-entry').length
+      / sampleSize;
+
+    expect(newZealandShare).toBeGreaterThanOrEqual(0.65);
+    expect(newZealandShare).toBeLessThanOrEqual(0.75);
+    expect(new Set(firstGateways)).toEqual(new Set(ANTARCTIC_GATEWAY_IDS_V2));
+    expect(deterministicSurvivalAntarcticGatewayOrderV2(81_004))
+      .toEqual(deterministicSurvivalAntarcticGatewayOrderV2(81_004));
+  });
+
+  it('keeps an already-authored legacy Survival route stable across reconnect', () => {
+    const seed = Array.from({ length: 10_000 }, (_, index) => index + 1).find((candidate) => (
+      deterministicAntarcticGatewayOrderV2(candidate).join('|')
+        !== deterministicSurvivalAntarcticGatewayOrderV2(candidate).join('|')
+    ))!;
+    const engine = survival(seed);
+    const legacyOrder = deterministicAntarcticGatewayOrderV2(seed);
+    engine.state.polarEndgame.gatewayBreachOrder = legacyOrder;
+    for (const gatewayId of ANTARCTIC_GATEWAY_IDS_V2) {
+      engine.state.polarEndgame.gatewayBreaches[gatewayId] = {
+        gatewayId,
+        status: gatewayId === legacyOrder[0] ? 'breaching' : 'sealed',
+        breachStartedTick: gatewayId === legacyOrder[0] ? engine.state.tick : null,
+        opensTick: gatewayId === legacyOrder[0]
+          ? engine.state.tick + 6 : null,
+        openedTick: null,
+      };
+    }
+
+    const reloaded = WorldEngineV2.fromSave(engine.save(), engine.content);
+    expect(reloaded.state.polarEndgame.gatewayBreachOrder).toEqual(legacyOrder);
+    expect(reloaded.state.polarEndgame.gatewayBreaches)
+      .toEqual(engine.state.polarEndgame.gatewayBreaches);
+    assertInvariantsV2(reloaded.state, reloaded.content);
   });
 
   it('uses more than one permutation across seeds and opens monotonically one by one', () => {

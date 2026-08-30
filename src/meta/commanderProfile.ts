@@ -8,6 +8,10 @@ import {
 export const COMMANDER_PROFILE_SCHEMA_VERSION = 1 as const;
 export const STARTER_COUNTRY_ID = 'grl' as const;
 export const STARTER_COUNTRY_POOL_SIZE = 1;
+/** Campaign seed money; a fresh account must earn the remainder of its first Survival entry. */
+export const STARTING_COMMAND_CREDITS_V1 = 50;
+/** Charged once per local commander seat when a new Survival timeline actually launches. */
+export const SURVIVAL_DEPLOYMENT_CREDIT_COST_V1 = 100;
 export const MAX_COUNTRY_UPGRADE_LEVEL = 5;
 export const MAX_COUNTRY_MASTERY_LEVEL = 150;
 /** Authored milestones end here; every talent remains repeatable afterwards. */
@@ -49,11 +53,26 @@ export type CommanderTalentId =
   | 'treasury-reserve'
   | 'civil-defense'
   | 'doctrine-command'
-  | 'drill-instructors';
-export type CommanderDoctrineV1 = 'vanguard' | 'bastion' | 'rapid-response';
+  | 'drill-instructors'
+  | 'combat-recovery'
+  | 'theater-network';
+export type CommanderDoctrineV1 = 'vanguard' | 'bastion' | 'rapid-response' | 'force-multiplier';
 export type CampaignOutcomeV1 = 'victory' | 'defeat' | 'surrender';
+/** Durable one-time Home onboarding unlocked only by settling a Campaign timeline. */
+export type CampaignProgressionTutorialStateV1 = 'locked' | 'ready' | 'seen';
 export type CommanderTransactionKindV1 = 'starter-grant' | 'country-unlock'
-  | 'country-upgrade' | 'commander-talent' | 'campaign-reward';
+  | 'country-upgrade' | 'commander-talent' | 'campaign-reward' | 'survival-deployment'
+  | 'survival-deployment-refund';
+
+/**
+ * Account identity deliberately uses a discriminated object instead of a bare
+ * id. A later custom-flag editor can add another source without rewriting the
+ * profile, lobby or renderer contracts introduced for country flags.
+ */
+export type EmpireFlagIdentityV1 = Readonly<{
+  kind: 'country';
+  countryId: string;
+}>;
 
 export interface CountryUpgradeLevelsV1 {
   mobilization: number;
@@ -129,7 +148,7 @@ export interface ResolvedCountryLoadoutV1 {
   openingFoodWeeksBonus: number;
 }
 
-export type CommanderTalentBranchV1 = 'lancer' | 'aegis' | 'nexus';
+export type CommanderTalentBranchV1 = 'offensive' | 'defensive' | 'shield-core' | 'military-command';
 
 export interface CommanderTalentPrerequisiteV1 {
   talentId: CommanderTalentId;
@@ -145,6 +164,8 @@ export interface CommanderTalentDefinitionV1 {
   description: string;
   perRank: string;
   prerequisites: readonly Readonly<CommanderTalentPrerequisiteV1>[];
+  /** Small cross-branch gate that makes deep specialization a deliberate build. */
+  outsideBranchPoints: number;
   milestones: readonly Readonly<{ rank: number; label: string; description: string }>[];
   synergy: string;
   /** Last authored milestone, not a progression cap. */
@@ -170,6 +191,11 @@ export interface CommanderTalentAllocationQuoteV1 {
     rank: number;
     label: string;
   }>;
+  unmetBreadth?: Readonly<{
+    current: number;
+    required: number;
+    scope: 'outside-branch' | 'other-nodes';
+  }>;
 }
 
 /**
@@ -179,28 +205,48 @@ export interface CommanderTalentAllocationQuoteV1 {
  * the force that is actually spawned.
  */
 export interface ResolvedCommanderTalentEffectsV1 {
-  activeManpower: number;
-  capacity: number;
-  trainedReserves: number;
-  attack: number;
-  defense: number;
-  supplyStock: number;
-  empireRecruitmentBonus: number;
-  empireReserveTrainingBonus: number;
+  /** Fraction added to the shield's maximum Energy pool. */
+  maxIntegrityBonus: number;
+  /** Fraction of Max Energy available as protected Reserve Energy. */
+  rechargeBufferBonus: number;
+  /** Fraction added to peacetime shield recharge speed. */
+  rechargeRateBonus: number;
+  /** Fraction added to the existing national army's Attack while the shield is online. */
+  armyAttackBonus: number;
+  /** Fraction added to APEX's bounded, non-personnel Pulse Attack. */
+  pulseAttackBonus: number;
+  /** Share of Pulse power retained instead of being lost when the network splits across fronts. */
+  pulseProjectionRetention: number;
+  /** Extra Pulse multiplier for each stored offensive charge (zero, one or two). */
+  pulseChargeBonusPerStep: number;
+  /** Extra damage blocked by each point of APEX Energy. */
+  interceptEfficiencyBonus: number;
+  /** Share of Energy spent intercepting a hit that is banked as offline Reserve Energy. */
+  impactRecoveryShare: number;
+  /** Extra Pulse Attack applied only while APEX supports the defending side. */
+  defensivePulseBonus: number;
+  /** Fraction added to the existing national army's Defense while the shield is online. */
+  armyDefenseBonus: number;
+  /** Retired compatibility field; direct casualty reduction is always zero. */
+  armyCasualtyReduction: number;
+  /** Fraction added to national army recovery during peace while the shield is online. */
+  armyPeaceRecoveryBonus: number;
 }
 
-/** One projected APEX neural dome. Legacy force fields carry shield state. */
+/** One account-wide APEX neural shield. */
 export const BASE_COMMANDER_FORCE_V1 = Object.freeze({
-  activeManpower: 0.0008,
-  /** Maximum Shield Integrity; every fresh projection starts fully charged. */
-  capacity: 0.0008,
-  /** Recharge buffer; it never reduces active Shield Integrity. */
-  trainedReserves: 0.00008,
-  attack: 125,
-  defense: 125,
+  /** Empire-wide shield Energy; every fresh campaign starts fully charged. */
+  integrity: 0.001,
+  maxIntegrity: 0.001,
+  /** Protected energy that can refill the same shield. */
+  rechargeBuffer: 0.00004,
+  /** Bounded battle pulse; it never becomes personnel or survives without a national Army. */
+  pulseAttack: 0.001,
+  attackMultiplier: 1.12,
+  defenseMultiplier: 1.07,
   treasury: 0,
   annualOutput: 0.015,
-  supplyStock: 0.010,
+  energyStock: 0.010,
 });
 
 /** Account levels improve APEX operations without eclipsing a weak host economy. */
@@ -217,6 +263,7 @@ export interface CommanderTransactionV1 {
   track?: CountryUpgradeTrack;
   talentId?: CommanderTalentId;
   campaignId?: string;
+  deploymentId?: string;
 }
 
 export interface CommanderProfileV1 {
@@ -226,8 +273,10 @@ export interface CommanderProfileV1 {
   displayName: string;
   /** Account-wide identity applied when a new solo campaign starts. */
   empireName: string;
-  /** @deprecated Legacy schema field. Always normalized to zero and never shown or spent. */
-  commandCredits: 0;
+  /** Account-wide flag projected across the player's empire in every mode. */
+  empireFlag: EmpireFlagIdentityV1;
+  /** Account currency used only to deploy a new Survival timeline. */
+  commandCredits: number;
   commanderXp: number;
   commanderLevel: number;
   commanderTalents: Record<CommanderTalentId, number>;
@@ -244,12 +293,14 @@ export interface CommanderProfileV1 {
   countryMastery: Record<string, CountryMasteryV1>;
   /** Account-wide gate: the guided APEX Campaign opening has been experienced once. */
   campaignTutorialCompleted: boolean;
+  /** Separate post-run guide for spending APEX Talent and Nation Mastery points. */
+  campaignProgressionTutorialState: CampaignProgressionTutorialStateV1;
   completedCampaigns: number;
   victories: number;
   defeats: number;
   surrenders: number;
-  /** @deprecated Legacy schema field. Always normalized to zero. */
-  lifetimeCreditsEarned: 0;
+  /** Campaign-earned Credits; the opening grant is intentionally excluded. */
+  lifetimeCreditsEarned: number;
   claimedCampaignIds: string[];
   transactions: CommanderTransactionV1[];
   createdAt: number;
@@ -292,7 +343,27 @@ export interface CampaignRewardV1 extends CampaignRewardInputV1 {
   outcomeMultiplier: number;
   masteryXp: number;
   commanderXp: number;
+  /** Campaign-only deployment currency. Survival and Alternative Universe always award zero. */
+  creditsEarned: number;
   score: number;
+}
+
+export interface SurvivalDeploymentCreditQuoteV1 {
+  cost: number;
+  balance: number;
+  balanceAfter: number;
+  affordable: boolean;
+}
+
+export interface SurvivalDeploymentCreditSpendResultV1 extends ProgressionActionResultV1 {
+  /** False for an idempotent retry of an already-paid deployment id. */
+  charged: boolean;
+  quote: SurvivalDeploymentCreditQuoteV1;
+}
+
+export interface SurvivalDeploymentCreditRefundResultV1 extends ProgressionActionResultV1 {
+  /** False when this deployment was already refunded or was never charged. */
+  refunded: boolean;
 }
 
 export interface ProgressionActionResultV1 {
@@ -319,6 +390,8 @@ export const COMMANDER_TALENT_IDS_V1: readonly CommanderTalentId[] = [
   'civil-defense',
   'doctrine-command',
   'drill-instructors',
+  'combat-recovery',
+  'theater-network',
 ] as const;
 
 export const COUNTRY_MASTERY_TRACK_IDS_V1: readonly CountryMasteryTrackV1[] = [
@@ -335,24 +408,31 @@ export const COUNTRY_MASTERY_TRACK_IDS_V1: readonly CountryMasteryTrackV1[] = [
 export const COMMANDER_DOCTRINES_V1: readonly CommanderDoctrineDefinitionV1[] = [
   {
     id: 'vanguard',
-    label: 'Singularity Pulse',
-    role: 'LANCER CAPSTONE PROTOCOL',
-    requirement: { talentId: 'elite-vanguard', rank: 5, label: 'Lancer Crown Rank 5' },
-    description: 'Every third APEX-supported offensive battle gains +60% dome Attack.',
+    label: 'Overdrive',
+    role: 'PULSE WARFARE CAPSTONE',
+    requirement: { talentId: 'elite-vanguard', rank: 5, label: 'Overdrive Core Rank 5' },
+    description: 'Every third supported attack doubles APEX Pulse Attack only, then spends 2% Max Energy. Army Attack never changes.',
   },
   {
     id: 'bastion',
-    label: 'Mirror Matrix',
-    role: 'AEGIS CAPSTONE PROTOCOL',
-    requirement: { talentId: 'doctrine-command', rank: 5, label: 'Aegis Crown Rank 5' },
-    description: 'Returns 20% of damage actually intercepted by the dome as a bounded counterpulse.',
+    label: 'Countermeasure',
+    role: 'REACTIVE MATRIX CAPSTONE',
+    requirement: { talentId: 'doctrine-command', rank: 5, label: 'Countermeasure Core Rank 5' },
+    description: 'Returns 15% of damage actually intercepted by APEX, within the hostile Army’s remaining 10% hit budget.',
   },
   {
     id: 'rapid-response',
-    label: 'Twin Projection',
-    role: 'NEXUS CAPSTONE PROTOCOL',
-    requirement: { talentId: 'mobile-logistics', rank: 5, label: 'Nexus Crown Rank 5' },
-    description: 'Supports two distinct legal fronts at 60% projection each, sharing one Shield Integrity and energy pool; both projections recombine when one front ends.',
+    label: 'Emergency Reboot',
+    role: 'ENERGY CORE CAPSTONE',
+    requirement: { talentId: 'frugal-quartermaster', rank: 5, label: 'Reboot Core Rank 5' },
+    description: 'Once per campaign, reaching 0% Energy immediately restores 20% after the battle. An Army at zero still loses.',
+  },
+  {
+    id: 'force-multiplier',
+    label: 'Theater Mesh',
+    role: 'EMPIRE WARFARE CAPSTONE',
+    requirement: { talentId: 'theater-network', rank: 5, label: 'Theater Coordination Rank 5' },
+    description: 'Each additional front adds 20% to the shared national Army buff pool, capped at 140%, then divides it across all fronts.',
   },
 ] as const;
 
@@ -369,124 +449,148 @@ export function commanderDoctrineRequirementMetV1(
 
 export const COMMANDER_TALENTS_V1: readonly CommanderTalentDefinitionV1[] = [
   {
-    id: 'science-corps', branch: 'lancer', tier: 1, label: 'Pulse Calibration',
-    description: 'Amplifies the neural dome\'s offensive pulse.',
-    perRank: '+0.40 Attack per effective rank; the exact next-rank gain follows the live curve.',
-    prerequisites: [],
+    id: 'science-corps', branch: 'offensive', tier: 1, label: 'Pulse Output',
+    description: 'Raises APEX’s own Pulse Attack.',
+    perRank: '+2% Pulse Attack per effective rank. Shared Pulse ceiling: +200%.',
+    prerequisites: [], outsideBranchPoints: 0,
     milestones: [
-      { rank: 5, label: 'Pulse Harmonics', description: '+0.74 Attack total.' },
-      { rank: 10, label: 'Focused Pulse', description: '+2.59 Attack total.' },
-      { rank: 15, label: 'Perfect Frequency', description: '+7.20 Attack total.' },
+      { rank: 5, label: 'Pulse I', description: '+3.72% Pulse Attack.' },
+      { rank: 10, label: 'Pulse II', description: '+12.97% Pulse Attack.' },
+      { rank: 15, label: 'Pulse III', description: '+36% Pulse Attack.' },
     ],
-    synergy: 'Feeds Targeting Lattice and the Lancer Crown.', coreRank: COMMANDER_TALENT_CORE_RANK,
+    synergy: 'Opens Front Projection.', coreRank: COMMANDER_TALENT_CORE_RANK,
   },
   {
-    id: 'treasury-reserve', branch: 'lancer', tier: 2, label: 'Targeting Lattice',
-    description: 'Tightens hostile-signal tracking for harder dome strikes.',
-    perRank: '+0.35 Attack per effective rank; the exact next-rank gain follows the live curve.',
-    prerequisites: [{ talentId: 'science-corps', rank: 3 }],
+    id: 'treasury-reserve', branch: 'offensive', tier: 2, label: 'Front Projection',
+    description: 'Preserves more Pulse power when APEX supports several fronts at once.',
+    perRank: '+0.35% of otherwise-lost multi-front Pulse power retained per effective rank.',
+    prerequisites: [{ talentId: 'science-corps', rank: 3 }], outsideBranchPoints: 2,
     milestones: [
-      { rank: 5, label: 'Predictive Lock', description: '+0.65 Attack total.' },
-      { rank: 10, label: 'Threat Solution', description: '+2.27 Attack total.' },
-      { rank: 15, label: 'Zero-Lag Targeting', description: '+6.30 Attack total.' },
+      { rank: 5, label: 'Projection I', description: 'Retains 0.65% of split Pulse power.' },
+      { rank: 10, label: 'Projection II', description: 'Retains 2.27% of split Pulse power.' },
+      { rank: 15, label: 'Projection III', description: 'Retains 6.30% of split Pulse power.' },
     ],
-    synergy: 'Requires Pulse Calibration Rank 3.', coreRank: COMMANDER_TALENT_CORE_RANK,
+    synergy: 'Requires Pulse Output Rank 3 and 2 points outside Pulse Warfare.', coreRank: COMMANDER_TALENT_CORE_RANK,
   },
   {
-    id: 'elite-vanguard', branch: 'lancer', tier: 3, label: 'Lancer Crown',
-    description: 'Hardens the live dome while pushing its Attack ceiling.',
-    perRank: '+0.625% Shield Integrity, +0.625% Max Integrity and +0.60 Attack per effective rank, plus authored integrity breakthroughs.',
-    prerequisites: [{ talentId: 'treasury-reserve', rank: 3 }],
+    id: 'elite-vanguard', branch: 'offensive', tier: 3, label: 'Pulse Charge',
+    description: 'Builds stronger Pulse charge across consecutive supported attacks, then unlocks Overdrive.',
+    perRank: '+0.50% Pulse Attack per stored charge and effective rank. APEX stores up to two charges.',
+    prerequisites: [{ talentId: 'treasury-reserve', rank: 3 }], outsideBranchPoints: 4,
     milestones: [
-      { rank: 5, label: 'Lancer Protocol', description: '+2.41% Shield Integrity · +2.41% Max Integrity · +1.12 Attack total · unlock Singularity Pulse: every third supported offensive battle gains +60% dome Attack.' },
-      { rank: 10, label: 'Lancer Resonance', description: '+7.80% Shield Integrity · +7.80% Max Integrity · +3.89 Attack total.' },
-      { rank: 15, label: 'Lancer Singularity', description: '+18.75% Shield Integrity · +18.75% Max Integrity · +10.80 Attack total.' },
+      { rank: 5, label: 'Overdrive', description: '+0.93% Pulse per stored charge · unlock: every third supported attack doubles Pulse only and spends 2% Max Energy.' },
+      { rank: 10, label: 'Charge II', description: '+3.24% Pulse per stored charge.' },
+      { rank: 15, label: 'Charge III', description: '+9% Pulse per stored charge.' },
     ],
-    synergy: 'Branch capstone; unlocks Singularity Pulse at Rank 5.', coreRank: COMMANDER_TALENT_CORE_RANK,
+    synergy: 'Unlocks Overdrive at Rank 5.', coreRank: COMMANDER_TALENT_CORE_RANK,
   },
   {
-    id: 'volunteer-brigade', branch: 'aegis', tier: 1, label: 'Integrity Lattice',
-    description: 'Expands the dome\'s maximum damage capacity.',
-    perRank: '+2.50% Max Integrity per effective rank, plus authored integrity breakthroughs.',
-    prerequisites: [],
+    id: 'volunteer-brigade', branch: 'defensive', tier: 1, label: 'Energy Efficiency',
+    description: 'Makes every point of APEX Energy stop more incoming damage.',
+    perRank: '+0.50% damage blocked per Energy per effective rank. The 20% Max Energy hit limit stays unchanged.',
+    prerequisites: [], outsideBranchPoints: 0,
     milestones: [
-      { rank: 5, label: 'Layered Shell', description: '+8.40% Max Integrity total.' },
-      { rank: 10, label: 'Deep Lattice', description: '+27.47% Max Integrity total.' },
-      { rank: 15, label: 'Boundless Shell', description: '+67.50% Max Integrity total.' },
+      { rank: 5, label: 'Efficiency I', description: '+0.93% damage blocked per Energy.' },
+      { rank: 10, label: 'Efficiency II', description: '+3.24% damage blocked per Energy.' },
+      { rank: 15, label: 'Efficiency III', description: '+9% damage blocked per Energy.' },
     ],
-    synergy: 'Feeds Interception Mesh.', coreRank: COMMANDER_TALENT_CORE_RANK,
+    synergy: 'Opens Impact Recovery.', coreRank: COMMANDER_TALENT_CORE_RANK,
   },
   {
-    id: 'civil-defense', branch: 'aegis', tier: 2, label: 'Interception Mesh',
-    description: 'Raises Defense and restores charge between hostile impacts.',
-    perRank: '+0.60 Defense and +5% Recharge per effective rank.',
-    prerequisites: [{ talentId: 'volunteer-brigade', rank: 3 }],
+    id: 'civil-defense', branch: 'defensive', tier: 2, label: 'Impact Recovery',
+    description: 'Banks part of the Energy spent blocking a hit as offline Reserve Energy for later recovery.',
+    perRank: '+0.35% of spent Energy recovered to Reserve per effective rank.',
+    prerequisites: [{ talentId: 'volunteer-brigade', rank: 3 }], outsideBranchPoints: 2,
     milestones: [
-      { rank: 5, label: 'Crossfire Screen', description: '+1.12 Defense · +9.30% Recharge total.' },
-      { rank: 10, label: 'Dense Interception', description: '+3.89 Defense · +32.43% Recharge total.' },
-      { rank: 15, label: 'Perfect Screen', description: '+10.80 Defense · +90% Recharge total.' },
+      { rank: 5, label: 'Recovery I', description: 'Recovers 0.65% of spent Energy to Reserve.' },
+      { rank: 10, label: 'Recovery II', description: 'Recovers 2.27% of spent Energy to Reserve.' },
+      { rank: 15, label: 'Recovery III', description: 'Recovers 6.30% of spent Energy to Reserve.' },
     ],
-    synergy: 'Requires Integrity Lattice Rank 3.', coreRank: COMMANDER_TALENT_CORE_RANK,
+    synergy: 'Requires Energy Efficiency Rank 3 and 2 points outside Reactive Matrix.', coreRank: COMMANDER_TALENT_CORE_RANK,
   },
   {
-    id: 'reserve-cadre', branch: 'aegis', tier: 3, label: 'Emergency Reboot',
-    description: 'Stores a protected recharge buffer for impact recovery.',
-    perRank: '+1% Max Integrity and +1% Recharge Buffer per effective rank, plus authored reboot breakthroughs.',
-    prerequisites: [{ talentId: 'civil-defense', rank: 3 }],
+    id: 'doctrine-command', branch: 'defensive', tier: 3, label: 'Defense Pulse',
+    description: 'Raises APEX Pulse only while defending, then unlocks bounded Countermeasure reflection.',
+    perRank: '+1% defensive Pulse Attack per effective rank.',
+    prerequisites: [{ talentId: 'civil-defense', rank: 3 }], outsideBranchPoints: 4,
     milestones: [
-      { rank: 5, label: 'Reboot Kernel', description: '+1.86% Max Integrity · +1.86% Recharge Buffer total · recover 10% of impact loss, up to 2.5% Max Integrity per battle.' },
-      { rank: 10, label: 'Twin Kernel', description: '+8.99% Max Integrity · +8.99% Recharge Buffer total.' },
-      { rank: 15, label: 'Persistent Kernel', description: '+24.25% Max Integrity · +24.25% Recharge Buffer total.' },
+      { rank: 5, label: 'Countermeasure', description: '+1.86% defensive Pulse · unlock: return 15% of intercepted damage inside the hostile 10% hit budget.' },
+      { rank: 10, label: 'Defense Pulse II', description: '+6.49% defensive Pulse.' },
+      { rank: 15, label: 'Defense Pulse III', description: '+18% defensive Pulse.' },
     ],
-    synergy: 'Feeds the Aegis Crown.', coreRank: COMMANDER_TALENT_CORE_RANK,
+    synergy: 'Unlocks Countermeasure at Rank 5.', coreRank: COMMANDER_TALENT_CORE_RANK,
   },
   {
-    id: 'doctrine-command', branch: 'aegis', tier: 4, label: 'Aegis Crown',
-    description: 'Concentrates the dome on Defense and peak interception.',
-    perRank: '+0.35 Defense per effective rank; the exact next-rank gain follows the live curve.',
-    prerequisites: [{ talentId: 'reserve-cadre', rank: 3 }],
+    id: 'reserve-cadre', branch: 'shield-core', tier: 1, label: 'Max Energy',
+    description: 'Expands the shared Energy pool.',
+    perRank: '+2% Max Energy per effective rank; capped at +150%.',
+    prerequisites: [], outsideBranchPoints: 0,
     milestones: [
-      { rank: 5, label: 'Aegis Protocol', description: '+0.65 Defense total · unlock Mirror Matrix: return 20% of intercepted damage as a bounded counterpulse.' },
-      { rank: 10, label: 'Aegis Resonance', description: '+2.27 Defense total.' },
-      { rank: 15, label: 'Aegis Singularity', description: '+6.30 Defense total.' },
+      { rank: 5, label: 'Energy I', description: '+3.72% Max Energy.' },
+      { rank: 10, label: 'Energy II', description: '+12.97% Max Energy.' },
+      { rank: 15, label: 'Energy III', description: '+36% Max Energy.' },
     ],
-    synergy: 'Branch capstone; unlocks Mirror Matrix at Rank 5.', coreRank: COMMANDER_TALENT_CORE_RANK,
+    synergy: 'Opens Shield Recharge.', coreRank: COMMANDER_TALENT_CORE_RANK,
   },
   {
-    id: 'drill-instructors', branch: 'nexus', tier: 1, label: 'Projection Relay',
-    description: 'Stabilizes remote dome projection and its recharge link.',
-    perRank: '+0.50% Shield Integrity, +1% Max Integrity, +0.50% Recharge Buffer and +2.50% Recharge per effective rank.',
-    prerequisites: [],
+    id: 'drill-instructors', branch: 'shield-core', tier: 2, label: 'Energy Recharge',
+    description: 'Recharges Energy faster between battles.',
+    perRank: '+2% Energy Recharge per effective rank; capped at +120%.',
+    prerequisites: [{ talentId: 'reserve-cadre', rank: 3 }], outsideBranchPoints: 2,
     milestones: [
-      { rank: 3, label: 'Distributed Projection', description: '+0.45% Shield Integrity · +0.91% Max Integrity · +0.45% Recharge Buffer · +2.27% Recharge total · recharge from any controlled territory and transfer charge 75% faster.' },
-      { rank: 10, label: 'Wide Relay', description: '+3.24% Shield Integrity · +6.49% Max Integrity · +3.24% Recharge Buffer · +16.22% Recharge total.' },
-      { rank: 15, label: 'Global Relay', description: '+9% Shield Integrity · +18% Max Integrity · +9% Recharge Buffer · +45% Recharge total.' },
+      { rank: 5, label: 'Recharge I', description: '+3.72% Energy Recharge.' },
+      { rank: 10, label: 'Recharge II', description: '+12.97% Energy Recharge.' },
+      { rank: 15, label: 'Recharge III', description: '+36% Energy Recharge.' },
     ],
-    synergy: 'Feeds Closed Recharge Loop.', coreRank: COMMANDER_TALENT_CORE_RANK,
+    synergy: 'Requires Max Energy Rank 3 and 2 points outside Energy Core.', coreRank: COMMANDER_TALENT_CORE_RANK,
   },
   {
-    id: 'frugal-quartermaster', branch: 'nexus', tier: 2, label: 'Closed Recharge Loop',
-    description: 'Recycles field energy into Max Integrity, recharge buffer and uptime.',
-    perRank: '+0.75% Max Integrity, +0.75% Recharge Buffer and +6% Recharge per effective rank.',
-    prerequisites: [{ talentId: 'drill-instructors', rank: 3 }],
+    id: 'frugal-quartermaster', branch: 'shield-core', tier: 3, label: 'Reserve Energy',
+    description: 'Expands protected Reserve Energy, then unlocks one emergency restart.',
+    perRank: '+1% Reserve Energy per effective rank; capped at +60%.',
+    prerequisites: [{ talentId: 'drill-instructors', rank: 3 }], outsideBranchPoints: 4,
     milestones: [
-      { rank: 5, label: 'Failsafe Shift I', description: '+1.39% Max Integrity · +1.39% Recharge Buffer · +11.16% Recharge total · one emergency projection shift.' },
-      { rank: 10, label: 'Failsafe Shift II', description: '+4.86% Max Integrity · +4.86% Recharge Buffer · +38.92% Recharge total · two emergency projection shifts.' },
-      { rank: 15, label: 'Closed Field', description: '+13.50% Max Integrity · +13.50% Recharge Buffer · +108% Recharge total.' },
+      { rank: 5, label: 'Emergency Reboot', description: '+1.86% Reserve Energy · unlock: once per campaign, 0% Energy immediately restores to 20% after battle.' },
+      { rank: 10, label: 'Reserve II', description: '+6.49% Reserve Energy.' },
+      { rank: 15, label: 'Reserve III', description: '+18% Reserve Energy.' },
     ],
-    synergy: 'Requires Projection Relay Rank 3.', coreRank: COMMANDER_TALENT_CORE_RANK,
+    synergy: 'Unlocks Emergency Reboot at Rank 5.', coreRank: COMMANDER_TALENT_CORE_RANK,
   },
   {
-    id: 'mobile-logistics', branch: 'nexus', tier: 3, label: 'Nexus Crown',
-    description: 'Maximizes recharge uptime and unlocks a shared twin projection.',
-    perRank: '+10% Recharge per effective rank.',
-    prerequisites: [{ talentId: 'frugal-quartermaster', rank: 3 }],
+    id: 'mobile-logistics', branch: 'military-command', tier: 1, label: 'Army Attack',
+    description: 'Raises national Army Attack while APEX is online.',
+    perRank: '+0.55% Army Attack per effective rank. Shared ceiling: +35%.',
+    prerequisites: [], outsideBranchPoints: 0,
     milestones: [
-      { rank: 5, label: 'Nexus Protocol', description: '+18.59% Recharge total · unlock Twin Projection: two legal fronts at 60% projection each, sharing one Shield Integrity and energy pool.' },
-      { rank: 10, label: 'Nexus Resonance', description: '+64.87% Recharge total.' },
-      { rank: 15, label: 'Nexus Singularity', description: '+180% Recharge total.' },
+      { rank: 5, label: 'Attack I', description: '+1.02% Army Attack.' },
+      { rank: 10, label: 'Attack II', description: '+3.57% Army Attack.' },
+      { rank: 15, label: 'Attack III', description: '+9.90% Army Attack.' },
     ],
-    synergy: 'Branch capstone; unlocks Twin Projection at Rank 5.', coreRank: COMMANDER_TALENT_CORE_RANK,
+    synergy: 'Opens Army Defense.', coreRank: COMMANDER_TALENT_CORE_RANK,
+  },
+  {
+    id: 'combat-recovery', branch: 'military-command', tier: 2, label: 'Army Defense',
+    description: 'Raises national Army Defense while APEX is online.',
+    perRank: '+0.40% Army Defense per effective rank. Shared ceiling: +35%.',
+    prerequisites: [{ talentId: 'mobile-logistics', rank: 3 }], outsideBranchPoints: 2,
+    milestones: [
+      { rank: 5, label: 'Defense I', description: '+0.74% Army Defense.' },
+      { rank: 10, label: 'Defense II', description: '+2.59% Army Defense.' },
+      { rank: 15, label: 'Defense III', description: '+7.20% Army Defense.' },
+    ],
+    synergy: 'Requires Army Attack Rank 3 and 2 points outside Empire Warfare.', coreRank: COMMANDER_TALENT_CORE_RANK,
+  },
+  {
+    id: 'theater-network', branch: 'military-command', tier: 3, label: 'Peace Recovery',
+    description: 'Restores the national Army faster during peace, then unlocks multi-front Theater Mesh.',
+    perRank: '+1.25% peacetime Army recovery per effective rank. Shared ceiling: +75%.',
+    prerequisites: [{ talentId: 'combat-recovery', rank: 3 }], outsideBranchPoints: 4,
+    milestones: [
+      { rank: 5, label: 'Theater Mesh', description: '+2.32% peacetime Army recovery · unlock: +20% shared Army buff pool per extra front, capped at 140%, then divided.' },
+      { rank: 10, label: 'Recovery II', description: '+8.11% peacetime Army recovery.' },
+      { rank: 15, label: 'Recovery III', description: '+22.50% peacetime Army recovery.' },
+    ],
+    synergy: 'Unlocks Theater Mesh at Rank 5.', coreRank: COMMANDER_TALENT_CORE_RANK,
   },
 ] as const;
 
@@ -687,6 +791,73 @@ const commanderLevelEffectiveGrowthV1 = (level: number): number => {
   return 99 + 24 * Math.log1p((growth - 99) / 24);
 };
 
+const COMMANDER_SHIELD_CORE_LEVEL_V1 = 50;
+const COMMANDER_SHIELD_CORE_MULTIPLIER_V1 = 12;
+const COMMANDER_SHIELD_TAIL_LIMIT_MULTIPLIER_V1 = 120;
+const COMMANDER_PULSE_CORE_MULTIPLIER_V1 = 18;
+const COMMANDER_PULSE_TAIL_LIMIT_MULTIPLIER_V1 = 180;
+
+function commanderLevelConvexMultiplierV1(
+  level: number,
+  coreMultiplier: number,
+  tailLimitMultiplier: number,
+): number {
+  const safeLevel = Math.max(1, Math.min(
+    Number.MAX_SAFE_INTEGER,
+    Math.floor(finiteNonNegative(level, 1)),
+  ));
+  if (safeLevel <= COMMANDER_SHIELD_CORE_LEVEL_V1) {
+    const progress = (safeLevel - 1) / (COMMANDER_SHIELD_CORE_LEVEL_V1 - 1);
+    return Math.exp(Math.log(coreMultiplier) * progress * progress);
+  }
+  const softTail = Math.log1p(
+    (safeLevel - COMMANDER_SHIELD_CORE_LEVEL_V1) / COMMANDER_SHIELD_CORE_LEVEL_V1,
+  );
+  return coreMultiplier
+    + (tailLimitMultiplier - coreMultiplier) * softTail / (12 + softTail);
+}
+
+/**
+ * Account progression, never the selected nation, expands the APEX shield.
+ * Levels 2-50 follow a normalized convex exponential: the first upgrades are
+ * deliberately small for Greenland, while a veteran level-50 APEX reaches a
+ * useful 12x base pool beside a France-scale Army. Beyond the authored core an
+ * asymptotic logarithmic tail remains monotonic without risking runaway saves.
+ */
+export function commanderLevelMaxIntegrityBonusV1(level: number): number {
+  return roundForceValueV1(commanderLevelConvexMultiplierV1(
+    level,
+    COMMANDER_SHIELD_CORE_MULTIPLIER_V1,
+    COMMANDER_SHIELD_TAIL_LIMIT_MULTIPLIER_V1,
+  ) - 1);
+}
+
+/** Exact Max Energy used by menu previews and campaign initialization. */
+export function commanderMaxIntegrityV1(
+  level: number,
+  talents: Readonly<Partial<Record<CommanderTalentId, number>>>,
+): number {
+  const levelMultiplier = 1 + commanderLevelMaxIntegrityBonusV1(level);
+  const talentMultiplier = 1 + resolveCommanderTalentEffectsV1(talents).maxIntegrityBonus;
+  return roundForceValueV1(
+    BASE_COMMANDER_FORCE_V1.maxIntegrity * levelMultiplier * talentMultiplier,
+  );
+}
+
+/** Exact bounded battle pulse; it never creates manpower or holds territory. */
+export function commanderPulseAttackV1(
+  level: number,
+  talents: Readonly<Partial<Record<CommanderTalentId, number>>>,
+): number {
+  const levelMultiplier = commanderLevelConvexMultiplierV1(
+    level,
+    COMMANDER_PULSE_CORE_MULTIPLIER_V1,
+    COMMANDER_PULSE_TAIL_LIMIT_MULTIPLIER_V1,
+  );
+  const talentMultiplier = 1 + resolveCommanderTalentEffectsV1(talents).pulseAttackBonus;
+  return roundForceValueV1(BASE_COMMANDER_FORCE_V1.pulseAttack * levelMultiplier * talentMultiplier);
+}
+
 export function commanderTalentPointsSpentV1(profile: CommanderProfileV1): number {
   return COMMANDER_TALENT_IDS_V1.reduce((sum, id) => sum + (profile.commanderTalents[id] ?? 0), 0);
 }
@@ -752,6 +923,44 @@ export function commanderTalentAllocationQuoteV1(
       available: false,
       unmetPrerequisite,
       reason: `Requires ${prerequisite.label} Rank ${missing.rank} before ${definition.label}.`,
+    };
+  }
+  const outsideBranchPoints = COMMANDER_TALENT_IDS_V1.reduce((total, id) => {
+    const candidate = COMMANDER_TALENTS_V1.find((entry) => entry.id === id);
+    return total + (candidate?.branch !== definition.branch ? talents[id] ?? 0 : 0);
+  }, 0);
+  if (targetRank === 1 && outsideBranchPoints < definition.outsideBranchPoints) {
+    return {
+      talentId,
+      targetRank,
+      requiredLevel,
+      available: false,
+      unmetBreadth: {
+        current: outsideBranchPoints,
+        required: definition.outsideBranchPoints,
+        scope: 'outside-branch',
+      },
+      reason: `Invest ${definition.outsideBranchPoints} points outside ${definition.branch.replace('-', ' ')} first (${outsideBranchPoints}/${definition.outsideBranchPoints}).`,
+    };
+  }
+  const otherNodePoints = COMMANDER_TALENT_IDS_V1.reduce((total, id) => (
+    total + (id === talentId ? 0 : talents[id] ?? 0)
+  ), 0);
+  const otherNodePointsRequired = targetRank <= 3 ? 0
+    : targetRank <= 5 ? targetRank - 3
+      : Math.min(16, 2 + Math.ceil((targetRank - 5) / 3));
+  if (otherNodePoints < otherNodePointsRequired) {
+    return {
+      talentId,
+      targetRank,
+      requiredLevel,
+      available: false,
+      unmetBreadth: {
+        current: otherNodePoints,
+        required: otherNodePointsRequired,
+        scope: 'other-nodes',
+      },
+      reason: `Invest ${otherNodePointsRequired} total points in other nodes first (${otherNodePoints}/${otherNodePointsRequired}).`,
     };
   }
   if (profile.commanderLevel < requiredLevel) {
@@ -941,7 +1150,8 @@ export function createCommanderProfileV1(
     commanderId,
     displayName: 'APEX',
     empireName: 'Frontier Alliance',
-    commandCredits: 0,
+    empireFlag: { kind: 'country', countryId: STARTER_COUNTRY_ID },
+    commandCredits: STARTING_COMMAND_CREDITS_V1,
     commanderXp: 0,
     commanderLevel: 1,
     commanderTalents: emptyCommanderTalentsV1(),
@@ -953,6 +1163,7 @@ export function createCommanderProfileV1(
     countryUpgrades: {},
     countryMastery: {},
     campaignTutorialCompleted: false,
+    campaignProgressionTutorialState: 'locked',
     completedCampaigns: 0,
     victories: 0,
     defeats: 0,
@@ -1056,7 +1267,8 @@ function normalizeCommanderTalents(
 }
 
 function isCommanderDoctrineV1(value: unknown): value is CommanderDoctrineV1 {
-  return value === 'vanguard' || value === 'bastion' || value === 'rapid-response';
+  return value === 'vanguard' || value === 'bastion'
+    || value === 'rapid-response' || value === 'force-multiplier';
 }
 
 function isUpgradeTrack(value: unknown): value is CountryUpgradeTrack {
@@ -1074,7 +1286,8 @@ function normalizeTransactions(input: unknown): CommanderTransactionV1[] {
     if (typeof source.id !== 'string' || source.id.length === 0 || seen.has(source.id)) continue;
     if (source.kind !== 'starter-grant' && source.kind !== 'country-unlock'
       && source.kind !== 'country-upgrade' && source.kind !== 'commander-talent'
-      && source.kind !== 'campaign-reward') continue;
+      && source.kind !== 'campaign-reward' && source.kind !== 'survival-deployment'
+      && source.kind !== 'survival-deployment-refund') continue;
     seen.add(source.id);
     transactions.push({
       id: source.id,
@@ -1088,6 +1301,7 @@ function normalizeTransactions(input: unknown): CommanderTransactionV1[] {
       ...(COMMANDER_TALENT_IDS_V1.includes(source.talentId as CommanderTalentId)
         ? { talentId: source.talentId as CommanderTalentId } : {}),
       ...(typeof source.campaignId === 'string' ? { campaignId: source.campaignId } : {}),
+      ...(typeof source.deploymentId === 'string' ? { deploymentId: source.deploymentId } : {}),
     });
   }
   return transactions.sort((a, b) => a.revision - b.revision || a.createdAt - b.createdAt);
@@ -1155,6 +1369,13 @@ export function normalizeCommanderProfileV1(input: unknown, now = Date.now()): C
     ? source.displayName.trim().slice(0, 28)
     : '';
   const completedCampaigns = Math.floor(finiteNonNegative(source.completedCampaigns));
+  const empireFlagSource = source.empireFlag;
+  const empireFlag: EmpireFlagIdentityV1 = empireFlagSource
+    && empireFlagSource.kind === 'country'
+    && typeof empireFlagSource.countryId === 'string'
+    && /^[a-z0-9-]{2,16}$/i.test(empireFlagSource.countryId.trim())
+    ? { kind: 'country', countryId: empireFlagSource.countryId.trim().toLowerCase() }
+    : { kind: 'country', countryId: STARTER_COUNTRY_ID };
   // V1 profiles predate the explicit tutorial ledger. Only durable progression
   // evidence migrates them to complete; a merely old/newly-created profile does not.
   const legacyCampaignExperience = completedCampaigns > 0
@@ -1166,6 +1387,31 @@ export function normalizeCommanderProfileV1(input: unknown, now = Date.now()): C
     || Math.floor(finiteNonNegative(source.victories)) > 0
     || Math.floor(finiteNonNegative(source.defeats)) > 0
     || Math.floor(finiteNonNegative(source.surrenders)) > 0;
+  const campaignProgressionTutorialState: CampaignProgressionTutorialStateV1 = (
+    source.campaignProgressionTutorialState === 'locked'
+      || source.campaignProgressionTutorialState === 'ready'
+      || source.campaignProgressionTutorialState === 'seen'
+  ) ? source.campaignProgressionTutorialState
+    // Existing experienced accounts have already passed the beginner moment;
+    // do not surprise them with a newly introduced first-run modal on migration.
+    : legacyCampaignExperience ? 'seen' : 'locked';
+  const sourceCreditBalance = Math.min(
+    Number.MAX_SAFE_INTEGER,
+    Math.floor(finiteNonNegative(source.commandCredits)),
+  );
+  const sourceLifetimeCredits = Math.min(
+    Number.MAX_SAFE_INTEGER,
+    Math.floor(finiteNonNegative(source.lifetimeCreditsEarned)),
+  );
+  // The retired build wrote inert credit values without a real debit/earning
+  // ledger. Ignore those stale numbers and migrate once to the new opening
+  // balance. Every live balance change creates a non-zero ledger entry, so a
+  // legitimately spent-to-zero account can never be refilled by normalization.
+  const hasLiveCreditLedger = transactions.some((entry) => (
+    entry.kind === 'survival-deployment'
+      || entry.kind === 'survival-deployment-refund'
+      || (entry.kind === 'campaign-reward' && entry.amount > 0)
+  ));
   return {
     schemaVersion: COMMANDER_PROFILE_SCHEMA_VERSION,
     revision: Math.max(1, Math.floor(finiteNonNegative(source.revision, 1))),
@@ -1179,9 +1425,9 @@ export function normalizeCommanderProfileV1(input: unknown, now = Date.now()): C
       )
       ? source.empireName.trim().replace(/\s+/g, ' ')
       : 'Frontier Alliance',
-    // Legacy balances are deliberately discarded. They cannot influence any
-    // unlock, reward or UI surface under the current rules.
-    commandCredits: 0,
+    empireFlag,
+    commandCredits: hasLiveCreditLedger
+      ? sourceCreditBalance : STARTING_COMMAND_CREDITS_V1,
     commanderXp,
     commanderLevel,
     commanderTalents,
@@ -1194,11 +1440,12 @@ export function normalizeCommanderProfileV1(input: unknown, now = Date.now()): C
     countryMastery,
     campaignTutorialCompleted: typeof source.campaignTutorialCompleted === 'boolean'
       ? source.campaignTutorialCompleted : legacyCampaignExperience,
+    campaignProgressionTutorialState,
     completedCampaigns,
     victories: Math.floor(finiteNonNegative(source.victories)),
     defeats: Math.floor(finiteNonNegative(source.defeats)),
     surrenders: Math.floor(finiteNonNegative(source.surrenders)),
-    lifetimeCreditsEarned: 0,
+    lifetimeCreditsEarned: hasLiveCreditLedger ? sourceLifetimeCredits : 0,
     // Settlement ids and transactions are permanent ledgers. Never truncate
     // either collection or an old campaign could be rewarded twice.
     claimedCampaignIds: [...new Set(
@@ -1274,60 +1521,49 @@ const talentRankV1 = (
   Math.floor(finiteNonNegative(talents[id])),
 ));
 
-const reachedV1 = (rank: number, threshold: number, value: number): number => (
-  rank >= threshold ? value : 0
-);
-
 const roundForceValueV1 = (value: number): number => Math.round(value * 1_000_000_000) / 1_000_000_000;
 
-/** Resolves the shield tree to legacy simulation fields without exposing force semantics. */
+/**
+ * Resolves the account tree into three APEX-only paths and one Army path.
+ * Only `military-command` ids may emit regular national Army effects.
+ */
 export function resolveCommanderTalentEffectsV1(
   talents: Readonly<Partial<Record<CommanderTalentId, number>>>,
 ): ResolvedCommanderTalentEffectsV1 {
-  const rawLancer = talentRankV1(talents, 'elite-vanguard');
-  const rawIntegrity = talentRankV1(talents, 'volunteer-brigade');
-  const rawReboot = talentRankV1(talents, 'reserve-cadre');
-  const lancer = commanderTalentEffectiveRankV1(rawLancer);
-  const integrity = commanderTalentEffectiveRankV1(rawIntegrity);
-  const reboot = commanderTalentEffectiveRankV1(rawReboot);
-  const projection = commanderTalentEffectiveRankV1(talentRankV1(talents, 'drill-instructors'));
-  const recharge = commanderTalentEffectiveRankV1(talentRankV1(talents, 'mobile-logistics'));
-  const closedLoop = commanderTalentEffectiveRankV1(talentRankV1(talents, 'frugal-quartermaster'));
-  const pulse = commanderTalentEffectiveRankV1(talentRankV1(talents, 'science-corps'));
-  const targeting = commanderTalentEffectiveRankV1(talentRankV1(talents, 'treasury-reserve'));
-  const interception = commanderTalentEffectiveRankV1(talentRankV1(talents, 'civil-defense'));
-  const aegis = commanderTalentEffectiveRankV1(talentRankV1(talents, 'doctrine-command'));
+  const effective = (id: CommanderTalentId): number => commanderTalentEffectiveRankV1(
+    talentRankV1(talents, id),
+  );
+  // Every regular Army scalar originates in the one Empire Warfare branch.
+  const armyAttack = effective('mobile-logistics') * 0.0055;
+  const armyDefense = effective('combat-recovery') * 0.004;
+  const peaceRecovery = effective('theater-network') * 0.0125;
 
-  const lancerBreakthroughs = reachedV1(rawLancer, 5, 0.00001)
-    + reachedV1(rawLancer, 10, 0.00002)
-    + reachedV1(rawLancer, 15, 0.00003);
-  const lancerIntegrity = lancer * 0.000005 + lancerBreakthroughs;
-  const maxIntegrity = integrity * 0.00002
-    + reachedV1(rawIntegrity, 5, 0.00003)
-    + reachedV1(rawIntegrity, 10, 0.00006)
-    + reachedV1(rawIntegrity, 15, 0.00009);
-  const rebootBuffer = reboot * 0.000008
-    + reachedV1(rawReboot, 10, 0.00002)
-    + reachedV1(rawReboot, 15, 0.00003);
-  const projectionIntegrity = projection * 0.000004;
-  const projectionBuffer = projection * 0.000004;
-  const closedLoopBuffer = closedLoop * 0.000006;
+  // The other three branches modify different parts of APEX. No node is a
+  // disguised bundle of Max Energy, Recharge and Army power anymore.
+  const pulseAttack = effective('science-corps') * 0.02;
+  const pulseProjectionRetention = effective('treasury-reserve') * 0.0035;
+  const pulseChargeBonusPerStep = effective('elite-vanguard') * 0.005;
+  const interceptEfficiency = effective('volunteer-brigade') * 0.005;
+  const impactRecovery = effective('civil-defense') * 0.0035;
+  const defensivePulse = effective('doctrine-command') * 0.01;
+  const maxIntegrity = effective('reserve-cadre') * 0.02;
+  const rechargeRate = effective('drill-instructors') * 0.02;
+  const rechargeBuffer = effective('frugal-quartermaster') * 0.01;
 
   return {
-    activeManpower: roundForceValueV1(lancerIntegrity + projectionIntegrity),
-    capacity: roundForceValueV1(
-      lancerIntegrity + maxIntegrity + rebootBuffer
-        + projectionIntegrity + projectionBuffer + closedLoopBuffer,
-    ),
-    trainedReserves: roundForceValueV1(rebootBuffer + projectionBuffer + closedLoopBuffer),
-    attack: roundForceValueV1(lancer * 0.60 + pulse * 0.40 + targeting * 0.35),
-    defense: roundForceValueV1(interception * 0.60 + aegis * 0.35),
-    supplyStock: roundForceValueV1(BASE_COMMANDER_FORCE_V1.supplyStock * (
-      recharge * 0.10 + interception * 0.05 + projection * 0.025 + closedLoop * 0.06
-    )),
-    // Retained compatibility fields. Shield talents never create or train national units.
-    empireRecruitmentBonus: 0,
-    empireReserveTrainingBonus: 0,
+    maxIntegrityBonus: roundForceValueV1(Math.min(1.5, maxIntegrity)),
+    rechargeBufferBonus: roundForceValueV1(Math.min(0.75, rechargeBuffer)),
+    rechargeRateBonus: roundForceValueV1(Math.min(2.5, rechargeRate)),
+    armyAttackBonus: roundForceValueV1(Math.min(0.35, armyAttack)),
+    pulseAttackBonus: roundForceValueV1(Math.min(2, pulseAttack)),
+    pulseProjectionRetention: roundForceValueV1(Math.min(0.35, pulseProjectionRetention)),
+    pulseChargeBonusPerStep: roundForceValueV1(Math.min(0.45, pulseChargeBonusPerStep)),
+    interceptEfficiencyBonus: roundForceValueV1(Math.min(0.45, interceptEfficiency)),
+    impactRecoveryShare: roundForceValueV1(Math.min(0.35, impactRecovery)),
+    defensivePulseBonus: roundForceValueV1(Math.min(0.75, defensivePulse)),
+    armyDefenseBonus: roundForceValueV1(Math.min(0.35, armyDefense)),
+    armyCasualtyReduction: 0,
+    armyPeaceRecoveryBonus: roundForceValueV1(Math.min(0.75, peaceRecovery)),
   };
 }
 
@@ -1376,14 +1612,18 @@ export function resolveCountryLoadoutV1(
     commanderLevel: profile.commanderLevel,
     commanderTalents: talents,
     activeDoctrine: profile.activeDoctrine,
-    // Compatibility field names are retained in the stored loadout schema,
-    // but now carry one coherent active/capacity/reserve package.
-    eliteStarterManpower: commanderEffects.activeManpower,
-    regularStarterManpower: commanderEffects.capacity,
-    trainedReserveStarterManpower: commanderEffects.trainedReserves,
+    // Legacy snapshot keys preserve old saves at the launch boundary. They now
+    // carry shield-energy bonuses only; APEX never contributes personnel.
+    eliteStarterManpower: 0,
+    regularStarterManpower: roundForceValueV1(
+      BASE_COMMANDER_FORCE_V1.maxIntegrity * commanderEffects.maxIntegrityBonus,
+    ),
+    trainedReserveStarterManpower: roundForceValueV1(
+      BASE_COMMANDER_FORCE_V1.maxIntegrity * commanderEffects.rechargeBufferBonus,
+    ),
     // Retained loadout key for old snapshots; talents never grant money.
     openingTreasuryBonus: 0,
-    openingFoodWeeksBonus: commanderEffects.supplyStock,
+    openingFoodWeeksBonus: 0,
   };
 }
 
@@ -1396,51 +1636,66 @@ export function resolveCommanderForceInitializationV1(
   const doctrine = isCommanderDoctrineV1(loadout.activeDoctrine)
     ? loadout.activeDoctrine : null;
   const levelGrowth = commanderLevelEffectiveGrowthV1(loadout.commanderLevel);
-  // Capacity is Max Shield Integrity. Integrity talents expand both the ceiling
-  // and the fresh charge, so a new campaign never presents APEX as already damaged.
-  // The separate energy buffer recharges the same dome during the campaign.
-  const capacity = roundForceValueV1(
-    BASE_COMMANDER_FORCE_V1.capacity
-      + loadout.regularStarterManpower + levelGrowth * 0.000001,
-  );
-  const trainedReserves = roundForceValueV1(
-    BASE_COMMANDER_FORCE_V1.trainedReserves
-      + loadout.trainedReserveStarterManpower,
+  const maxIntegrity = commanderMaxIntegrityV1(loadout.commanderLevel, talents);
+  const pulseAttack = commanderPulseAttackV1(loadout.commanderLevel, talents);
+  const rechargeBuffer = roundForceValueV1(
+    Math.min(
+      maxIntegrity,
+      BASE_COMMANDER_FORCE_V1.rechargeBuffer
+        + BASE_COMMANDER_FORCE_V1.maxIntegrity * effects.rechargeBufferBonus,
+    ),
   );
   return {
-    manpower: capacity,
-    capacity,
-    trainedReserves,
-    baseAttack: Math.min(160, BASE_COMMANDER_FORCE_V1.attack
-      + levelGrowth * 0.018 + effects.attack),
-    baseDefense: Math.min(160, BASE_COMMANDER_FORCE_V1.defense
-      + levelGrowth * 0.018 + effects.defense),
+    shield: {
+      integrity: maxIntegrity,
+      maxIntegrity,
+      rechargeBuffer,
+      rechargeMultiplier: 1 + effects.rechargeRateBonus,
+      pulseAttack,
+      pulseProjectionRetention: effects.pulseProjectionRetention,
+      pulseChargeBonusPerStep: effects.pulseChargeBonusPerStep,
+      interceptEfficiency: 1 + effects.interceptEfficiencyBonus,
+      impactRecoveryShare: effects.impactRecoveryShare,
+      defensivePulseMultiplier: 1 + effects.defensivePulseBonus,
+    },
+    attackMultiplier: Math.min(
+      1.50,
+      BASE_COMMANDER_FORCE_V1.attackMultiplier + effects.armyAttackBonus,
+    ),
+    defenseMultiplier: Math.min(
+      1.50,
+      BASE_COMMANDER_FORCE_V1.defenseMultiplier + effects.armyDefenseBonus,
+    ),
+    armyCasualtyMultiplier: 1 - effects.armyCasualtyReduction,
+    armyPeaceRecoveryMultiplier: 1 + effects.armyPeaceRecoveryBonus,
     treasury: BASE_COMMANDER_FORCE_V1.treasury,
     annualOutput: BASE_COMMANDER_FORCE_V1.annualOutput
       + levelGrowth * COMMANDER_LEVEL_ANNUAL_OUTPUT_GROWTH_V1,
     // Resolve from the stable talent ids at launch; legacy loadout snapshots
     // cannot reintroduce retired civilian/economic talent semantics.
-    supplyStock: BASE_COMMANDER_FORCE_V1.supplyStock + effects.supplyStock,
+    supplyStock: BASE_COMMANDER_FORCE_V1.energyStock,
     countryTraitScale: loadout.traitScale,
     capabilities: {
-      mobileHeadquarters: talents['drill-instructors'] >= 3,
-      fieldHospital: talents['reserve-cadre'] >= 5,
-      rapidResponse: doctrine === 'rapid-response' && talents['mobile-logistics'] >= 5,
+      mobileHeadquarters: false,
+      fieldHospital: doctrine === 'rapid-response' && talents['frugal-quartermaster'] >= 5,
+      rapidResponse: false,
       assaultSpecialist: doctrine === 'vanguard' && talents['elite-vanguard'] >= 5,
       defenseSpecialist: doctrine === 'bastion' && talents['doctrine-command'] >= 5,
-      emergencyExtractionCharges: talents['frugal-quartermaster'] >= 10
-        ? 2 : talents['frugal-quartermaster'] >= 5 ? 1 : 0,
+      forceMultiplier: doctrine === 'force-multiplier' && talents['theater-network'] >= 5,
+      emergencyExtractionCharges: 0,
     },
     empireSupport: {
       recruitmentMultiplier: Math.min(
         1.50,
-        1 + APEX_EMPIRE_RECRUITMENT_BASE_BONUS_V2 + effects.empireRecruitmentBonus,
+        1 + APEX_EMPIRE_RECRUITMENT_BASE_BONUS_V2,
       ),
       reserveTrainingMultiplier: Math.min(
         1.75,
         1 + APEX_EMPIRE_RESERVE_TRAINING_BASE_BONUS_V2
-          + effects.empireReserveTrainingBonus,
+          + 0,
       ),
+      armyCasualtyMultiplier: 1 - effects.armyCasualtyReduction,
+      armyPeaceRecoveryMultiplier: 1 + effects.armyPeaceRecoveryBonus,
       // Retired protocol/save fields stay neutral until the next schema break.
       annualFoodOutput: 0,
       foodProductionMultiplier: 1,
@@ -1468,6 +1723,54 @@ export function recordCampaignTutorialExperiencedV1(
       ...profile,
       revision: nextRevision(profile),
       campaignTutorialCompleted: true,
+      updatedAt: now,
+    }, now),
+  };
+}
+
+/**
+ * Arms the short meta-progression guide after the account's first completed
+ * Campaign. Survival and Alternative Universe outcomes can never open it.
+ */
+export function queueCampaignProgressionTutorialV1(
+  profile: CommanderProfileV1,
+  mode: GameModeV2,
+  now = Date.now(),
+): ProgressionActionResultV1 {
+  if (mode !== 'standard-2026') {
+    return { accepted: false, profile, reason: 'Only a completed Campaign unlocks this guide.' };
+  }
+  if (profile.campaignProgressionTutorialState !== 'locked') {
+    return { accepted: false, profile, reason: 'Campaign progression guide was already queued or seen.' };
+  }
+  return {
+    accepted: true,
+    profile: normalizeCommanderProfileV1({
+      ...profile,
+      revision: nextRevision(profile),
+      campaignProgressionTutorialState: 'ready',
+      updatedAt: now,
+    }, now),
+  };
+}
+
+/** Persists dismissal before the Home tutorial disappears or changes view. */
+export function acknowledgeCampaignProgressionTutorialV1(
+  profile: CommanderProfileV1,
+  now = Date.now(),
+): ProgressionActionResultV1 {
+  if (profile.campaignProgressionTutorialState === 'seen') {
+    return { accepted: false, profile, reason: 'Campaign progression guide was already seen.' };
+  }
+  if (profile.campaignProgressionTutorialState !== 'ready') {
+    return { accepted: false, profile, reason: 'Campaign progression guide is not ready.' };
+  }
+  return {
+    accepted: true,
+    profile: normalizeCommanderProfileV1({
+      ...profile,
+      revision: nextRevision(profile),
+      campaignProgressionTutorialState: 'seen',
       updatedAt: now,
     }, now),
   };
@@ -1552,7 +1855,8 @@ function transactionV1(
   amount: number,
   balanceAfter: number,
   now: number,
-  detail: Pick<CommanderTransactionV1, 'countryId' | 'track' | 'talentId' | 'campaignId'> = {},
+  detail: Pick<CommanderTransactionV1,
+    'countryId' | 'track' | 'talentId' | 'campaignId' | 'deploymentId'> = {},
 ): CommanderTransactionV1 {
   const revision = nextRevision(profile);
   return {
@@ -1563,6 +1867,160 @@ function transactionV1(
     balanceAfter,
     createdAt: now,
     ...detail,
+  };
+}
+
+/** Pure account quote used by both the mission card and the launch boundary. */
+export function quoteSurvivalDeploymentCreditsV1(
+  profile: CommanderProfileV1,
+): SurvivalDeploymentCreditQuoteV1 {
+  const balance = Math.min(
+    Number.MAX_SAFE_INTEGER,
+    Math.floor(finiteNonNegative(profile.commandCredits)),
+  );
+  const cost = SURVIVAL_DEPLOYMENT_CREDIT_COST_V1;
+  return {
+    cost,
+    balance,
+    balanceAfter: Math.max(0, balance - cost),
+    affordable: balance >= cost,
+  };
+}
+
+function latestSurvivalDeploymentTransactionV1(
+  profile: CommanderProfileV1,
+  deploymentId: string,
+): CommanderTransactionV1 | undefined {
+  let latest: CommanderTransactionV1 | undefined;
+  let latestIndex = -1;
+  profile.transactions.forEach((entry, index) => {
+    if (entry.deploymentId !== deploymentId
+      || (entry.kind !== 'survival-deployment'
+        && entry.kind !== 'survival-deployment-refund')) return;
+    if (!latest
+      || entry.revision > latest.revision
+      || (entry.revision === latest.revision && entry.createdAt > latest.createdAt)
+      || (entry.revision === latest.revision && entry.createdAt === latest.createdAt
+        && index > latestIndex)) {
+      latest = entry;
+      latestIndex = index;
+    }
+  });
+  return latest;
+}
+
+/**
+ * Atomically debits one local Survival seat. The stable deployment id makes
+ * launch retries idempotent and reconnects never call this boundary.
+ */
+export function spendSurvivalDeploymentCreditsV1(
+  profile: CommanderProfileV1,
+  deploymentId: string,
+  now = Date.now(),
+): SurvivalDeploymentCreditSpendResultV1 {
+  const canonicalDeploymentId = deploymentId.trim().slice(0, 180);
+  const quote = quoteSurvivalDeploymentCreditsV1(profile);
+  if (!canonicalDeploymentId) {
+    return {
+      accepted: false,
+      charged: false,
+      profile,
+      quote,
+      reason: 'A Survival deployment id is required.',
+    };
+  }
+  if (latestSurvivalDeploymentTransactionV1(profile, canonicalDeploymentId)?.kind
+    === 'survival-deployment') {
+    return { accepted: true, charged: false, profile, quote };
+  }
+  if (!quote.affordable) {
+    return {
+      accepted: false,
+      charged: false,
+      profile,
+      quote,
+      reason: `Survival requires ${quote.cost} Credits; balance ${quote.balance}.`,
+    };
+  }
+  const balanceAfter = quote.balanceAfter;
+  const next = normalizeCommanderProfileV1({
+    ...profile,
+    revision: nextRevision(profile),
+    commandCredits: balanceAfter,
+    transactions: [...profile.transactions, transactionV1(
+      profile,
+      'survival-deployment',
+      -quote.cost,
+      balanceAfter,
+      now,
+      { deploymentId: canonicalDeploymentId },
+    )],
+    updatedAt: now,
+  }, now);
+  return {
+    accepted: true,
+    charged: true,
+    profile: next,
+    quote: { ...quote, balanceAfter },
+  };
+}
+
+/**
+ * Reverses a deployment debit only while it is the latest ledger event for the
+ * same id. Repeated rollback attempts are no-ops, while a later launch retry can
+ * charge the refunded id again exactly once.
+ */
+export function refundSurvivalDeploymentCreditsV1(
+  profile: CommanderProfileV1,
+  deploymentId: string,
+  now = Date.now(),
+): SurvivalDeploymentCreditRefundResultV1 {
+  const canonicalDeploymentId = deploymentId.trim().slice(0, 180);
+  if (!canonicalDeploymentId) {
+    return {
+      accepted: false,
+      refunded: false,
+      profile,
+      reason: 'A Survival deployment id is required.',
+    };
+  }
+  const charge = latestSurvivalDeploymentTransactionV1(profile, canonicalDeploymentId);
+  if (charge?.kind !== 'survival-deployment') {
+    return { accepted: true, refunded: false, profile };
+  }
+  const refundAmount = Math.min(
+    Number.MAX_SAFE_INTEGER,
+    Math.floor(finiteNonNegative(-charge.amount)),
+  );
+  if (refundAmount <= 0) {
+    return {
+      accepted: false,
+      refunded: false,
+      profile,
+      reason: 'The Survival deployment debit is not refundable.',
+    };
+  }
+  const balanceAfter = Math.min(
+    Number.MAX_SAFE_INTEGER,
+    Math.floor(finiteNonNegative(profile.commandCredits)) + refundAmount,
+  );
+  return {
+    accepted: true,
+    refunded: true,
+    profile: normalizeCommanderProfileV1({
+      ...profile,
+      revision: nextRevision(profile),
+      commandCredits: balanceAfter,
+      transactions: [...profile.transactions, transactionV1(
+        profile,
+        'survival-deployment-refund',
+        refundAmount,
+        balanceAfter,
+        now,
+        { deploymentId: canonicalDeploymentId },
+      )],
+      updatedAt: now,
+    }, now),
   };
 }
 
@@ -1772,6 +2230,22 @@ export function calculateCampaignRewardV1(input: CampaignRewardInputV1): Campaig
   ) * Math.min(1.1, modeMultiplier) * MASTERY_OUTCOME_MULTIPLIER[input.outcome] : 0;
   const masteryXp = Math.max(0, Math.round(rawMasteryXp));
   const commanderXp = Math.max(0, Math.round(rawMasteryXp * 0.6));
+  // Credits reward demonstrated Campaign activity, never the selected outcome
+  // or elapsed time by itself. Survival spends Credits but cannot refund its
+  // own entry fee; Alternative Universe remains entirely outside progression.
+  const meaningfulCampaignCreditActivity = input.mode === 'standard-2026'
+    && (territories > 0 || territoriesLost > 0 || warsWon > 0
+      || (weeks >= 4 && warsFought > 0 && losses >= 0.00025));
+  const creditsEarned = meaningfulCampaignCreditActivity
+    ? Math.min(50, Math.max(1, Math.round(
+      5
+        + Math.min(8, 2 * Math.sqrt(weeks / 13))
+        + Math.min(25, territories * 5)
+        + Math.min(8, territoriesLost * 2)
+        + Math.min(24, warsWon * 6)
+        + Math.min(6, warsWithoutVictory * 2),
+    )))
+    : 0;
   const score = Math.max(0, Math.round(
     weeks + territories * 125 + warsWon * 90 + warsWithoutVictory * 25 + wave * 160
       + Math.min(500, verifiedRogueWaveLosses * 1_000)
@@ -1791,6 +2265,7 @@ export function calculateCampaignRewardV1(input: CampaignRewardInputV1): Campaig
     outcomeMultiplier,
     masteryXp,
     commanderXp,
+    creditsEarned,
     score,
   };
 }
@@ -1816,12 +2291,24 @@ export function claimCampaignRewardV1(
   const currentMastery = countryMasteryV1(profile, reward.countryId);
   const nextXp = currentMastery.xp + reward.masteryXp;
   const nextCommanderXp = profile.commanderXp + reward.commanderXp;
+  const creditsEarned = reward.mode === 'standard-2026'
+    ? Math.floor(finiteNonNegative(reward.creditsEarned)) : 0;
+  const nextCreditBalance = Math.min(
+    Number.MAX_SAFE_INTEGER,
+    profile.commandCredits + creditsEarned,
+  );
+  const creditedAmount = Math.max(0, nextCreditBalance - profile.commandCredits);
   const revision = nextRevision(profile);
   const next = normalizeCommanderProfileV1({
     ...profile,
     revision,
     commanderXp: nextCommanderXp,
     commanderLevel: commanderLevelFromXpV1(nextCommanderXp),
+    commandCredits: nextCreditBalance,
+    lifetimeCreditsEarned: Math.min(
+      Number.MAX_SAFE_INTEGER,
+      profile.lifetimeCreditsEarned + creditedAmount,
+    ),
     countryMastery: {
       ...profile.countryMastery,
       [reward.countryId]: {
@@ -1839,7 +2326,7 @@ export function claimCampaignRewardV1(
     surrenders: profile.surrenders + (reward.outcome === 'surrender' ? 1 : 0),
     claimedCampaignIds: [...profile.claimedCampaignIds, reward.campaignId],
     transactions: [...profile.transactions, transactionV1(
-      profile, 'campaign-reward', 0, 0, now,
+      profile, 'campaign-reward', creditedAmount, nextCreditBalance, now,
       { countryId: reward.countryId, campaignId: reward.campaignId },
     )],
     updatedAt: now,
@@ -1887,6 +2374,33 @@ export function renameEmpireV1(
       ...profile,
       revision: nextRevision(profile),
       empireName,
+      updatedAt: now,
+    }, now),
+  };
+}
+
+/** Selects any authored world flag; ownership is intentionally not required. */
+export function selectEmpireFlagV1(
+  profile: CommanderProfileV1,
+  requestedFlag: EmpireFlagIdentityV1,
+  availableCountryIds: readonly string[],
+  now = Date.now(),
+): ProgressionActionResultV1 {
+  const countryId = requestedFlag.kind === 'country'
+    ? requestedFlag.countryId.trim().toLowerCase() : '';
+  const available = new Set(normalizeCountryIds(availableCountryIds));
+  if (!countryId || !available.has(countryId)) {
+    return { accepted: false, profile, reason: 'That world flag is unavailable.' };
+  }
+  if (profile.empireFlag.kind === 'country' && profile.empireFlag.countryId === countryId) {
+    return { accepted: false, profile, reason: 'That flag already represents your empire.' };
+  }
+  return {
+    accepted: true,
+    profile: normalizeCommanderProfileV1({
+      ...profile,
+      revision: nextRevision(profile),
+      empireFlag: { kind: 'country', countryId },
       updatedAt: now,
     }, now),
   };

@@ -42,7 +42,7 @@ import {
 } from './battleEffectPresentation';
 import {
   compactMapCombatPower,
-  commanderForceMapCombatPower,
+  commanderShieldMapSupportPercent,
   forcePresentationSignature,
   mapCombatPowerLabel,
 } from './forcePresentation';
@@ -69,9 +69,7 @@ import {
   ANTARCTICA_ICE_SHELF,
   ANTARCTICA_MAP_SILHOUETTE,
   ANTARCTICA_SECTOR_PRESENTATIONS,
-  SEA_MAP_LABELS,
   projectAntarcticaMapPoint,
-  seaLabelZoomPresentation,
 } from './mapGeographyPresentation';
 import {
   selectGlobeVisibleLogisticsRoutes,
@@ -581,7 +579,6 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
   private neuralConvergenceGraphics?: Phaser.GameObjects.Graphics;
   private routeGraphics?: Phaser.GameObjects.Graphics;
   private graticuleGraphics?: Phaser.GameObjects.Graphics;
-  private seaLabels: { definition: (typeof SEA_MAP_LABELS)[number]; text: Phaser.GameObjects.Text }[] = [];
   private antarcticaLabel?: Phaser.GameObjects.Text;
   private logisticsGraphics?: Phaser.GameObjects.Graphics;
   private ownershipBoundaryGraphics?: Phaser.GameObjects.Graphics;
@@ -865,7 +862,6 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
     this.graticuleGraphics = this.add.graphics().setDepth(-19);
     this.drawGraticule();
     this.drawAntarctica();
-    this.createSeaLabels();
   }
 
   private drawAntarctica(): void {
@@ -885,31 +881,8 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
     }).setOrigin(0.5).setDepth(-17).setAlpha(0.34).setResolution(LABEL_TEXT_RESOLUTION);
   }
 
-  private createSeaLabels(): void {
-    this.seaLabels = SEA_MAP_LABELS.map((definition) => {
-      const point = definition.mapPosition
-        ? { x: definition.mapPosition[0], y: definition.mapPosition[1] }
-        : projectWorldPoint(definition.longitude, definition.latitude);
-      const ocean = definition.kind === 'ocean';
-      const text = this.add.text(point.x, point.y, definition.name, {
-        fontFamily: 'Inter, system-ui, sans-serif', fontSize: ocean ? '11px' : '10px',
-        fontStyle: 'italic', color: ocean ? '#74a7b5' : '#8ab6c0',
-        letterSpacing: ocean ? 2.1 : 1.25,
-      }).setOrigin(0.5)
-        .setRotation(Phaser.Math.DegToRad(definition.rotation ?? 0))
-        .setDepth(-17)
-        .setResolution(LABEL_TEXT_RESOLUTION);
-      return { definition, text };
-    });
-    this.refreshSeaLabels();
-  }
-
-  private refreshSeaLabels(): void {
+  private refreshAntarcticaLabel(): void {
     const zoom = this.cameras.main.zoom;
-    for (const { definition, text } of this.seaLabels) {
-      const presentation = seaLabelZoomPresentation(definition, zoom);
-      text.setVisible(presentation.visible).setAlpha(presentation.alpha).setScale(presentation.scale);
-    }
     if (this.antarcticaLabel) {
       const fade = Phaser.Math.Clamp((1.95 - zoom) / 0.55, 0, 1);
       this.antarcticaLabel.setVisible(fade > 0).setAlpha(0.30 * fade)
@@ -2137,7 +2110,7 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
     this.drawAuthoredGatewayRoutes();
     this.drawCommanderTerritoryCoverage(this.commanderCoverageEntries, true);
     this.drawCommanderRoutes(this.commanderCoverageEntries, true);
-    this.refreshSeaLabels();
+    this.refreshAntarcticaLabel();
     const camera = this.cameras.main;
     const humanId = this.mapState?.humanPlayerId;
     const humanPlayerIds = this.mapState?.humanPlayerIds.length
@@ -2525,8 +2498,8 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
     const primeSectorId = primeState?.force
       && primePresentation.visible && !primePresentation.moving
       ? primeState.force.locationId : undefined;
-    const primePower = primeState?.force
-      ? commanderForceMapCombatPower(primeState.force.army) : 0;
+    const primeSupportPercent = primeState?.force
+      ? commanderShieldMapSupportPercent(primeState.force.shield) : 0;
     const polarVisible = Boolean(
       state?.polarEndgame
         && OPEN_ANTARCTICA_READINESS_PHASES.has(state.polarEndgame.phase),
@@ -2587,12 +2560,12 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
         const supportLabel = apexSupport
           ? `  ${apexProjection?.label ?? apexShield.label}`
           : primeSupport
-            ? `  +${compactMapCombatPower(primePower)} PRIME`
+            ? `  PRIME +${primeSupportPercent.toFixed(1)}%`
             : '';
         const accessibleLabel = `${sector.name}. National power ${compactMapCombatPower(territory.army.power)}.${apexSupport
-          ? ` APEX neural shield at ${apexShield.percent}% integrity.`
+          ? ` APEX neural shield at ${apexShield.percent}% Energy.`
           : primeSupport
-            ? ` ROGUE PRIME supporting with ${compactMapCombatPower(primePower)} power.`
+            ? ` ROGUE PRIME amplifying the Antarctic army by ${primeSupportPercent.toFixed(1)}%.`
             : ''}`;
         visual.power
           .setText(`${sector.name.toUpperCase()}\n⚔ ${compactMapCombatPower(territory.army.power)}${supportLabel}`)
@@ -3042,8 +3015,8 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
     const primeSupportTerritoryId = primeState?.force
       && primePresentation.visible && !primePresentation.moving
       ? primeState.force.locationId : undefined;
-    const primeSupportPower = primeState?.force
-      ? commanderForceMapCombatPower(primeState.force.army) : 0;
+    const primeSupportPercent = primeState?.force
+      ? commanderShieldMapSupportPercent(primeState.force.shield) : 0;
     for (const territory of TERRITORIES) {
       const territoryState = state.territories[territory.id];
       const visual = this.visuals.get(territory.id);
@@ -3100,7 +3073,12 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
         entry.locationId === territory.id
           && (entry.projection === 'secondary' || !viewerApex?.transit)
       ));
-      const apexSupport = Boolean(apexProjection);
+      const apexNetworkFront = viewerApex?.empireShield?.fronts.find((front) => (
+        front.friendlyTerritoryId === territory.id
+      ));
+      const apexFrontProjectionPercent = apexNetworkFront
+        ? Math.round(apexNetworkFront.allocationShare * 1_000) / 10 : null;
+      const apexSupport = Boolean(apexProjection || apexNetworkFront);
       const apexInbound = apexShield.visible && territory.id === apexInboundTerritoryId;
       const apexSignal = apexSupport || apexInbound;
       const primeSupport = territory.id === primeSupportTerritoryId;
@@ -3116,11 +3094,12 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       const controllerLabel = owner.id === humanId ? 'YOU'
         : owner.isHuman ? `PLAYER ${compactControllerName(owner.controllerName).toUpperCase()}` : '';
       const supportPowerLabel = apexSupport
-        ? `  ${apexProjection?.label ?? apexShield.label}`
+        ? `  ${apexShield.label}${apexFrontProjectionPercent !== null
+          ? ` · MESH ${apexFrontProjectionPercent}%` : ''}`
         : apexInbound
           ? `  ${apexShield.label} · INBOUND`
         : primeSupport
-          ? `  +${compactMapCombatPower(primeSupportPower)} PRIME`
+          ? `  PRIME +${primeSupportPercent.toFixed(1)}%`
           : '';
       const nationalArmyLabel = integrating ? `SIGNAL PURGE ${integrationPercent}%`
         : localHeadquarters ? `PWR ${compactMapCombatPower(displayedArmy.power)}`
@@ -3134,11 +3113,13 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
         visual.name.setText(labelName);
         visual.detail.setText(armyLabel);
         const supportAccessibleLabel = apexSupport
-          ? `National power ${compactMapCombatPower(displayedArmy.power)}. APEX neural shield at ${apexShield.percent}% shared integrity${apexProjection?.split ? ' with a 60% twin projection' : ''}${apexProjection?.singularityCharged ? '; Singularity Pulse charged' : ''}.`
+          ? `National power ${compactMapCombatPower(displayedArmy.power)}. APEX neural shield at ${apexShield.percent}% shared Energy.${apexFrontProjectionPercent !== null
+            ? ` Theater Mesh allocates ${apexFrontProjectionPercent}% combat support to this front.` : ''}${apexProjection?.singularityCharged
+              ? ' Overdrive Pulse charged.' : ''}`
           : apexInbound
             ? `National power ${compactMapCombatPower(displayedArmy.power)}. ${apexShield.label} inbound; not yet protecting this territory.`
           : primeSupport
-            ? `National power ${compactMapCombatPower(displayedArmy.power)}. ROGUE PRIME supporting with ${compactMapCombatPower(primeSupportPower)} power.`
+            ? `National power ${compactMapCombatPower(displayedArmy.power)}. ROGUE PRIME amplifying the Antarctic army by ${primeSupportPercent.toFixed(1)}%.`
             : `National power ${compactMapCombatPower(displayedArmy.power)}.`;
         visual.hud.setName(supportAccessibleLabel).setData('accessibleLabel', supportAccessibleLabel);
         visual.name.setFontSize(localHeadquarters ? 12 : LABEL_NAME_SIZE);

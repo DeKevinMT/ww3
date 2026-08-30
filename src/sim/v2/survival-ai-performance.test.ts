@@ -8,7 +8,10 @@ import { NATIONAL_AI_REVIEW_TICKS } from './balance';
 import { WorldEngineV2 } from './WorldEngineV2';
 import { resolveScenarioV2 } from './scenarios';
 import {
+  SURVIVAL_BASE_WAVE_INTERVAL_TICKS_V2,
+  SURVIVAL_FIRST_WAVE_DELAY_TICKS_V2,
   SURVIVAL_MAX_CONCURRENT_ROGUE_FRONTS_V2,
+  SURVIVAL_MIN_WAVE_INTERVAL_TICKS_V2,
   survivalRogueFrontCapV2,
 } from './survival';
 
@@ -78,5 +81,15 @@ describe('Survival AI planning performance', () => {
     expect([1, 2, 3, 4, 5, 6, 7, 9].map((wave) => (
       survivalRogueFrontCapV2(wave, true)
     ))).toEqual([2, 2, 3, 3, 4, 4, 5, 6]);
+  });
+
+  it('uses a faster but still readable Survival wave cadence', () => {
+    expect(SURVIVAL_FIRST_WAVE_DELAY_TICKS_V2).toBeGreaterThanOrEqual(8);
+    expect(SURVIVAL_FIRST_WAVE_DELAY_TICKS_V2).toBeLessThan(13);
+    expect(SURVIVAL_BASE_WAVE_INTERVAL_TICKS_V2).toBeGreaterThanOrEqual(39);
+    expect(SURVIVAL_BASE_WAVE_INTERVAL_TICKS_V2).toBeLessThan(52);
+    expect(SURVIVAL_MIN_WAVE_INTERVAL_TICKS_V2).toBeGreaterThanOrEqual(20);
+    expect(SURVIVAL_MIN_WAVE_INTERVAL_TICKS_V2)
+      .toBeLessThan(SURVIVAL_BASE_WAVE_INTERVAL_TICKS_V2);
   });
 });

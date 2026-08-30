@@ -4,6 +4,10 @@ import { describe, expect, it } from 'vitest';
 const sceneSource = readFileSync(new URL('./ThreeGlobeScene.ts', import.meta.url), 'utf8');
 const flatSceneSource = readFileSync(new URL('../WorldMapScene.ts', import.meta.url), 'utf8');
 const worldUiSource = readFileSync(new URL('../../../ui/WorldUIV2.ts', import.meta.url), 'utf8');
+const empireFieldSource = readFileSync(
+  new URL('../empireNeuralFieldPresentation.ts', import.meta.url),
+  'utf8',
+);
 
 const globeFieldSource = sceneSource.slice(
   sceneSource.indexOf('function createStrategicNeuralFieldGeometry'),
@@ -33,7 +37,9 @@ describe('autonomous APEX / ROGUE PRIME map presentation', () => {
     }
     expect(globeFieldSource).toContain('drawTerritoryWideNeuralField(');
     expect(sceneSource).toContain('this.neuralFieldCoverageLayer.userData.sharedTerritoryNeuralFieldLayer = true;');
-    expect(sceneSource).toContain('this.syncTerritoryNeuralFieldCoverage(entries);');
+    expect(sceneSource).toContain('this.syncTerritoryNeuralFieldCoverage(');
+    expect(sceneSource).toContain('this.apexEmpireField,');
+    expect(sceneSource).toContain('this.rogueAntarcticField,');
     expect(globeMarkerSource).not.toMatch(/THREE\.Sprite|CircleGeometry|RingGeometry/);
     expect(flatFieldSource).toContain('private drawCommanderTerritoryCoverage(');
     expect(flatSceneSource).toContain('this.drawCommanderTerritoryCoverage(entries);');
@@ -55,8 +61,8 @@ describe('autonomous APEX / ROGUE PRIME map presentation', () => {
 
   it('adds a pooled true-3D cap whose foot is the territory border', () => {
     expect(sceneSource).toContain('function buildTerritoryNeuralDomeGeometry(');
-    expect(sceneSource).toContain('TERRITORY_NEURAL_DOME_GEOMETRY_CACHE.get(territoryId)');
-    expect(sceneSource).toContain('preparedTerritoryNeuralDomeGeometry(entry.force.locationId)');
+    expect(sceneSource).toContain('TERRITORY_NEURAL_DOME_GEOMETRY_CACHE.get(cacheKey)');
+    expect(sceneSource).toContain('preparedTerritoryNeuralDomeGeometry(territoryId, detail)');
     expect(sceneSource).toContain('multiplyScalar(NEURAL_DOME_BASE_RADIUS)');
     expect(sceneSource).toContain('NEURAL_DOME_BASE_RADIUS + neuralDomeSpokeElevation');
     expect(sceneSource).toContain('this.neuralDomeLines.userData.pooledTerritoryNeuralDome = true;');
@@ -66,11 +72,32 @@ describe('autonomous APEX / ROGUE PRIME map presentation', () => {
     expect(flatFieldSource).toContain('this.game.canvas.dataset.neuralFieldCurvedArches');
   });
 
-  it('uses the point-local core only in transit and rebuilds the territory field at arrival', () => {
+  it('uses low broad caps and one sparse Antarctic silhouette instead of stacked cages', () => {
+    const domeSource = sceneSource.slice(
+      sceneSource.indexOf('function pushLowWideDomeCap('),
+      sceneSource.indexOf('function neuralFieldDomeShellPoint('),
+    );
+    const rebuildSource = sceneSource.slice(
+      sceneSource.indexOf('private rebuildTerritoryNeuralDomes('),
+      sceneSource.indexOf('private syncTerritoryNeuralFieldCoverage('),
+    );
+    expect(domeSource).toContain('progress * 0.84');
+    expect(domeSource).toContain("detail === 'front' ? 0.35 : 0.31");
+    expect(domeSource).toContain("detail === 'front' ? 0.27 : 0.22");
+    expect(domeSource).not.toContain('tier[(index + 2) % tier.length]');
+    expect(domeSource).toContain('preparedRogueAntarcticNeuralDomeGeometry()');
+    expect(rebuildSource).toContain("this.host.dataset.rogueShieldDomeClusters = '1';");
+    expect(rebuildSource).toContain('APEX_EMPIRE_NETWORK_RENDER_MAX_EDGES');
+    expect(rebuildSource).not.toContain('copyPreparedDome(territory.territoryId');
+  });
+
+  it('uses a distributed human field while keeping the hostile point core route-local', () => {
     expect(sceneSource).toContain('visual.fieldMesh.visible = false;');
     expect(sceneSource).toContain('visual.nodes.visible = mode.signalNodeVisible;');
     expect(flatSceneSource).toContain('visual.container.setVisible(mode.signalNodeVisible);');
-    expect(sceneSource).toContain('neuralFieldCoverageGeometrySignature(entries)');
+    expect(sceneSource).toContain('selectApexEmpireFieldPresentation(engine, viewerForce)');
+    expect(sceneSource).toContain("this.host.dataset.apexPhysicalMarker = 'none';");
+    expect(sceneSource).not.toContain('neuralFieldCoverageGeometrySignature(entries)');
     expect(flatSceneSource).toContain('neuralFieldCoverageGeometrySignature(entries)');
   });
 
@@ -87,7 +114,8 @@ describe('autonomous APEX / ROGUE PRIME map presentation', () => {
       'visual?.routePointSignature === routePointSignature',
     );
     expect(globeForceSyncSource).toContain(': commanderRoutePoints(force, entry.routePath);');
-    expect(globeForceSyncSource).toContain('this.syncTerritoryNeuralFieldCoverage(entries);');
+    expect(globeForceSyncSource).toContain('this.syncTerritoryNeuralFieldCoverage(');
+    expect(globeForceSyncSource).toContain('this.apexEmpireField,');
     expect(globeForceSyncSource).not.toContain('this.labelsDirty = true;');
   });
 
@@ -100,9 +128,10 @@ describe('autonomous APEX / ROGUE PRIME map presentation', () => {
     expect(flatSceneSource).not.toMatch(/apexStrike|ApexStrike|laser/i);
   });
 
-  it('samples canonical multi-hop transit and restores its field at arrival', () => {
+  it('keeps human APEX locationless while PRIME still samples canonical travel', () => {
     expect(sceneSource).toContain('commanderPointAlongRoute(');
-    expect(sceneSource).toContain('mapCommanderTransitProgress(viewerForce, engine.state.tick)');
+    expect(sceneSource).not.toContain('mapCommanderTransitProgress(viewerForce, engine.state.tick)');
+    expect(sceneSource).toContain("this.host.dataset.apexPhysicalMarker = 'none';");
     expect(flatSceneSource).toContain('neuralFieldRouteSegment(progress, route.length)');
     expect(flatSceneSource).toContain('mapCommanderTransitProgress(viewerForce, engine.state.tick)');
     expect(sceneSource).toContain('neuralFieldModePresentation(');
@@ -121,7 +150,7 @@ describe('autonomous APEX / ROGUE PRIME map presentation', () => {
 
   it('clips a supported incoming wave at the field surface in 3D and 2D', () => {
     expect(sceneSource).toContain('clipGlobeRouteToNeuralField(path');
-    expect(sceneSource).toContain('const shellPoint = field ? neuralFieldDomeShellPoint(');
+    expect(sceneSource).toContain('const shellPoint = neuralFieldDomeShellPoint(');
     expect(sceneSource).toContain('path[path.length - 1]!.copy(shellPoint);');
     expect(sceneSource).not.toContain('(field?.marker.scale.x ?? 0.08) * 0.76');
     expect(sceneSource).toContain("const targetCountry = neuralField?.interceptsIncoming");
@@ -132,20 +161,19 @@ describe('autonomous APEX / ROGUE PRIME map presentation', () => {
     expect(flatSceneSource).toContain('return;');
   });
 
-  it('removes exhausted APEX coverage and power tags for its complete recovery lifecycle', () => {
-    for (const source of [sceneSource, flatSceneSource]) {
-      expect(source).toContain('mapCommanderRecoveryLifecycleActive(viewerForce)');
-      expect(source).toContain('const projections = apexProjectionPresentations(viewerForce);');
-      expect(source).toContain('fieldOperational: true');
-      expect(source).toContain('apexProjectionPresentations(viewerForce)');
-    }
+  it('removes exhausted distributed APEX coverage while PRIME retains its lifecycle', () => {
+    expect(empireFieldSource).toContain('if (!force || !visible || !apexFieldPresentationActive(engine))');
+    expect(empireFieldSource).toContain('return INACTIVE_APEX_EMPIRE_FIELD;');
+    expect(sceneSource).not.toContain('mapCommanderRecoveryLifecycleActive(viewerForce)');
+    expect(flatSceneSource).toContain('mapCommanderRecoveryLifecycleActive(viewerForce)');
+    expect(flatSceneSource).toContain('const projections = apexProjectionPresentations(viewerForce);');
     expect(globeForceSyncSource).toContain('fieldOperational: true');
     expect(globeForceSyncSource).toContain('visual.fieldOperational = entry.fieldOperational;');
     expect(globeForceSyncSource).toContain('entry.fieldOperational');
-    expect(sceneSource).toContain('const apexSupport = viewerApexOperational && Boolean(apexProjection);');
-    expect(sceneSource).toContain('const apexInbound = viewerApexOperational && definition.id === apexInboundTerritoryId;');
+    expect(sceneSource).toContain('const viewerApexOperational = this.apexEmpireField.active;');
+    expect(sceneSource).toContain('const apexSupport = viewerApexOperational');
     expect(sceneSource).toContain('candidate.inTransit || !candidate.fieldOperational || !candidate.combatActive');
-    expect(sceneSource).toContain('fieldUnavailable = Boolean(visual && !visual.fieldOperational)');
+    expect(sceneSource).toContain('? !this.apexEmpireField.active');
     expect(flatSceneSource).toContain('candidate.moving || !candidate.fieldOperational || !candidate.combatActive');
     expect(flatSceneSource).toContain('visual.fieldOperational && targetVisible');
   });
@@ -159,56 +187,47 @@ describe('autonomous APEX / ROGUE PRIME map presentation', () => {
     expect(sceneSource).not.toContain('globe-map__commander-label');
   });
 
-  it('presents viewer APEX as shield integrity while PRIME retains hostile force power', () => {
-    for (const source of [sceneSource, flatSceneSource]) {
-      expect(source).toContain('commanderForceMapCombatPower');
-      expect(source).toContain('apexShieldPresentation');
-      expect(source).not.toContain('APEX supporting with ${compactMapCombatPower(');
-      expect(source).not.toMatch(/\+\$\{compactMapCombatPower\([^}]*apex/i);
-      expect(source).toContain('ROGUE PRIME supporting with ${compactMapCombatPower(');
-    }
-    expect(sceneSource).toContain('${viewerApexShield.label}');
+  it('presents viewer APEX as Energy while PRIME retains hostile force support', () => {
+    expect(sceneSource).toContain('commanderShieldMapSupportPercent');
+    expect(sceneSource).not.toContain('commanderForceMapCombatPower');
+    expect(empireFieldSource).toContain('apexShieldPresentation(force)');
+    expect(sceneSource).toContain('this.apexEmpireField.percent');
+    expect(sceneSource).not.toContain('APEX supporting with ${compactMapCombatPower(');
+    expect(sceneSource).not.toMatch(/\+\$\{compactMapCombatPower\([^}]*apex/i);
+    expect(sceneSource).toContain('ROGUE PRIME amplifying the Antarctic army by ${primeSupportPercent.toFixed(1)}%');
+    expect(flatSceneSource).toContain('apexShieldPresentation');
     expect(flatSceneSource).toContain('${apexShield.label}');
-    expect(sceneSource).toContain('${compactMapCombatPower(primePower)} PRIME');
-    expect(flatSceneSource).toContain('${compactMapCombatPower(primeSupportPower)} PRIME');
+    expect(flatSceneSource).toContain('commanderShieldMapSupportPercent');
+    expect(sceneSource).toContain('PRIME +${primeSupportPercent.toFixed(1)}%');
+    expect(flatSceneSource).toContain('PRIME +${primeSupportPercent.toFixed(1)}%');
     expect(flatSceneSource).toContain("setData('accessibleLabel', supportAccessibleLabel)");
   });
 
-  it('keeps non-exhausted shield transit visible without presenting army power', () => {
-    for (const source of [sceneSource, flatSceneSource]) {
-      expect(source).toContain('const apexInboundTerritoryId = viewerApex?.transit?.path.at(-1);');
-      expect(source).toContain('const apexSignal = apexSupport || apexInbound;');
-      expect(source).toContain('not yet protecting this territory');
-      expect(source).not.toMatch(/APEX (?:supporting|inbound)[^\n`]*compactMapCombatPower/i);
-    }
-    expect(sceneSource).toContain('const apexProjections = apexProjectionPresentations(viewerApex);');
-    expect(sceneSource).toContain('${viewerApexShield.label} · INBOUND');
+  it('never presents human APEX transit or army power', () => {
+    expect(sceneSource).not.toContain('const apexInboundTerritoryId = viewerApex?.transit?.path.at(-1);');
+    expect(sceneSource).not.toContain('const apexProjections = apexProjectionPresentations(viewerApex);');
+    expect(sceneSource).toContain("this.host.dataset.apexPhysicalMarker = 'none';");
+    expect(sceneSource).not.toMatch(/APEX (?:supporting|inbound)[^\n`]*compactMapCombatPower/i);
+    expect(flatSceneSource).toContain('const apexInboundTerritoryId = viewerApex?.transit?.path.at(-1);');
     expect(sceneSource).toContain('(empirePower.get(territory.ownerId) ?? 0) + territory.army.power');
     expect(flatSceneSource).toContain('${apexShield.label} · INBOUND');
   });
 
   it('scales the pooled shield coverage and contact pulse by integrity', () => {
-    for (const source of [sceneSource, flatSceneSource]) {
-      expect(source).toContain('fieldIntensity: projection.integrity * projection.combatShare');
-      expect(source).toContain('fieldIntensity: 1');
-      expect(source).toContain('shieldIntensity');
-      expect(source).toMatch(/contactOpacity[^;]*\* shieldIntensity/s);
-    }
-    expect(sceneSource).toContain('mode.intensity * entry.fieldIntensity');
+    expect(sceneSource).toContain('this.apexEmpireField.integrity');
+    expect(sceneSource).toContain('fieldIntensity: 1');
+    expect(sceneSource).toContain('shieldIntensity');
+    expect(sceneSource).toMatch(/contactOpacity[^;]*\* shieldIntensity/s);
+    expect(flatSceneSource).toContain('fieldIntensity: projection.integrity * projection.combatShare');
     expect(flatSceneSource).toContain('const fieldIntensity = mode.intensity * entry.fieldIntensity;');
   });
 
-  it('renders Twin Projection as two shared 60% domes with one subtle tether', () => {
-    for (const source of [sceneSource, flatSceneSource]) {
-      expect(source).toContain('apexProjectionPresentations(viewerForce)');
-      expect(source).toContain('projection.integrity * projection.combatShare');
-      expect(source).toContain("`${engine.state.humanPlayerId}:twin`");
-      expect(source).toContain('tether: secondary');
-      expect(source).toContain('Math.min(2, entries.filter((entry) => entry.role === \'apex\').length)');
-      expect(source).toContain("entry.projection === 'secondary'");
-      expect(source).toContain("' with a 60% twin projection'");
-    }
-    expect(sceneSource).toContain("entry.tether ? 'tether:' : ''");
+  it('concentrates one shared network on multiple fronts without twin markers', () => {
+    expect(empireFieldSource).toContain('canonicalShield?.activeFrontTerritoryIds');
+    expect(sceneSource).toContain('const frontIds = new Set(empireField.activeFrontTerritoryIds);');
+    expect(sceneSource).toContain("this.host.dataset.apexProjectionCount = '0';");
+    expect(sceneSource).not.toContain("`${engine.state.humanPlayerId}:twin`");
+    expect(flatSceneSource).toContain('apexProjectionPresentations(viewerForce)');
     expect(flatSceneSource).toContain('const twinTether = entry.tether;');
   });
 
@@ -227,7 +246,8 @@ describe('autonomous APEX / ROGUE PRIME map presentation', () => {
   });
 
   it('gates every APEX production surface behind the viewer first-strike phase', () => {
-    expect(sceneSource.match(/apexFieldPresentationActive\(/g)?.length).toBeGreaterThanOrEqual(3);
+    expect(sceneSource.match(/apexFieldPresentationActive\(/g)?.length).toBeGreaterThanOrEqual(1);
+    expect(empireFieldSource).toContain('apexFieldPresentationActive(engine)');
     expect(flatSceneSource.match(/apexFieldPresentationActive\(/g)?.length).toBeGreaterThanOrEqual(3);
     expect(worldUiSource).toContain('apexFieldActivated: scenarioId !== \'standard-2026\'');
     expect(worldUiSource).toContain('campaignHumanWarsUnlockedV2(engine.state, engine.content, viewerId)');

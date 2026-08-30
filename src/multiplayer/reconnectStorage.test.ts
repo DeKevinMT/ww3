@@ -53,19 +53,21 @@ describe('session-scoped multiplayer rejoin metadata', () => {
     expect(raw).not.toContain('commandCredits');
     expect(raw).not.toContain('commanderTalents');
     expect(raw).toContain('countryMastery');
-    const shield = loaded!.deployments[0]!.apex;
-    expect(shield).toMatchObject({
-      manpower: 0.0008,
-      capacity: 0.0008,
-      trainedReserves: 0.00008,
-      baseAttack: 125,
-      baseDefense: 125,
+    const apex = loaded!.deployments[0]!.apex;
+    expect(apex).toMatchObject({
+      shield: {
+        integrity: 0.0004,
+        maxIntegrity: 0.0004,
+        pulseAttack: 0.001,
+      },
+      attackMultiplier: 1.12,
+      defenseMultiplier: 1.07,
       supplyStock: 0.010,
     });
-    expect(Object.keys(shield).sort()).toEqual([
-      'annualOutput', 'baseAttack', 'baseDefense', 'capabilities', 'capacity',
-      'countryTraitScale', 'empireSupport', 'manpower', 'supplyStock',
-      'trainedReserves', 'treasury',
+    expect(Object.keys(apex).sort()).toEqual([
+      'annualOutput', 'armyCasualtyMultiplier', 'armyPeaceRecoveryMultiplier',
+      'attackMultiplier', 'capabilities', 'countryTraitScale', 'defenseMultiplier',
+      'empireSupport', 'shield', 'supplyStock', 'treasury',
     ]);
   });
 

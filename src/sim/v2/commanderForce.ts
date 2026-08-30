@@ -1,7 +1,11 @@
-import { clamp, combatDefenseEffectV2, round } from './balance';
+import { clamp, round } from './balance';
 import { isWorldConnectionOpenV2 } from './antarcticGateways';
 import { synchronizeArmyCapacityV2, initialNationArmyCapacityBenchmarkV2 } from './capacity';
-import { ROGUE_AI_NATION_ID_V2, type WorldContentV2 } from './content';
+import {
+  ANTARCTIC_TERRITORY_IDS_V2,
+  ROGUE_AI_NATION_ID_V2,
+  type WorldContentV2,
+} from './content';
 import { addWorldEventV2 } from './events';
 import { isHumanPlayerV2 } from './humanPlayers';
 import { selectApexSignalPurgeFocusV2 } from './apexSignalPurgeFocus';
@@ -56,6 +60,8 @@ export const APEX_EMPIRE_ANNUAL_FOOD_OUTPUT_CAP_V2 = 1.56;
 export const BASE_APEX_EMPIRE_SUPPORT_V2: Readonly<CommanderEmpireSupportV2> = Object.freeze({
   recruitmentMultiplier: 1 + APEX_EMPIRE_RECRUITMENT_BASE_BONUS_V2,
   reserveTrainingMultiplier: 1 + APEX_EMPIRE_RESERVE_TRAINING_BASE_BONUS_V2,
+  armyCasualtyMultiplier: 1,
+  armyPeaceRecoveryMultiplier: 1,
   annualFoodOutput: APEX_EMPIRE_BASE_ANNUAL_FOOD_OUTPUT_V2,
   foodProductionMultiplier: 1,
   foodStorageMultiplier: 1,
@@ -65,6 +71,8 @@ export const NEUTRAL_COMMANDER_EMPIRE_SUPPORT_V2: Readonly<CommanderEmpireSuppor
   = Object.freeze({
     recruitmentMultiplier: 1,
     reserveTrainingMultiplier: 1,
+    armyCasualtyMultiplier: 1,
+    armyPeaceRecoveryMultiplier: 1,
     annualFoodOutput: 0,
     foodProductionMultiplier: 1,
     foodStorageMultiplier: 1,
@@ -105,10 +113,12 @@ export const COMMANDER_RECOVERY_MANPOWER_READINESS_V2 = 0.70;
 export const COMMANDER_RECOVERY_SUPPLY_READINESS_V2 = 0.60;
 /** Active frontline circuitry can stabilise energy, but never rebuild at node speed. */
 export const COMMANDER_FRONTLINE_RECOVERY_MULTIPLIER_V2 = 0.15;
-/** A healthy neural dome takes nine tenths of the hit before the host army. */
-export const APEX_FRONTLINE_SHIELD_INTERCEPT_SHARE_V2 = 0.90;
-/** Dome protection is real but bounded; one integrity point can never become infinite armour. */
-export const APEX_FRONTLINE_DURABILITY_MAX_V2 = 4;
+/** One battle pulse can drain at most twenty percent of maximum shield Energy. */
+export const APEX_SHIELD_MAX_ENERGY_LOSS_SHARE_PER_HIT_V2 = 0.20;
+/** APEX can intercept at most half of the post-DEF national damage in one hit. */
+export const APEX_FRONTLINE_SHIELD_INTERCEPT_SHARE_V2 = 0.50;
+/** Compatibility export: shield integrity and blocked damage now use the same unit. */
+export const APEX_FRONTLINE_DURABILITY_MAX_V2 = 1;
 const COMMANDER_OPERATIONAL_SUPPLY_WEEKS_V2 = 10;
 /** Persisted marker for the one canonical zero-integrity recovery lifecycle. */
 const COMMANDER_EXHAUSTED_RECOVERY_HOLD_TICK_V2 = Number.MAX_SAFE_INTEGER;
@@ -116,20 +126,25 @@ const COMMANDER_EXHAUSTED_RECOVERY_HOLD_TICK_V2 = Number.MAX_SAFE_INTEGER;
 const EPSILON = 0.000000001;
 
 export const APEX_LANCER_PULSE_INTERVAL_V2 = 3;
-export const APEX_LANCER_PULSE_ATTACK_MULTIPLIER_V2 = 1.60;
-export const APEX_AEGIS_COUNTERPULSE_SHARE_V2 = 0.20;
-export const APEX_NEXUS_PROJECTION_COMBAT_SHARE_V2 = 0.60;
+export const APEX_LANCER_PULSE_ATTACK_MULTIPLIER_V2 = 2;
+export const APEX_AEGIS_COUNTERPULSE_SHARE_V2 = 0.15;
+/** Theater Mesh adds this much shared army-buff budget per extra front. */
+export const APEX_NEXUS_ADDITIONAL_FRONT_BUDGET_V2 = 0.20;
+/** Theater Mesh can project at most 140% total ATK/DEF across all fronts. */
+export const APEX_NEXUS_MAX_PROJECTION_BUDGET_V2 = 1.40;
 
 export const DEFAULT_APEX_DOCTRINE_RUNTIME_V2: Readonly<ApexDoctrineRuntimeV2>
   = Object.freeze({
     lancerSupportedAssaultCount: 0,
     secondaryProjection: null,
+    emergencyRebootUsed: false,
   });
 
 const APEX_CAPSTONE_CAPABILITY_KEYS_V2 = [
   'assaultSpecialist',
   'defenseSpecialist',
-  'rapidResponse',
+  'fieldHospital',
+  'forceMultiplier',
 ] as const;
 
 type ApexCapstoneCapabilityKeyV2 = typeof APEX_CAPSTONE_CAPABILITY_KEYS_V2[number];
@@ -173,14 +188,18 @@ export function normalizeApexDoctrineRuntimeV2(
         pairedPrimaryFront: cloneApexFrontAssignmentV2(secondary.pairedPrimaryFront),
       }
     : null;
-  return { lancerSupportedAssaultCount, secondaryProjection };
+  return {
+    lancerSupportedAssaultCount,
+    secondaryProjection,
+    emergencyRebootUsed: runtime?.emergencyRebootUsed === true,
+  };
 }
 
 /**
  * Repairs authenticated saves created before capstone selection became
- * exclusive. A live Twin projection wins first, then persisted Lancer charge;
- * otherwise the stable talent-tree order (Lancer, Aegis, Nexus) selects one.
- * Incompatible runtime sidecars are cleared with the discarded protocols.
+ * exclusive. A retired NEXUS sidecar first preserves the player's chosen
+ * rapid-response protocol, then migration cleanup removes its placement data.
+ * Otherwise persisted Lancer charge or stable talent-tree order selects one.
  */
 export function normalizeApexCapstoneProtocolV2(
   force: CommanderForceStateV2,
@@ -189,15 +208,20 @@ export function normalizeApexCapstoneProtocolV2(
   const capabilities = force.capabilities;
   let selected: ApexCapstoneCapabilityKeyV2 | null = null;
   if (runtime.secondaryProjection && capabilities.rapidResponse) {
-    selected = 'rapidResponse';
+    capabilities.forceMultiplier = true;
+    selected = 'forceMultiplier';
   } else if (runtime.lancerSupportedAssaultCount > 0 && capabilities.assaultSpecialist) {
     selected = 'assaultSpecialist';
   } else {
     selected = APEX_CAPSTONE_CAPABILITY_KEYS_V2.find((key) => capabilities[key]) ?? null;
   }
   for (const key of APEX_CAPSTONE_CAPABILITY_KEYS_V2) capabilities[key] = key === selected;
-  if (selected !== 'assaultSpecialist') runtime.lancerSupportedAssaultCount = 0;
-  if (selected !== 'rapidResponse') runtime.secondaryProjection = null;
+  if (selected !== 'assaultSpecialist'
+    && (force.shield.pulseChargeBonusPerStep ?? 0) <= EPSILON) {
+    runtime.lancerSupportedAssaultCount = 0;
+  }
+  capabilities.rapidResponse = false;
+  runtime.secondaryProjection = null;
   force.doctrineRuntime = runtime;
   return selected;
 }
@@ -210,22 +234,27 @@ function apexDoctrineRuntimeV2(
   return normalized;
 }
 
-function apexDomeAttackRatingV2(
+export const BASE_APEX_ARMY_ATTACK_MULTIPLIER_V2 = 1.12;
+export const BASE_APEX_ARMY_DEFENSE_MULTIPLIER_V2 = 1.07;
+/** Base fixed neural-pulse damage potential (one thousand troop-equivalent). */
+export const BASE_APEX_PULSE_ATTACK_V2 = 0.001;
+
+function apexArmyAttackMultiplierV2(
   state: WorldStateV2,
   playerId: PlayerId,
   force: CommanderForceStateV2,
 ): number {
-  return force.army.baseAttack
-    + selectRunModifiersV2(state, playerId).commanderAttackBonus;
+  const legacyRunBonus = selectRunModifiersV2(state, playerId).commanderAttackBonus;
+  return Math.max(1, force.shield.attackMultiplier + legacyRunBonus / 100);
 }
 
-function apexDomeDefenseRatingV2(
+function apexArmyDefenseMultiplierV2(
   state: WorldStateV2,
   playerId: PlayerId,
   force: CommanderForceStateV2,
 ): number {
-  return force.army.baseDefense
-    + selectRunModifiersV2(state, playerId).commanderDefenseBonus;
+  const legacyRunBonus = selectRunModifiersV2(state, playerId).commanderDefenseBonus;
+  return Math.max(1, force.shield.defenseMultiplier + legacyRunBonus / 100);
 }
 
 export interface ApexFrontlineDamageAllocationV2 {
@@ -235,48 +264,48 @@ export interface ApexFrontlineDamageAllocationV2 {
   allyLosses: number;
   /** National-equivalent damage stopped by the dome before casualty conversion. */
   interceptedDamage: number;
-  /** Dome durability applied to the intercepted national-equivalent hit. */
+  /** Damage blocked per Energy spent; one without Energy Efficiency talents. */
   durabilityMultiplier: number;
-  /** Bounded AEGIS damage reflected toward the hostile formation. */
+  /** Bounded Countermeasure damage reflected toward the hostile formation. */
   counterpulseDamage: number;
 }
 
 /**
- * Pure frontline dome-damage allocator. A healthy, exactly assigned human
- * APEX intercepts most incoming national-equivalent damage with its finite
- * energy shield. The national formation receives the unintercepted remainder;
- * national overkill flows back into any integrity still available in the dome.
- * Reaching zero triggers core extraction after damage accounting.
- * Without an active dome this preserves the former proportional split.
+ * Pure frontline shield allocator. Combat supplies one post-DEF, already-capped
+ * hit; ally exposure is resolved first and the separate APEX layer then absorbs
+ * at most 50% of the national share while spending at most 20% of its own
+ * maximum Energy. Interception talents can make each Energy stop more damage,
+ * but cannot bypass either limit. An empty national formation receives no
+ * protection that could extend defeat or stalemate.
  */
 export function allocateApexFrontlineDamageV2(input: {
   requestedDamage: number;
   nationalManpower: number;
   allyManpower?: number;
-  /** Hostile formation currently present; Mirror Matrix can never exceed it. */
+  /** Compatibility input retained for older callers; the shared combat cap bounds reflection. */
   hostileManpower?: number;
   apex?: {
     shieldActive: boolean;
-    engagedManpower: number;
-    manpower: number;
-    capacity: number;
-    defense: number;
-    nationalDefense: number;
-    opposingAttack: number;
+    integrity: number;
+    maxIntegrity?: number;
     mirrorMatrixEligible?: boolean;
+    interceptEfficiency?: number;
   };
 }): ApexFrontlineDamageAllocationV2 {
   const nationalManpower = Math.max(0, input.nationalManpower);
   const allyManpower = Math.max(0, input.allyManpower ?? 0);
-  // `manpower` and `engagedManpower` are legacy battle-protocol field names.
-  // For APEX they carry current and engaged neural-dome integrity, never people.
-  const apexIntegrity = Math.max(0, input.apex?.manpower ?? 0);
-  const engagedIntegrity = Math.min(
+  const apexIntegrity = Math.max(0, input.apex?.integrity ?? 0);
+  const apexMaxIntegrity = Math.max(
     apexIntegrity,
-    Math.max(0, input.apex?.engagedManpower ?? 0),
+    input.apex?.maxIntegrity ?? apexIntegrity,
+  );
+  const interceptEfficiency = clamp(
+    input.apex?.interceptEfficiency ?? 1,
+    1,
+    1.45,
   );
   const rawRequestedDamage = Math.max(0, input.requestedDamage);
-  const exposed = nationalManpower + allyManpower + engagedIntegrity;
+  const exposed = nationalManpower + allyManpower;
   if (rawRequestedDamage <= EPSILON || exposed <= EPSILON) {
     return {
       nationalLosses: 0,
@@ -288,22 +317,20 @@ export function allocateApexFrontlineDamageV2(input: {
     };
   }
 
-  if (!input.apex?.shieldActive || engagedIntegrity <= EPSILON) {
-    const requestedDamage = Math.min(exposed, rawRequestedDamage);
-    const allyLosses = Math.min(
-      allyManpower,
-      requestedDamage * allyManpower / exposed,
-    );
-    const integrityDamage = Math.min(
-      engagedIntegrity,
-      requestedDamage * engagedIntegrity / exposed,
-    );
+  const requestedDamage = Math.min(exposed, rawRequestedDamage);
+  const allyLosses = Math.min(
+    allyManpower,
+    requestedDamage * allyManpower / exposed,
+  );
+  const nationalDamageBeforeShield = Math.min(
+    nationalManpower,
+    Math.max(0, requestedDamage - allyLosses),
+  );
+  if (!input.apex?.shieldActive || apexIntegrity <= EPSILON
+    || nationalDamageBeforeShield <= EPSILON) {
     return {
-      nationalLosses: Math.min(
-        nationalManpower,
-        Math.max(0, requestedDamage - allyLosses - integrityDamage),
-      ),
-      apexLosses: integrityDamage,
+      nationalLosses: nationalDamageBeforeShield,
+      apexLosses: 0,
       allyLosses,
       interceptedDamage: 0,
       durabilityMultiplier: 1,
@@ -311,55 +338,28 @@ export function allocateApexFrontlineDamageV2(input: {
     };
   }
 
-  const nationalProtection = combatDefenseEffectV2(
-    input.apex.nationalDefense,
-    input.apex.opposingAttack,
-  );
-  const apexProtection = combatDefenseEffectV2(
-    input.apex.defense,
-    input.apex.opposingAttack,
-  );
-  const durabilityMultiplier = clamp(
-    apexProtection / Math.max(EPSILON, nationalProtection),
-    1,
-    APEX_FRONTLINE_DURABILITY_MAX_V2,
-  );
-  const domeDamageCapacity = engagedIntegrity * durabilityMultiplier;
-  const equivalentExposed = nationalManpower + allyManpower + domeDamageCapacity;
-  const requestedDamage = Math.min(equivalentExposed, rawRequestedDamage);
-  const allyLosses = equivalentExposed > EPSILON ? Math.min(
-    allyManpower,
-    requestedDamage * allyManpower / equivalentExposed,
-  ) : 0;
-  const protectedDamage = Math.max(0, requestedDamage - allyLosses);
-  const desiredIntercept = protectedDamage * APEX_FRONTLINE_SHIELD_INTERCEPT_SHARE_V2;
-  const primaryIntercept = Math.min(domeDamageCapacity, desiredIntercept);
-  const requestedNationalLosses = Math.max(0, protectedDamage - primaryIntercept);
-  const nationalLosses = Math.min(nationalManpower, requestedNationalLosses);
-  // A tiny or already empty national formation cannot make overkill vanish.
-  // The remainder returns to any durability still available in the dome.
-  const nationalOverflow = Math.max(0, requestedNationalLosses - nationalLosses);
-  const overflowIntercept = Math.min(
-    Math.max(0, domeDamageCapacity - primaryIntercept),
-    nationalOverflow,
+  const maximumEnergySpend = Math.min(
+    apexIntegrity,
+    apexMaxIntegrity * APEX_SHIELD_MAX_ENERGY_LOSS_SHARE_PER_HIT_V2,
   );
   const interceptedDamage = Math.min(
-    protectedDamage,
-    primaryIntercept + overflowIntercept,
+    nationalDamageBeforeShield * APEX_FRONTLINE_SHIELD_INTERCEPT_SHARE_V2,
+    maximumEnergySpend * interceptEfficiency,
   );
-  const integrityDamage = interceptedDamage / Math.max(1, durabilityMultiplier);
+  const energySpent = Math.min(
+    maximumEnergySpend,
+    interceptedDamage / interceptEfficiency,
+  );
+  const nationalLosses = Math.max(0, nationalDamageBeforeShield - interceptedDamage);
   const counterpulseDamage = input.apex.mirrorMatrixEligible
-    ? Math.min(
-        Math.max(0, input.hostileManpower ?? 0),
-        interceptedDamage * APEX_AEGIS_COUNTERPULSE_SHARE_V2,
-      )
+    ? interceptedDamage * APEX_AEGIS_COUNTERPULSE_SHARE_V2
     : 0;
   return {
     nationalLosses,
-    apexLosses: integrityDamage,
+    apexLosses: energySpent,
     allyLosses,
     interceptedDamage,
-    durabilityMultiplier,
+    durabilityMultiplier: interceptEfficiency,
     counterpulseDamage,
   };
 }
@@ -379,6 +379,12 @@ export function normalizeApexEmpireSupportV2(
     ), 9),
     reserveTrainingMultiplier: round(clamp(
       support?.reserveTrainingMultiplier ?? fallback.reserveTrainingMultiplier, 1, 1.75,
+    ), 9),
+    armyCasualtyMultiplier: round(clamp(
+      support?.armyCasualtyMultiplier ?? fallback.armyCasualtyMultiplier, 0.82, 1,
+    ), 9),
+    armyPeaceRecoveryMultiplier: round(clamp(
+      support?.armyPeaceRecoveryMultiplier ?? fallback.armyPeaceRecoveryMultiplier, 1, 1.75,
     ), 9),
     annualFoodOutput: 0,
     foodProductionMultiplier: round(clamp(
@@ -403,6 +409,21 @@ export function selectApexEmpireSupportV2(
     return { ...NEUTRAL_COMMANDER_EMPIRE_SUPPORT_V2 };
   }
   return normalizeApexEmpireSupportV2(force.empireSupport);
+}
+
+/** Army-side talent effects exist only while the one shared shield is online. */
+export function selectApexOperationalArmyModifiersV2(
+  state: WorldStateV2,
+  playerId: PlayerId,
+): Pick<CommanderEmpireSupportV2, 'armyCasualtyMultiplier' | 'armyPeaceRecoveryMultiplier'> {
+  if (selectApexShieldOperationalStateV2(state, playerId) !== 'operational') {
+    return { armyCasualtyMultiplier: 1, armyPeaceRecoveryMultiplier: 1 };
+  }
+  const support = selectApexEmpireSupportV2(state, playerId);
+  return {
+    armyCasualtyMultiplier: support.armyCasualtyMultiplier,
+    armyPeaceRecoveryMultiplier: support.armyPeaceRecoveryMultiplier,
+  };
 }
 
 /** Narrow compatibility selector retained for military callsites and tests. */
@@ -474,19 +495,17 @@ export interface CommanderForecastMobilityV2 {
   etaWeeks: number | null;
   readiness: number;
   supplyReadiness: number;
-  /** Legacy protocol name for current dome integrity. */
-  manpower: number;
-  /** Legacy protocol name for maximum dome integrity. */
-  capacity: number;
-  attack: number;
-  defense: number;
+  integrity: number;
+  maxIntegrity: number;
+  attackMultiplier: number;
+  defenseMultiplier: number;
+  pulseAttack: number;
+  interceptEfficiency: number;
   reason: string;
 }
 
 /**
- * Canonical public state for the APEX neural energy shield. The persisted
- * Commander `army` record remains unchanged for save, replay and multiplayer
- * compatibility; its manpower fields are interpreted here as dome integrity.
+ * Canonical public state for the APEX neural energy shield.
  */
 export type ApexShieldOperationalStateV2 =
   | 'operational'
@@ -499,19 +518,62 @@ export interface ApexShieldPresentationV2 {
   /** Display percentage from 0 through 100, retaining tenths near full. */
   readonly integrityPercent: number;
   readonly operationalState: ApexShieldOperationalStateV2;
-  /** Effective strike-support rating; zero while the dome is unavailable. */
-  readonly attack: number;
-  /** Effective interception rating; zero while the dome is unavailable. */
-  readonly defense: number;
-  /** Comparable current dome power; never national troop power. */
-  readonly combatPower: number;
+  /** Multiplier applied to the supported national army; one while offline. */
+  readonly attackMultiplier: number;
+  /** Multiplier applied to the supported national army; one while offline. */
+  readonly defenseMultiplier: number;
+  /** Fixed neural attack potential; zero while the network is offline. */
+  readonly pulseAttack: number;
+  /** Readable average percentage bonus, never independent combat strength. */
+  readonly supportBonusPercent: number;
+}
+
+export interface ApexEmpireShieldFrontV2 {
+  readonly warId: string;
+  readonly sourceId: TerritoryId;
+  readonly targetId: TerritoryId;
+  readonly friendlyTerritoryId: TerritoryId;
+  readonly hostileTerritoryId: TerritoryId;
+  readonly mission: Extract<CommanderMissionV2, 'assault-support' | 'defense'>;
+  /**
+   * Share of the one global ATK/DEF pool projected into this front. Integrity
+   * is never cloned: every pulse still damages the same persisted shield.
+   */
+  readonly allocationShare: number;
 }
 
 /**
- * Single authoritative adapter from the legacy save fields to shield terms.
+ * Renderer- and UI-facing projection of the distributed APEX network. The
+ * legacy force location remains in saves only as a recovery/core anchor; it
+ * never limits coverage, combat support or Signal Purge work.
+ */
+export interface ApexEmpireShieldNetworkV2 extends ApexShieldPresentationV2 {
+  readonly active: boolean;
+  readonly coverageTerritoryIds: readonly TerritoryId[];
+  readonly activeFrontTerritoryIds: readonly TerritoryId[];
+  readonly activeFrontCount: number;
+  readonly fronts: readonly ApexEmpireShieldFrontV2[];
+}
+
+/** Hostile signal remnants block combat-field authentication until purged. */
+function apexEmpireShieldTerritoryEligibleV2(
+  state: WorldStateV2,
+  playerId: PlayerId,
+  territoryId: TerritoryId,
+): boolean {
+  const territory = state.territories[territoryId];
+  return Boolean(
+    territory?.owner === playerId
+      && territory.integration >= 1 - EPSILON
+      && !territory.integrationProgram,
+  );
+}
+
+/**
+ * Single authoritative adapter from persisted shield state to public terms.
  * A true-zero extraction stays non-operational for the complete recovery
  * mission, including a loaded 99.9% state; only the process that reaches 100%
- * releases the dome and makes its ATK/DEF and combat power available again.
+ * releases the dome and makes its force multipliers available again.
  */
 export function selectApexShieldPresentationV2(
   state: WorldStateV2,
@@ -520,8 +582,8 @@ export function selectApexShieldPresentationV2(
   const force = state.commanderForces?.[playerId];
   if (!force) return null;
 
-  const integrityMax = Math.max(0, force.army.capacity);
-  const integrityCurrent = clamp(force.army.manpower, 0, integrityMax);
+  const integrityMax = Math.max(0, force.shield.maxIntegrity);
+  const integrityCurrent = clamp(force.shield.integrity, 0, integrityMax);
   const rawIntegrityPercent = clamp(
     integrityMax > EPSILON ? integrityCurrent / integrityMax * 100 : 0,
     0,
@@ -545,27 +607,14 @@ export function selectApexShieldPresentationV2(
       : operational
         ? 'operational'
         : 'unavailable';
-  const ratedAttack = Math.max(
-    0,
-    apexDomeAttackRatingV2(
-      state,
-      playerId,
-      force,
-    ),
-  );
-  const ratedDefense = Math.max(
-    0,
-    apexDomeDefenseRatingV2(
-      state,
-      playerId,
-      force,
-    ),
-  );
-  const attack = operational ? round(ratedAttack, 3) : 0;
-  const defense = operational ? round(ratedDefense, 3) : 0;
-  const combatPower = operational ? round(
-    1_000 * integrityCurrent * (0.55 * attack + 0.45 * defense),
-    9,
+  const attackMultiplier = operational
+    ? round(apexArmyAttackMultiplierV2(state, playerId, force), 6) : 1;
+  const defenseMultiplier = operational
+    ? round(apexArmyDefenseMultiplierV2(state, playerId, force), 6) : 1;
+  const pulseAttack = operational ? round(Math.max(0, force.shield.pulseAttack), 9) : 0;
+  const supportBonusPercent = operational ? round(
+    ((attackMultiplier - 1) * 0.55 + (defenseMultiplier - 1) * 0.45) * 100,
+    3,
   ) : 0;
 
   return Object.freeze({
@@ -573,9 +622,96 @@ export function selectApexShieldPresentationV2(
     integrityMax: round(integrityMax, 9),
     integrityPercent,
     operationalState,
-    attack,
-    defense,
-    combatPower,
+    attackMultiplier,
+    defenseMultiplier,
+    pulseAttack,
+    supportBonusPercent,
+  });
+}
+
+/**
+ * Exact per-front share of the one global ATK/DEF pool. Without Theater Mesh,
+ * the normal 100% budget is divided evenly. Theater Mesh adds 20% budget for
+ * every additional live front, caps the total at 140%, then divides it evenly.
+ */
+export function apexEmpireFrontAllocationShareV2(
+  activeFrontCount: number,
+  omnipresenceGrid: boolean,
+): number {
+  if (activeFrontCount <= 1) return 1;
+  const totalProjectionBudget = omnipresenceGrid
+    ? Math.min(
+        APEX_NEXUS_MAX_PROJECTION_BUDGET_V2,
+        1 + (activeFrontCount - 1) * APEX_NEXUS_ADDITIONAL_FRONT_BUDGET_V2,
+      )
+    : 1;
+  return clamp(totalProjectionBudget / activeFrontCount, 0, 1);
+}
+
+/**
+ * One deterministic empire-wide shield view. Every human-controlled territory
+ * is covered while the network is operational and every live war front gets a
+ * projection. All projections consume the same integrity and energy records.
+ */
+export function selectApexEmpireShieldNetworkV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  playerId: PlayerId,
+): ApexEmpireShieldNetworkV2 | null {
+  const force = state.commanderForces?.[playerId];
+  const presentation = selectApexShieldPresentationV2(state, playerId);
+  if (!force || !presentation || !isHumanPlayerV2(state, playerId)) return null;
+
+  const coverageTerritoryIds = content.territoryIds
+    .filter((territoryId) => apexEmpireShieldTerritoryEligibleV2(
+      state,
+      playerId,
+      territoryId,
+    ))
+    .sort((left, right) => left.localeCompare(right));
+  const coverage = new Set(coverageTerritoryIds);
+  const rawFronts = activeCommanderFrontsV2(state).flatMap((front) => {
+    const humanAssaults = front.source.owner === playerId
+      && front.target.owner !== playerId;
+    const humanDefends = front.target.owner === playerId
+      && front.source.owner !== playerId;
+    if (!humanAssaults && !humanDefends) return [];
+    const friendlyTerritoryId = humanAssaults
+      ? front.operation.sourceId : front.operation.targetId;
+    // A newly captured country is still carrying the hostile signal. APEX can
+    // purge it through the distributed network, but cannot authenticate a
+    // combat dome there until integration reaches exactly 100%.
+    if (!coverage.has(friendlyTerritoryId)) return [];
+    return [{
+      warId: front.war.id,
+      sourceId: front.operation.sourceId,
+      targetId: front.operation.targetId,
+      friendlyTerritoryId,
+      hostileTerritoryId: humanAssaults
+        ? front.operation.targetId : front.operation.sourceId,
+      mission: humanAssaults ? 'assault-support' as const : 'defense' as const,
+    }];
+  });
+  const allocationShare = apexEmpireFrontAllocationShareV2(
+    rawFronts.length,
+    force.capabilities.forceMultiplier,
+  );
+  const fronts = rawFronts.map((front) => Object.freeze({
+    ...front,
+    allocationShare: round(allocationShare, 9),
+  }));
+  const active = presentation.operationalState === 'operational'
+    && coverageTerritoryIds.length > 0;
+
+  return Object.freeze({
+    ...presentation,
+    active,
+    coverageTerritoryIds: Object.freeze([...coverageTerritoryIds]),
+    activeFrontTerritoryIds: Object.freeze([...new Set(
+      fronts.map((front) => front.friendlyTerritoryId),
+    )].sort((left, right) => left.localeCompare(right))),
+    activeFrontCount: fronts.length,
+    fronts: Object.freeze(fronts),
   });
 }
 
@@ -605,20 +741,20 @@ export const selectApexShieldOperationalStateV2 = (
 export const selectApexShieldAttackV2 = (
   state: WorldStateV2,
   playerId: PlayerId,
-): number => selectApexShieldPresentationV2(state, playerId)?.attack ?? 0;
+): number => selectApexShieldPresentationV2(state, playerId)?.attackMultiplier ?? 1;
 
 export const selectApexShieldDefenseV2 = (
   state: WorldStateV2,
   playerId: PlayerId,
-): number => selectApexShieldPresentationV2(state, playerId)?.defense ?? 0;
+): number => selectApexShieldPresentationV2(state, playerId)?.defenseMultiplier ?? 1;
 
 export const selectApexShieldCombatPowerV2 = (
   state: WorldStateV2,
   playerId: PlayerId,
-): number => selectApexShieldPresentationV2(state, playerId)?.combatPower ?? 0;
+): number => selectApexShieldPresentationV2(state, playerId)?.supportBonusPercent ?? 0;
 
 export interface ApexLancerPulseStatusV2 {
-  /** Exact persisted progress since the last Singularity Pulse: 0, 1 or 2. */
+  /** Exact persisted progress toward the next Overdrive Pulse: 0, 1 or 2. */
   readonly supportedAssaultCount: number;
   readonly nextPulseCharged: boolean;
   readonly nextAttackMultiplier: number;
@@ -635,19 +771,26 @@ export function selectApexLancerPulseStatusV2(
   playerId: PlayerId,
 ): ApexLancerPulseStatusV2 {
   const force = state.commanderForces?.[playerId];
-  const enabled = Boolean(force?.capabilities.assaultSpecialist
-    && isHumanPlayerV2(state, playerId));
+  const chargeBonusPerStep = clamp(
+    force?.shield.pulseChargeBonusPerStep ?? 0,
+    0,
+    0.45,
+  );
+  const enabled = Boolean(force
+    && isHumanPlayerV2(state, playerId)
+    && (force.capabilities.assaultSpecialist || chargeBonusPerStep > EPSILON));
   const supportedAssaultCount = enabled
     ? normalizeApexDoctrineRuntimeV2(force?.doctrineRuntime)
       .lancerSupportedAssaultCount
     : 0;
-  const nextPulseCharged = enabled
+  const nextPulseCharged = Boolean(force?.capabilities.assaultSpecialist)
     && supportedAssaultCount === APEX_LANCER_PULSE_INTERVAL_V2 - 1;
+  const storedChargeMultiplier = 1 + supportedAssaultCount * chargeBonusPerStep;
   return Object.freeze({
     supportedAssaultCount,
     nextPulseCharged,
-    nextAttackMultiplier: nextPulseCharged
-      ? APEX_LANCER_PULSE_ATTACK_MULTIPLIER_V2 : 1,
+    nextAttackMultiplier: storedChargeMultiplier * (nextPulseCharged
+      ? APEX_LANCER_PULSE_ATTACK_MULTIPLIER_V2 : 1),
   });
 }
 
@@ -670,8 +813,13 @@ export function registerApexSupportedAssaultBattleV2(
     nextAttackMultiplier: 1,
   };
   const force = state.commanderForces?.[playerId];
-  if (!force?.capabilities.assaultSpecialist
-    || !isHumanPlayerV2(state, playerId)) {
+  const chargeBonusPerStep = clamp(
+    force?.shield.pulseChargeBonusPerStep ?? 0,
+    0,
+    0.45,
+  );
+  if (!force || !isHumanPlayerV2(state, playerId)
+    || (!force.capabilities.assaultSpecialist && chargeBonusPerStep <= EPSILON)) {
     return {
       recorded: false,
       singularityPulse: false,
@@ -681,19 +829,24 @@ export function registerApexSupportedAssaultBattleV2(
     };
   }
   const runtime = apexDoctrineRuntimeV2(force);
-  const singularityPulse = runtime.lancerSupportedAssaultCount
+  const completedChargeCycle = runtime.lancerSupportedAssaultCount
     === APEX_LANCER_PULSE_INTERVAL_V2 - 1;
-  runtime.lancerSupportedAssaultCount = singularityPulse
+  const singularityPulse = force.capabilities.assaultSpecialist
+    && completedChargeCycle;
+  runtime.lancerSupportedAssaultCount = completedChargeCycle
     ? 0 : runtime.lancerSupportedAssaultCount + 1;
+  if (singularityPulse) {
+    applyApexShieldDamageV2(
+      state,
+      playerId,
+      force.shield.maxIntegrity * 0.02,
+    );
+  }
+  const next = selectApexLancerPulseStatusV2(state, playerId);
   return {
     recorded: true,
     singularityPulse,
-    supportedAssaultCount: runtime.lancerSupportedAssaultCount,
-    nextPulseCharged: runtime.lancerSupportedAssaultCount
-      === APEX_LANCER_PULSE_INTERVAL_V2 - 1,
-    nextAttackMultiplier: runtime.lancerSupportedAssaultCount
-      === APEX_LANCER_PULSE_INTERVAL_V2 - 1
-      ? APEX_LANCER_PULSE_ATTACK_MULTIPLIER_V2 : 1,
+    ...next,
   };
 }
 
@@ -747,9 +900,13 @@ export function selectCommanderEliteComparisonV2(
   content: WorldContentV2,
   playerId: PlayerId,
 ): CommanderEliteComparisonV2 | null {
-  const army = state.commanderForces?.[playerId]?.army;
-  return army
-    ? commanderEliteComparisonForRatingsV2(content, army.baseAttack, army.baseDefense)
+  const shield = state.commanderForces?.[playerId]?.shield;
+  return shield
+    ? commanderEliteComparisonForRatingsV2(
+        content,
+        shield.attackMultiplier,
+        shield.defenseMultiplier,
+      )
     : null;
 }
 
@@ -786,9 +943,9 @@ function apexSecondaryProjectionPairedFrontsOperationalV2(
   secondary: ApexSecondaryProjectionV2 | null,
 ): secondary is ApexSecondaryProjectionV2 {
   return Boolean(
-    force.capabilities.rapidResponse
+    force.capabilities.forceMultiplier
       && !force.transit
-      && force.army.manpower > EPSILON
+      && force.shield.integrity > EPSILON
       && force.front
       && secondary
       && frontSignatureV2(secondary.pairedPrimaryFront)
@@ -847,6 +1004,11 @@ function clearApexSecondaryProjectionV2(
   return true;
 }
 
+/**
+ * Compatibility view retained for older UI/save adapters. Live NEXUS no
+ * longer owns a second location or projection sidecar; `combatShare` is the
+ * current even share of the distributed Omnipresence Grid.
+ */
 export interface ApexTwinProjectionStatusV2 {
   readonly active: boolean;
   readonly combatShare: number;
@@ -854,7 +1016,7 @@ export interface ApexTwinProjectionStatusV2 {
   readonly secondaryProjection: ApexSecondaryProjectionV2 | null;
 }
 
-/** Read-only NEXUS split state; neither projection carries cloned HP or energy. */
+/** Read-only legacy adapter over the stateless Omnipresence Grid. */
 export function selectApexTwinProjectionStatusV2(
   state: WorldStateV2,
   playerId: PlayerId,
@@ -867,20 +1029,26 @@ export function selectApexTwinProjectionStatusV2(
     primaryLocationId: null,
     secondaryProjection: null,
   });
-  const secondary = normalizeApexDoctrineRuntimeV2(force.doctrineRuntime)
-    .secondaryProjection;
-  const active = apexSecondaryProjectionOperationalV2(
-    state, content, playerId, force, secondary,
-  );
+  if (isHumanPlayerV2(state, playerId)) {
+    const network = selectApexEmpireShieldNetworkV2(state, content, playerId);
+    const active = Boolean(
+      force.capabilities.forceMultiplier
+        && network?.active
+        && (network.activeFrontCount ?? 0) > 1,
+    );
+    return Object.freeze({
+      active,
+      combatShare: active ? network!.fronts[0]?.allocationShare ?? 1 : 1,
+      primaryLocationId: network?.fronts[0]?.friendlyTerritoryId
+        ?? network?.coverageTerritoryIds[0] ?? null,
+      secondaryProjection: null,
+    });
+  }
   return Object.freeze({
-    active,
-    combatShare: active ? APEX_NEXUS_PROJECTION_COMBAT_SHARE_V2 : 1,
+    active: false,
+    combatShare: 1,
     primaryLocationId: force.locationId,
-    secondaryProjection: active && secondary ? {
-      ...secondary,
-      front: { ...secondary.front },
-      pairedPrimaryFront: { ...secondary.pairedPrimaryFront },
-    } : null,
+    secondaryProjection: null,
   });
 }
 
@@ -1032,9 +1200,10 @@ export function selectCommanderEmergencyExtractionRouteV2(
 }
 
 /**
- * Side-effect-free, route-legal availability for a prospective friendly
- * staging territory. APEX never receives credit through enemy territory and a
- * dome already committed to another front cannot provide strike support twice.
+ * Side-effect-free availability for a prospective friendly staging territory.
+ * The shield is an empire-wide network: physical routes, legacy transit and
+ * another active front never delay its projection. Existing fronts only divide
+ * the conserved ATK/DEF budget with the prospective campaign.
  */
 export function selectCommanderForecastMobilityV2(
   state: WorldStateV2,
@@ -1048,72 +1217,66 @@ export function selectCommanderForecastMobilityV2(
     etaWeeks: null,
     readiness: 0,
     supplyReadiness: 0,
-    manpower: 0,
-    capacity: 0,
-    attack: 0,
-    defense: 0,
+    integrity: 0,
+    maxIntegrity: 0,
+    attackMultiplier: 1,
+    defenseMultiplier: 1,
+    pulseAttack: 0,
+    interceptEfficiency: 1,
     reason,
   });
-  if (!force || force.army.manpower <= EPSILON) {
+  if (!force || force.shield.integrity <= EPSILON) {
     return absent('absent', 'No operational APEX neural dome is available.');
   }
-  // This forecast is consumed only for a prospective attacking campaign.
-  const attack = apexDomeAttackRatingV2(state, playerId, force);
-  const defense = apexDomeDefenseRatingV2(state, playerId, force);
   if (state.territories[destinationId]?.owner !== playerId) {
     return absent('unreachable', 'The prospective staging territory is not under your control.');
   }
-  if (force.front) {
-    return {
-      ...absent('committed', 'APEX is committed to another active front.'),
-      readiness: clamp(force.army.manpower / Math.max(EPSILON, force.army.capacity), 0, 1),
-      supplyReadiness: clamp(force.economy.supplyStock / Math.max(EPSILON, force.army.manpower), 0, 1),
-      manpower: force.army.manpower,
-      capacity: force.army.capacity,
-      attack,
-      defense,
-    };
+  const presentation = selectApexShieldPresentationV2(state, playerId);
+  if (!presentation || presentation.operationalState !== 'operational') {
+    return absent(
+      presentation?.operationalState === 'recharging' ? 'committed' : 'absent',
+      presentation?.operationalState === 'recharging'
+        ? 'APEX is rebuilding the global shield to full Energy.'
+        : 'No operational APEX neural shield is available.',
+    );
   }
-  const currentTransitWeeks = force.transit
-    ? Math.max(0, force.transit.arriveTick - state.tick) : 0;
-  const routeSourceId = force.transit?.path[force.transit.path.length - 1] ?? force.locationId;
-  const route = selectCommanderRouteV2(
-    state,
-    content,
-    playerId,
-    routeSourceId,
-    destinationId,
+  const network = selectApexEmpireShieldNetworkV2(state, content, playerId);
+  const prospectiveFrontCount = Math.max(1, (network?.activeFrontCount ?? 0) + 1);
+  const allocationShare = apexEmpireFrontAllocationShareV2(
+    prospectiveFrontCount,
+    force.capabilities.forceMultiplier,
   );
-  if (!route) {
-    return absent('unreachable', 'No route entirely inside your empire reaches this front.');
-  }
-  const routeTravelWeeks = commanderRouteTravelTicksV2(force, route);
-  const etaWeeks = currentTransitWeeks + routeTravelWeeks;
-  const supplyCost = routeTravelWeeks === 0 ? 0 : round(
-    COMMANDER_TRAVEL_SUPPLY_PER_MILLION_TICK_V2 * force.army.manpower * routeTravelWeeks,
-    9,
+  const readiness = clamp(
+    force.shield.integrity / Math.max(EPSILON, force.shield.maxIntegrity),
+    0,
+    1,
   );
-  if (force.economy.supplyStock + EPSILON < supplyCost) {
-    return {
-      ...absent('unreachable', 'APEX lacks the field supply for this redeployment.'),
-      etaWeeks,
-      readiness: clamp(force.army.manpower / Math.max(EPSILON, force.army.capacity), 0, 1),
-      supplyReadiness: clamp(force.economy.supplyStock / Math.max(EPSILON, force.army.manpower), 0, 1),
-      manpower: force.army.manpower,
-      capacity: force.army.capacity,
-    };
-  }
   return {
-    status: etaWeeks === 0 ? 'ready' : 'delayed',
-    etaWeeks,
-    readiness: clamp(force.army.manpower / Math.max(EPSILON, force.army.capacity), 0, 1),
-    supplyReadiness: clamp(force.economy.supplyStock / Math.max(EPSILON, force.army.manpower), 0, 1),
-    manpower: force.army.manpower,
-    capacity: force.army.capacity,
-    attack,
-    defense,
-    reason: etaWeeks === 0 ? 'APEX is already at the prospective front.'
-      : `APEX can reach the prospective front in ${etaWeeks} weeks.`,
+    status: 'ready',
+    etaWeeks: 0,
+    readiness,
+    // Integrity is a damage pool, not a throttle. Any online shield projects
+    // its complete per-front army modifier until the pool reaches true zero.
+    supplyReadiness: 1,
+    integrity: force.shield.integrity,
+    maxIntegrity: force.shield.maxIntegrity,
+    attackMultiplier: round(
+      1 + (presentation.attackMultiplier - 1) * allocationShare,
+      9,
+    ),
+    defenseMultiplier: round(
+      1 + (presentation.defenseMultiplier - 1) * allocationShare,
+      9,
+    ),
+    pulseAttack: round(
+      presentation.pulseAttack
+        * apexPulseProjectionShareV2(force, allocationShare),
+      9,
+    ),
+    interceptEfficiency: clamp(force.shield.interceptEfficiency ?? 1, 1, 1.45),
+    reason: prospectiveFrontCount === 1
+      ? 'The empire-wide APEX shield can support this front immediately.'
+      : `The empire-wide APEX shield can support this front immediately while sharing energy across ${prospectiveFrontCount} fronts.`,
   };
 }
 
@@ -1212,7 +1375,7 @@ function quoteAutonomousCommanderOrderV2(
   }
   const travelTicks = commanderRouteTravelTicksV2(force, route);
   const supplyCost = travelTicks === 0 ? 0 : round(
-    COMMANDER_TRAVEL_SUPPLY_PER_MILLION_TICK_V2 * force.army.manpower * travelTicks,
+    COMMANDER_TRAVEL_SUPPLY_PER_MILLION_TICK_V2 * force.shield.integrity * travelTicks,
     9,
   );
   if (force.economy.supplyStock + EPSILON < supplyCost) {
@@ -1327,11 +1490,20 @@ export function setCommanderPrioritiesV2(
 
 function initializationValidV2(input: CommanderForceInitializationV2): boolean {
   const values = [
-    input.manpower,
-    input.capacity,
-    input.trainedReserves ?? 0,
-    input.baseAttack,
-    input.baseDefense,
+    input.shield.integrity,
+    input.shield.maxIntegrity,
+    input.shield.rechargeBuffer ?? 0,
+    input.shield.rechargeMultiplier ?? 1,
+    input.shield.pulseAttack,
+    input.shield.pulseProjectionRetention ?? 0,
+    input.shield.pulseChargeBonusPerStep ?? 0,
+    input.shield.interceptEfficiency ?? 1,
+    input.shield.impactRecoveryShare ?? 0,
+    input.shield.defensivePulseMultiplier ?? 1,
+    input.attackMultiplier,
+    input.defenseMultiplier,
+    input.armyCasualtyMultiplier ?? 1,
+    input.armyPeaceRecoveryMultiplier ?? 1,
     input.treasury,
     input.annualOutput,
     input.supplyStock ?? 0,
@@ -1348,13 +1520,33 @@ function initializationValidV2(input: CommanderForceInitializationV2): boolean {
     support.foodImportCostMultiplier,
   ];
   return values.every(Number.isFinite)
-    && input.manpower >= 0
-    && input.capacity > 0
-    && input.manpower <= input.capacity + EPSILON
-    && (input.trainedReserves ?? 0) >= 0
-    && (input.trainedReserves ?? 0) <= input.capacity + EPSILON
-    && input.baseAttack > 0 && input.baseAttack <= 160
-    && input.baseDefense > 0 && input.baseDefense <= 160
+    && input.shield.integrity >= 0
+    && input.shield.maxIntegrity > 0
+    && input.shield.integrity <= input.shield.maxIntegrity + EPSILON
+    && (input.shield.rechargeBuffer ?? 0) >= 0
+    && (input.shield.rechargeBuffer ?? 0) <= input.shield.maxIntegrity + EPSILON
+    && input.attackMultiplier >= 1
+    && input.attackMultiplier <= 2.5
+    && input.defenseMultiplier >= 1
+    && input.defenseMultiplier <= 2.5
+    && (input.shield.rechargeMultiplier ?? 1) >= 1
+    && (input.shield.rechargeMultiplier ?? 1) <= 3.5
+    && input.shield.pulseAttack >= 0
+    && input.shield.pulseAttack <= 1
+    && (input.shield.pulseProjectionRetention ?? 0) >= 0
+    && (input.shield.pulseProjectionRetention ?? 0) <= 0.35
+    && (input.shield.pulseChargeBonusPerStep ?? 0) >= 0
+    && (input.shield.pulseChargeBonusPerStep ?? 0) <= 0.45
+    && (input.shield.interceptEfficiency ?? 1) >= 1
+    && (input.shield.interceptEfficiency ?? 1) <= 1.45
+    && (input.shield.impactRecoveryShare ?? 0) >= 0
+    && (input.shield.impactRecoveryShare ?? 0) <= 0.35
+    && (input.shield.defensivePulseMultiplier ?? 1) >= 1
+    && (input.shield.defensivePulseMultiplier ?? 1) <= 1.75
+    && (input.armyCasualtyMultiplier ?? 1) >= 0.82
+    && (input.armyCasualtyMultiplier ?? 1) <= 1
+    && (input.armyPeaceRecoveryMultiplier ?? 1) >= 1
+    && (input.armyPeaceRecoveryMultiplier ?? 1) <= 1.75
     && input.treasury >= 0 && input.annualOutput >= 0
     && (input.supplyStock ?? 0) >= 0
     && (input.countryTraitScale ?? 0) >= 0
@@ -1378,7 +1570,12 @@ function initializationValidV2(input: CommanderForceInitializationV2): boolean {
       capabilities.rapidResponse,
       capabilities.assaultSpecialist,
       capabilities.defenseSpecialist,
+      capabilities.forceMultiplier,
     ].every((value) => value === undefined || typeof value === 'boolean')
+    // Retired rapid-response snapshots are normalized only at authenticated
+    // migration boundaries. New campaign launches must select one of the four
+    // shield-native capstones and can never emit this legacy capability.
+    && capabilities.rapidResponse !== true
     && apexCapstoneCapabilityCountV2(capabilities) <= 1
     && Number.isSafeInteger(capabilities.emergencyExtractionCharges ?? 0)
     && (capabilities.emergencyExtractionCharges ?? 0) >= 0
@@ -1432,18 +1629,32 @@ export function initializeCommanderForceV2(
   if (!initializationValidV2(input)) {
     return { accepted: false, reason: 'APEX neural-dome profile snapshot is invalid.' };
   }
-  // Keep the authenticated save shape stable: the old army fields now store
-  // active integrity, maximum integrity and buffered recovery energy.
-  const integrity = round(input.manpower, 9);
-  const maxIntegrity = round(input.capacity, 9);
-  const recoveryBuffer = round(input.trainedReserves ?? 0, 9);
+  const integrity = round(input.shield.integrity, 9);
+  const maxIntegrity = round(input.shield.maxIntegrity, 9);
+  const recoveryBuffer = round(input.shield.rechargeBuffer ?? 0, 9);
   const force: CommanderForceStateV2 = {
-    army: {
-      manpower: integrity,
-      capacity: maxIntegrity,
-      trainedReserves: recoveryBuffer,
-      baseAttack: round(input.baseAttack, 9),
-      baseDefense: round(input.baseDefense, 9),
+    shield: {
+      integrity,
+      maxIntegrity,
+      rechargeBuffer: recoveryBuffer,
+      attackMultiplier: round(input.attackMultiplier, 9),
+      defenseMultiplier: round(input.defenseMultiplier, 9),
+      rechargeMultiplier: round(input.shield.rechargeMultiplier ?? 1, 9),
+      pulseAttack: round(input.shield.pulseAttack, 9),
+      pulseProjectionRetention: round(
+        input.shield.pulseProjectionRetention ?? 0,
+        9,
+      ),
+      pulseChargeBonusPerStep: round(
+        input.shield.pulseChargeBonusPerStep ?? 0,
+        9,
+      ),
+      interceptEfficiency: round(input.shield.interceptEfficiency ?? 1, 9),
+      impactRecoveryShare: round(input.shield.impactRecoveryShare ?? 0, 9),
+      defensivePulseMultiplier: round(
+        input.shield.defensivePulseMultiplier ?? 1,
+        9,
+      ),
     },
     economy: {
       treasury: 0,
@@ -1455,11 +1666,18 @@ export function initializeCommanderForceV2(
       mobileHeadquarters: input.capabilities?.mobileHeadquarters ?? false,
       fieldHospital: input.capabilities?.fieldHospital ?? false,
       rapidResponse: input.capabilities?.rapidResponse ?? false,
+      forceMultiplier: input.capabilities?.forceMultiplier ?? false,
       assaultSpecialist: input.capabilities?.assaultSpecialist ?? false,
       defenseSpecialist: input.capabilities?.defenseSpecialist ?? false,
       emergencyExtractionCharges: input.capabilities?.emergencyExtractionCharges ?? 0,
     },
-    empireSupport: normalizeApexEmpireSupportV2(input.empireSupport),
+    empireSupport: normalizeApexEmpireSupportV2({
+      ...input.empireSupport,
+      armyCasualtyMultiplier: input.armyCasualtyMultiplier
+        ?? input.empireSupport?.armyCasualtyMultiplier,
+      armyPeaceRecoveryMultiplier: input.armyPeaceRecoveryMultiplier
+        ?? input.empireSupport?.armyPeaceRecoveryMultiplier,
+    }),
     countryTraitScale: round(input.countryTraitScale ?? 0, 9),
     locationId: state.players[playerId]!.capitalId,
     mission: 'standby',
@@ -1497,10 +1715,10 @@ export function selectCommanderAutomaticPrioritiesV2(
   force: CommanderForceStateV2,
   supplyMultiplier = 1,
 ): CommanderEconomyPrioritiesV2 {
-  const capacity = Math.max(EPSILON, force.army.capacity);
-  const activeGap = clamp((capacity - force.army.manpower) / capacity, 0, 1);
+  const capacity = Math.max(EPSILON, force.shield.maxIntegrity);
+  const activeGap = clamp((capacity - force.shield.integrity) / capacity, 0, 1);
   const reserveGap = clamp(
-    (capacity - force.army.trainedReserves) / capacity,
+    (capacity - force.shield.rechargeBuffer) / capacity,
     0,
     1,
   );
@@ -1538,7 +1756,7 @@ function commanderEconomyProjectionV2(
   const weeklyIncome = round(Math.max(0, force.economy.annualOutput) / 52, 9);
   const recoveryBufferGap = Math.max(
     0,
-    force.army.capacity - force.army.trainedReserves,
+    force.shield.maxIntegrity - force.shield.rechargeBuffer,
   );
   const priorities = selectCommanderAutomaticPrioritiesV2(force, supplyMultiplier);
   const trainingAllocation = clamp(
@@ -1553,12 +1771,12 @@ function commanderEconomyProjectionV2(
   ) ? COMMANDER_FRONTLINE_RECOVERY_MULTIPLIER_V2 : 1;
   const recoveryBufferGain = allowIntegrityRecovery ? Math.min(
     recoveryBufferGap,
-    force.army.capacity * COMMANDER_PEACE_TRAINING_CAPACITY_SHARE_V2
+    force.shield.maxIntegrity * COMMANDER_PEACE_TRAINING_CAPACITY_SHARE_V2
       * trainingAllocation * frontlineRecoveryMultiplier,
   ) : 0;
   const supplyCap = Math.max(
     0.001,
-    force.army.capacity * COMMANDER_SUPPLY_CAPACITY_WEEKS_V2 * supplyMultiplier,
+    force.shield.maxIntegrity * COMMANDER_SUPPLY_CAPACITY_WEEKS_V2 * supplyMultiplier,
   );
   const logisticsAllocation = clamp(
     (priorities.logistics + priorities.development * 0.35) / 100,
@@ -1567,7 +1785,7 @@ function commanderEconomyProjectionV2(
   );
   const supplyGain = Math.min(
     Math.max(0, supplyCap - force.economy.supplyStock),
-    force.army.capacity * COMMANDER_FREE_SUPPLY_CAPACITY_WEEKS_PER_TICK_V2
+    force.shield.maxIntegrity * COMMANDER_FREE_SUPPLY_CAPACITY_WEEKS_PER_TICK_V2
       * logisticsAllocation * supplyMultiplier * frontlineRecoveryMultiplier,
   );
   return {
@@ -1698,8 +1916,8 @@ function processCommanderEconomyV2(
   );
   // National finance has already booked `weeklyIncome` exactly once.
   force.economy.treasury = 0;
-  force.army.trainedReserves = round(
-    force.army.trainedReserves + projection.trainedReserveGain,
+  force.shield.rechargeBuffer = round(
+    force.shield.rechargeBuffer + projection.trainedReserveGain,
     9,
   );
   force.economy.supplyStock = round(
@@ -1725,21 +1943,23 @@ function processCommanderEconomyV2(
     const weeklyTransferCap = atHqRecovery
       ? Math.max(
           0.000001,
-          force.army.capacity * COMMANDER_HQ_TRANSFER_CAPACITY_SHARE_V2
+          force.shield.maxIntegrity * COMMANDER_HQ_TRANSFER_CAPACITY_SHARE_V2
+            * force.shield.rechargeMultiplier
             * (force.capabilities.mobileHeadquarters
               ? COMMANDER_MOBILE_HQ_TRANSFER_MULTIPLIER_V2 : 1),
         )
-      : force.army.capacity * COMMANDER_PEACE_FIELD_TRANSFER_CAPACITY_SHARE_V2;
+      : force.shield.maxIntegrity * COMMANDER_PEACE_FIELD_TRANSFER_CAPACITY_SHARE_V2
+        * force.shield.rechargeMultiplier;
     const integrityRestored = Math.min(
-      force.army.trainedReserves,
-      Math.max(0, force.army.capacity - force.army.manpower),
+      force.shield.rechargeBuffer,
+      Math.max(0, force.shield.maxIntegrity - force.shield.integrity),
       weeklyTransferCap,
     );
-    force.army.trainedReserves = round(
-      force.army.trainedReserves - integrityRestored,
+    force.shield.rechargeBuffer = round(
+      force.shield.rechargeBuffer - integrityRestored,
       9,
     );
-    force.army.manpower = round(force.army.manpower + integrityRestored, 9);
+    force.shield.integrity = round(force.shield.integrity + integrityRestored, 9);
   }
 }
 
@@ -1918,13 +2138,13 @@ function commanderOperationalReadinessV2(force: CommanderForceStateV2): {
 } {
   return {
     integrity: clamp(
-      force.army.manpower / Math.max(EPSILON, force.army.capacity),
+      force.shield.integrity / Math.max(EPSILON, force.shield.maxIntegrity),
       0,
       1,
     ),
     supply: clamp(
       force.economy.supplyStock
-        / Math.max(EPSILON, force.army.capacity * COMMANDER_OPERATIONAL_SUPPLY_WEEKS_V2),
+        / Math.max(EPSILON, force.shield.maxIntegrity * COMMANDER_OPERATIONAL_SUPPLY_WEEKS_V2),
       0,
       1,
     ),
@@ -2003,20 +2223,20 @@ function commanderForcePowerV2(
   mission: Extract<CommanderMissionV2, 'assault-support' | 'defense'>,
 ): { power: number; supplyReadiness: number } {
   const rating = mission === 'assault-support'
-    ? apexDomeAttackRatingV2(state, playerId, force)
-    : apexDomeDefenseRatingV2(state, playerId, force);
+    ? apexArmyAttackMultiplierV2(state, playerId, force)
+    : apexArmyDefenseMultiplierV2(state, playerId, force);
   const integrityReadiness = clamp(
-    force.army.manpower / Math.max(EPSILON, force.army.capacity),
+    force.shield.integrity / Math.max(EPSILON, force.shield.maxIntegrity),
     0,
     1,
   );
   const supplyReadiness = clamp(
-    force.economy.supplyStock / Math.max(EPSILON, force.army.manpower * 13),
+    force.economy.supplyStock / Math.max(EPSILON, force.shield.maxIntegrity * 13),
     0,
     1,
   );
   return {
-    power: force.army.manpower * Math.max(EPSILON, rating)
+    power: Math.max(0, rating - 1) * 100
       * (0.55 + 0.45 * integrityReadiness)
       * (0.35 + 0.65 * supplyReadiness),
     supplyReadiness,
@@ -2030,7 +2250,7 @@ function buildAutonomousCommanderCandidatesV2(
   force: CommanderForceStateV2,
   allowStandbyTransitOverride = false,
 ): CommanderAutonomyCandidateV2[] {
-  if (force.army.manpower <= EPSILON || force.economy.supplyStock <= EPSILON) return [];
+  if (force.shield.integrity <= EPSILON || force.economy.supplyStock <= EPSILON) return [];
   const survival = content.metadata?.scenarioId === 'survival';
   const candidates: CommanderAutonomyCandidateV2[] = [];
   for (const front of activeCommanderFrontsV2(state)) {
@@ -2192,9 +2412,8 @@ function selectAutonomousCommanderCandidateV2(
 }
 
 /**
- * Deterministically creates or recombines the NEXUS secondary projection.
- * A valid pairing is sticky: it never hops between live fronts. It is selected
- * again only after either front closes or the optimizer changes the primary.
+ * Migration cleanup for obsolete location-bound NEXUS saves. Omnipresence
+ * Grid is derived from active fronts and never creates a secondary sidecar.
  */
 export function reconcileApexTwinProjectionV2(
   state: WorldStateV2,
@@ -2203,46 +2422,9 @@ export function reconcileApexTwinProjectionV2(
 ): boolean {
   const force = state.commanderForces?.[playerId];
   if (!force) return false;
-  const runtime = apexDoctrineRuntimeV2(force);
-  const current = runtime.secondaryProjection;
-  const primaryOperational = force.capabilities.rapidResponse
-    && !force.transit
-    && force.army.manpower > EPSILON
-    && apexFrontAssignmentOperationalV2(
-      state, playerId, force.locationId, force.mission, force.front,
-    );
-  if (!primaryOperational) return clearApexSecondaryProjectionV2(force);
-  // A live secondary front must remain physically tethered to the primary
-  // dome through territory the player still controls. Losing an intermediate
-  // corridor recombines this projection first; it can never teleport to a
-  // different front in the same reconciliation pass.
-  if (current
-    && apexSecondaryProjectionPairedFrontsOperationalV2(
-      state, playerId, force, current,
-    )
-    && !apexSecondaryProjectionHasLegalTetherV2(
-      state, content, playerId, force, current,
-    )) return clearApexSecondaryProjectionV2(force);
-  if (apexSecondaryProjectionOperationalV2(
-    state, content, playerId, force, current,
-  )) return false;
-
-  const primarySignature = frontSignatureV2(force.front!);
-  const bestSecondary = buildAutonomousCommanderCandidatesV2(
-    state, content, playerId, force,
-  ).find((candidate) => (
-    candidate.signature !== primarySignature
-      && candidate.destinationId !== force.locationId
-  ));
-  if (!bestSecondary) return clearApexSecondaryProjectionV2(force);
-
-  runtime.secondaryProjection = {
-    locationId: bestSecondary.destinationId,
-    mission: bestSecondary.mission,
-    front: { ...bestSecondary.front },
-    pairedPrimaryFront: { ...force.front! },
-  };
-  return true;
+  void state;
+  void content;
+  return clearApexSecondaryProjectionV2(force);
 }
 
 /** Shared deterministic ranking for the autonomous sim and read-only War UI. */
@@ -2251,22 +2433,53 @@ export function selectCommanderFrontPrioritiesV2(
   content: WorldContentV2,
   playerId: PlayerId,
 ): CommanderFrontPriorityV2[] {
-  const force = state.commanderForces?.[playerId];
-  if (!force) return [];
-  return buildAutonomousCommanderCandidatesV2(state, content, playerId, force)
-    .map((candidate) => ({
-      front: { ...candidate.front },
-      destinationId: candidate.destinationId,
-      hostileTerritoryId: candidate.hostileTerritoryId,
-      mission: candidate.mission,
-      access: candidate.access,
-      score: round(candidate.score, 3),
-      criticalDefense: candidate.criticalDefense,
-      freshHumanAssault: candidate.freshHumanAssault,
-      marginalWinImpact: round(candidate.marginalWinImpact, 3),
-      travelTicks: candidate.travelTicks,
-      assigned: sameCommanderCandidateV2(force, candidate),
-    }));
+  const network = selectApexEmpireShieldNetworkV2(state, content, playerId);
+  if (!network) return [];
+  const activeBySignature = new Map(activeCommanderFrontsV2(state)
+    .map((front) => [front.signature, front] as const));
+  return network.fronts.map((front, index) => {
+    const signature = `${front.warId}:${front.sourceId}:${front.targetId}`;
+    const active = activeBySignature.get(signature);
+    const friendly = state.territories[front.friendlyTerritoryId];
+    const hostile = state.territories[front.hostileTerritoryId];
+    const ownPower = friendly ? armyPressureV2(
+      friendly,
+      front.mission === 'assault-support',
+    ) : 0;
+    const enemyPower = hostile ? armyPressureV2(
+      hostile,
+      front.mission !== 'assault-support',
+    ) : 0;
+    const supportedMultiplier = front.mission === 'assault-support'
+      ? 1 + (network.attackMultiplier - 1) * front.allocationShare
+      : 1 + (network.defenseMultiplier - 1) * front.allocationShare;
+    const allocatedPower = ownPower * Math.max(0, supportedMultiplier - 1);
+    const before = ownPower / Math.max(EPSILON, ownPower + enemyPower);
+    const after = (ownPower + allocatedPower)
+      / Math.max(EPSILON, ownPower + allocatedPower + enemyPower);
+    const pressureRatio = enemyPower / Math.max(EPSILON, ownPower);
+    return {
+      front: {
+        warId: front.warId,
+        sourceId: front.sourceId,
+        targetId: front.targetId,
+      },
+      destinationId: front.friendlyTerritoryId,
+      hostileTerritoryId: front.hostileTerritoryId,
+      mission: front.mission,
+      access: active?.operation.access ?? 'land',
+      score: round((network.fronts.length - index) * 10 + pressureRatio, 3),
+      criticalDefense: front.mission === 'defense' && pressureRatio >= 1.5,
+      freshHumanAssault: front.mission === 'assault-support'
+        && Boolean(active && state.tick - Math.max(
+          active.war.startedTick,
+          active.operation.startedTick,
+        ) <= 2),
+      marginalWinImpact: round(Math.max(0, (after - before) * 100), 3),
+      travelTicks: 0,
+      assigned: network.active,
+    };
+  });
 }
 
 export function selectCommanderAutonomyStatusV2(
@@ -2279,63 +2492,48 @@ export function selectCommanderAutonomyStatusV2(
     state: 'absent', headline: 'APEX UNAVAILABLE', reason: 'No neural dome is active in this timeline.',
     etaWeeks: null, locationId: null, destinationId: null, front: null,
   };
-  const destinationId = force.transit?.path.at(-1) ?? force.locationId;
-  if (force.transit) return {
-    state: 'moving',
-    headline: force.mission === 'evacuate' ? 'APEX EXTRACTING'
-      : !force.front
-        && destinationId === selectApexSignalPurgeFocusV2(state, content, playerId)
-        ? 'APEX MOVING TO PURGE'
-        : 'APEX REDEPLOYING',
-    reason: force.mission === 'evacuate'
-      ? 'Its protected territory was lost; extracting through secured Empire territory.'
-      : !force.front
-        && destinationId === selectApexSignalPurgeFocusV2(state, content, playerId)
-        ? 'Moving its neural protection dome through secured Empire territory to the active Signal Purge.'
-        : 'Moving to the highest-impact reachable front.',
-    etaWeeks: Math.max(0, force.transit.arriveTick - state.tick),
-    locationId: force.locationId,
-    destinationId,
-    front: force.front ? { ...force.front } : null,
+  const network = selectApexEmpireShieldNetworkV2(state, content, playerId);
+  if (network?.operationalState === 'recharging') return {
+    state: 'rebuilding', headline: 'APEX NETWORK RECHARGING',
+    reason: 'The empire-wide shield is offline until Energy reaches 100%.',
+    etaWeeks: null, locationId: force.locationId,
+    destinationId: force.locationId, front: null,
   };
-  const current = buildAutonomousCommanderCandidatesV2(
-    state, content, playerId, force,
-  ).find((candidate) => sameCommanderCandidateV2(force, candidate));
-  if (current) return {
+  if (network?.active && network.fronts.length > 0) {
+    const lead = network.fronts[0]!;
+    return {
     state: 'supporting',
-    headline: current.mission === 'defense' ? 'APEX INTERCEPTING' : 'APEX STRIKE SUPPORT',
-    reason: current.criticalDefense
-      ? 'The dome is intercepting damage at the front closest to collapse.'
-      : current.freshHumanAssault
-        ? 'A new human assault opened; APEX routed strike support to its highest-impact reachable front.'
-        : `Highest marginal dome impact · +${round(current.marginalWinImpact, 1)}pp.`,
+    headline: 'APEX EMPIRE SHIELD ENGAGED',
+    reason: network.fronts.length === 1
+      ? 'The full network is reinforcing the active front.'
+      : `${network.fronts.length} fronts share one Energy and ATK/DEF pool.`,
     etaWeeks: 0,
     locationId: force.locationId,
-    destinationId: current.destinationId,
-    front: { ...current.front },
+    destinationId: lead.friendlyTerritoryId,
+    front: {
+      warId: lead.warId,
+      sourceId: lead.sourceId,
+      targetId: lead.targetId,
+    },
   };
-  if (force.mission === 'hq-training') return {
-    state: 'rebuilding', headline: 'APEX RECHARGING',
-    reason: 'Recharging neural-dome integrity at its current secured node.',
-    etaWeeks: null, locationId: force.locationId, destinationId: force.locationId, front: null,
-  };
+  }
   const purgeFocusId = selectApexSignalPurgeFocusV2(state, content, playerId);
-  if (purgeFocusId === force.locationId
-    && force.mission === 'standby'
-    && !force.front) {
+  if (network?.active && purgeFocusId) {
     return {
-      state: 'monitoring',
-      headline: 'APEX SIGNAL PURGE ACTIVE',
-      reason: 'The neural dome is on site and removing the Rogue signal at full speed.',
+      state: 'monitoring', headline: 'APEX PRIORITY PURGE ACTIVE',
+      reason: 'The distributed network is focusing purge bandwidth here while maintaining Empire coverage.',
       etaWeeks: 0,
       locationId: force.locationId,
-      destinationId: force.locationId,
+      destinationId: purgeFocusId,
       front: null,
     };
   }
   return {
-    state: 'monitoring', headline: 'APEX MONITORING',
-    reason: 'No active front is reachable through friendly territory.',
+    state: network?.active ? 'monitoring' : 'absent',
+    headline: network?.active ? 'APEX EMPIRE SHIELD ONLINE' : 'APEX UNAVAILABLE',
+    reason: network?.active
+      ? `Protecting ${network.coverageTerritoryIds.length} Empire territories.`
+      : 'The global shield has no operational Energy.',
     etaWeeks: null, locationId: force.locationId, destinationId: force.locationId, front: null,
   };
 }
@@ -2401,11 +2599,9 @@ function selectCommanderEmergencyExtractionDestinationV2(
 }
 
 /**
- * Cancels a deployment the moment its saved route is broken. APEX may leave a
- * station on the exact tick it falls, but only through a connected route whose
- * every subsequent node is already friendly. That emergency movement is
- * visible and takes normal route time; it neither teleports nor consumes the
- * separate lethal-battle extraction talent.
+ * Normalizes location-bound legacy saves into the distributed network model.
+ * `locationId` remains a compatibility core/recovery anchor, but the live
+ * shield never travels, reserves a territory or carries a front assignment.
  */
 export function reconcileCommanderTerritorialAccessV2(
   state: WorldStateV2,
@@ -2435,94 +2631,28 @@ export function reconcileCommanderTerritorialAccessV2(
     return changed;
   }
 
-  const locationOwned = state.territories[force.locationId]?.owner === playerId;
-  if (!locationOwned && commanderEmergencyTransitValidV2(
-    state, content, playerId, force,
-  )) return false;
-  const transitOwned = !force.transit || (
-    force.transit.path.length > 0
-    && force.transit.path.every((territoryId) => (
-      state.territories[territoryId]?.owner === playerId
-    ))
-  );
-  if (locationOwned && transitOwned) return false;
-
-  if (!locationOwned) {
-    // A dome reduced to zero cannot use the territorial fallback to bypass the
-    // dedicated core-extraction lifecycle. A charged dome can still withdraw
-    // physically when a secured exit exists.
-    const destination = force.army.manpower > EPSILON
-      ? selectCommanderEmergencyExtractionDestinationV2(
-        state, content, playerId, force, ownedTerritoryIds,
-      )
-      : undefined;
-    if (destination) {
-      const travelTicks = commanderRouteTravelTicksV2(force, destination.route);
-      const ordinarySupplyCost = round(
-        COMMANDER_TRAVEL_SUPPLY_PER_MILLION_TICK_V2
-          * force.army.manpower * travelTicks,
-        9,
-      );
-      // A capital loss cannot turn a charged core into a zero-distance
-      // deletion merely because the last interception exhausted its supply.
-      // It spends everything available and arrives depleted; no supply appears.
-      const supplyCost = Math.min(force.economy.supplyStock, ordinarySupplyCost);
-      force.transit = null;
-      applyCommanderOrderV2(state, playerId, 'evacuate', null, {
-        allowed: true,
-        reason: 'The station fell; APEX is extracting over the nearest secured Empire route.',
-        destinationId: destination.territoryId,
-        path: destination.route.path,
-        distanceKm: destination.route.distanceKm,
-        travelTicks,
-        treasuryCost: 0,
-        supplyCost,
-      }, 'autonomous');
-      addWorldEventV2(
-        state,
-        'war',
-        'critical',
-        `APEX EMERGENCY EXTRACTION: ${content.territories[force.locationId]?.name ?? force.locationId} was overrun. The neural-dome core is withdrawing along a secured Empire route to ${content.territories[destination.territoryId]?.name ?? destination.territoryId}.`,
-        force.locationId,
-        playerId,
-      );
-      return true;
-    }
-    if (isHumanPlayerV2(state, playerId) && playerId !== ROGUE_AI_NATION_ID_V2) {
-      // A destroyed station can sever every physical extraction route, but
-      // human APEX remains the timeline's persistent narrator. Relocate the
-      // retained neural core to the safest unclaimed enclave and stage it there;
-      // standby has no front power or shield, so this cannot save the battle
-      // that overran its previous station.
-      const capitalId = state.players[playerId]?.capitalId;
-      const narrativeDestination = ownedTerritoryIds
-        .filter((territoryId) => !commanderCandidateClaimedByOtherV2(
-          state, playerId, territoryId,
-        ))
-        .map((territoryId) => ({
-          territoryId,
-          threat: hostilePressureAtV2(state, playerId, territoryId).ratio,
-          capital: territoryId === capitalId,
-        }))
-        .sort((left, right) => left.threat - right.threat
-          || Number(right.capital) - Number(left.capital)
-          || left.territoryId.localeCompare(right.territoryId))[0]?.territoryId;
-      if (narrativeDestination) force.locationId = narrativeDestination;
-      force.front = null;
-      force.transit = null;
-      force.mission = 'standby';
-      force.orderSource = 'autonomous';
-      force.manualHoldUntilTick = state.tick + COMMANDER_AUTONOMY_HYSTERESIS_TICKS_V2;
-      clearApexSecondaryProjectionV2(force);
-      return true;
-    }
-    delete state.commanderForces[playerId];
-    synchronizeArmyCapacityV2(state, content);
-    return true;
-  }
+  const capitalId = state.players[playerId]?.capitalId;
+  const anchorId = capitalId && state.territories[capitalId]?.owner === playerId
+    ? capitalId : ownedTerritoryIds[0]!;
+  const recoveryActive = force.mission === 'hq-training'
+    || force.mission === 'evacuate';
+  const changed = force.locationId !== anchorId
+    || Boolean(force.front)
+    || Boolean(force.transit)
+    || force.orderSource !== 'autonomous'
+    || (!recoveryActive && force.mission !== 'standby')
+    || Boolean(normalizeApexDoctrineRuntimeV2(force.doctrineRuntime)
+      .secondaryProjection);
+  force.locationId = anchorId;
+  force.front = null;
   force.transit = null;
-  releaseCommanderToAutonomyV2(force);
-  return true;
+  force.orderSource = 'autonomous';
+  if (force.mission === 'evacuate') force.mission = 'hq-training';
+  else if (!recoveryActive) force.mission = 'standby';
+  if (force.mission !== 'hq-training') force.manualHoldUntilTick = 0;
+  clearApexSecondaryProjectionV2(force);
+  void content;
+  return changed;
 }
 
 /**
@@ -2539,7 +2669,7 @@ function assignAutonomousSignalPurgeV2(
   const focusId = selectApexSignalPurgeFocusV2(state, content, playerId);
   if (!focusId
     || commanderCandidateClaimedByOtherV2(state, playerId, focusId)
-    || force.army.manpower <= EPSILON
+    || force.shield.integrity <= EPSILON
     || force.economy.supplyStock <= EPSILON
     || force.front
     || force.mission === 'evacuate') {
@@ -2576,71 +2706,25 @@ function assignAutonomousSignalPurgeV2(
 }
 
 /**
- * Repairs legacy/reconnect races before autonomy runs. Lexicographically first
- * human seat keeps an existing territory/front claim; later seats fall back to
- * a distinct owned station and wait for another valid assignment.
+ * Distributed shields do not claim individual territories or fronts. This
+ * compatibility hook now only normalizes old co-op movement assignments.
  */
 export function reconcileCoopApexClaimsV2(
   state: WorldStateV2,
   content: WorldContentV2,
 ): boolean {
-  const claimedTerritories = new Set<TerritoryId>();
-  const claimedFronts = new Set<string>();
   let changed = false;
-  for (const [playerId, force] of (Object.entries(state.commanderForces ?? {}) as Array<[
+  for (const [playerId] of (Object.entries(state.commanderForces ?? {}) as Array<[
     PlayerId,
     CommanderForceStateV2,
   ]>)
     .filter(([candidateId]) => isHumanPlayerV2(state, candidateId))
     .sort(([left], [right]) => left.localeCompare(right))) {
-    const currentClaims = commanderClaimedTerritoryIdsV2(force);
-    const secondaryFront = normalizeApexDoctrineRuntimeV2(force.doctrineRuntime)
-      .secondaryProjection?.front;
-    const frontClaims = [force.front, secondaryFront]
-      .filter((front): front is CommanderFrontAssignmentV2 => Boolean(front))
-      .map(frontSignatureV2);
-    const duplicateTerritory = currentClaims.some((territoryId) => (
-      claimedTerritories.has(territoryId)
-    ));
-    const duplicateFront = frontClaims.some((frontClaim) => claimedFronts.has(frontClaim));
-    if (duplicateTerritory || duplicateFront) {
-      force.transit = null;
-      force.front = null;
-      force.mission = 'standby';
-      force.orderSource = 'autonomous';
-      force.manualHoldUntilTick = 0;
-      clearApexSecondaryProjectionV2(force);
-      changed = true;
-      if (claimedTerritories.has(force.locationId)) {
-        const replacement = (Object.entries(state.territories) as Array<[
-          TerritoryId,
-          WorldStateV2['territories'][TerritoryId],
-        ]>)
-          .filter(([territoryId, territory]) => territory.owner === playerId
-            && !claimedTerritories.has(territoryId))
-          .map(([territoryId]) => ({
-            territoryId,
-            pressure: hostilePressureAtV2(state, playerId, territoryId).ratio,
-            capital: territoryId === state.players[playerId]?.capitalId,
-          }))
-          .sort((left, right) => left.pressure - right.pressure
-            || Number(right.capital) - Number(left.capital)
-            || left.territoryId.localeCompare(right.territoryId))[0];
-        // Human APEX is narratively persistent. When every owned station is
-        // already reserved, the later seat stays inert at its current station;
-        // selectApexTerritoryClaimOwnerV2 keeps exactly one visible dome owner
-        // and a standby dome contributes no combat power.
-        if (!replacement) continue;
-        force.locationId = replacement.territoryId;
-      }
-    }
-    for (const territoryId of commanderClaimedTerritoryIdsV2(force)) {
-      claimedTerritories.add(territoryId);
-    }
-    if (force.front) claimedFronts.add(frontSignatureV2(force.front));
-    const retainedSecondary = normalizeApexDoctrineRuntimeV2(force.doctrineRuntime)
-      .secondaryProjection;
-    if (retainedSecondary) claimedFronts.add(frontSignatureV2(retainedSecondary.front));
+    changed = reconcileCommanderTerritorialAccessV2(
+      state,
+      content,
+      playerId,
+    ) || changed;
   }
   return changed;
 }
@@ -2650,15 +2734,6 @@ export function processCommanderForcesV2(
   state: WorldStateV2,
   content: WorldContentV2,
 ): void {
-  for (const [rawPlayerId] of Object.entries(state.commanderForces ?? {})
-    .sort(([left], [right]) => left.localeCompare(right))) {
-    reconcileCommanderTerritorialAccessV2(
-      state,
-      content,
-      rawPlayerId as PlayerId,
-    );
-  }
-  reconcileCoopApexClaimsV2(state, content);
   for (const [rawPlayerId] of Object.entries(state.commanderForces ?? {})
     .sort(([left], [right]) => left.localeCompare(right))) {
     const playerId = rawPlayerId as PlayerId;
@@ -2677,142 +2752,29 @@ export function processCommanderForcesV2(
       continue;
     }
     force.empireSupport = normalizeApexEmpireSupportV2(force.empireSupport);
-    // Authenticated old saves may carry player-authored orders. Keep their
-    // physical position/transit, but remove the retired protection immediately.
-    if (force.orderSource === 'manual') {
-      force.orderSource = 'autonomous';
-      force.manualHoldUntilTick = 0;
-    }
-    // Legacy front-logistics deployments are retired. APEX logistics,
-    // recruitment and finance are remote Empire support and never move the
-    // physical dome.
-    if (force.mission === 'logistics-relief') {
-      force.transit = null;
-      releaseCommanderToAutonomyV2(force);
-    }
-    if (!force.capabilities.rapidResponse
-      || force.transit
-      || force.army.manpower <= EPSILON
-      || !force.front
-      || force.mission === 'evacuate'
-      || force.mission === 'hq-training') {
-      clearApexSecondaryProjectionV2(force);
-    }
-    // Authenticated saves made on the exact dome-damage tick may contain the
-    // canonical zero/HQ state before the persisted sentinel was introduced.
+    // Authenticated location/front assignments have already been collapsed by
+    // reconcileCommanderTerritorialAccessV2. Only true-zero recovery remains a
+    // physical-core lifecycle; normal combat and purge projection are global.
     if (force.mission === 'hq-training'
-      && !force.transit
-      && force.army.manpower <= EPSILON) {
+      && force.shield.integrity <= EPSILON) {
       force.manualHoldUntilTick = COMMANDER_EXHAUSTED_RECOVERY_HOLD_TICK_V2;
     }
     processCommanderEconomyV2(state, playerId, force);
-    const livePurgeFocusId = selectApexSignalPurgeFocusV2(
-      state, content, playerId,
-    );
-    // Finish an existing peace route even if purge ranking changes en route.
-    // Only a concrete war assignment below may interrupt physical travel.
-    // Likewise, a war that closes while APEX was still moving releases that
-    // obsolete deployment without forcing a pointless arrival first.
-    if (force.transit && force.front && !frontStillValidV2(
-      state, content, playerId, force,
-    )) {
-      force.transit = null;
-      releaseCommanderToAutonomyV2(force);
-    }
-    // WAR > PURGE > OTHER. Only a concrete legal war assignment may interrupt
-    // physical purge travel. Merely having an unreachable or unrelated war no
-    // longer cancels and reissues the same route every autonomy tick.
-    const purgeTransit = Boolean(force.transit
-      && force.mission === 'standby'
-      && !force.front
-      && force.transit.path.at(-1) === livePurgeFocusId);
-    if (purgeTransit && buildAutonomousCommanderCandidatesV2(
-      state,
-      content,
-      playerId,
-      force,
-      true,
-    ).length > 0) {
-      force.transit = null;
-      force.manualHoldUntilTick = 0;
-    }
-    if (force.transit && state.tick >= force.transit.arriveTick) {
-      force.locationId = force.transit.path.at(-1) ?? force.locationId;
-      force.transit = null;
-      if (force.mission === 'evacuate') {
-        // An emergency withdrawal commits to recovery at its chosen safe
-        // station. It may not immediately choose a second 'safer' territory.
-        force.mission = 'hq-training';
-        force.front = null;
-      } else if ((force.mission === 'assault-support'
-        || force.mission === 'defense'
-        || force.mission === 'logistics-relief')
-        && !frontStillValidV2(state, content, playerId, force)) {
-        releaseCommanderToAutonomyV2(force);
-      }
-    }
-    if (force.transit) {
-      clearApexSecondaryProjectionV2(force);
-      continue;
-    }
-    if (retreatApexFromCollapsedFrontV2(state, content, playerId)) continue;
-    if (retreatApexForRecoveryV2(state, content, playerId)) continue;
     if (force.mission === 'hq-training') {
       const readiness = commanderOperationalReadinessV2(force);
-      if (commanderExhaustedRecoveryActiveV2(force)) {
-        // A zero-integrity dome stays hidden and cannot re-enter any front at
-        // 70% like ordinary damage recovery. It returns exactly once, only at
-        // full integrity and the established safe supply threshold.
-        if (readiness.integrity + EPSILON < 1
-          || readiness.supply + EPSILON < COMMANDER_RECOVERY_SUPPLY_READINESS_V2) {
-          continue;
-        }
-        force.manualHoldUntilTick = 0;
-        releaseCommanderToAutonomyV2(force);
-      }
-      const reentry = selectRecoveryFrontReentryCandidateV2(
-        state, content, playerId, force,
-      );
-      if (reentry) {
-        const quote = quoteAutonomousCommanderOrderV2(
-          state,
-          content,
-          playerId,
-          reentry.destinationId,
-          reentry.mission,
-          reentry.front,
-        );
-        if (quote.allowed) {
-          applyCommanderOrderV2(
-            state, playerId, reentry.mission, reentry.front, quote, 'autonomous',
-          );
-          continue;
-        }
-      }
-      if (readiness.integrity + EPSILON < COMMANDER_RECOVERY_MANPOWER_READINESS_V2
-        || readiness.supply + EPSILON < COMMANDER_RECOVERY_SUPPLY_READINESS_V2
-        || state.tick < force.manualHoldUntilTick) continue;
+      // Once integrity reaches zero the field is genuinely absent everywhere.
+      // The network returns atomically at full integrity so no tiny projection
+      // can stall a national defeat while the core is recharging.
+      if (readiness.integrity + EPSILON < 1) continue;
+      force.manualHoldUntilTick = 0;
       releaseCommanderToAutonomyV2(force);
     }
-    if (((force.mission === 'assault-support' || force.mission === 'defense')
-      && (!frontStillValidV2(state, content, playerId, force)
-        || force.army.manpower <= EPSILON))
-      || force.mission === 'logistics-relief') {
-      releaseCommanderToAutonomyV2(force);
-    }
-    const selected = selectAutonomousCommanderCandidateV2(
-      state, content, playerId, force,
-    );
-    reconcileApexTwinProjectionV2(state, content, playerId);
-    if (!selected && !force.front) {
-      const purgeAssigned = !force.transit
-        && force.mission !== 'evacuate'
-        && force.mission !== 'hq-training'
-        && assignAutonomousSignalPurgeV2(state, content, playerId, force);
-      // Peace recovery is passive on the current station. Do not manufacture
-      // a relocation merely because APEX is below full strength.
-      void purgeAssigned;
-    }
+    // A healthy human APEX is an empire service, not a movable formation.
+    // The canonical network selector derives live fronts without writing any
+    // of the retired location-bound assignment fields.
+    force.front = null;
+    force.transit = null;
+    force.mission = 'standby';
   }
 }
 
@@ -2854,6 +2816,11 @@ export function reconcileCommanderForcesV2(
       releaseCommanderToAutonomyV2(force);
     }
     reconcileApexTwinProjectionV2(state, content, playerId);
+    if (force.mission !== 'hq-training') {
+      force.front = null;
+      force.transit = null;
+      force.mission = 'standby';
+    }
   }
 }
 
@@ -2861,22 +2828,34 @@ export interface CommanderBattleFormationV2 {
   playerId: PlayerId;
   /** Explicit projection role lets the commit boundary reject defensive pulses. */
   mission: Extract<CommanderMissionV2, 'assault-support' | 'defense'>;
-  /** Legacy battle-protocol field carrying active dome integrity for APEX. */
-  manpower: number;
-  /** Legacy battle-protocol field carrying maximum dome integrity for APEX. */
-  capacity: number;
-  /** Neural strike-support rating, not a soldier-quality multiplier. */
-  baseAttack: number;
-  /** Neural interception rating, not a soldier-quality multiplier. */
-  baseDefense: number;
+  shieldIntegrity: number;
+  maxShieldIntegrity: number;
+  /** Applied only to the existing national army on this front. */
+  attackMultiplier: number;
+  /** Applied only to the existing national army on this front. */
+  defenseMultiplier: number;
+  /** Fixed neural-pulse damage budget after this front's shared allocation. */
+  pulseAttack: number;
+  /** Damage blocked by each point of Energy spent on this hit. */
+  interceptEfficiency?: number;
   availableSupply: number;
   projection: 'primary' | 'secondary';
-  /** NEXUS uses 0.60 for both projections; a recombined dome uses 1.00. */
+  /** Multi-front network share allocated to this battle. */
   projectionCombatShare: number;
-  /** True only when this resolved offensive battle should fire Singularity Pulse. */
+  /** True only when this resolved offensive battle should fire Overdrive Pulse. */
   singularityPulseCharged: boolean;
-  /** AEGIS may reflect 20% of damage that this dome actually intercepts. */
+  /** Countermeasure may reflect 15% of damage this shield actually intercepts. */
   mirrorMatrixEligible: boolean;
+}
+
+/** Pulse-specialized builds retain part of the power normally lost to a split network. */
+function apexPulseProjectionShareV2(
+  force: CommanderForceStateV2,
+  projectionCombatShare: number,
+): number {
+  const share = clamp(projectionCombatShare, 0, 1);
+  const retention = clamp(force.shield.pulseProjectionRetention ?? 0, 0, 0.35);
+  return clamp(share + (1 - share) * retention, 0, 1);
 }
 
 export interface CommanderBattleLogisticsV2 {
@@ -2913,12 +2892,35 @@ function apexBattleProjectionV2(
   war: WarStateV2,
   operation: FrontOperationV2,
   mission: Extract<CommanderMissionV2, 'assault-support' | 'defense'>,
-): 'primary' | 'secondary' | null {
+): { role: 'primary' | 'secondary'; share: number } | null {
+  if (playerId !== ROGUE_AI_NATION_ID_V2 && isHumanPlayerV2(state, playerId)) {
+    const network = selectApexEmpireShieldNetworkV2(state, content, playerId);
+    if (!network?.active) return null;
+    const frontIndex = network.fronts.findIndex((front) => (
+      front.warId === war.id
+      && front.sourceId === operation.sourceId
+      && front.targetId === operation.targetId
+      && front.mission === mission
+    ));
+    if (frontIndex < 0) return null;
+    return {
+      role: frontIndex === 0 ? 'primary' : 'secondary',
+      share: network.fronts[frontIndex]!.allocationShare,
+    };
+  }
+  if (playerId === ROGUE_AI_NATION_ID_V2) {
+    // PRIME's hostile red field is Antarctic infrastructure, not a second
+    // worldwide network. A gateway strike may originate on the ice, but weak
+    // machine-occupied world territories never gain PRIME shield support.
+    const friendlyTerritoryId = mission === 'assault-support'
+      ? operation.sourceId : operation.targetId;
+    if (!ANTARCTIC_TERRITORY_IDS_V2.includes(friendlyTerritoryId)) return null;
+  }
   if (force.transit) return null;
   if (force.mission === mission
     && force.locationId === (mission === 'assault-support'
       ? operation.sourceId : operation.targetId)
-    && frontMatchesV2(force.front, war, operation)) return 'primary';
+    && frontMatchesV2(force.front, war, operation)) return { role: 'primary', share: 1 };
   const twin = selectApexTwinProjectionStatusV2(state, playerId, content);
   const secondary = twin.secondaryProjection;
   return twin.active
@@ -2926,7 +2928,7 @@ function apexBattleProjectionV2(
     && secondary.locationId === (mission === 'assault-support'
       ? operation.sourceId : operation.targetId)
     && frontMatchesV2(secondary.front, war, operation)
-    ? 'secondary' : null;
+    ? { role: 'secondary', share: twin.combatShare } : null;
 }
 
 /** Exact selected-front lookup. Unassigned, moving or recharging domes contribute nothing. */
@@ -2951,14 +2953,18 @@ export function selectCommanderBattleSupportV2(
     ? commanderOperationalReadinessV2(attackerForce) : null;
   const defenderReadiness = defenderForce
     ? commanderOperationalReadinessV2(defenderForce) : null;
-  const attackerOperational = source.owner === ROGUE_AI_NATION_ID_V2
-    || Boolean(attackerReadiness
-      && attackerReadiness.integrity > COMMANDER_DAMAGE_RETREAT_MANPOWER_READINESS_V2
-      && attackerReadiness.supply > COMMANDER_DAMAGE_RETREAT_SUPPLY_READINESS_V2);
-  const defenderOperational = target.owner === ROGUE_AI_NATION_ID_V2
-    || Boolean(defenderReadiness
-      && defenderReadiness.integrity > COMMANDER_DAMAGE_RETREAT_MANPOWER_READINESS_V2
-      && defenderReadiness.supply > COMMANDER_DAMAGE_RETREAT_SUPPLY_READINESS_V2);
+  const attackerOperational = isHumanPlayerV2(state, source.owner)
+    ? selectApexShieldOperationalStateV2(state, source.owner) === 'operational'
+    : source.owner === ROGUE_AI_NATION_ID_V2
+      || Boolean(attackerReadiness
+        && attackerReadiness.integrity > COMMANDER_DAMAGE_RETREAT_MANPOWER_READINESS_V2
+        && attackerReadiness.supply > COMMANDER_DAMAGE_RETREAT_SUPPLY_READINESS_V2);
+  const defenderOperational = isHumanPlayerV2(state, target.owner)
+    ? selectApexShieldOperationalStateV2(state, target.owner) === 'operational'
+    : target.owner === ROGUE_AI_NATION_ID_V2
+      || Boolean(defenderReadiness
+        && defenderReadiness.integrity > COMMANDER_DAMAGE_RETREAT_MANPOWER_READINESS_V2
+        && defenderReadiness.supply > COMMANDER_DAMAGE_RETREAT_SUPPLY_READINESS_V2);
   const attackerProjection = attackerForce
     ? apexBattleProjectionV2(
         state, content, source.owner, attackerForce, war, operation, 'assault-support',
@@ -2972,27 +2978,42 @@ export function selectCommanderBattleSupportV2(
   if (attackerForce
     && attackerOperational
     && attackerProjection) {
-    if (attackerForce.army.manpower > EPSILON) {
-      const twin = selectApexTwinProjectionStatusV2(state, source.owner, content);
-      const projectionCombatShare = twin.active
-        ? APEX_NEXUS_PROJECTION_COMBAT_SHARE_V2 : 1;
+    if (attackerForce.shield.integrity > EPSILON) {
+      const projectionCombatShare = attackerProjection.share;
+      const pulseProjectionShare = apexPulseProjectionShareV2(
+        attackerForce,
+        projectionCombatShare,
+      );
       const lancer = selectApexLancerPulseStatusV2(state, source.owner);
+      const attackBonus = Math.max(
+        0,
+        apexArmyAttackMultiplierV2(state, source.owner, attackerForce) - 1,
+      ) * projectionCombatShare;
+      const defenseBonus = Math.max(
+        0,
+        apexArmyDefenseMultiplierV2(state, source.owner, attackerForce) - 1,
+      ) * projectionCombatShare;
       result.attacker = {
         playerId: source.owner,
         mission: 'assault-support',
-        manpower: attackerForce.army.manpower,
-        capacity: attackerForce.army.capacity,
-        // Exact order: persistent base + run bonus, then the charged LANCER
-        // pulse, then NEXUS's per-projection share. Capstones add no hidden
-        // generic ATK/DEF modifier outside these explicit mechanics.
-        baseAttack: apexDomeAttackRatingV2(
-          state, source.owner, attackerForce,
-        ) * lancer.nextAttackMultiplier * projectionCombatShare,
-        baseDefense: apexDomeDefenseRatingV2(
-          state, source.owner, attackerForce,
-        ) * projectionCombatShare,
-        availableSupply: attackerForce.economy.supplyStock,
-        projection: attackerProjection,
+        shieldIntegrity: attackerForce.shield.integrity,
+        maxShieldIntegrity: attackerForce.shield.maxIntegrity,
+        attackMultiplier: round(1 + attackBonus, 9),
+        defenseMultiplier: round(1 + defenseBonus, 9),
+        pulseAttack: round(
+          attackerForce.shield.pulseAttack
+            * pulseProjectionShare
+            * lancer.nextAttackMultiplier,
+          9,
+        ),
+        interceptEfficiency: clamp(
+          attackerForce.shield.interceptEfficiency ?? 1,
+          1,
+          1.45,
+        ),
+        availableSupply: isHumanPlayerV2(state, source.owner)
+          ? attackerForce.shield.integrity : attackerForce.economy.supplyStock,
+        projection: attackerProjection.role,
         projectionCombatShare,
         singularityPulseCharged: lancer.nextPulseCharged,
         mirrorMatrixEligible: attackerForce.capabilities.defenseSpecialist,
@@ -3002,23 +3023,39 @@ export function selectCommanderBattleSupportV2(
   if (defenderForce
     && defenderOperational
     && defenderProjection) {
-    if (defenderForce.army.manpower > EPSILON) {
-      const twin = selectApexTwinProjectionStatusV2(state, target.owner, content);
-      const projectionCombatShare = twin.active
-        ? APEX_NEXUS_PROJECTION_COMBAT_SHARE_V2 : 1;
+    if (defenderForce.shield.integrity > EPSILON) {
+      const projectionCombatShare = defenderProjection.share;
+      const pulseProjectionShare = apexPulseProjectionShareV2(
+        defenderForce,
+        projectionCombatShare,
+      );
       result.defender = {
         playerId: target.owner,
         mission: 'defense',
-        manpower: defenderForce.army.manpower,
-        capacity: defenderForce.army.capacity,
-        baseAttack: apexDomeAttackRatingV2(
-          state, target.owner, defenderForce,
-        ) * projectionCombatShare,
-        baseDefense: apexDomeDefenseRatingV2(
-          state, target.owner, defenderForce,
-        ) * projectionCombatShare,
-        availableSupply: defenderForce.economy.supplyStock,
-        projection: defenderProjection,
+        shieldIntegrity: defenderForce.shield.integrity,
+        maxShieldIntegrity: defenderForce.shield.maxIntegrity,
+        attackMultiplier: round(1 + Math.max(
+          0,
+          apexArmyAttackMultiplierV2(state, target.owner, defenderForce) - 1,
+        ) * projectionCombatShare, 9),
+        defenseMultiplier: round(1 + Math.max(
+          0,
+          apexArmyDefenseMultiplierV2(state, target.owner, defenderForce) - 1,
+        ) * projectionCombatShare, 9),
+        pulseAttack: round(
+          defenderForce.shield.pulseAttack
+            * pulseProjectionShare
+            * clamp(defenderForce.shield.defensivePulseMultiplier ?? 1, 1, 1.75),
+          9,
+        ),
+        interceptEfficiency: clamp(
+          defenderForce.shield.interceptEfficiency ?? 1,
+          1,
+          1.45,
+        ),
+        availableSupply: isHumanPlayerV2(state, target.owner)
+          ? defenderForce.shield.integrity : defenderForce.economy.supplyStock,
+        projection: defenderProjection.role,
         projectionCombatShare,
         singularityPulseCharged: false,
         mirrorMatrixEligible: defenderForce.capabilities.defenseSpecialist,
@@ -3069,103 +3106,66 @@ export function applyApexShieldDamageV2(
   if (!playerId || !(requestedIntegrityDamage > 0)) return 0;
   const force = battleCommanderForceV2(state, playerId);
   if (!force) return 0;
+  const integrityBefore = Math.max(0, force.shield.integrity);
   const appliedIntegrityDamage = Math.min(
-    force.army.manpower,
+    integrityBefore,
     requestedIntegrityDamage,
+  );
+  force.shield.integrity = round(
+    Math.max(0, integrityBefore - appliedIntegrityDamage),
+    9,
   );
   const humanApex = isHumanPlayerV2(state, playerId)
     && playerId !== ROGUE_AI_NATION_ID_V2;
-  const lethal = force.army.manpower > EPSILON
-    && appliedIntegrityDamage >= force.army.manpower - EPSILON;
-  let extracted = false;
-  let extractedCoreEnergy = 0;
-  if (lethal && (humanApex || force.capabilities.emergencyExtractionCharges > 0)) {
-    const talentExtraction = force.capabilities.emergencyExtractionCharges > 0;
-    extractedCoreEnergy = talentExtraction
-      ? Math.min(force.army.manpower, clamp(
-          force.army.capacity * COMMANDER_EXTRACTION_CAPACITY_SHARE_V2,
-          COMMANDER_EXTRACTION_SURVIVORS_MIN_V2,
-          COMMANDER_EXTRACTION_SURVIVORS_MAX_V2,
-        ))
-      : Math.min(force.army.capacity, clamp(
-          force.army.capacity * COMMANDER_NARRATIVE_EXTRACTION_CAPACITY_SHARE_V2,
-          COMMANDER_EXTRACTION_SURVIVORS_MIN_V2,
-          COMMANDER_EXTRACTION_SURVIVORS_MAX_V2,
-        ));
-    if (talentExtraction) force.capabilities.emergencyExtractionCharges -= 1;
+  const collapsed = integrityBefore > EPSILON
+    && force.shield.integrity <= EPSILON;
+  if (collapsed && humanApex) {
+    const runtime = apexDoctrineRuntimeV2(force);
+    if (force.capabilities.fieldHospital && !runtime.emergencyRebootUsed) {
+      runtime.emergencyRebootUsed = true;
+      force.shield.integrity = round(force.shield.maxIntegrity * 0.20, 9);
+      addWorldEventV2(
+        state,
+        'war',
+        'critical',
+        'APEX EMERGENCY REBOOT · Energy restored to 20%.',
+        force.locationId,
+        playerId,
+      );
+      return round(appliedIntegrityDamage, 9);
+    }
     const capitalId = state.players[playerId]?.capitalId;
-    const ownedCapitalId = capitalId
+    const compatibilityAnchorId = capitalId
       && state.territories[capitalId]?.owner === playerId
-      && !commanderCandidateClaimedByOtherV2(state, playerId, capitalId)
-      ? capitalId : undefined;
-    const safestFallbackId = (Object.entries(state.territories) as Array<[
-      TerritoryId,
-      WorldStateV2['territories'][TerritoryId],
-    ]>)
-      .filter(([territoryId, territory]) => territory.owner === playerId
-        && territoryId !== ownedCapitalId
-        && !commanderCandidateClaimedByOtherV2(state, playerId, territoryId))
-      .map(([territoryId]) => ({
-        territoryId,
-        threat: hostilePressureAtV2(state, playerId, territoryId).ratio,
-      }))
-      .sort((left, right) => left.threat - right.threat
-        || left.territoryId.localeCompare(right.territoryId))[0]?.territoryId;
-    const extractionTerritoryId = ownedCapitalId ?? safestFallbackId;
-    if (extractionTerritoryId) force.locationId = extractionTerritoryId;
-    force.mission = extractionTerritoryId ? 'hq-training' : 'standby';
+      ? capitalId
+      : (Object.entries(state.territories) as Array<[
+          TerritoryId,
+          WorldStateV2['territories'][TerritoryId],
+        ]>)
+          .filter(([, territory]) => territory.owner === playerId)
+          .map(([territoryId]) => territoryId)
+          .sort((left, right) => left.localeCompare(right))[0];
+    if (compatibilityAnchorId) force.locationId = compatibilityAnchorId;
+    force.mission = compatibilityAnchorId ? 'hq-training' : 'standby';
     force.orderSource = 'autonomous';
-    force.manualHoldUntilTick = extractionTerritoryId
+    force.manualHoldUntilTick = compatibilityAnchorId
       ? COMMANDER_EXHAUSTED_RECOVERY_HOLD_TICK_V2
       : state.tick + COMMANDER_AUTONOMY_HYSTERESIS_TICKS_V2;
     force.front = null;
     force.transit = null;
     clearApexSecondaryProjectionV2(force);
-    extracted = true;
     addWorldEventV2(
       state,
       'war',
       'critical',
-      extractionTerritoryId
-        ? `APEX EXHAUSTED · DOME OFFLINE: integrity reached zero; its neural core auto-extracted to ${extractionTerritoryId} for a full recharge.`
-        : 'APEX EXHAUSTED · DOME OFFLINE: integrity reached zero and no sovereign Empire recharge node remains.',
-      extractionTerritoryId ?? force.locationId,
+      compatibilityAnchorId
+        ? 'APEX EXHAUSTED · DOME OFFLINE: Energy reached zero and a full network recharge has begun.'
+        : 'APEX EXHAUSTED · DOME OFFLINE: Energy reached zero and no sovereign Empire network remains.',
+      compatibilityAnchorId ?? force.locationId,
       playerId,
     );
   }
-  force.army.manpower = round(
-    Math.max(0, force.army.manpower - appliedIntegrityDamage),
-    9,
-  );
-  if (extracted && extractedCoreEnergy > 0) {
-    // Extraction preserves only a tiny amount of non-operational core energy.
-    // Active dome integrity reaches a truthful zero and cannot intercept a
-    // later battle. Only safe-node recovery can return it to the field.
-    force.army.trainedReserves = round(
-      force.army.trainedReserves + Math.min(
-        extractedCoreEnergy,
-        Math.max(0, force.army.capacity - force.army.trainedReserves),
-      ),
-      9,
-    );
-  }
-  let bufferedEnergy = 0;
-  if (!extracted && force.capabilities.fieldHospital) {
-    const recoveryBufferRoom = Math.max(
-      0,
-      force.army.capacity - force.army.trainedReserves,
-    );
-    bufferedEnergy = Math.min(
-      recoveryBufferRoom,
-      appliedIntegrityDamage * COMMANDER_FIELD_HOSPITAL_RECOVERY_SHARE_V2,
-      force.army.capacity * COMMANDER_FIELD_HOSPITAL_RECOVERY_CAPACITY_SHARE_V2,
-    );
-    force.army.trainedReserves = round(
-      force.army.trainedReserves + bufferedEnergy,
-      9,
-    );
-  }
-  return round(Math.max(0, appliedIntegrityDamage - bufferedEnergy), 9);
+  return round(appliedIntegrityDamage, 9);
 }
 
 /**
@@ -3177,7 +3177,22 @@ export function applyCommanderCasualtiesV2(
   playerId: PlayerId | null,
   requested: number,
 ): number {
-  return applyApexShieldDamageV2(state, playerId, requested);
+  const force = playerId ? battleCommanderForceV2(state, playerId) : undefined;
+  const applied = applyApexShieldDamageV2(state, playerId, requested);
+  const recoveredImpactEnergy = applied * clamp(
+    force?.shield.impactRecoveryShare ?? 0,
+    0,
+    0.35,
+  );
+  if (force && recoveredImpactEnergy > EPSILON) {
+    // Impact Recovery never repairs the live wartime shield. It only banks
+    // offline Reserve Energy consumed by the existing safe recharge phase.
+    force.shield.rechargeBuffer = round(Math.min(
+      force.shield.maxIntegrity,
+      force.shield.rechargeBuffer + recoveredImpactEnergy,
+    ), 9);
+  }
+  return applied;
 }
 
 export function consumeCommanderSupplyV2(
@@ -3186,6 +3201,10 @@ export function consumeCommanderSupplyV2(
   requested: number,
 ): number {
   if (!playerId || !(requested > 0)) return 0;
+  // Human APEX combat is powered by the one shared integrity pool. The legacy
+  // field supply stock remains a recharge buffer and can no longer make a
+  // distributed shield disappear from a distant front.
+  if (playerId !== ROGUE_AI_NATION_ID_V2 && isHumanPlayerV2(state, playerId)) return 0;
   const force = battleCommanderForceV2(state, playerId);
   if (!force) return 0;
   const applied = Math.min(force.economy.supplyStock, requested);
@@ -3193,25 +3212,204 @@ export function consumeCommanderSupplyV2(
   return round(applied, 9);
 }
 
+type LegacyCommanderForceArmyBoundaryV2 = {
+  manpower?: unknown;
+  capacity?: unknown;
+  trainedReserves?: unknown;
+  baseAttack?: unknown;
+  baseDefense?: unknown;
+};
+
+function finiteCommanderBoundaryNumberV2(value: unknown, fallback = 0): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+/**
+ * One authenticated-save migration boundary. Old APEX Army records are read
+ * here and immediately converted into shield energy plus army multipliers;
+ * the returned runtime object can never expose personnel or reserves.
+ */
+export function normalizeCommanderForceRuntimeV2(
+  source: unknown,
+  empireSupportFallback: Readonly<CommanderEmpireSupportV2> = BASE_APEX_EMPIRE_SUPPORT_V2,
+): CommanderForceStateV2 | null {
+  if (!source || typeof source !== 'object') return null;
+  const raw = source as Record<string, unknown>;
+  const legacyArmy = (raw.army && typeof raw.army === 'object'
+    ? raw.army : {}) as LegacyCommanderForceArmyBoundaryV2;
+  const rawShield = (raw.shield && typeof raw.shield === 'object'
+    ? raw.shield : {}) as Record<string, unknown>;
+  const legacyCapacity = Math.max(
+    EPSILON,
+    finiteCommanderBoundaryNumberV2(legacyArmy.capacity, 0.0008),
+  );
+  const maxIntegrity = Math.max(
+    EPSILON,
+    finiteCommanderBoundaryNumberV2(rawShield.maxIntegrity, legacyCapacity),
+  );
+  const integrity = clamp(
+    finiteCommanderBoundaryNumberV2(
+      rawShield.integrity,
+      finiteCommanderBoundaryNumberV2(legacyArmy.manpower, maxIntegrity),
+    ),
+    0,
+    maxIntegrity,
+  );
+  const legacyAttackRating = finiteCommanderBoundaryNumberV2(legacyArmy.baseAttack, 125);
+  const legacyDefenseRating = finiteCommanderBoundaryNumberV2(legacyArmy.baseDefense, 125);
+  const capabilitiesSource = (raw.capabilities && typeof raw.capabilities === 'object'
+    ? raw.capabilities : {}) as Record<string, unknown>;
+  const economySource = (raw.economy && typeof raw.economy === 'object'
+    ? raw.economy : {}) as Record<string, unknown>;
+  const prioritiesSource = (economySource.priorities
+    && typeof economySource.priorities === 'object'
+    ? economySource.priorities : {}) as Record<string, unknown>;
+  const candidatePriorities: CommanderEconomyPrioritiesV2 = {
+    training: finiteCommanderBoundaryNumberV2(prioritiesSource.training, 40),
+    logistics: finiteCommanderBoundaryNumberV2(prioritiesSource.logistics, 40),
+    development: finiteCommanderBoundaryNumberV2(prioritiesSource.development, 20),
+  };
+  const frontSource = raw.front && typeof raw.front === 'object'
+    ? raw.front as CommanderFrontAssignmentV2 : null;
+  const transitSource = raw.transit && typeof raw.transit === 'object'
+    ? raw.transit as Partial<CommanderForceStateV2['transit']> : null;
+  const mission = typeof raw.mission === 'string' && [
+    'standby', 'assault-support', 'defense', 'logistics-relief', 'evacuate', 'hq-training',
+  ].includes(raw.mission)
+    ? raw.mission as CommanderMissionV2 : 'standby';
+  const force: CommanderForceStateV2 = {
+    shield: {
+      integrity: round(integrity, 9),
+      maxIntegrity: round(maxIntegrity, 9),
+      rechargeBuffer: round(clamp(
+        finiteCommanderBoundaryNumberV2(
+          rawShield.rechargeBuffer,
+          finiteCommanderBoundaryNumberV2(legacyArmy.trainedReserves, 0),
+        ),
+        0,
+        maxIntegrity,
+      ), 9),
+      rechargeMultiplier: round(clamp(
+        finiteCommanderBoundaryNumberV2(rawShield.rechargeMultiplier, 1),
+        1,
+        3.5,
+      ), 9),
+      attackMultiplier: round(clamp(
+        finiteCommanderBoundaryNumberV2(
+          rawShield.attackMultiplier,
+          1 + Math.max(0, legacyAttackRating) * 0.00064,
+        ),
+        1,
+        2.5,
+      ), 9),
+      defenseMultiplier: round(clamp(
+        finiteCommanderBoundaryNumberV2(
+          rawShield.defenseMultiplier,
+          1 + Math.max(0, legacyDefenseRating) * 0.00064,
+        ),
+        1,
+        2.5,
+      ), 9),
+      pulseAttack: round(clamp(
+        finiteCommanderBoundaryNumberV2(rawShield.pulseAttack, BASE_APEX_PULSE_ATTACK_V2),
+        0,
+        1,
+      ), 9),
+      pulseProjectionRetention: round(clamp(
+        finiteCommanderBoundaryNumberV2(rawShield.pulseProjectionRetention, 0),
+        0,
+        0.35,
+      ), 9),
+      pulseChargeBonusPerStep: round(clamp(
+        finiteCommanderBoundaryNumberV2(rawShield.pulseChargeBonusPerStep, 0),
+        0,
+        0.45,
+      ), 9),
+      interceptEfficiency: round(clamp(
+        finiteCommanderBoundaryNumberV2(rawShield.interceptEfficiency, 1),
+        1,
+        1.45,
+      ), 9),
+      impactRecoveryShare: round(clamp(
+        finiteCommanderBoundaryNumberV2(rawShield.impactRecoveryShare, 0),
+        0,
+        0.35,
+      ), 9),
+      defensivePulseMultiplier: round(clamp(
+        finiteCommanderBoundaryNumberV2(rawShield.defensivePulseMultiplier, 1),
+        1,
+        1.75,
+      ), 9),
+    },
+    economy: {
+      treasury: 0,
+      annualOutput: round(Math.max(
+        0,
+        finiteCommanderBoundaryNumberV2(economySource.annualOutput),
+      ), 9),
+      supplyStock: round(Math.max(
+        0,
+        finiteCommanderBoundaryNumberV2(economySource.supplyStock),
+      ), 9),
+      priorities: prioritiesValidV2(candidatePriorities)
+        ? candidatePriorities : { ...DEFAULT_COMMANDER_PRIORITIES_V2 },
+    },
+    capabilities: {
+      mobileHeadquarters: capabilitiesSource.mobileHeadquarters === true,
+      fieldHospital: capabilitiesSource.fieldHospital === true,
+      rapidResponse: false,
+      forceMultiplier: capabilitiesSource.forceMultiplier === true
+        || capabilitiesSource.rapidResponse === true,
+      assaultSpecialist: capabilitiesSource.assaultSpecialist === true,
+      defenseSpecialist: capabilitiesSource.defenseSpecialist === true,
+      emergencyExtractionCharges: clamp(Math.floor(finiteCommanderBoundaryNumberV2(
+        capabilitiesSource.emergencyExtractionCharges,
+      )), 0, 2),
+    },
+    empireSupport: normalizeApexEmpireSupportV2(
+      raw.empireSupport && typeof raw.empireSupport === 'object'
+        ? raw.empireSupport as Partial<CommanderEmpireSupportV2> : undefined,
+      empireSupportFallback,
+    ),
+    countryTraitScale: round(clamp(
+      finiteCommanderBoundaryNumberV2(raw.countryTraitScale),
+      0,
+      1,
+    ), 9),
+    locationId: (typeof raw.locationId === 'string' ? raw.locationId : '') as TerritoryId,
+    mission,
+    orderSource: raw.orderSource === 'manual' ? 'manual' : 'autonomous',
+    manualHoldUntilTick: Math.max(
+      0,
+      Math.floor(finiteCommanderBoundaryNumberV2(raw.manualHoldUntilTick)),
+    ),
+    front: frontSource ? { ...frontSource } : null,
+    transit: transitSource && Array.isArray(transitSource.path)
+      ? {
+          path: [...transitSource.path],
+          distanceKm: finiteCommanderBoundaryNumberV2(transitSource.distanceKm),
+          departTick: finiteCommanderBoundaryNumberV2(transitSource.departTick),
+          arriveTick: finiteCommanderBoundaryNumberV2(transitSource.arriveTick),
+        }
+      : null,
+    doctrineRuntime: normalizeApexDoctrineRuntimeV2(
+      raw.doctrineRuntime && typeof raw.doctrineRuntime === 'object'
+        ? raw.doctrineRuntime as Partial<ApexDoctrineRuntimeV2> : undefined,
+    ),
+  };
+  normalizeApexCapstoneProtocolV2(force);
+  return force;
+}
+
 export function cloneCommanderForcesV2(
-  forces: WorldStateV2['commanderForces'],
+  forces: WorldStateV2['commanderForces'] | Readonly<Record<string, unknown>>,
 ): WorldStateV2['commanderForces'] {
   return Object.fromEntries(Object.entries(forces ?? {})
-    .filter((entry): entry is [string, CommanderForceStateV2] => Boolean(entry[1]))
     .sort(([left], [right]) => left.localeCompare(right))
-    .map(([playerId, force]) => [playerId, {
-      ...force,
-      army: { ...force.army },
-      capabilities: { ...force.capabilities },
-      empireSupport: normalizeApexEmpireSupportV2(force.empireSupport),
-      economy: {
-        ...force.economy,
-        priorities: { ...force.economy.priorities },
-      },
-      front: force.front ? { ...force.front } : null,
-      transit: force.transit ? { ...force.transit, path: [...force.transit.path] } : null,
-      doctrineRuntime: normalizeApexDoctrineRuntimeV2(force.doctrineRuntime),
-    }])) as WorldStateV2['commanderForces'];
+    .flatMap(([playerId, source]) => {
+      const force = normalizeCommanderForceRuntimeV2(source);
+      return force ? [[playerId, force] as const] : [];
+    })) as WorldStateV2['commanderForces'];
 }
 
 export function commanderFrontSignatureV2(

@@ -1,26 +1,62 @@
 import { describe, expect, it } from 'vitest';
 import { synchronizeArmyCapacityV2 } from '../sim/v2/capacity';
-import { reconcileCommanderTerritorialAccessV2 } from '../sim/v2/commanderForce';
+import {
+  normalizeCommanderForceRuntimeV2,
+  reconcileCommanderTerritorialAccessV2,
+} from '../sim/v2/commanderForce';
 import { retireAbsorbedNationV2 } from '../sim/v2/integration';
-import { nationIdV2, territoryIdV2 } from '../sim/v2/types';
+import {
+  nationIdV2,
+  territoryIdV2,
+  type CommanderForceInitializationV2,
+} from '../sim/v2/types';
 import { WorldEngineV2 } from '../sim/v2/WorldEngineV2';
 import { createMapEngineAdapter, createMapSnapshot } from './WorldUIV2';
 
+function apexInitialization(options: {
+  integrity: number;
+  maxIntegrity: number;
+  rechargeBuffer?: number;
+  attackMultiplier?: number;
+  defenseMultiplier?: number;
+  pulseAttack?: number;
+  treasury?: number;
+  annualOutput?: number;
+  supplyStock?: number;
+  capabilities?: CommanderForceInitializationV2['capabilities'];
+}): CommanderForceInitializationV2 {
+  return {
+    shield: {
+      integrity: options.integrity,
+      maxIntegrity: options.maxIntegrity,
+      rechargeBuffer: options.rechargeBuffer ?? 0,
+      rechargeMultiplier: 1,
+      pulseAttack: options.pulseAttack ?? 0.001,
+    },
+    attackMultiplier: options.attackMultiplier ?? 1.08,
+    defenseMultiplier: options.defenseMultiplier ?? 1.08,
+    treasury: options.treasury ?? 0,
+    annualOutput: options.annualOutput ?? 0,
+    supplyStock: options.supplyStock ?? 0,
+    capabilities: options.capabilities,
+  };
+}
+
 describe('APEX neural-dome map snapshot', () => {
-  it('projects the dome without merging Shield Integrity into a territory army', () => {
+  it('projects Energy without merging APEX into a territory army', () => {
     const engine = new WorldEngineV2(81_551);
     const belgium = nationIdV2('bel');
     expect(engine.chooseCountry(belgium)).toEqual({ accepted: true });
-    expect(engine.initializeCommanderForce(belgium, {
-      manpower: 0.018,
-      capacity: 0.03,
-      trainedReserves: 0.004,
-      baseAttack: 4.8,
-      baseDefense: 5.2,
+    expect(engine.initializeCommanderForce(belgium, apexInitialization({
+      integrity: 0.018,
+      maxIntegrity: 0.03,
+      rechargeBuffer: 0.004,
+      attackMultiplier: 1.048,
+      defenseMultiplier: 1.052,
       treasury: 24,
       annualOutput: 7.5,
       supplyStock: 1.2,
-    })).toEqual({ accepted: true });
+    }))).toEqual({ accepted: true });
 
     const territoryManpower = engine.state.territories[territoryIdV2('bel')].army.manpower;
     const projected = createMapSnapshot(engine);
@@ -32,7 +68,14 @@ describe('APEX neural-dome map snapshot', () => {
       locationId: territoryIdV2('bel'),
       mission: 'standby',
       front: null,
-      army: { manpower: 0.018, capacity: 0.03, trainedReserves: 0.004 },
+      shield: {
+        integrity: 0.018,
+        maxIntegrity: 0.03,
+        rechargeBuffer: 0.004,
+        attackMultiplier: 1.048,
+        defenseMultiplier: 1.052,
+        pulseAttack: 0.001,
+      },
       economy: { treasury: 0, annualOutput: 7.5, supplyStock: 1.2 },
       doctrineRuntime: {
         lancerSupportedAssaultCount: 0,
@@ -43,87 +86,68 @@ describe('APEX neural-dome map snapshot', () => {
     expect(engine.state.territories[territoryIdV2('bel')].army.manpower).toBe(territoryManpower);
   });
 
-  it('projects Twin placement without inventing charge for an unselected Lancer protocol', () => {
+  it('projects one empire network without retired split placement or false Overdrive charge', () => {
     const engine = new WorldEngineV2(81_555);
     const belgium = nationIdV2('bel');
     expect(engine.chooseCountry(belgium)).toEqual({ accepted: true });
-    expect(engine.initializeCommanderForce(belgium, {
-      manpower: 0.0008,
-      capacity: 0.0008,
-      trainedReserves: 0.00008,
-      baseAttack: 125,
-      baseDefense: 125,
-      treasury: 0,
+    expect(engine.initializeCommanderForce(belgium, apexInitialization({
+      integrity: 0.0008,
+      maxIntegrity: 0.0008,
+      rechargeBuffer: 0.00008,
+      attackMultiplier: 1.08,
+      defenseMultiplier: 1.08,
       annualOutput: 0.015,
       supplyStock: 0.010,
-      capabilities: { rapidResponse: true },
-    })).toEqual({ accepted: true });
-    engine.state.commanderForces[belgium]!.doctrineRuntime = {
-      lancerSupportedAssaultCount: 0,
-      secondaryProjection: {
-        locationId: territoryIdV2('lux'),
-        mission: 'assault-support',
-        front: {
-          warId: 'war-twin-map',
-          sourceId: territoryIdV2('lux'),
-          targetId: territoryIdV2('deu'),
-        },
-        pairedPrimaryFront: {
-          warId: 'war-primary-map',
-          sourceId: territoryIdV2('bel'),
-          targetId: territoryIdV2('nld'),
-        },
-      },
-    };
+      capabilities: { forceMultiplier: true },
+    }))).toEqual({ accepted: true });
 
-    const runtime = createMapSnapshot(engine).commanderForces?.[belgium]
-      ?.doctrineRuntime;
+    const projected = createMapSnapshot(engine).commanderForces?.[belgium];
+    const runtime = projected?.doctrineRuntime;
     expect(runtime).toEqual({
       lancerSupportedAssaultCount: 0,
-      secondaryProjection: {
-        locationId: territoryIdV2('lux'),
-        mission: 'assault-support',
-        front: {
-          warId: 'war-twin-map',
-          sourceId: territoryIdV2('lux'),
-          targetId: territoryIdV2('deu'),
-        },
-      },
+      secondaryProjection: null,
     });
-    expect(runtime?.secondaryProjection).not.toHaveProperty('army');
-    expect(runtime?.secondaryProjection).not.toHaveProperty('economy');
+    expect(projected?.empireShield).toMatchObject({
+      active: true,
+      integrityPercent: 100,
+      coverageTerritoryIds: [territoryIdV2('bel')],
+      activeFrontTerritoryIds: [],
+    });
+    expect(projected).not.toHaveProperty('army');
   });
 
   it('projects ROGUE PRIME as a hostile polar sidecar instead of a human APEX entry', () => {
     const engine = new WorldEngineV2(81_553);
     const belgium = nationIdV2('bel');
     expect(engine.chooseCountry(belgium)).toEqual({ accepted: true });
+    const roguePrimeForce = normalizeCommanderForceRuntimeV2({
+      army: { manpower: 0.0003, capacity: 0.0005, trainedReserves: 0, baseAttack: 70, baseDefense: 80 },
+      economy: {
+        treasury: 20,
+        annualOutput: 0,
+        supplyStock: 0.01,
+        priorities: { training: 0, logistics: 100, development: 0 },
+      },
+      capabilities: {
+        mobileHeadquarters: true,
+        fieldHospital: false,
+        rapidResponse: true,
+        assaultSpecialist: true,
+        defenseSpecialist: true,
+        emergencyExtractionCharges: 0,
+      },
+      countryTraitScale: 0,
+      locationId: territoryIdV2('zero-point-core'),
+      mission: 'standby',
+      orderSource: 'autonomous',
+      manualHoldUntilTick: 0,
+      front: null,
+      transit: null,
+    });
+    expect(roguePrimeForce).not.toBeNull();
     engine.state.polarEndgame.roguePrime = {
       status: 'guarding',
-      force: {
-        army: { manpower: 0.0003, capacity: 0.0005, trainedReserves: 0, baseAttack: 70, baseDefense: 80 },
-        economy: {
-          treasury: 20,
-          annualOutput: 0,
-          supplyStock: 0.01,
-          priorities: { training: 0, logistics: 100, development: 0 },
-        },
-        capabilities: {
-          mobileHeadquarters: true,
-          fieldHospital: false,
-          rapidResponse: true,
-          assaultSpecialist: true,
-          defenseSpecialist: true,
-          emergencyExtractionCharges: 0,
-        },
-        countryTraitScale: 0,
-        locationId: territoryIdV2('zero-point-core'),
-        mission: 'standby',
-        orderSource: 'autonomous',
-        manualHoldUntilTick: 0,
-        front: null,
-        transit: null,
-      },
+      force: roguePrimeForce,
       sortieSequence: 0,
       nextSortieTick: 60,
       gatewayId: null,
@@ -147,39 +171,30 @@ describe('APEX neural-dome map snapshot', () => {
     });
   });
 
-  it('refreshes a movement route and ETA after a manual order changes state', () => {
+  it('refreshes Energy changes without exposing manual movement state', () => {
     const engine = new WorldEngineV2(81_552);
     const belgium = nationIdV2('bel');
     expect(engine.chooseCountry(belgium)).toEqual({ accepted: true });
-    expect(engine.initializeCommanderForce(belgium, {
-      manpower: 0.012,
-      capacity: 0.02,
-      baseAttack: 4.2,
-      baseDefense: 4.6,
+    expect(engine.initializeCommanderForce(belgium, apexInitialization({
+      integrity: 0.012,
+      maxIntegrity: 0.02,
+      attackMultiplier: 1.042,
+      defenseMultiplier: 1.046,
       treasury: 20,
       annualOutput: 6,
-    })).toEqual({ accepted: true });
-    engine.state.commanderForces[belgium]!.mission = 'logistics-relief';
-    engine.state.commanderForces[belgium]!.transit = {
-      path: [territoryIdV2('bel'), territoryIdV2('fra')],
-      distanceKm: 300,
-      departTick: 3,
-      arriveTick: 7,
-    };
+    }))).toEqual({ accepted: true });
+    engine.state.commanderForces[belgium]!.shield.integrity = 0.006;
 
     const adapter = createMapEngineAdapter(engine, () => engine.globalRanking());
     adapter.refreshSnapshot?.();
     expect(adapter.state.commanderForces?.[belgium]).toMatchObject({
-      mission: 'logistics-relief',
-      transit: {
-        path: [territoryIdV2('bel'), territoryIdV2('fra')],
-        departTick: 3,
-        arriveTick: 7,
-      },
+      mission: 'standby',
+      shield: { integrity: 0.006, maxIntegrity: 0.02 },
+      transit: null,
     });
   });
 
-  it('projects lost-Greenland extraction to the African destination without adding APEX to its army', () => {
+  it('anchors a legacy lost-Greenland save to the surviving empire without adding APEX to its army', () => {
     const engine = new WorldEngineV2(81_554);
     const greenland = nationIdV2('grl');
     const guineaBissau = nationIdV2('gnb');
@@ -187,16 +202,15 @@ describe('APEX neural-dome map snapshot', () => {
     const grl = territoryIdV2('grl');
     const gnb = territoryIdV2('gnb');
     expect(engine.chooseCountry(greenland)).toEqual({ accepted: true });
-    expect(engine.initializeCommanderForce(greenland, {
-      manpower: 0.0008,
-      capacity: 0.0008,
-      trainedReserves: 0.00008,
-      baseAttack: 125,
-      baseDefense: 125,
-      treasury: 0,
+    expect(engine.initializeCommanderForce(greenland, apexInitialization({
+      integrity: 0.0008,
+      maxIntegrity: 0.0008,
+      rechargeBuffer: 0.00008,
+      attackMultiplier: 1.08,
+      defenseMultiplier: 1.08,
       annualOutput: 0.015,
       supplyStock: 0.010,
-    })).toEqual({ accepted: true });
+    }))).toEqual({ accepted: true });
     engine.state.territories[gnb]!.owner = greenland;
     engine.state.territories[gnb]!.coreOwner = greenland;
     engine.state.territories[gnb]!.integration = 1;
@@ -216,13 +230,21 @@ describe('APEX neural-dome map snapshot', () => {
     const projected = createMapSnapshot(engine);
 
     expect(projected.commanderForces?.[greenland]).toMatchObject({
-      locationId: grl,
-      mission: 'evacuate',
-      transit: { path: [grl, gnb] },
-      army: { manpower: 0.0008, baseAttack: 125, baseDefense: 125 },
+      locationId: gnb,
+      mission: 'standby',
+      transit: null,
+      shield: {
+        integrity: 0.0008,
+        maxIntegrity: 0.0008,
+        rechargeBuffer: 0.00008,
+        attackMultiplier: 1.08,
+        defenseMultiplier: 1.08,
+      },
     });
     expect(projected.territories[gnb]!.army).toEqual(nationalArmyBeforeExtraction);
-    expect(projected.commanderForces![greenland]!.transit!.arriveTick)
-      .toBeGreaterThan(projected.tick);
+    expect(projected.commanderForces![greenland]!.empireShield).toMatchObject({
+      coverageTerritoryIds: [gnb],
+      activeFrontTerritoryIds: [],
+    });
   });
 });

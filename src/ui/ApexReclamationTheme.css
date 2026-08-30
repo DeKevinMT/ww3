@@ -1,0 +1,634 @@
+:root {
+  --apex-void: #020811;
+  --apex-ink: #04111d;
+  --apex-surface: rgba(5, 18, 30, .92);
+  --apex-surface-soft: rgba(6, 23, 37, .76);
+  --apex-line: rgba(139, 218, 234, .16);
+  --apex-line-strong: rgba(139, 226, 242, .32);
+  --apex-cyan: #71e9ff;
+  --apex-cyan-soft: #a9f4ff;
+  --apex-magenta: #f04fd3;
+  --apex-amber: #efbd68;
+  --apex-danger: #ff756d;
+  --apex-positive: #69e3a2;
+  --apex-text: #ecf9fc;
+  --apex-muted: #92aeb7;
+  --apex-display: "Segoe UI Variable Display", "Bahnschrift", "Segoe UI", sans-serif;
+  --apex-copy: "Segoe UI Variable Text", "Segoe UI", Arial, sans-serif;
+  --apex-shadow: 0 28px 80px rgba(0, 0, 0, .46);
+}
+
+html,
+body,
+button,
+input,
+select,
+textarea { font-family: var(--apex-copy); }
+
+body { background: var(--apex-void); }
+
+button,
+input,
+select,
+textarea { font-synthesis: none; }
+
+button { -webkit-tap-highlight-color: transparent; }
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+summary:focus-visible {
+  outline: 2px solid var(--apex-cyan-soft);
+  outline-offset: 3px;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(113, 233, 255, .27) rgba(2, 8, 17, .2);
+}
+
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: rgba(2, 8, 17, .2); }
+*::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: rgba(113, 233, 255, .27);
+  background-clip: padding-box;
+}
+
+/* Shared interaction language ------------------------------------------------ */
+
+.primary-button,
+.secondary-button,
+.ghost-button,
+.danger-button {
+  border-radius: 5px 13px 5px 13px;
+  font-weight: 850;
+  letter-spacing: .7px;
+  transition: transform 150ms ease, border-color 150ms ease,
+    background-color 150ms ease, box-shadow 150ms ease, color 150ms ease;
+}
+
+.primary-button {
+  border-color: rgba(158, 243, 255, .74);
+  color: #031018;
+  background: linear-gradient(112deg, #5dcce3, #9ff4ff 70%, #d9fbff);
+  box-shadow: 0 12px 30px rgba(58, 194, 219, .18), inset 0 1px rgba(255, 255, 255, .65);
+}
+
+.secondary-button {
+  border-color: rgba(113, 233, 255, .25);
+  color: #c8f6fc;
+  background: linear-gradient(115deg, rgba(47, 142, 167, .16), rgba(7, 25, 39, .68));
+}
+
+.ghost-button {
+  border-color: rgba(154, 205, 217, .15);
+  color: #9ebbc4;
+  background: rgba(4, 15, 25, .38);
+}
+
+.primary-button:not(:disabled):hover,
+.secondary-button:not(:disabled):hover,
+.ghost-button:not(:disabled):hover,
+.danger-button:not(:disabled):hover {
+  transform: translateY(-1px);
+  border-color: rgba(168, 242, 255, .58);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, .3), 0 0 22px rgba(113, 233, 255, .08);
+}
+
+/* Account, deployment, talent and arsenal surfaces -------------------------- */
+
+.commander-menu-shell {
+  --menu-cyan: var(--apex-cyan);
+  --menu-magenta: var(--apex-magenta);
+  color: var(--apex-text);
+  background-color: var(--apex-void);
+  background-image:
+    linear-gradient(100deg, rgba(2, 8, 17, .96), rgba(2, 8, 17, .76) 48%, rgba(2, 8, 17, .9)),
+    url("../assets/apex-reclamation-bg.jpg");
+  background-size: cover;
+  background-position: center;
+  background-attachment: fixed;
+}
+
+.commander-menu-shell::before {
+  opacity: .14;
+  background-size: 64px 64px;
+  mask-image: linear-gradient(105deg, #000 0%, rgba(0, 0, 0, .52) 54%, transparent 88%);
+}
+
+.commander-menu-shell--home {
+  background-image:
+    linear-gradient(92deg, rgba(2, 8, 17, .76), rgba(2, 8, 17, .42) 46%, rgba(2, 8, 17, .66)),
+    linear-gradient(0deg, rgba(2, 8, 17, .82), transparent 66%),
+    url("../assets/apex-reclamation-bg.jpg");
+}
+
+.commander-menu-shell--home::after {
+  opacity: .42;
+  background:
+    linear-gradient(112deg, transparent 0 51%, rgba(113, 233, 255, .05) 51.1% 51.2%, transparent 51.3%),
+    radial-gradient(ellipse at 27% 118%, rgba(32, 105, 142, .3), transparent 50%);
+}
+
+.commander-profile-strip,
+.commander-menu-shell--home .commander-profile-strip {
+  border-bottom: 1px solid var(--apex-line);
+  background: linear-gradient(90deg, rgba(2, 8, 17, .84), rgba(5, 20, 32, .68) 54%, rgba(2, 8, 17, .82));
+  box-shadow: 0 16px 44px rgba(0, 0, 0, .28);
+}
+
+.commander-profile-strip__identity > i {
+  border-color: rgba(113, 233, 255, .38);
+  border-radius: 5px 14px 5px 14px;
+  background: linear-gradient(145deg, rgba(113, 233, 255, .16), rgba(240, 79, 211, .06));
+  box-shadow: inset 0 1px rgba(255, 255, 255, .08), 0 0 24px rgba(113, 233, 255, .08);
+}
+
+.commander-profile-strip__identity small,
+.commander-profile-strip__record,
+.commander-menu-shell--home .commander-profile-strip__identity small,
+.commander-menu-shell--home .commander-profile-strip__record {
+  color: #79959f;
+  font-size: 10px;
+  letter-spacing: .85px;
+}
+
+.commander-profile-strip__identity strong { font-family: var(--apex-display); }
+
+.commander-profile-strip__level {
+  border-color: rgba(113, 233, 255, .13);
+  background: linear-gradient(90deg, rgba(113, 233, 255, .035), rgba(240, 79, 211, .018));
+}
+
+.commander-theater {
+  border-color: color-mix(in srgb, var(--home-country) 24%, rgba(113, 233, 255, .18));
+  background: linear-gradient(92deg, rgba(3, 13, 22, .7) 0%, rgba(3, 13, 22, .48) 48%, rgba(2, 9, 17, .32) 100%);
+  backdrop-filter: blur(5px) saturate(112%);
+  box-shadow: var(--apex-shadow), inset 0 1px rgba(255, 255, 255, .035);
+}
+
+.commander-theater::before {
+  opacity: .72;
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--home-country) 22%, transparent) 0 3px, transparent 3px),
+    repeating-linear-gradient(0deg, transparent 0 39px, rgba(113, 233, 255, .024) 40px);
+}
+
+.commander-theater__flag-echo { opacity: .09; filter: saturate(.7) contrast(1.15); }
+
+.commander-theater .commander-theater__flag-echo {
+  z-index: 0;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: .105;
+  transform: none;
+  filter: saturate(.82) contrast(1.12);
+}
+
+.commander-theater .commander-theater__flag-echo > .country-flag {
+  width: 100%;
+  height: 100%;
+  aspect-ratio: auto;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.commander-theater .commander-theater__flag-echo :is(svg, img) {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.commander-theater__brand {
+  position: absolute;
+  z-index: 3;
+  top: 25px;
+  right: 28px;
+  display: grid;
+  justify-items: end;
+  pointer-events: none;
+  text-align: right;
+  text-shadow: 0 4px 24px rgba(0, 0, 0, .7);
+}
+
+.commander-theater__brand > span {
+  color: var(--apex-cyan);
+  font: 800 11px/1 var(--apex-display);
+  letter-spacing: 4.4px;
+}
+
+.commander-theater__brand > strong {
+  margin-top: 5px;
+  color: rgba(230, 249, 252, .78);
+  font: 760 19px/.9 var(--apex-display);
+  letter-spacing: 1.1px;
+}
+
+.commander-theater__brief h2,
+.commander-deployment__heading h1,
+.commander-talents__heading h1,
+.commander-arsenal__heading h1,
+.commander-country-detail h2 {
+  font-family: var(--apex-display);
+  font-weight: 760;
+  text-wrap: balance;
+}
+
+.commander-theater__brief p,
+.commander-deployment__heading p,
+.commander-mode-card > p { color: #9db6be; font-size: 12px; }
+
+.commander-command-dossier,
+.commander-meta-card,
+.commander-strategy-strip,
+.commander-deployment__tools,
+.commander-country-list,
+.commander-country-detail,
+.commander-selected-flagship,
+.commander-mode-loadout,
+.commander-deployment-loadout,
+.commander-talents__overview,
+.commander-talent-branch,
+.commander-arsenal__body {
+  border-color: var(--apex-line);
+  background-color: rgba(3, 14, 24, .78);
+  box-shadow: inset 0 1px rgba(255, 255, 255, .025), 0 18px 48px rgba(0, 0, 0, .18);
+}
+
+.commander-menu-shell--home .commander-command-dossier {
+  background: linear-gradient(155deg, rgba(6, 25, 39, .5), rgba(2, 10, 18, .3));
+  backdrop-filter: blur(7px) saturate(110%);
+}
+
+.commander-menu-shell--home .commander-strategy-strip {
+  background: linear-gradient(90deg, rgba(6, 24, 36, .48), rgba(3, 13, 22, .28));
+  backdrop-filter: blur(5px) saturate(108%);
+}
+
+.commander-menu-shell--home .commander-meta-card {
+  background: linear-gradient(145deg, rgba(7, 29, 43, .43), rgba(2, 10, 18, .25));
+}
+
+@media (min-width: 981px) and (min-height: 720px) {
+  .commander-command-stage {
+    height: 100%;
+    grid-template-rows: minmax(0, 1fr) auto;
+    align-content: stretch;
+  }
+
+  .commander-theater { min-height: 0; }
+
+  .commander-command-dossier {
+    height: 100%;
+    align-self: stretch;
+    grid-template-rows: auto auto minmax(0, 1fr);
+  }
+
+  .commander-command-dossier > .commander-account-settings { align-self: end; }
+}
+
+.commander-meta-card,
+.commander-country-row,
+.commander-mode-card,
+.commander-talent-node,
+.commander-mastery-option,
+.commander-deployment-loadout__corps article,
+.commander-deployment-loadout__nation > span {
+  background-image: linear-gradient(125deg, rgba(113, 233, 255, .035), rgba(255, 255, 255, .009));
+}
+
+.commander-country-row:hover,
+.commander-country-row.is-selected,
+.commander-mode-card:hover,
+.commander-talent-node:hover,
+.commander-mastery-option:hover {
+  border-color: rgba(113, 233, 255, .36);
+  background-color: rgba(30, 99, 117, .12);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, .22), inset 3px 0 rgba(113, 233, 255, .58);
+}
+
+.commander-deployment__heading > div > span,
+.commander-mode-card > span,
+.commander-meta-card header > span,
+.commander-talent-branch > header span,
+.commander-country-row > b {
+  color: var(--apex-cyan);
+  font-size: 10px;
+  letter-spacing: 1.05px;
+}
+
+.commander-deployment__tools input,
+.commander-identity-field input,
+.mp-field input,
+.mp-field textarea,
+.mp-field select {
+  border-color: rgba(135, 214, 230, .19);
+  border-radius: 5px 11px 5px 11px;
+  color: #e9f9fc;
+  background: rgba(1, 8, 15, .82);
+}
+
+/* Live command HUD ---------------------------------------------------------- */
+
+.world-ui-v2 {
+  --cyan: var(--apex-cyan);
+  color: var(--apex-text);
+}
+
+.world-ui-v2 .glass-panel,
+.world-ui-v2 .modal-card {
+  border-color: var(--apex-line);
+  background: linear-gradient(145deg, rgba(6, 22, 36, .94), rgba(3, 13, 23, .93));
+  box-shadow: var(--apex-shadow), inset 0 1px rgba(255, 255, 255, .03);
+}
+
+.world-ui-v2 .situation-topbar {
+  border-radius: 5px 15px 5px 15px;
+  background: linear-gradient(90deg, rgba(3, 13, 23, .97), rgba(5, 21, 34, .94) 52%, rgba(3, 12, 21, .97));
+  backdrop-filter: blur(14px) saturate(120%);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, .34), inset 0 1px rgba(255, 255, 255, .035);
+}
+
+.world-ui-v2 .command-identity {
+  border-right-color: rgba(113, 233, 255, .13);
+  background: linear-gradient(100deg, color-mix(in srgb, var(--coalition) 10%, transparent), transparent 75%);
+}
+
+.world-ui-v2 .command-identity__line > strong {
+  font-family: var(--apex-display);
+  font-weight: 750;
+}
+
+.world-ui-v2 .topbar-status .top-metric {
+  border-color: transparent;
+  border-left-color: rgba(138, 207, 220, .09);
+  border-radius: 0;
+  background: linear-gradient(0deg, color-mix(in srgb, var(--metric-accent) 4%, transparent), transparent 65%);
+}
+
+.world-ui-v2 .topbar-status .top-metric::before { opacity: .82; }
+
+.world-ui-v2 .topbar-status .top-metric:hover,
+.world-ui-v2 .topbar-status .top-metric:focus-visible {
+  border-color: rgba(113, 233, 255, .14);
+  border-radius: 4px 10px 4px 10px;
+  background: color-mix(in srgb, var(--metric-accent) 7%, rgba(6, 24, 38, .58));
+}
+
+.world-ui-v2 .topbar-status .top-metric > span {
+  color: #90aab2;
+  font-size: 10px;
+  letter-spacing: .85px;
+}
+
+.world-ui-v2 .topbar-status .top-metric > strong {
+  color: #f1fbfd;
+  font-family: var(--apex-display);
+  font-weight: 720;
+}
+
+.world-ui-v2 .topbar-status .topbar-progress-bar,
+.world-ui-v2 .topbar-status .topbar-defence-stack {
+  height: 100%;
+  min-height: 6px;
+  opacity: .32;
+  border-radius: 0;
+  mask-image: linear-gradient(90deg, #000, rgba(0, 0, 0, .62));
+}
+
+.world-ui-v2 .topbar-status .top-metric:hover :is(.topbar-progress-bar, .topbar-defence-stack) { opacity: .52; }
+
+.world-ui-v2 .topbar-status .top-metric--defence-stack {
+  border-right: 1px solid rgba(113, 233, 255, .12);
+  background: linear-gradient(0deg, rgba(69, 191, 220, .11), rgba(4, 16, 28, .12) 72%);
+  box-shadow: inset 0 1px rgba(179, 246, 255, .08), 0 0 32px rgba(70, 204, 229, .07);
+}
+
+.world-ui-v2 .topbar-status .top-metric--defence-stack::after {
+  background:
+    linear-gradient(90deg, rgba(4, 16, 27, .1), rgba(4, 16, 27, .28) 68%, rgba(4, 16, 27, .42)),
+    linear-gradient(180deg, rgba(255, 255, 255, .02), rgba(0, 0, 0, .12));
+}
+
+.world-ui-v2 .topbar-status .top-metric--defence-stack > span { color: #a9f3ff; }
+
+.world-ui-v2 .topbar-status .top-metric--defence-stack > strong {
+  text-shadow: 0 0 18px rgba(154, 241, 255, .17);
+}
+
+.world-ui-v2 .topbar-status .top-metric--defence-stack .topbar-defence-stack {
+  opacity: .9;
+  mask-image: none;
+}
+
+.world-ui-v2 .topbar-status .top-metric--defence-stack .topbar-defence-stack > b {
+  background: linear-gradient(108deg, rgba(226, 76, 68, .68), rgba(255, 153, 93, .54));
+  box-shadow: inset -1px 0 rgba(255, 220, 188, .62), 10px 0 22px rgba(255, 103, 75, .2);
+}
+
+.world-ui-v2 .topbar-status .top-metric--defence-stack .topbar-defence-stack > em {
+  border-right-color: #c9fbff;
+  background:
+    repeating-linear-gradient(126deg, transparent 0 11px, rgba(208, 252, 255, .19) 12px 13px),
+    linear-gradient(105deg, rgba(33, 161, 218, .11), rgba(85, 231, 249, .42));
+  box-shadow: inset -1px 0 rgba(225, 254, 255, .68), 12px 0 28px rgba(84, 225, 245, .25);
+}
+
+.world-ui-v2 .top-actions .icon-button {
+  border-color: rgba(137, 207, 220, .14);
+  border-radius: 5px 10px 5px 10px;
+  background: rgba(3, 13, 22, .52);
+}
+
+.world-ui-v2 .top-actions .icon-button:hover {
+  border-color: rgba(113, 233, 255, .36);
+  color: #dffbff;
+  background: rgba(113, 233, 255, .075);
+}
+
+.world-ui-v2 .command-dock {
+  border-radius: 5px 16px 5px 16px;
+  background: linear-gradient(100deg, rgba(3, 14, 24, .96), rgba(6, 23, 37, .92));
+  backdrop-filter: blur(14px) saturate(120%);
+  box-shadow: 0 22px 60px rgba(0, 0, 0, .4), inset 0 1px rgba(255, 255, 255, .03);
+}
+
+.world-ui-v2 .command-dock > button {
+  border-radius: 4px 10px 4px 10px;
+  transition: background 150ms ease, border-color 150ms ease, transform 150ms ease;
+}
+
+.world-ui-v2 .command-dock > button:hover { transform: translateY(-1px); }
+
+.world-ui-v2 .command-dock > button.is-active {
+  border-color: rgba(113, 233, 255, .28);
+  background: linear-gradient(120deg, rgba(113, 233, 255, .12), rgba(113, 233, 255, .035));
+  box-shadow: inset 3px 0 var(--apex-cyan), 0 0 24px rgba(113, 233, 255, .07);
+}
+
+.world-ui-v2 .world-panel.command-drawer,
+.world-ui-v2 .war-tracker {
+  border-radius: 5px 15px 5px 15px;
+  background: linear-gradient(145deg, rgba(5, 21, 34, .97), rgba(2, 12, 21, .96));
+  box-shadow: 0 28px 76px rgba(0, 0, 0, .48), inset 0 1px rgba(255, 255, 255, .025);
+  backdrop-filter: blur(13px) saturate(115%);
+}
+
+.world-ui-v2 .world-panel.command-drawer h2,
+.world-ui-v2 .modal-card h2,
+.world-ui-v2 .war-outcome-modal h2 {
+  font-family: var(--apex-display);
+  font-weight: 750;
+  text-wrap: balance;
+}
+
+.world-ui-v2 .command-drawer--clean .panel-kicker,
+.world-ui-v2 .command-drawer--clean .section-label,
+.world-ui-v2 .panel-kicker,
+.world-ui-v2 .section-label {
+  color: var(--apex-cyan);
+  letter-spacing: 1.1px;
+}
+
+.world-ui-v2 :is(.decision-details, .progress-program, .war-command-conflict,
+  .review-command-section, .review-operation-facts > article,
+  .review-combat-detail > article, .territory-integration-card) {
+  border-color: rgba(139, 205, 219, .12);
+  background-color: rgba(255, 255, 255, .014);
+}
+
+.world-ui-v2 details > summary {
+  border-radius: 4px 9px 4px 9px;
+  transition: background 140ms ease, color 140ms ease;
+}
+
+.world-ui-v2 details > summary:hover { color: #defaff; background: rgba(113, 233, 255, .035); }
+
+.world-ui-v2 .war-tracker__wars { scrollbar-gutter: stable; }
+
+.world-ui-v2 .war-tracker__war.is-defending {
+  background: linear-gradient(90deg, rgba(255, 73, 67, .09), transparent 78%);
+}
+
+.world-ui-v2 .modal-backdrop {
+  background:
+    radial-gradient(circle at 68% 26%, rgba(31, 119, 145, .12), transparent 34%),
+    rgba(1, 6, 12, .78);
+  backdrop-filter: blur(14px) saturate(80%);
+}
+
+.world-ui-v2 .modal-card,
+.world-ui-v2 .review-attack-modal.command-modal--unified,
+.world-ui-v2 .war-outcome-modal {
+  border-radius: 6px 19px 6px 19px;
+  background-image:
+    radial-gradient(circle at 100% 0, rgba(113, 233, 255, .055), transparent 33%),
+    linear-gradient(145deg, rgba(7, 25, 40, .98), rgba(3, 13, 23, .98));
+}
+
+.world-ui-v2 .review-power-decision {
+  border-radius: 5px 13px 5px 13px;
+  background: linear-gradient(110deg, rgba(75, 208, 232, .065), rgba(255, 255, 255, .012), color-mix(in srgb, var(--review-accent) 6%, transparent));
+}
+
+.world-ui-v2 .apex-transmission-backdrop {
+  background: rgba(1, 7, 13, .66);
+}
+
+.world-ui-v2 .apex-transmission-channel {
+  border-radius: 6px 20px 6px 20px;
+  background: linear-gradient(120deg, rgba(4, 18, 29, .96), rgba(3, 13, 23, .9));
+  box-shadow: 0 36px 110px rgba(0, 0, 0, .58), inset 3px 0 rgba(113, 233, 255, .62);
+}
+
+.world-ui-v2 .apex-transmission__message h2,
+.world-ui-v2 .apex-transmission__signal > b { font-family: var(--apex-display); }
+
+#tooltip {
+  border-color: rgba(139, 218, 234, .2);
+  border-radius: 4px 12px 4px 12px;
+  background: rgba(3, 14, 24, .97);
+  box-shadow: 0 20px 48px rgba(0, 0, 0, .48), inset 0 1px rgba(255, 255, 255, .025);
+}
+
+.toast {
+  border-radius: 4px 11px 4px 11px;
+  background: rgba(10, 20, 26, .97);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, .46);
+}
+
+/* Campaign ending and multiplayer ------------------------------------------ */
+
+.campaign-report {
+  background:
+    linear-gradient(100deg, rgba(2, 8, 17, .88), rgba(2, 8, 17, .58)),
+    url("../assets/apex-reclamation-bg.jpg") center / cover fixed;
+}
+
+.campaign-report__atmosphere { background: transparent; }
+
+.campaign-report__card {
+  border-radius: 7px 21px 7px 21px;
+  background: linear-gradient(145deg, rgba(7, 25, 40, .96), rgba(3, 13, 23, .95));
+  box-shadow: 0 38px 120px rgba(0, 0, 0, .58), inset 0 1px rgba(255, 255, 255, .035);
+}
+
+.campaign-report__header h1,
+.campaign-report__stats strong { font-family: var(--apex-display); }
+
+.campaign-report__reward-row article,
+.campaign-report__stats,
+.campaign-report__signal-purges {
+  border-color: rgba(139, 218, 234, .14);
+  background: rgba(255, 255, 255, .018);
+}
+
+.multiplayer-lobby-layer {
+  background:
+    linear-gradient(100deg, rgba(2, 8, 17, .9), rgba(2, 8, 17, .64)),
+    url("../assets/apex-reclamation-bg.jpg") center / cover fixed;
+}
+
+.multiplayer-lobby-card {
+  border-color: rgba(139, 218, 234, .18);
+  border-radius: 7px 21px 7px 21px;
+  background: linear-gradient(145deg, rgba(7, 25, 40, .96), rgba(3, 13, 23, .95));
+  box-shadow: 0 38px 120px rgba(0, 0, 0, .58), inset 0 1px rgba(255, 255, 255, .035);
+}
+
+.multiplayer-lobby-card h1,
+.multiplayer-lobby-card h2,
+.mp-matchmaking__count b { font-family: var(--apex-display); }
+
+.mp-player,
+.mp-connect-grid section,
+.mp-answer-callout,
+.mp-deployment-summary,
+.mp-matchmaking__roster {
+  border-color: rgba(139, 218, 234, .13);
+  border-radius: 5px 13px 5px 13px;
+  background: rgba(2, 12, 21, .58);
+}
+
+@media (max-width: 760px) {
+  .commander-menu-shell { background-attachment: scroll; }
+  .world-ui-v2 .situation-topbar,
+  .world-ui-v2 .command-dock,
+  .world-ui-v2 .world-panel.command-drawer,
+  .world-ui-v2 .war-tracker { backdrop-filter: none; }
+  .commander-theater { background-position: 63% center; }
+  .commander-theater__brand { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .primary-button,
+  .secondary-button,
+  .ghost-button,
+  .danger-button,
+  .world-ui-v2 .command-dock > button { transition-duration: 1ms; }
+}

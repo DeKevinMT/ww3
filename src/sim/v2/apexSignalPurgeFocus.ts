@@ -18,7 +18,7 @@ function accessibilityRankV2(
   return 2;
 }
 
-/** Stable APEX work queue shared by the simulation and physical autonomy. */
+/** Stable APEX work queue shared by simulation and distributed-network priority. */
 export function selectApexSignalPurgeQueueV2(
   state: WorldStateV2,
   content: WorldContentV2,
@@ -51,7 +51,7 @@ export function selectApexSignalPurgeQueueV2(
   });
 }
 
-/** The single territory APEX autonomously travels to and un-brainwashes. */
+/** The single territory receiving APEX priority purge bandwidth. */
 export function selectApexSignalPurgeFocusV2(
   state: WorldStateV2,
   content: WorldContentV2,

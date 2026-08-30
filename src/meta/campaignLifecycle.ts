@@ -190,6 +190,7 @@ function suppressIneligibleRewardV1(reward: CampaignRewardV1): CampaignRewardV1 
     ...reward,
     masteryXp: 0,
     commanderXp: 0,
+    creditsEarned: 0,
   };
 }
 

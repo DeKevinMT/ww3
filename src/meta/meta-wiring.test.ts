@@ -32,6 +32,44 @@ describe('account progression wiring', () => {
     expect(commanderProfileSource).not.toContain('(1 - BASE_COUNTRY_TRAIT_SCALE_V1)');
   });
 
+  it('charges each new Survival seat once, refunds failed starts and never charges resume', () => {
+    const charge = mainSource.slice(
+      mainSource.indexOf('async function chargeSurvivalDeploymentV1('),
+      mainSource.indexOf('function persistCampaignTutorialExperience('),
+    );
+    const solo = mainSource.slice(
+      mainSource.indexOf('async function beginStoredCampaign('),
+      mainSource.indexOf('function persistProfileResult('),
+    );
+    const host = mainSource.slice(
+      mainSource.indexOf('async function launchHostGame('),
+      mainSource.indexOf('async function launchGuestGame('),
+    );
+    const guest = mainSource.slice(
+      mainSource.indexOf('async function launchGuestGame('),
+      mainSource.indexOf('function resumeStoredGuestMatch('),
+    );
+    const resume = mainSource.slice(
+      mainSource.indexOf('function continueStoredCampaign()'),
+      mainSource.indexOf('function mountWorldUi('),
+    );
+
+    expect(charge).toContain("if (mode !== 'survival') return;");
+    expect(charge).toContain('spendSurvivalDeploymentCreditsV1(commanderProfile, deploymentId)');
+    expect(charge).toContain('refundSurvivalDeploymentCreditsV1(commanderProfile, deploymentId)');
+    expect(charge).toContain('commanderDatabase.saveProfile(commanderProfile)');
+    expect(solo).toContain('chargeSurvivalDeploymentV1(scenario.mode, newCampaignId)');
+    expect(solo).toContain('await refundSurvivalDeploymentV1(scenario.mode, newCampaignId)');
+    expect(solo.indexOf('await commanderDatabase.saveCampaign(newCampaign)'))
+      .toBeLessThan(solo.indexOf('campaignSlot = newCampaign'));
+    expect(host).toContain('`coop:${launch.transport.roomId}:${launch.transport.hostPeerId}`');
+    expect(host).toContain('await refundSurvivalDeploymentV1(scenario.config.mode, deploymentId)');
+    expect(host.indexOf('const started = session.start()'))
+      .toBeLessThan(host.indexOf('await refundSurvivalDeploymentV1('));
+    expect(guest).toContain('`coop:${launch.transport.roomId}:${launch.transport.peerId}`');
+    expect(resume).not.toContain('chargeSurvivalDeploymentV1');
+  });
+
   it('does not scale defeated countries across Campaign timelines', () => {
     expect(mainSource).not.toContain('rememberDefeatedCampaignOpponent(');
     expect(mainSource).not.toContain('recordCampaignAdaptationV1(');

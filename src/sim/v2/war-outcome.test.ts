@@ -10,12 +10,26 @@ import {
   nationIdV2,
   territoryIdV2,
   type BattleEventV2,
+  type CommanderForceInitializationV2,
   type PlayerId,
   type WarOutcomeV2,
 } from './types';
 import { declareWarV2, recordApexWarBattleTelemetryV2 } from './war';
 
 const id = (value: string) => value as PlayerId;
+
+const TEST_APEX_PROFILE: CommanderForceInitializationV2 = {
+  shield: {
+    integrity: 0.0008,
+    maxIntegrity: 0.0008,
+    pulseAttack: 0.0008,
+  },
+  attackMultiplier: 1.10,
+  defenseMultiplier: 1.10,
+  treasury: 0,
+  annualOutput: 0.015,
+  supplyStock: 0.010,
+};
 
 describe('transient post-war outcomes', () => {
   it('emits one exact human report when both field armies are exhausted', () => {
@@ -24,16 +38,9 @@ describe('transient post-war outcomes', () => {
     const opponentId = id('lux');
     state.humanPlayerId = humanId;
     state.humanPlayerIds = [humanId];
-    expect(initializeCommanderForceV2(state, WORLD_CONTENT_V2, humanId, {
-      manpower: 0.0008,
-      capacity: 0.0008,
-      trainedReserves: 0.00008,
-      baseAttack: 125,
-      baseDefense: 125,
-      treasury: 0,
-      annualOutput: 0.015,
-      supplyStock: 0.010,
-    }).accepted).toBe(true);
+    expect(initializeCommanderForceV2(
+      state, WORLD_CONTENT_V2, humanId, TEST_APEX_PROFILE,
+    ).accepted).toBe(true);
     state.tick = 80;
     state.aiEscalation.lastWarStartTick = 1_000_000;
     state.wars = [{
@@ -134,16 +141,9 @@ describe('transient post-war outcomes', () => {
     const opponentId = id('lux');
     state.humanPlayerId = humanId;
     state.humanPlayerIds = [humanId];
-    expect(initializeCommanderForceV2(state, WORLD_CONTENT_V2, humanId, {
-      manpower: 0.0008,
-      capacity: 0.0008,
-      trainedReserves: 0.00008,
-      baseAttack: 125,
-      baseDefense: 125,
-      treasury: 0,
-      annualOutput: 0.015,
-      supplyStock: 0.010,
-    }).accepted).toBe(true);
+    expect(initializeCommanderForceV2(
+      state, WORLD_CONTENT_V2, humanId, TEST_APEX_PROFILE,
+    ).accepted).toBe(true);
     state.tick = 80;
     state.aiEscalation.lastWarStartTick = 1_000_000;
     state.wars = [{
@@ -226,7 +226,7 @@ describe('transient post-war outcomes', () => {
     }));
     // The report must retain the conflict baseline rather than reinterpreting
     // integrity damage through whatever the current live capacity became.
-    engine.state.commanderForces[humanId]!.army.capacity = 0.002;
+    engine.state.commanderForces[humanId]!.shield.maxIntegrity = 0.002;
     const reloaded = WorldEngineV2.fromSave(engine.save(), WORLD_CONTENT_V2);
     expect(reloaded.state.wars[0]!.apexTelemetryByPlayer?.[humanId]).toEqual({
       supportedBattles: 2,

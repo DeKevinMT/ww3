@@ -435,7 +435,6 @@ describe('V2 one-source manpower combat', () => {
     expect(belPower / nldPower).toBeLessThan(5);
     expect(selectCatchUpFactorV2(state, WORLD_CONTENT_V2, isl)).toBeGreaterThan(1);
     const icelandFill = selectArmyStrengthV2(state, WORLD_CONTENT_V2, isl).fillRatio;
-    expect(icelandFill).toBeGreaterThan(0.7);
-    expect(icelandFill).toBeLessThan(1);
+    expect(icelandFill).toBe(1);
   });
 });

@@ -3,16 +3,12 @@ import {
   WAR_ACCESS_ASSAULT_MULTIPLIER,
   WAR_ACCESS_CASUALTY_MULTIPLIER,
   WAR_ACCESS_OPERATION_MULTIPLIER,
-  WAR_ACCESS_SUPPLY_MULTIPLIER,
-  NAVAL_ROUTE_SUPPLY_MULTIPLIER_MIN,
   WAR_MOBILIZATION_TICKS,
   warAccessOperationMultiplierV2,
-  warAccessSupplyMultiplierV2,
 } from './balance';
 import { createWorldStateV2 } from './bootstrap';
 import {
   territoryTerrainOperationCostMultiplierV2,
-  territoryTerrainSupplyMultiplierV2,
   WORLD_CONTENT_V2,
 } from './content';
 import {
@@ -20,15 +16,9 @@ import {
   selectWarRouteDistanceKmV2,
   selectWeeklyFinanceBreakdownV2,
 } from './selectors';
-import {
-  composeTraitContextV2,
-  traitNationContextV2,
-  traitTerritoryContextV2,
-} from './traitContext';
-import { countryTraitFactorV2 } from './traits';
 import { nationIdV2, territoryIdV2 } from './types';
 import { enterPostBlackoutCampaignForTestV2 } from './testSupport';
-import { declareWarV2, processWarsV2, supplyFactorV2 } from './war';
+import { declareWarV2, frontCapacitySupplyQuoteV2, processWarsV2 } from './war';
 
 const bel = nationIdV2('bel');
 const deu = nationIdV2('deu');
@@ -89,27 +79,22 @@ describe('V2 multi-front and naval balance regressions', () => {
     expect(battles.every((battle) => battle.tick === state.tick)).toBe(true);
   });
 
-  it('makes naval war viable but materially slower to supply than a land front', () => {
+  it('makes naval war viable with half the battle capacity of a land front', () => {
     expect(WAR_ACCESS_ASSAULT_MULTIPLIER.naval)
       .toBe(WAR_ACCESS_ASSAULT_MULTIPLIER.land);
     expect(WAR_ACCESS_CASUALTY_MULTIPLIER.naval)
       .toBe(WAR_ACCESS_CASUALTY_MULTIPLIER.land);
     expect(WAR_ACCESS_OPERATION_MULTIPLIER.naval
       / WAR_ACCESS_OPERATION_MULTIPLIER.land).toBeCloseTo(1.35, 10);
-    expect(WAR_ACCESS_SUPPLY_MULTIPLIER.naval
-      / WAR_ACCESS_SUPPLY_MULTIPLIER.land).toBeCloseTo(0.85, 10);
-    expect(WAR_ACCESS_OPERATION_MULTIPLIER.naval - 1)
-      .toBeGreaterThan(1 - WAR_ACCESS_SUPPLY_MULTIPLIER.naval);
 
     const supplyState = createWorldStateV2(8_220_002);
     supplyState.players[bel].research.effectLevels.supply = 0;
-    const landSupply = supplyFactorV2(
-      supplyState, WORLD_CONTENT_V2, bel, belTerritory, 'land',
-    );
-    const navalSupply = supplyFactorV2(
-      supplyState, WORLD_CONTENT_V2, bel, belTerritory, 'naval',
-    );
-    expect(navalSupply / landSupply).toBeCloseTo(0.85, 10);
+    const landQuote = frontCapacitySupplyQuoteV2(supplyState, belTerritory, 'land');
+    const navalQuote = frontCapacitySupplyQuoteV2(supplyState, belTerritory, 'naval');
+    expect(landQuote.capacityShare).toBe(0.08);
+    expect(navalQuote.capacityShare).toBe(0.04);
+    expect(navalQuote.capacityBudget).toBeCloseTo(landQuote.capacityBudget * 0.5, 9);
+    expect(navalQuote.readiness).toBe(landQuote.readiness);
 
     const landState = createWorldStateV2(8_220_003);
     const navalState = createWorldStateV2(8_220_003);
@@ -140,7 +125,7 @@ describe('V2 multi-front and naval balance regressions', () => {
     expect(navalOperations / landOperations).toBeCloseTo(expectedOperationRatio, 5);
   });
 
-  it('lets distant sea lanes reach much farther while scaling cost and supply with distance', () => {
+  it('keeps distant sea lanes expensive while distance never fakes low readiness', () => {
     const regionalCost = warAccessOperationMultiplierV2('naval', 2_000);
     const longRangeCost = warAccessOperationMultiplierV2('naval', 6_000);
     const pacificCost = warAccessOperationMultiplierV2('naval', 12_000);
@@ -161,61 +146,18 @@ describe('V2 multi-front and naval balance regressions', () => {
     expect(farRoute).toBeDefined();
     expect(farRoute!.distanceKm).toBeGreaterThan(6_000);
     const distantOperationCost = warAccessOperationMultiplierV2('naval', farRoute!.distanceKm);
-    const distantCombatSupply = warAccessSupplyMultiplierV2('naval', farRoute!.distanceKm);
     expect(distantOperationCost).toBeGreaterThan(WAR_ACCESS_OPERATION_MULTIPLIER.naval);
-    expect(distantCombatSupply).toBeLessThan(WAR_ACCESS_SUPPLY_MULTIPLIER.naval);
-    expect(distantCombatSupply).toBeGreaterThanOrEqual(NAVAL_ROUTE_SUPPLY_MULTIPLIER_MIN);
-    expect(distantOperationCost - 1).toBeGreaterThan((1 - distantCombatSupply) * 5);
 
     const state = createWorldStateV2(8_220_004);
     const sourceOwner = state.territories[farRoute!.sourceId]!.owner;
     state.players[sourceOwner]!.research.effectLevels.supply = 0;
     expect(state.players[sourceOwner]!.capitalId).toBe(farRoute!.sourceId);
-    const localSupply = supplyFactorV2(
-      state, WORLD_CONTENT_V2, sourceOwner, farRoute!.sourceId, 'land',
+    const localQuote = frontCapacitySupplyQuoteV2(state, farRoute!.sourceId, 'land');
+    const distantNavalQuote = frontCapacitySupplyQuoteV2(
+      state, farRoute!.sourceId, 'naval',
     );
-    const distantNavalSupply = supplyFactorV2(
-      state,
-      WORLD_CONTENT_V2,
-      sourceOwner,
-      farRoute!.sourceId,
-      'naval',
-      farRoute!.targetId,
-    );
-
-    const commonTraitContext = composeTraitContextV2(
-      traitNationContextV2(state, sourceOwner),
-      traitTerritoryContextV2(state, WORLD_CONTENT_V2, sourceOwner, farRoute!.sourceId),
-    );
-    const localTraitContext = composeTraitContextV2(commonTraitContext, { access: 'land' });
-    const navalTraitContext = composeTraitContextV2(commonTraitContext, { access: 'naval' });
-    const rawDistantNavalSupply = warAccessSupplyMultiplierV2(
-      'naval', farRoute!.distanceKm,
-    );
-    const navalDistancePressureFactor = countryTraitFactorV2(
-      sourceOwner, 'naval-distance-pressure', navalTraitContext,
-    );
-    const traitAwareNavalAccess = WAR_ACCESS_SUPPLY_MULTIPLIER.naval
-      - (WAR_ACCESS_SUPPLY_MULTIPLIER.naval - rawDistantNavalSupply)
-        * navalDistancePressureFactor;
-    const boundSupply = (value: number): number => Math.max(0.25, Math.min(1, value));
-    const localTerrainSupply = territoryTerrainSupplyMultiplierV2(
-      WORLD_CONTENT_V2, farRoute!.sourceId,
-    );
-    const navalTerrainSupply = territoryTerrainSupplyMultiplierV2(
-      WORLD_CONTENT_V2, farRoute!.targetId,
-    );
-    const expectedLocalSupply = boundSupply(
-      boundSupply(countryTraitFactorV2(sourceOwner, 'front-supply', localTraitContext)
-        * localTerrainSupply) * WAR_ACCESS_SUPPLY_MULTIPLIER.land,
-    );
-    const expectedDistantNavalSupply = boundSupply(
-      boundSupply(countryTraitFactorV2(sourceOwner, 'front-supply', navalTraitContext)
-        * navalTerrainSupply) * traitAwareNavalAccess,
-    );
-    // The distance curve remains canonical, while the live route owner's
-    // access-scoped trait is intentionally layered onto its actual supply.
-    expect(distantNavalSupply / localSupply)
-      .toBeCloseTo(expectedDistantNavalSupply / expectedLocalSupply, 8);
+    expect(distantNavalQuote.readiness).toBe(localQuote.readiness);
+    expect(distantNavalQuote.capacityBudget)
+      .toBeCloseTo(localQuote.capacityBudget * 0.5, 9);
   });
 });

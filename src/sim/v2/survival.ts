@@ -19,6 +19,7 @@ import {
   addRogueWaveManpowerV2,
   rogueWaveManpowerAtV2,
 } from './survivalProvenance';
+import { selectSurvivalDawnlineLeaderIdV2 } from './survivalEmpire';
 import { activateRoguePrimeV2 } from './roguePrime';
 import type {
   PlayerId,
@@ -29,9 +30,11 @@ import type {
 } from './types';
 import { territoryIdV2 } from './types';
 
-export const SURVIVAL_FIRST_WAVE_DELAY_TICKS_V2 = 13;
-export const SURVIVAL_BASE_WAVE_INTERVAL_TICKS_V2 = 52;
-export const SURVIVAL_MIN_WAVE_INTERVAL_TICKS_V2 = 26;
+export const SURVIVAL_FIRST_WAVE_DELAY_TICKS_V2 = 10;
+export const SURVIVAL_BASE_WAVE_INTERVAL_TICKS_V2 = 44;
+export const SURVIVAL_MIN_WAVE_INTERVAL_TICKS_V2 = 24;
+const CAMPAIGN_BASE_WAVE_INTERVAL_TICKS_V2 = 52;
+const CAMPAIGN_MIN_WAVE_INTERVAL_TICKS_V2 = 26;
 /** Hard readability/performance ceiling after the first world foothold. */
 export const SURVIVAL_MAX_CONCURRENT_ROGUE_FRONTS_V2 = 6;
 export const ROGUE_AI_CORE_TERRITORY_ID_V2 = territoryIdV2('zero-point-core');
@@ -44,11 +47,17 @@ export const SURVIVAL_RECAPTURE_PRESSURE_RELIEF_V2 = 2;
  * destroyed most of the force they actually started the timeline with. */
 export const SURVIVAL_ROGUE_DECISIVE_SURRENDER_LOSS_SHARE_V2 = 0.65;
 /**
- * Four thousand machines in wave one: the normal visible opening convoy.
+ * Six thousand machines in wave one: a visible but still trackable convoy.
  * Later waves retain the same super-linear escalation curve.
  */
-export const SURVIVAL_WAVE_STAGING_BASE_MANPOWER_V2 = 0.004;
+export const SURVIVAL_WAVE_STAGING_BASE_MANPOWER_V2 = 0.006;
 export const SURVIVAL_WAVE_STAGING_EXPONENT_V2 = 1.32;
+/** Real machine columns apply steady pressure once they physically reach a front. */
+export const SURVIVAL_ROGUE_ASSAULT_MULTIPLIER_V2 = 1.5;
+export const SURVIVAL_ROGUE_FRONT_PROTECTION_MULTIPLIER_V2 = 1.25;
+/** A concentrated gateway breach force, deliberately not a global machine buff. */
+export const SURVIVAL_ROGUE_GATEWAY_BREAKOUT_ASSAULT_MULTIPLIER_V2 = 3.5;
+export const SURVIVAL_ROGUE_GATEWAY_BREAKOUT_PROTECTION_MULTIPLIER_V2 = 1.75;
 
 const ROGUE_AI_MINIMUM_RESEARCH_V2: Readonly<Partial<Record<ResearchEffectV2, number>>> = Object.freeze({
   attack: 5,
@@ -223,7 +232,7 @@ export function activateRogueAiSurvivalV2(
   state.polarEndgame.victoryCommanderId = null;
   state.polarEndgame.globalWave = 1;
   state.polarEndgame.nextCounteroffensiveTick = state.tick
-    + (immediate ? SURVIVAL_FIRST_WAVE_DELAY_TICKS_V2 : SURVIVAL_BASE_WAVE_INTERVAL_TICKS_V2);
+    + (immediate ? SURVIVAL_FIRST_WAVE_DELAY_TICKS_V2 : CAMPAIGN_BASE_WAVE_INTERVAL_TICKS_V2);
   state.polarEndgame.earthDefenseMembers = (Object.keys(state.players) as PlayerId[])
     .filter((playerId) => rogueAiIsHostileToV2(content, playerId))
     .sort((left, right) => left.localeCompare(right));
@@ -299,10 +308,10 @@ export function accessibleRogueTargetsV2(
 ): RogueTargetAccessV2[] {
   const targets = new Map<PlayerId, 'land' | 'naval'>();
   for (const sourceId of rogueOwnedTerritoryIdsV2(state)) {
-    // A damaged occupation marker cannot project a new front by itself. A war
-    // becomes real only after Antarctic-origin personnel have visibly reached
-    // an adjacent staging territory through the ordinary logistics graph.
-    if (rogueWaveManpowerAtV2(state, sourceId) <= 1e-9) continue;
+    // Opening occupation garrisons may begin the visible assault immediately,
+    // but remain outside the provenance/reward ledger. Real replacements must
+    // still travel from Antarctica through the ordinary logistics graph.
+    if ((state.territories[sourceId]?.army.manpower ?? 0) <= 1e-9) continue;
     for (const connection of content.territories[sourceId]?.connections ?? []) {
       if (!isWorldConnectionOpenV2(state, sourceId, connection.targetId)) continue;
       const ownerId = state.territories[connection.targetId]?.owner;
@@ -313,11 +322,16 @@ export function accessibleRogueTargetsV2(
     }
   }
   const candidates = [...targets].map(([targetId, access]) => ({ targetId, access }));
-  // World occupation expands over contiguous borders. A sea operation is a
-  // slow fallback only when no land objective exists at this wave review.
-  const land = candidates.filter((candidate) => candidate.access === 'land');
-  return (land.length > 0 ? land : candidates)
-    .sort((left, right) => left.targetId.localeCompare(right.targetId));
+  const dawnlineLeaderId = selectSurvivalDawnlineLeaderIdV2(state);
+  // Humans and Dawnline own separate, readable theatres. Ordinary remnants
+  // can only enter the queue after those two persistent conflicts exist.
+  return candidates.sort((left, right) => (
+    Number(state.humanPlayerIds.includes(right.targetId))
+      - Number(state.humanPlayerIds.includes(left.targetId))
+      || Number(right.targetId === dawnlineLeaderId) - Number(left.targetId === dawnlineLeaderId)
+      || Number(left.access === 'naval') - Number(right.access === 'naval')
+      || left.targetId.localeCompare(right.targetId)
+  ));
 }
 
 function waveHashV2(seed: number, wave: number, playerId: PlayerId): number {
@@ -404,6 +418,48 @@ export function survivalRogueFrontCapV2(
     SURVIVAL_MAX_CONCURRENT_ROGUE_FRONTS_V2,
     2 + Math.floor(Math.max(0, canonicalWave - 1) / 2),
   );
+}
+
+function rogueHasWorldFootholdV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+): boolean {
+  return Object.entries(state.territories).some(([territoryId, territory]) => (
+    territory.owner === ROGUE_AI_NATION_ID_V2
+      && (content.territories[territoryId as TerritoryId]?.kind ?? 'sovereign') === 'sovereign'
+  ));
+}
+
+function openReachableRogueFrontsV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  wave: number,
+): PlayerId[] {
+  const activeTargets = activeRogueWarOpponentsV2(state);
+  const capacity = survivalRogueFrontCapV2(
+    wave,
+    rogueHasWorldFootholdV2(state, content),
+  );
+  if (activeTargets.length >= capacity) return [];
+  const humanIds = new Set(state.humanPlayerIds);
+  const dawnlineLeaderId = selectSurvivalDawnlineLeaderIdV2(state);
+  const candidates = accessibleRogueTargetsV2(state, content)
+    .sort((left, right) => Number(humanIds.has(right.targetId))
+      - Number(humanIds.has(left.targetId))
+      || waveHashV2(state.seed, wave, left.targetId)
+        - waveHashV2(state.seed, wave, right.targetId)
+      || left.targetId.localeCompare(right.targetId));
+  // One host conflict plus one geographically separate Dawnline conflict fit
+  // inside the wave-one cap. Every human conflict can own two operations, but
+  // Dawnline AI remains an ordinary one-front bilateral war.
+  const critical = candidates.filter((candidate) => (
+    humanIds.has(candidate.targetId) || candidate.targetId === dawnlineLeaderId
+  ));
+  const ordinary = candidates.filter((candidate) => !critical.includes(candidate));
+  const newTargets = [...critical, ...ordinary]
+    .slice(0, Math.max(0, capacity - activeTargets.length));
+  for (const target of newTargets) openRogueWarV2(state, target.targetId);
+  return newTargets.map((target) => target.targetId);
 }
 
 /**
@@ -504,29 +560,24 @@ export function processRogueAiSurvivalV2(
   normalizeSurvivalWarPressureV2(state);
   const dueTick = state.polarEndgame.nextCounteroffensiveTick;
   if (dueTick === null || dueTick > state.tick) {
-    if (activeRogueWarOpponentsV2(state).length === 0) {
-      const humanIds = new Set(state.humanPlayerIds);
-      const reached = accessibleRogueTargetsV2(state, content)
-        .sort((left, right) => Number(humanIds.has(right.targetId))
-          - Number(humanIds.has(left.targetId))
-          || waveHashV2(state.seed, state.polarEndgame.globalWave, left.targetId)
-            - waveHashV2(state.seed, state.polarEndgame.globalWave, right.targetId)
-          || left.targetId.localeCompare(right.targetId))[0];
-      if (reached) {
-        openRogueWarV2(state, reached.targetId);
-        state.polarEndgame.visualRevision += 1;
-        addWorldEventV2(
-          state,
-          'polar',
-          'critical',
-          `MACHINE FRONT REACHED: an Antarctic-origin column made contact with ${content.nations[reached.targetId]?.shortName ?? reached.targetId} by ${reached.access}.`,
-          undefined,
-          ROGUE_AI_NATION_ID_V2,
-          { polarRegion: 'antarctica' },
-        );
-      }
+    const opened = openReachableRogueFrontsV2(
+      state,
+      content,
+      Math.max(1, Math.floor(state.polarEndgame.globalWave)),
+    );
+    if (opened.length > 0) {
+      state.polarEndgame.visualRevision += 1;
+      addWorldEventV2(
+        state,
+        'polar',
+        'critical',
+        `MACHINE OFFENSIVE: occupation garrisons opened ${opened.length} front${opened.length === 1 ? '' : 's'} against ${opened.map((targetId) => content.nations[targetId]?.shortName ?? targetId).join(', ')} while Antarctic reinforcements advance.`,
+        undefined,
+        ROGUE_AI_NATION_ID_V2,
+        { polarRegion: 'antarctica' },
+      );
     }
-    return { activated: true, waveStarted: null, targets: [], victory: false };
+    return { activated: true, waveStarted: null, targets: opened, victory: false };
   }
   const wave = Math.max(1, Math.floor(state.polarEndgame.globalWave));
   const breachIndex = wave === 3 ? 1 : wave === 5 ? 2 : -1;
@@ -557,10 +608,7 @@ export function processRogueAiSurvivalV2(
     .sort((left, right) => Number(humanIds.has(right.targetId)) - Number(humanIds.has(left.targetId))
       || waveHashV2(state.seed, wave, left.targetId) - waveHashV2(state.seed, wave, right.targetId)
       || left.targetId.localeCompare(right.targetId));
-  const hasWorldFoothold = Object.entries(state.territories).some(([territoryId, territory]) => (
-    territory.owner === ROGUE_AI_NATION_ID_V2
-      && content.territories[territoryId as TerritoryId]?.kind === 'sovereign'
-  ));
+  const hasWorldFoothold = rogueHasWorldFootholdV2(state, content);
   // The opening is one readable, approaching threat. Later gateways may be
   // visible already, but they do not steal the convoy from the first breach
   // until the machine has actually established a world foothold. Expansion
@@ -571,9 +619,17 @@ export function processRogueAiSurvivalV2(
   const targets = [...activeTargets, ...newTargets]
     .filter((targetId, index, all) => all.indexOf(targetId) === index)
     .sort((left, right) => left.localeCompare(right));
+  const survivalTimeline = isSurvivalStateV2(state);
+  const baseInterval = survivalTimeline
+    ? SURVIVAL_BASE_WAVE_INTERVAL_TICKS_V2
+    : CAMPAIGN_BASE_WAVE_INTERVAL_TICKS_V2;
+  const minimumInterval = survivalTimeline
+    ? SURVIVAL_MIN_WAVE_INTERVAL_TICKS_V2
+    : CAMPAIGN_MIN_WAVE_INTERVAL_TICKS_V2;
+  const maximumAcceleration = baseInterval - minimumInterval;
   const interval = Math.max(
-    SURVIVAL_MIN_WAVE_INTERVAL_TICKS_V2,
-    SURVIVAL_BASE_WAVE_INTERVAL_TICKS_V2 - Math.min(26, wave * 2),
+    minimumInterval,
+    baseInterval - Math.min(maximumAcceleration, wave * 2),
   );
   if (targets.length === 0) {
     // The convoy is still a real wave and must not be restaged every four

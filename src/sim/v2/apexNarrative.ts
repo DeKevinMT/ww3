@@ -57,17 +57,17 @@ const COPY: Readonly<Record<ApexTransmissionIdV2, TransmissionCopyV2>> = Object.
   },
   'campaign-first-war-recovery': {
     title: 'Recovery window',
-    body: 'The first liberation battle is over. Your empire is automatically rebuilding its army, trained reserves and supplies. I am moving the neural dome to the captured territory to accelerate its purge. Use this quiet window for Research and your next strategy.',
+    body: 'The first liberation battle is over. Your empire is automatically rebuilding its army, trained reserves and supplies. I am redirecting spare network bandwidth to the captured territory to accelerate its purge. Use this quiet window for Research and your next strategy.',
     action: null,
   },
   'campaign-first-conquest': {
     title: 'Territory secured · signal remains',
-    body: 'We control the territory, but its people and systems are still linked to the Rogue signal. Remote Signal Purge is active. Once the shield is fully recharged and the front is secure, I will project the dome here; on-site purge runs three times faster.',
+    body: 'We control the territory, but its people and systems are still linked to the Rogue signal. My Empire network is already containing it. Once shield energy is stable, I can focus purge bandwidth here at three times the normal rate without dropping protection elsewhere.',
     action: null,
   },
   'campaign-first-purge-arrival': {
-    title: 'On-site Signal Purge active',
-    body: 'The neural dome is anchored over the captured territory. On-site purge now runs at 3× speed. If another war starts, I will redeploy automatically; the purge continues by remote relay at 50% speed until I return.',
+    title: 'Signal Purge bandwidth active',
+    body: 'The Empire Shield Network is concentrating spare bandwidth on the captured territory. Signal Purge now runs at 3× speed. If another war starts, combat support takes priority and purge continues through the remote relay.',
     action: null,
   },
   'campaign-first-liberation': {
@@ -142,9 +142,9 @@ function upgradedPersistedCopyV2(
       : item.id === 'campaign-first-conquest'
         ? /slow remote signal purge|purge at full speed|when combat ends/i
         : item.id === 'campaign-first-war-recovery'
-          ? /assigning the neural dome|from here, you choose the target/i
+          ? /assigning the neural dome|moving the neural dome|from here, you choose the target/i
           : item.id === 'campaign-first-purge-arrival'
-            ? /removing the rogue signal at full speed|slower remote relay/i
+            ? /removing the rogue signal at full speed|slower remote relay|anchored over/i
             : null;
   return retired?.test(item.body) ? COPY[item.id] : item;
 }
@@ -415,7 +415,7 @@ function firstConquestTargetV2(
   });
 }
 
-/** Full-speed purge guidance only appears once APEX is physically on site. */
+/** Full-speed purge guidance appears once the distributed network has selected it. */
 function apexFirstPurgeArrivalV2(
   state: WorldStateV2,
   content: WorldContentV2,
@@ -501,7 +501,7 @@ export function recordApexConquestNarrativeV2(
       content,
       attackerId,
       'campaign-first-conquest',
-      `We control ${target}, but its people and systems are still linked to the Rogue signal. Remote Signal Purge is active. Once the shield is fully recharged and the front is secure, I will project the dome here; on-site purge runs three times faster.`,
+      `We control ${target}, but its people and systems are still linked to the Rogue signal. My Empire network is already containing it. Once shield energy is stable, I can focus purge bandwidth here at three times the normal rate without dropping protection elsewhere.`,
       targetId,
     );
   }
@@ -576,7 +576,7 @@ export function processApexNarrativeV2(
         content,
         playerId,
         'campaign-first-conquest',
-        `We control ${name}, but its people and systems are still linked to the Rogue signal. Remote Signal Purge is active. Once the shield is fully recharged and the front is secure, I will project the dome here; on-site purge runs three times faster.`,
+        `We control ${name}, but its people and systems are still linked to the Rogue signal. My Empire network is already containing it. Once shield energy is stable, I can focus purge bandwidth here at three times the normal rate without dropping protection elsewhere.`,
         firstConquest,
       ));
     }
@@ -590,7 +590,7 @@ export function processApexNarrativeV2(
         content,
         playerId,
         'campaign-first-war-recovery',
-        `The first liberation battle is over. Your empire is automatically rebuilding its army, trained reserves and supplies. I am moving the neural dome to ${targetName} to accelerate its purge. Use this quiet window for Research and your next strategy.`,
+        `The first liberation battle is over. Your empire is automatically rebuilding its army, trained reserves and supplies. I am redirecting spare network bandwidth to ${targetName} to accelerate its purge. Use this quiet window for Research and your next strategy.`,
         purgeTarget ?? null,
       ));
     }
@@ -602,7 +602,7 @@ export function processApexNarrativeV2(
         content,
         playerId,
         'campaign-first-purge-arrival',
-        `The neural dome is anchored over ${name}. On-site purge now runs at 3× speed. If another war starts, I will redeploy automatically; the purge continues by remote relay at 50% speed until I return.`,
+        `The Empire Shield Network is concentrating spare bandwidth on ${name}. Signal Purge now runs at 3× speed. If another war starts, combat support takes priority and purge continues through the remote relay.`,
         purgeArrival,
       ));
     }

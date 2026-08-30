@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import apexGalaxyMapBackgroundUrl from '../../../assets/apex-galaxy-map-bg.jpg?url';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
@@ -13,29 +14,25 @@ import {
   worldPointCoordinates,
 } from '../../data/worldMap';
 import {
-  mapCommanderRecoveryLifecycleActive,
-  mapCommanderTransitProgress,
   mapBridge,
   type MapBattleEvent,
   type MapCommanderForceState,
   type MapPolarEndgamePhase,
   type MapPolarRegion,
   type MapPolarSectorId,
-  type MapPolarSectorStatus,
   type MapSceneAdapter,
   type MapSelectionState,
   type WorldMapEngineContract,
 } from '../bridge';
 import {
-  ANTARCTICA_ACCESS_ANCHORS,
+  ANTARCTICA_POLITICAL_COASTLINE,
   ANTARCTICA_SECTOR_PRESENTATION_BY_ID,
   ANTARCTICA_SECTOR_PRESENTATIONS,
-  SEA_MAP_LABELS,
   antarcticaSectorAtCoordinates,
 } from '../mapGeographyPresentation';
 import {
   compactMapCombatPower,
-  commanderForceMapCombatPower,
+  commanderShieldMapSupportPercent,
 } from '../forcePresentation';
 import { resolveCountryPresentationAnchor } from '../countryPresentation';
 import { PASSIVE_POWER_LABEL_LIMIT } from '../mapLabelVisibility';
@@ -90,12 +87,9 @@ import {
 import {
   STRATEGIC_NEURAL_FIELD_STYLE,
   apexFieldPresentationActive,
-  apexProjectionPresentations,
-  apexShieldPresentation,
   createNeuralFieldPulseSample,
   neuralDomeShellElevation,
   neuralDomeSpokeElevation,
-  neuralFieldCoverageGeometrySignature,
   neuralFieldModePresentation,
   neuralFieldPulseDurationMs,
   resolveNeuralFieldPulseTarget,
@@ -106,6 +100,16 @@ import {
   createApexFogTransitionState,
   sampleApexFogVisualBlend,
 } from '../apexFogTransition';
+import {
+  selectApexEmpireFieldPresentation,
+  type ApexEmpireFieldPresentation,
+} from '../empireNeuralFieldPresentation';
+import {
+  selectRogueAntarcticFieldPresentation,
+  type RogueAntarcticFieldPresentation,
+} from '../rogueAntarcticFieldPresentation';
+import { selectGlobeSignalPurgePresentation } from '../globeSignalPurgePresentation';
+import { GlobeSignalPurgeEffect } from './globeSignalPurgeEffect';
 import { buildGlobeBorderBuffer, globeBorderOwnershipSignature } from './globeBorders';
 import {
   GLOBE_SPHERE_HEIGHT_SEGMENTS,
@@ -139,6 +143,18 @@ const COUNTRY_LABEL_MIN_SCALE_DISTANCE = 16.75;
 // Strategic tags never shrink below their authored 11px text size. Collision
 // culling, rather than tiny typography, keeps the overview readable.
 const COUNTRY_LABEL_FAR_SCALE = 1;
+// The authored galaxy is cropped slightly so camera rotation can pan it
+// without exposing an edge. A full horizontal orbit shifts the sky by only
+// ~4% of its width: enough depth to feel spatial, never enough to compete
+// with the globe. Vertical orbit motion is deliberately lighter still.
+const GALAXY_UV_REPEAT_X = 0.92;
+const GALAXY_UV_REPEAT_Y = 0.94;
+const GALAXY_UV_BASE_OFFSET_X = (1 - GALAXY_UV_REPEAT_X) * 0.5;
+const GALAXY_UV_BASE_OFFSET_Y = (1 - GALAXY_UV_REPEAT_Y) * 0.5;
+const GALAXY_HORIZONTAL_PARALLAX_PER_RADIAN = 0.0065;
+const GALAXY_VERTICAL_PARALLAX_PER_RADIAN = 0.012;
+const GALAXY_MAX_HORIZONTAL_PAN = 0.035;
+const GALAXY_MAX_VERTICAL_PAN = 0.02;
 const COMMANDER_MARKER_FORWARD = new THREE.Vector3(0, 0, 1);
 const NEURAL_FIELD_SCREEN_WIDTH_PX = 58;
 const NEURAL_CONVERGENCE_PATH_POINT_COUNT = 40;
@@ -148,19 +164,20 @@ const NEURAL_DOME_BASE_RADIUS = GLOBE_RADIUS * 1.007;
 const NEURAL_DOME_MAX_LINE_SEGMENTS = 10_000;
 const NEURAL_DOME_MAX_NODES = 2_048;
 const NEURAL_DOME_SPOKE_STEPS = 3;
+const APEX_EMPIRE_NETWORK_ARC_STEPS = 5;
+const APEX_EMPIRE_NETWORK_RENDER_MAX_EDGES = 192;
+const NEURAL_DOME_CALM_ARCH_COUNT = 5;
+const NEURAL_DOME_FRONT_ARCH_COUNT = 7;
+const ROGUE_ANTARCTIC_DOME_ARCH_COUNT = 9;
+const ROGUE_ANTARCTIC_DOME_BOUNDARY_COUNT = 24;
+const NEURAL_DOME_LINE_BASE_OPACITY = 0.72;
+const NEURAL_DOME_NODE_BASE_OPACITY = 0.76;
 // Only the collapsed transit core uses this radius. Stationary APEX/PRIME
 // presence is painted across the complete supported territory silhouette.
 const COMMANDER_MARKER_RADIUS = GLOBE_RADIUS * 1.008;
 const OPEN_ANTARCTICA_PHASES = new Set<MapPolarEndgamePhase>([
   'warning', 'contact', 'counteroffensive', 'core-exposed', 'victory',
 ]);
-const POLAR_SECTOR_COLORS: Readonly<Record<MapPolarSectorStatus, number>> = {
-  hidden: 0x132b38,
-  available: 0x66eaff,
-  contested: 0xff665e,
-  secured: 0x76efa5,
-};
-
 /** Nameplates use the canonical compact formatter, trimmed to one decimal. */
 function compactNameplateCombatPower(power: number): string {
   return compactMapCombatPower(power).replace(/^(\d+\.\d)\d([KMBT]?)$/, '$1$2');
@@ -176,7 +193,6 @@ function countryLabelScaleForDistance(cameraDistance: number): number {
   return THREE.MathUtils.lerp(1, COUNTRY_LABEL_FAR_SCALE, progress);
 }
 
-type LabelKind = 'country' | 'sea' | 'access';
 type ScenePickResult = GlobePickResult | {
   kind: 'antarctica-sector';
   sectorId: MapPolarSectorId;
@@ -184,7 +200,6 @@ type ScenePickResult = GlobePickResult | {
 
 interface GlobeLabel {
   id: string;
-  kind: LabelKind;
   longitude: number;
   latitude: number;
   worldPosition: THREE.Vector3;
@@ -229,15 +244,6 @@ interface AnimatedRouteMaterial {
   phase: number;
   flowSpeed?: number;
   dashOffsetUniform?: { value: number };
-}
-
-interface PolarCorridorVisual {
-  line: THREE.Line<THREE.BufferGeometry, THREE.LineDashedMaterial>;
-  beaconMaterial: THREE.MeshBasicMaterial;
-  label: HTMLDivElement;
-  animation: AnimatedRouteMaterial;
-  baseColor: number;
-  entrySectorId: Extract<MapPolarSectorId, 'drake-entry' | 'maud-entry' | 'ross-entry'>;
 }
 
 interface CommanderForceVisual {
@@ -286,6 +292,23 @@ interface CommanderForceRenderEntry {
   readonly combatActive: boolean;
   readonly etaTicks: number;
 }
+
+const INACTIVE_APEX_EMPIRE_PRESENTATION: ApexEmpireFieldPresentation = Object.freeze({
+  active: false,
+  integrity: 0,
+  percent: 0,
+  coverageTerritoryIds: Object.freeze([]),
+  activeFrontTerritoryIds: Object.freeze([]),
+  networkEdges: Object.freeze([]),
+  geometrySignature: 'apex-empire-field:off',
+});
+
+const INACTIVE_ROGUE_ANTARCTIC_PRESENTATION: RogueAntarcticFieldPresentation = Object.freeze({
+  active: false,
+  territories: Object.freeze([]),
+  coverageTerritoryIds: Object.freeze([]),
+  geometrySignature: 'rogue-antarctic-field:off',
+});
 
 interface ScreenProjection {
   clientX: number;
@@ -428,26 +451,6 @@ const GLOBE_TERRITORY_LABEL_DEFINITIONS: readonly GlobeTerritoryLabelDefinition[
 const GLOBE_TERRITORY_LABEL_BY_ID = new Map(
   GLOBE_TERRITORY_LABEL_DEFINITIONS.map((territory) => [territory.id, territory] as const),
 );
-
-function createSunGlowTexture(): THREE.CanvasTexture {
-  const canvas = document.createElement('canvas');
-  canvas.width = 256;
-  canvas.height = 256;
-  const context = canvas.getContext('2d');
-  if (context) {
-    const glow = context.createRadialGradient(128, 128, 0, 128, 128, 128);
-    glow.addColorStop(0, 'rgba(255, 250, 222, 1)');
-    glow.addColorStop(0.055, 'rgba(255, 226, 145, 0.98)');
-    glow.addColorStop(0.13, 'rgba(255, 171, 78, 0.58)');
-    glow.addColorStop(0.36, 'rgba(225, 82, 34, 0.13)');
-    glow.addColorStop(1, 'rgba(30, 66, 105, 0)');
-    context.fillStyle = glow;
-    context.fillRect(0, 0, 256, 256);
-  }
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  return texture;
-}
 
 function createApexFogCloudTexture(): THREE.CanvasTexture {
   const canvas = document.createElement('canvas');
@@ -780,10 +783,12 @@ function drawTerritoryWideNeuralField(
   intensity: number,
   width: number,
   height: number,
+  frontAccent = false,
 ): number {
   const style = role === 'rogue-prime'
     ? STRATEGIC_NEURAL_FIELD_STYLE.roguePrime
     : STRATEGIC_NEURAL_FIELD_STYLE.apex;
+  const unstable = role === 'rogue-prime';
   const rings = preparedNeuralFieldRings(territoryId);
   let paintedParts = 0;
   for (const ring of rings) {
@@ -806,11 +811,15 @@ function drawTerritoryWideNeuralField(
       traceNeuralFieldRing(context, ring, shift, width, height);
       context.save();
       context.globalCompositeOperation = 'source-over';
-      context.shadowColor = neuralFieldCssColor(style.fieldColor, 0.36 * intensity);
-      context.shadowBlur = Math.max(2.5, Math.min(8, maximumSpan * 0.09));
+      const accent = frontAccent ? 1.34 : 1;
+      context.shadowColor = neuralFieldCssColor(
+        style.fieldColor,
+        Math.min(0.72, 0.36 * intensity * accent),
+      );
+      context.shadowBlur = Math.max(2.5, Math.min(frontAccent ? 12 : 8, maximumSpan * 0.12));
       context.fillStyle = neuralFieldCssColor(
         style.fieldColor,
-        Math.min(0.12, style.fieldOpacity * 0.62 * intensity),
+        Math.min(frontAccent ? 0.19 : 0.12, style.fieldOpacity * 0.62 * intensity * accent),
       );
       context.fill();
       context.clip();
@@ -834,51 +843,99 @@ function drawTerritoryWideNeuralField(
       context.shadowBlur = 0;
       context.strokeStyle = neuralFieldCssColor(
         style.fieldColor,
-        Math.min(0.34, style.networkOpacity * 0.30 * intensity),
+        Math.min(frontAccent ? 0.52 : 0.34, style.networkOpacity * 0.30 * intensity * accent),
       );
       context.lineWidth = maximumSpan < 14 ? 1.15 : 0.72;
-      const latticeCount = Math.max(4, Math.min(15, Math.round(maximumSpan / 34) + 4));
+      if (unstable) context.setLineDash([2.8, 1.45, 0.75, 1.25]);
+      const latticeCount = unstable
+        ? Math.max(2, Math.min(5, Math.round(maximumSpan / 72) + 2))
+        : Math.max(4, Math.min(12, Math.round(maximumSpan / 40) + 4));
       const latticeReach = spanX + spanY;
       for (let index = 0; index <= latticeCount; index += 1) {
         const offset = index / latticeCount * latticeReach - spanY;
+        const jitter = unstable ? ((index * 17) % 5 - 2) * spanY * 0.025 : 0;
         context.beginPath();
         context.moveTo(left + offset, bottom);
-        context.lineTo(left + offset + spanY, top);
+        context.quadraticCurveTo(
+          left + offset + spanY * 0.43 + jitter,
+          centerY - jitter,
+          left + offset + spanY,
+          top,
+        );
         context.stroke();
         context.beginPath();
         context.moveTo(right - offset, bottom);
-        context.lineTo(right - offset - spanY, top);
+        context.quadraticCurveTo(
+          right - offset - spanY * 0.47 - jitter,
+          centerY + jitter,
+          right - offset - spanY,
+          top,
+        );
         context.stroke();
       }
+      if (unstable) context.setLineDash([]);
       context.lineWidth = maximumSpan < 14 ? 0.95 : 0.54;
-      const horizontalCount = Math.max(2, Math.min(7, Math.round(spanY / 30) + 2));
+      const horizontalCount = unstable
+        ? Math.max(1, Math.min(3, Math.round(spanY / 72) + 1))
+        : Math.max(2, Math.min(6, Math.round(spanY / 36) + 2));
       for (let index = 1; index <= horizontalCount; index += 1) {
         const y = top + index / (horizontalCount + 1) * spanY;
         context.beginPath();
         context.moveTo(left, y);
-        context.quadraticCurveTo(centerX, y - spanY * 0.12, right, y);
+        context.quadraticCurveTo(
+          centerX + (unstable ? ((index % 3) - 1) * spanX * 0.08 : 0),
+          y - spanY * (unstable ? (index % 2 === 0 ? 0.22 : -0.09) : 0.12),
+          right,
+          y,
+        );
         context.stroke();
       }
 
-      const nodeCount = Math.max(5, Math.min(26, Math.round(Math.sqrt(spanX * spanY) / 9)));
-      context.fillStyle = neuralFieldCssColor(style.nodeColor, 0.42 * intensity);
+      const nodeCount = unstable
+        ? Math.max(2, Math.min(6, Math.round(Math.sqrt(spanX * spanY) / 24)))
+        : Math.max(4, Math.min(18, Math.round(Math.sqrt(spanX * spanY) / 11)));
+      context.fillStyle = neuralFieldCssColor(
+        style.nodeColor,
+        (unstable ? 0.30 : 0.42) * intensity,
+      );
       for (let index = 0; index < nodeCount; index += 1) {
         const u = ((index * 37 + 19) % 101) / 100;
         const v = ((index * 61 + 11) % 97) / 96;
         const radius = maximumSpan < 14 ? 1.15 : index % 5 === 0 ? 1.35 : 0.85;
-        context.beginPath();
-        context.arc(left + u * spanX, top + v * spanY, radius, 0, Math.PI * 2);
-        context.fill();
+        const nodeX = left + u * spanX;
+        const nodeY = top + v * spanY;
+        if (unstable) {
+          context.save();
+          context.translate(nodeX, nodeY);
+          context.rotate(Math.PI * 0.25);
+          context.fillRect(-radius, -radius, radius * 2, radius * 2);
+          context.restore();
+        } else {
+          context.beginPath();
+          context.arc(nodeX, nodeY, radius, 0, Math.PI * 2);
+          context.fill();
+        }
       }
       context.restore();
 
       traceNeuralFieldRing(context, ring, shift, width, height);
       context.save();
       context.globalCompositeOperation = 'lighter';
-      context.strokeStyle = neuralFieldCssColor(style.nodeColor, 0.54 * intensity);
-      context.lineWidth = maximumSpan < 14 ? 1.7 : 1.15;
-      context.shadowColor = neuralFieldCssColor(style.fieldColor, 0.82 * intensity);
-      context.shadowBlur = maximumSpan < 14 ? 3.5 : 5.5;
+      context.strokeStyle = neuralFieldCssColor(
+        style.nodeColor,
+        Math.min(0.88, 0.54 * intensity * accent),
+      );
+      context.lineWidth = maximumSpan < 14
+        ? (frontAccent ? 2.2 : 1.7)
+        : (frontAccent ? 1.65 : 1.15);
+      context.shadowColor = neuralFieldCssColor(
+        style.fieldColor,
+        Math.min(1, 0.82 * intensity * accent),
+      );
+      context.shadowBlur = maximumSpan < 14
+        ? (frontAccent ? 6 : 3.5)
+        : (frontAccent ? 9 : 5.5);
+      if (unstable) context.setLineDash([3.1, 1.2, 0.8, 1.45]);
       context.stroke();
       context.restore();
       paintedParts += 1;
@@ -900,11 +957,14 @@ interface TerritoryNeuralDomeGeometry {
   readonly elevatedVertexCount: number;
 }
 
+type TerritoryNeuralDomeDetail = 'calm' | 'front';
+
 /** Immutable on-demand geometry; recovery/color changes only rewrite the pooled buffers. */
 const TERRITORY_NEURAL_DOME_GEOMETRY_CACHE = new Map<
   string,
   TerritoryNeuralDomeGeometry
 >();
+let ROGUE_ANTARCTIC_NEURAL_DOME_GEOMETRY: TerritoryNeuralDomeGeometry | undefined;
 
 function neuralFieldDomeMetrics(territoryId: string): NeuralDomeMetrics {
   const anchor = presentationAnchor(territoryId);
@@ -931,9 +991,9 @@ function neuralFieldDomeMetrics(territoryId: string): NeuralDomeMetrics {
     THREE.MathUtils.degToRad(8),
   );
   const domeHeight = THREE.MathUtils.clamp(
-    GLOBE_RADIUS * angularRadiusRadians * 0.52,
-    0.065,
-    0.42,
+    GLOBE_RADIUS * angularRadiusRadians * 0.33,
+    0.034,
+    0.27,
   );
   return {
     angularRadiusRadians,
@@ -967,12 +1027,64 @@ function sampledDomeBoundary(
   return result;
 }
 
+function pushLowWideDomeCap(
+  linePositions: number[],
+  nodePositions: number[],
+  boundary: readonly THREE.Vector3[],
+  centreDirection: THREE.Vector3,
+  domeHeight: number,
+): number {
+  if (boundary.length < 3) return 0;
+  const tierPoints: THREE.Vector3[][] = Array.from(
+    { length: NEURAL_DOME_SPOKE_STEPS },
+    () => [],
+  );
+  const nodeStride = Math.max(2, Math.ceil(boundary.length / 4));
+  let elevatedVertexCount = 0;
+  for (let boundaryIndex = 0; boundaryIndex < boundary.length; boundaryIndex += 1) {
+    const boundaryDirection = boundary[boundaryIndex]!;
+    let previous = boundaryDirection.clone().multiplyScalar(NEURAL_DOME_BASE_RADIUS);
+    if (boundaryIndex % nodeStride === 0) pushDomeVector(nodePositions, previous);
+    for (let step = 1; step <= NEURAL_DOME_SPOKE_STEPS; step += 1) {
+      const progress = step / NEURAL_DOME_SPOKE_STEPS;
+      // Keep a small crown ring instead of converging every rib into one
+      // white hotspot. The cap remains unmistakably spatial, but reads as a
+      // broad protective shell rather than a tall wire cage.
+      const direction = slerpDirection(
+        boundaryDirection,
+        centreDirection,
+        progress * 0.84,
+      );
+      const point = direction.multiplyScalar(
+        NEURAL_DOME_BASE_RADIUS + neuralDomeSpokeElevation(domeHeight, progress),
+      );
+      pushDomeSegment(linePositions, previous, point);
+      tierPoints[step - 1]!.push(point);
+      if (step === 2 && boundaryIndex % 2 === 0) pushDomeVector(nodePositions, point);
+      elevatedVertexCount += 1;
+      previous = point;
+    }
+  }
+  // Three clean latitude ribs describe the curved shell. Deliberately no
+  // diagonals: they were the main source of the Antarctic line pile-up.
+  for (const tier of tierPoints) {
+    for (let index = 0; index < tier.length; index += 1) {
+      pushDomeSegment(linePositions, tier[index]!, tier[(index + 1) % tier.length]!);
+    }
+  }
+  return elevatedVertexCount;
+}
+
 /**
- * Builds bounded true-3D cap ribs. Every land part receives ground-boundary
- * anchors; the largest parts also receive elevated spokes, cross-ribs and
- * nodes. Geometry is rebuilt only on canonical force placement changes.
+ * Builds a low, true-3D cap rooted at the real territory perimeter. Calm
+ * territories use five broad arches; live fronts use seven. Detached islands
+ * retain their ground outline, while only the one or two meaningful land
+ * masses rise into the shell. This keeps a world-sized empire readable.
  */
-function buildTerritoryNeuralDomeGeometry(territoryId: string): TerritoryNeuralDomeGeometry {
+function buildTerritoryNeuralDomeGeometry(
+  territoryId: string,
+  detail: TerritoryNeuralDomeDetail = 'calm',
+): TerritoryNeuralDomeGeometry {
   const linePositions: number[] = [];
   const nodePositions: number[] = [];
   let groundAnchorCount = 0;
@@ -981,14 +1093,14 @@ function buildTerritoryNeuralDomeGeometry(territoryId: string): TerritoryNeuralD
     .sort((left, right) => right.visualArea - left.visualArea);
   const principalArea = rings[0]?.visualArea ?? 0;
   const capRings = new Set(rings
-    .filter((ring) => ring.visualArea >= principalArea * 0.0015)
-    .slice(0, 18));
+    .filter((ring) => ring.visualArea >= principalArea * 0.12)
+    .slice(0, detail === 'front' ? 2 : 1));
 
   for (const ring of rings) {
     const boundaryCount = THREE.MathUtils.clamp(
-      Math.round(Math.sqrt(ring.points.length) * 1.35),
+      Math.round(Math.sqrt(ring.points.length)),
       4,
-      18,
+      detail === 'front' ? 14 : 10,
     );
     const boundary = sampledDomeBoundary(ring, boundaryCount);
     for (let index = 0; index < boundary.length; index += 1) {
@@ -1000,57 +1112,32 @@ function buildTerritoryNeuralDomeGeometry(territoryId: string): TerritoryNeuralD
     }
     if (!capRings.has(ring)) continue;
 
-    const centreDirection = boundary.reduce(
+    const archCount = detail === 'front'
+      ? NEURAL_DOME_FRONT_ARCH_COUNT
+      : NEURAL_DOME_CALM_ARCH_COUNT;
+    const archBoundary = sampledDomeBoundary(ring, archCount);
+    const centreDirection = archBoundary.reduce(
       (sum, point) => sum.add(point),
       new THREE.Vector3(),
     ).normalize();
     let angularExtent = 0;
-    for (const point of boundary) {
+    for (const point of archBoundary) {
       angularExtent = Math.max(
         angularExtent,
         Math.acos(THREE.MathUtils.clamp(centreDirection.dot(point), -1, 1)),
       );
     }
     const domeHeight = THREE.MathUtils.clamp(
-      GLOBE_RADIUS * angularExtent * 0.52,
-      0.055,
-      0.42,
+      GLOBE_RADIUS * angularExtent * (detail === 'front' ? 0.35 : 0.31),
+      0.034,
+      detail === 'front' ? 0.27 : 0.22,
     );
-    const tierPoints: THREE.Vector3[][] = Array.from(
-      { length: NEURAL_DOME_SPOKE_STEPS },
-      () => [],
-    );
-    for (let boundaryIndex = 0; boundaryIndex < boundary.length; boundaryIndex += 1) {
-      const boundaryDirection = boundary[boundaryIndex]!;
-      let previous = boundaryDirection.clone().multiplyScalar(NEURAL_DOME_BASE_RADIUS);
-      if (boundaryIndex % 2 === 0) pushDomeVector(nodePositions, previous);
-      for (let step = 1; step <= NEURAL_DOME_SPOKE_STEPS; step += 1) {
-        const progress = step / NEURAL_DOME_SPOKE_STEPS;
-        const direction = slerpDirection(boundaryDirection, centreDirection, progress);
-        const point = direction.multiplyScalar(
-          NEURAL_DOME_BASE_RADIUS + neuralDomeSpokeElevation(domeHeight, progress),
-        );
-        pushDomeSegment(linePositions, previous, point);
-        tierPoints[step - 1]!.push(point);
-        if (step < NEURAL_DOME_SPOKE_STEPS) pushDomeVector(nodePositions, point);
-        elevatedVertexCount += 1;
-        previous = point;
-      }
-    }
-    // Two lateral rings create the visible curved shell instead of a bundle
-    // of spokes converging into a flat marker.
-    for (let tierIndex = 0; tierIndex < NEURAL_DOME_SPOKE_STEPS - 1; tierIndex += 1) {
-      const tier = tierPoints[tierIndex]!;
-      for (let index = 0; index < tier.length; index += 1) {
-        pushDomeSegment(linePositions, tier[index]!, tier[(index + 1) % tier.length]!);
-        if (index % 2 === 0 && tier.length > 6) {
-          pushDomeSegment(linePositions, tier[index]!, tier[(index + 2) % tier.length]!);
-        }
-      }
-    }
-    pushDomeVector(
+    elevatedVertexCount += pushLowWideDomeCap(
+      linePositions,
       nodePositions,
-      centreDirection.multiplyScalar(NEURAL_DOME_BASE_RADIUS + domeHeight),
+      archBoundary,
+      centreDirection,
+      domeHeight,
     );
   }
   return { linePositions, nodePositions, groundAnchorCount, elevatedVertexCount };
@@ -1058,12 +1145,62 @@ function buildTerritoryNeuralDomeGeometry(territoryId: string): TerritoryNeuralD
 
 function preparedTerritoryNeuralDomeGeometry(
   territoryId: string,
+  detail: TerritoryNeuralDomeDetail = 'calm',
 ): TerritoryNeuralDomeGeometry {
-  const cached = TERRITORY_NEURAL_DOME_GEOMETRY_CACHE.get(territoryId);
+  const cacheKey = `${territoryId}:${detail}`;
+  const cached = TERRITORY_NEURAL_DOME_GEOMETRY_CACHE.get(cacheKey);
   if (cached) return cached;
-  const geometry = buildTerritoryNeuralDomeGeometry(territoryId);
-  TERRITORY_NEURAL_DOME_GEOMETRY_CACHE.set(territoryId, geometry);
+  const geometry = buildTerritoryNeuralDomeGeometry(territoryId, detail);
+  TERRITORY_NEURAL_DOME_GEOMETRY_CACHE.set(cacheKey, geometry);
   return geometry;
+}
+
+/** One coherent, sparse continental shell instead of nine overlapping caps. */
+function preparedRogueAntarcticNeuralDomeGeometry(): TerritoryNeuralDomeGeometry {
+  if (ROGUE_ANTARCTIC_NEURAL_DOME_GEOMETRY) {
+    return ROGUE_ANTARCTIC_NEURAL_DOME_GEOMETRY;
+  }
+  const linePositions: number[] = [];
+  const nodePositions: number[] = [];
+  const coastlineRing = prepareNeuralFieldRing(ANTARCTICA_POLITICAL_COASTLINE);
+  if (!coastlineRing) {
+    ROGUE_ANTARCTIC_NEURAL_DOME_GEOMETRY = {
+      linePositions,
+      nodePositions,
+      groundAnchorCount: 0,
+      elevatedVertexCount: 0,
+    };
+    return ROGUE_ANTARCTIC_NEURAL_DOME_GEOMETRY;
+  }
+  const perimeter = sampledDomeBoundary(
+    coastlineRing,
+    ROGUE_ANTARCTIC_DOME_BOUNDARY_COUNT,
+  );
+  for (let index = 0; index < perimeter.length; index += 1) {
+    pushDomeSegment(
+      linePositions,
+      perimeter[index]!.clone().multiplyScalar(NEURAL_DOME_BASE_RADIUS),
+      perimeter[(index + 1) % perimeter.length]!.clone().multiplyScalar(NEURAL_DOME_BASE_RADIUS),
+    );
+  }
+  const arches = sampledDomeBoundary(
+    coastlineRing,
+    ROGUE_ANTARCTIC_DOME_ARCH_COUNT,
+  );
+  const elevatedVertexCount = pushLowWideDomeCap(
+    linePositions,
+    nodePositions,
+    arches,
+    new THREE.Vector3(0, -1, 0),
+    0.27,
+  );
+  ROGUE_ANTARCTIC_NEURAL_DOME_GEOMETRY = {
+    linePositions,
+    nodePositions,
+    groundAnchorCount: perimeter.length,
+    elevatedVertexCount,
+  };
+  return ROGUE_ANTARCTIC_NEURAL_DOME_GEOMETRY;
 }
 
 function neuralFieldDomeShellPoint(
@@ -1143,7 +1280,7 @@ export class ThreeGlobeScene implements MapSceneAdapter {
   private readonly neuralDomeLineMaterial = new THREE.LineBasicMaterial({
     vertexColors: true,
     transparent: true,
-    opacity: 0.78,
+    opacity: NEURAL_DOME_LINE_BASE_OPACITY,
     depthTest: true,
     depthWrite: false,
     blending: THREE.AdditiveBlending,
@@ -1151,10 +1288,10 @@ export class ThreeGlobeScene implements MapSceneAdapter {
   });
   private readonly neuralDomeNodeMaterial = new THREE.PointsMaterial({
     vertexColors: true,
-    size: 2.35,
+    size: 1.85,
     sizeAttenuation: false,
     transparent: true,
-    opacity: 0.92,
+    opacity: NEURAL_DOME_NODE_BASE_OPACITY,
     depthTest: true,
     depthWrite: false,
     blending: THREE.AdditiveBlending,
@@ -1277,6 +1414,8 @@ export class ThreeGlobeScene implements MapSceneAdapter {
   private neuralConvergencePointCount = 0;
   private neuralPulseVisualId?: string;
   private neuralPulseTargetId?: string;
+  private neuralPulseRole: 'apex' | 'rogue-prime' = 'apex';
+  private neuralPulseFieldIntensity = 0;
   private neuralPulseInterceptsIncoming = false;
   private neuralPulseAbility: NeuralFieldPulseResolution['ability'] = 'standard';
   private neuralPulseCounterpulseDamage = 0;
@@ -1297,16 +1436,23 @@ export class ThreeGlobeScene implements MapSceneAdapter {
   private readonly nextFrameResolvers = new Set<() => void>();
   private readonly labels = new Map<string, GlobeLabel>();
   private readonly animatedRouteMaterials: AnimatedRouteMaterial[] = [];
-  private readonly polarMaterials: AnimatedRouteMaterial[] = [];
-  private readonly polarCorridors: PolarCorridorVisual[] = [];
   private readonly commanderForces = new Map<string, CommanderForceVisual>();
+  private apexEmpireField: ApexEmpireFieldPresentation = INACTIVE_APEX_EMPIRE_PRESENTATION;
+  private rogueAntarcticField: RogueAntarcticFieldPresentation = INACTIVE_ROGUE_ANTARCTIC_PRESENTATION;
   private readonly visiblePolarSectorIds = new Set<MapPolarSectorId>();
   private readonly battleEffects: BattleEffect[] = [];
   private readonly battleProjectilePool = new GlobeBattleProjectilePool(
     this.reducedMotion ? 0 : BATTLE_EFFECT_MAX_ACTIVE,
   );
   private readonly battleWaveResourceCache = new GlobeBattleWaveResourceCache();
+  private readonly signalPurgeEffect: GlobeSignalPurgeEffect;
   private readonly backdropTextures: THREE.Texture[] = [];
+  private galaxyBackdropTexture?: THREE.Texture;
+  private galaxyParallaxInitialized = false;
+  private galaxyLastAzimuth = 0;
+  private galaxyLastElevation = 0;
+  private galaxyPanX = 0;
+  private galaxyPanY = 0;
   private readonly onBeforeUnload = (): void => this.destroy();
   private engine?: WorldMapEngineContract;
   private intelligenceVisibility: ApexIntelligenceVisibility = {
@@ -1371,6 +1517,7 @@ export class ThreeGlobeScene implements MapSceneAdapter {
     if (!host) throw new Error('The map host #game-canvas is missing.');
     this.host = host;
     this.host.classList.add('globe-map');
+    this.signalPurgeEffect = new GlobeSignalPurgeEffect(GLOBE_RADIUS, this.reducedMotion);
 
     this.renderer = new THREE.WebGLRenderer({
       antialias: true,
@@ -1392,10 +1539,11 @@ export class ThreeGlobeScene implements MapSceneAdapter {
     this.antarcticaCard = document.createElement('div');
     this.antarcticaCard.className = 'globe-map__polar-card globe-map__polar-card--antarctica';
     this.antarcticaCard.innerHTML = [
-      '<small>POLAR SIGNAL · DORMANT</small>',
-      '<strong>ANTARCTIC SECRETS</strong>',
-      '<span>3 sealed access corridors</span>',
+      '<small>POLAR SIGNAL</small>',
+      '<strong>ANTARCTIC FRONT</strong>',
+      '<span>0/9 sectors secured</span>',
     ].join('');
+    this.antarcticaCard.hidden = true;
     this.host.append(this.antarcticaCard);
 
     this.arcticCard = document.createElement('div');
@@ -1629,6 +1777,7 @@ export class ThreeGlobeScene implements MapSceneAdapter {
       this.globe,
       this.intelligenceFogClearLayer,
       this.intelligenceFogCloudLayer,
+      this.signalPurgeEffect.object3d,
       this.neuralFieldCoverageLayer,
       this.borderDetail,
       this.gatewayRoutes,
@@ -1640,10 +1789,7 @@ export class ThreeGlobeScene implements MapSceneAdapter {
 
     this.addLighting();
     this.addAtmosphere();
-    this.addStars();
     this.addCelestialBackdrop();
-    this.addSeaLabels();
-    this.addAntarcticaPresentation();
     this.addArcticPresentation();
     this.bindInput();
 
@@ -1683,6 +1829,18 @@ export class ThreeGlobeScene implements MapSceneAdapter {
     }
     this.updateApexFogVisualBlend(nowMs);
     this.globeTexture.sync(engine, this.selection);
+    const signalPurge = selectGlobeSignalPurgePresentation(engine);
+    this.signalPurgeEffect.sync(signalPurge, nowMs);
+    this.host.dataset.signalPurgeTerritories = String(
+      this.signalPurgeEffect.activeTerritoryCount,
+    );
+    this.host.dataset.signalPurgeDrawCalls = String(this.signalPurgeEffect.drawCallCount);
+    this.host.dataset.signalPurgeLineVertices = String(
+      this.signalPurgeEffect.activeLineVertexCount,
+    );
+    this.host.dataset.signalPurgeFilaments = String(
+      this.signalPurgeEffect.activePointVertexCount,
+    );
     this.updateGlobeBorderDetail(engine);
     this.updatePolarVisuals(engine);
     this.updateCommanderForces(engine);
@@ -1787,7 +1945,15 @@ export class ThreeGlobeScene implements MapSceneAdapter {
 
   focusCommanderForce(playerId: string): void {
     const visual = this.commanderForces.get(playerId);
-    if (!visual) return;
+    if (!visual) {
+      const engine = this.engine;
+      if (!engine || playerId !== engine.state.humanPlayerId) return;
+      const strategicFocusId = this.apexEmpireField.activeFrontTerritoryIds[0]
+        ?? engine.player(playerId)?.capitalId
+        ?? this.apexEmpireField.coverageTerritoryIds[0];
+      if (strategicFocusId) this.focusCountry(strategicFocusId);
+      return;
+    }
     this.startCameraFlight(
       visual.worldPosition.clone().normalize(),
       Math.min(this.camera.position.length(), 8.4),
@@ -1819,19 +1985,11 @@ export class ThreeGlobeScene implements MapSceneAdapter {
     );
     if (!path) return;
     if (neuralField?.interceptsIncoming) {
-      const field = [...this.commanderForces.values()].find((visual) => (
-        visual.coverageTerritoryId === neuralField.fieldTerritoryId
-        && !visual.inTransit && visual.fieldOperational
-      ));
-      const shellPoint = field ? neuralFieldDomeShellPoint(
+      const shellPoint = neuralFieldDomeShellPoint(
         result.sourceId,
         result.targetId,
-        {
-          angularRadiusRadians: field.domeAngularRadiusRadians,
-          domeHeight: field.domeHeight,
-          boundaryWorldRadius: field.coverageBoundaryWorldRadius,
-        },
-      ) : undefined;
+        neuralFieldDomeMetrics(neuralField.fieldTerritoryId),
+      );
       if (shellPoint) clipGlobeRouteToNeuralField(path, shellPoint);
     }
     const impactDirection = path[path.length - 1]!.clone().normalize();
@@ -1936,6 +2094,8 @@ export class ThreeGlobeScene implements MapSceneAdapter {
     this.battleWaveResourceCache.dispose();
     this.battleProjectilePool.dispose();
     this.globeTexture.destroy();
+    this.globeGroup.remove(this.signalPurgeEffect.object3d);
+    this.signalPurgeEffect.dispose();
     disposeObject(this.scene);
     this.neuralFieldGeometry.dispose();
     this.neuralNetworkGeometry.dispose();
@@ -1994,111 +2154,134 @@ export class ThreeGlobeScene implements MapSceneAdapter {
 
   private addAtmosphere(): void {
     const atmosphereMaterial = new THREE.ShaderMaterial({
+      uniforms: {
+        sunDirection: { value: new THREE.Vector3(0.62, 0.34, 0.71).normalize() },
+      },
       transparent: true,
       side: THREE.BackSide,
       blending: THREE.AdditiveBlending,
+      depthTest: true,
       depthWrite: false,
+      toneMapped: false,
+      fog: false,
       vertexShader: `
-        varying vec3 vNormal;
+        varying vec3 worldNormal;
+        varying vec3 worldPosition;
         void main() {
-          vNormal = normalize(normalMatrix * normal);
+          worldNormal = normalize(mat3(modelMatrix) * normal);
+          worldPosition = (modelMatrix * vec4(position, 1.0)).xyz;
           gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
         }
       `,
       fragmentShader: `
-        varying vec3 vNormal;
+        uniform vec3 sunDirection;
+        varying vec3 worldNormal;
+        varying vec3 worldPosition;
         void main() {
-          float facing = abs(dot(normalize(vNormal), vec3(0.0, 0.0, 1.0)));
-          float rim = pow(max(0.0, 1.0 - facing), 3.25);
-          gl_FragColor = vec4(0.10, 0.55, 0.91, rim * 0.46);
+          vec3 normal = normalize(worldNormal);
+          vec3 viewDirection = normalize(cameraPosition - worldPosition);
+          float horizon = 1.0 - clamp(abs(dot(normal, viewDirection)), 0.0, 1.0);
+          float broadScatter = pow(horizon, 3.25);
+          float thinRim = pow(horizon, 9.5);
+          float dayLight = smoothstep(-0.42, 0.72, dot(normal, normalize(sunDirection)));
+          vec3 nightBlue = vec3(0.012, 0.13, 0.28);
+          vec3 dayCyan = vec3(0.11, 0.58, 0.86);
+          vec3 rimColor = mix(nightBlue, dayCyan, 0.22 + dayLight * 0.68);
+          float alpha = broadScatter * (0.045 + dayLight * 0.035)
+            + thinRim * (0.14 + dayLight * 0.09);
+          gl_FragColor = vec4(rimColor, min(alpha, 0.30));
         }
       `,
     });
-    this.globeGroup.add(new THREE.Mesh(
-      new THREE.SphereGeometry(GLOBE_RADIUS * 1.032, 80, 52),
+    const atmosphere = new THREE.Mesh(
+      new THREE.SphereGeometry(GLOBE_RADIUS * 1.024, 64, 40),
       atmosphereMaterial,
-    ));
-  }
-
-  private addStars(): void {
-    let seed = 0x2f6e2b1;
-    const random = (): number => {
-      seed = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-      seed ^= seed + Math.imul(seed ^ (seed >>> 7), 61 | seed);
-      return ((seed ^ (seed >>> 14)) >>> 0) / 4_294_967_296;
-    };
-    const positions = new Float32Array(1350 * 3);
-    const colors = new Float32Array(1350 * 3);
-    for (let index = 0; index < 1350; index += 1) {
-      const direction = new THREE.Vector3(random() * 2 - 1, random() * 2 - 1, random() * 2 - 1).normalize();
-      direction.multiplyScalar(30 + random() * 80);
-      positions[index * 3] = direction.x;
-      positions[index * 3 + 1] = direction.y;
-      positions[index * 3 + 2] = direction.z;
-      const temperature = random();
-      const color = new THREE.Color(
-        temperature < 0.07 ? 0xffd3a1 : temperature < 0.28 ? 0xf2f4ff : 0x9ed9f5,
-      );
-      colors[index * 3] = color.r;
-      colors[index * 3 + 1] = color.g;
-      colors[index * 3 + 2] = color.b;
-    }
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-    this.scene.add(new THREE.Points(geometry, new THREE.PointsMaterial({
-      vertexColors: true,
-      size: 0.042,
-      transparent: true,
-      opacity: 0.72,
-      depthWrite: false,
-      fog: false,
-    })));
+    );
+    atmosphere.renderOrder = 20;
+    atmosphere.userData.premiumAtmosphere = true;
+    this.globeGroup.add(atmosphere);
+    this.host.dataset.atmosphere = 'single-fresnel-shell';
   }
 
   private addCelestialBackdrop(): void {
-    const sunTexture = createSunGlowTexture();
-    this.backdropTextures.push(sunTexture);
-    const sun = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: sunTexture,
-      transparent: true,
-      opacity: 0.88,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      depthTest: true,
-      fog: false,
-      toneMapped: false,
-    }));
-    sun.position.set(11.5, 5.2, -46);
-    sun.scale.set(13.5, 13.5, 1);
-    sun.renderOrder = -10;
-    this.camera.add(sun);
+    this.host.dataset.celestialBackdrop = 'premium-texture-loading';
+    // The authored galaxy is the complete celestial presentation: no extra
+    // star, flare, particle or post-processing pass sits over the globe.
+    this.host.dataset.celestialBackdropDrawCalls = '1';
+    const deepSpaceTexture = new THREE.TextureLoader().load(
+      apexGalaxyMapBackgroundUrl,
+      (loadedTexture) => {
+        if (this.destroyed) {
+          loadedTexture.dispose();
+          return;
+        }
+        this.scene.background = loadedTexture;
+        this.host.dataset.celestialBackdrop = 'camera-parallax-galaxy-texture';
+      },
+      undefined,
+      () => {
+        if (this.destroyed) return;
+        // The initial deep navy clear color remains a clean fallback if an
+        // asset request fails; no procedural stars or replacement draw pass.
+        this.host.dataset.celestialBackdrop = 'color-fallback';
+        this.host.dataset.celestialBackdropDrawCalls = '0';
+      },
+    );
+    deepSpaceTexture.name = 'APEX camera-parallax galaxy map background';
+    deepSpaceTexture.colorSpace = THREE.SRGBColorSpace;
+    deepSpaceTexture.minFilter = THREE.LinearFilter;
+    deepSpaceTexture.magFilter = THREE.LinearFilter;
+    deepSpaceTexture.generateMipmaps = false;
+    deepSpaceTexture.repeat.set(GALAXY_UV_REPEAT_X, GALAXY_UV_REPEAT_Y);
+    deepSpaceTexture.offset.set(GALAXY_UV_BASE_OFFSET_X, GALAXY_UV_BASE_OFFSET_Y);
+    this.galaxyBackdropTexture = deepSpaceTexture;
+    this.host.dataset.celestialBackdropParallax = 'orbit-coupled-counter-motion';
+    this.backdropTextures.push(deepSpaceTexture);
   }
 
-  private addSeaLabels(): void {
-    for (const sea of SEA_MAP_LABELS) {
-      // The flat map's authored Southern Ocean screen point has an ordinary
-      // geographic equivalent on the globe.
-      const longitude = sea.mapPosition && sea.id === 'southern-ocean' ? 0 : sea.longitude;
-      const latitude = sea.mapPosition && sea.id === 'southern-ocean' ? -58 : sea.latitude;
-      const element = document.createElement('div');
-      element.className = `globe-map__sea-label globe-map__sea-label--${sea.kind}`;
-      element.textContent = sea.name;
-      if (sea.rotation) element.style.setProperty('--label-rotation', `${sea.rotation}deg`);
-      this.labelLayer.append(element);
-      this.labels.set(`sea:${sea.id}`, {
-        id: `sea:${sea.id}`,
-        kind: 'sea',
-        longitude,
-        latitude,
-        worldPosition: vectorFor(longitude, latitude, GLOBE_RADIUS * 1.025),
-        element,
-        persistent: true,
-        priority: sea.kind === 'ocean' ? 80 : 90,
-        width: sea.kind === 'ocean' ? 190 : 120,
-        height: 16,
-      });
+  private updateCelestialBackdropParallax(): void {
+    const texture = this.galaxyBackdropTexture;
+    if (!texture) return;
+    const cameraLength = this.camera.position.length();
+    if (cameraLength <= 1e-8) return;
+    const azimuth = Math.atan2(this.camera.position.x, this.camera.position.z);
+    const elevation = Math.asin(THREE.MathUtils.clamp(
+      this.camera.position.y / cameraLength,
+      -1,
+      1,
+    ));
+    if (!this.galaxyParallaxInitialized) {
+      this.galaxyParallaxInitialized = true;
+      this.galaxyLastAzimuth = azimuth;
+      this.galaxyLastElevation = elevation;
+      return;
     }
+
+    // atan2(sin, cos) keeps a drag across the +/-PI seam continuous. The
+    // negative factors make the deep sky lag behind the globe direction.
+    const azimuthDelta = Math.atan2(
+      Math.sin(azimuth - this.galaxyLastAzimuth),
+      Math.cos(azimuth - this.galaxyLastAzimuth),
+    );
+    const elevationDelta = elevation - this.galaxyLastElevation;
+    this.galaxyLastAzimuth = azimuth;
+    this.galaxyLastElevation = elevation;
+    const nextPanX = THREE.MathUtils.clamp(
+      this.galaxyPanX - azimuthDelta * GALAXY_HORIZONTAL_PARALLAX_PER_RADIAN,
+      -GALAXY_MAX_HORIZONTAL_PAN,
+      GALAXY_MAX_HORIZONTAL_PAN,
+    );
+    const nextPanY = THREE.MathUtils.clamp(
+      this.galaxyPanY - elevationDelta * GALAXY_VERTICAL_PARALLAX_PER_RADIAN,
+      -GALAXY_MAX_VERTICAL_PAN,
+      GALAXY_MAX_VERTICAL_PAN,
+    );
+    if (Math.abs(nextPanX - this.galaxyPanX) <= 1e-7
+      && Math.abs(nextPanY - this.galaxyPanY) <= 1e-7) return;
+    this.galaxyPanX = nextPanX;
+    this.galaxyPanY = nextPanY;
+    texture.offset.x = GALAXY_UV_BASE_OFFSET_X + nextPanX;
+    texture.offset.y = GALAXY_UV_BASE_OFFSET_Y + nextPanY;
   }
 
   /** One immutable dashed buffer for the exact authored world gateways. */
@@ -2222,104 +2405,13 @@ export class ThreeGlobeScene implements MapSceneAdapter {
     this.borderDetail.material.opacity = close ? 0.94 : 0.7;
   }
 
-  private addAntarcticaPresentation(): void {
-    const colors = [0x66eaff, 0xffc76b, 0xb68cff];
-    ANTARCTICA_ACCESS_ANCHORS.forEach((anchor, index) => {
-      const path = greatCirclePath(
-        vectorFor(anchor.origin[0], anchor.origin[1], GLOBE_RADIUS * 1.008),
-        vectorFor(anchor.longitude, anchor.latitude, GLOBE_RADIUS * 1.01),
-        0.12,
-        56,
-      );
-      const material = new THREE.LineDashedMaterial({
-        color: colors[index]!,
-        transparent: true,
-        opacity: 0.22,
-        dashSize: 0.12,
-        gapSize: 0.105,
-        depthWrite: false,
-      });
-      const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(path), material);
-      line.computeLineDistances();
-      this.polarGroup.add(line);
-      const animation = { material, baseOpacity: 0.22, phase: index * 1.8 };
-      this.polarMaterials.push(animation);
-
-      const beaconMaterial = new THREE.MeshBasicMaterial({
-        color: colors[index]!,
-        transparent: true,
-        opacity: 0.74,
-        depthWrite: false,
-      });
-      const beacon = new THREE.Mesh(
-        new THREE.OctahedronGeometry(0.085, 1),
-        beaconMaterial,
-      );
-      beacon.position.copy(vectorFor(anchor.longitude, anchor.latitude, GLOBE_RADIUS * 1.022));
-      this.polarGroup.add(beacon);
-
-      const element = document.createElement('div');
-      element.className = 'globe-map__access-label';
-      element.innerHTML = `<strong>SEALED</strong><span>${anchor.corridor.replaceAll('-', ' ')}</span>`;
-      this.labelLayer.append(element);
-      this.labels.set(`access:${anchor.id}`, {
-        id: `access:${anchor.id}`,
-        kind: 'access',
-        longitude: anchor.longitude,
-        latitude: anchor.latitude,
-        worldPosition: vectorFor(anchor.longitude, anchor.latitude, GLOBE_RADIUS * 1.025),
-        element,
-        persistent: true,
-        priority: 20 + index,
-        width: 118,
-        height: 34,
-      });
-      this.polarCorridors.push({
-        line,
-        beaconMaterial,
-        label: element,
-        animation,
-        baseColor: colors[index]!,
-        entrySectorId: anchor.entrySectorId,
-      });
-    });
-
-    const pole = new THREE.Mesh(
-      new THREE.OctahedronGeometry(0.15, 1),
-      new THREE.MeshBasicMaterial({
-        color: 0x84edff,
-        transparent: true,
-        opacity: 0.68,
-        depthWrite: false,
-      }),
-    );
-    pole.position.copy(vectorFor(0, -88.5, GLOBE_RADIUS * 1.025));
-    this.polarGroup.add(pole);
-  }
-
-  /** State-driven polar changes update the political atlas, labels and three routes. */
+  /** State-driven polar changes reveal the machine stronghold without bespoke access markers. */
   private updatePolarVisuals(engine: WorldMapEngineContract): void {
     const polar = engine.state.polarEndgame;
     const signature = globePolarPresentationSignature(polar);
     if (signature === this.polarVisualSignature) return;
     this.polarVisualSignature = signature;
     const corridorsOpen = polar ? OPEN_ANTARCTICA_PHASES.has(polar.phase) : false;
-    const legacyPresentation = !polar;
-
-    for (const corridor of this.polarCorridors) {
-      const sectorStatus = polar?.sectors[corridor.entrySectorId]?.status ?? 'hidden';
-      const color = sectorStatus === 'contested' ? POLAR_SECTOR_COLORS.contested
-        : sectorStatus === 'secured' ? POLAR_SECTOR_COLORS.secured
-          : corridor.baseColor;
-      corridor.line.visible = legacyPresentation || corridorsOpen;
-      corridor.line.material.color.setHex(color);
-      corridor.beaconMaterial.color.setHex(color);
-      corridor.animation.baseOpacity = corridorsOpen ? 0.34 : 0.12;
-      corridor.line.material.opacity = corridor.animation.baseOpacity;
-      corridor.beaconMaterial.opacity = corridorsOpen ? 0.88 : 0.46;
-      corridor.label.innerHTML = `<strong>${corridorsOpen ? 'OPEN' : 'SEALED'}</strong><span>${corridor.entrySectorId.replaceAll('-', ' ')}</span>`;
-    }
-
     this.visiblePolarSectorIds.clear();
     if (corridorsOpen) {
       for (const sector of ANTARCTICA_SECTOR_PRESENTATIONS) {
@@ -2331,11 +2423,14 @@ export class ThreeGlobeScene implements MapSceneAdapter {
       ? Object.values(polar.sectors).filter((sector) => sector?.status === 'secured').length
       : 0;
     const phaseLabel = polar?.phase.replaceAll('-', ' ').toUpperCase() ?? 'DORMANT';
+    this.antarcticaCard.hidden = !corridorsOpen;
     this.antarcticaCard.innerHTML = [
       `<small>POLAR SIGNAL · ${phaseLabel}</small>`,
-      `<strong>${corridorsOpen ? 'ANTARCTIC FRONT' : 'ANTARCTIC SECRETS'}</strong>`,
-      `<span>${corridorsOpen ? `${securedCount}/9 sectors secured` : '3 sealed access corridors'}</span>`,
+      '<strong>ANTARCTIC FRONT</strong>',
+      `<span>${securedCount}/9 sectors secured</span>`,
     ].join('');
+    this.host.dataset.antarcticaMachinePresentation = corridorsOpen ? 'revealed' : 'dormant-clean';
+    this.host.dataset.antarcticaAccessMarkers = 'none';
     this.labelsDirty = true;
     this.polarCardsDirty = true;
   }
@@ -2359,13 +2454,10 @@ export class ThreeGlobeScene implements MapSceneAdapter {
     const nextCountryLabelKeys = new Set<string>();
 
     const { state } = this.engine;
-    const viewerApex = apexFieldPresentationActive(this.engine)
-      ? state.commanderForces?.[state.humanPlayerId]
-      : undefined;
-    const viewerApexShield = apexShieldPresentation(viewerApex);
-    const viewerApexOperational = viewerApexShield.visible;
-    const apexProjections = apexProjectionPresentations(viewerApex);
-    const apexInboundTerritoryId = viewerApex?.transit?.path.at(-1);
+    const viewerApexOperational = this.apexEmpireField.active;
+    const viewerApexPercent = this.apexEmpireField.percent;
+    const apexCoverageTerritoryIds = new Set(this.apexEmpireField.coverageTerritoryIds);
+    const apexFrontTerritoryIds = new Set(this.apexEmpireField.activeFrontTerritoryIds);
     const primeState = state.polarEndgame?.roguePrime;
     const primePresentation = roguePrimeMapPresentation(
       primeState,
@@ -2429,13 +2521,9 @@ export class ThreeGlobeScene implements MapSceneAdapter {
       const exactIntel = apexTerritoryIntelVisible(this.intelligenceVisibility, definition.id);
       const clearIntel = apexTerritoryMapClear(this.intelligenceVisibility, definition.id);
       const frontierIntel = this.intelligenceVisibility.enabled && !clearIntel;
-      const apexProjection = apexProjections.find((entry) => (
-        entry.locationId === definition.id
-          && (entry.projection === 'secondary' || !viewerApex?.transit)
-      ));
-      const apexSupport = viewerApexOperational && Boolean(apexProjection);
-      const apexInbound = viewerApexOperational && definition.id === apexInboundTerritoryId;
-      const apexSignal = apexSupport || apexInbound;
+      const apexSupport = viewerApexOperational
+        && apexCoverageTerritoryIds.has(definition.id);
+      const apexSignal = apexSupport && apexFrontTerritoryIds.has(definition.id);
       const primeSignal = definition.id === primeSupportTerritoryId;
       const owner = this.engine.player(territory.ownerId);
       if (!owner) continue;
@@ -2529,20 +2617,16 @@ export class ThreeGlobeScene implements MapSceneAdapter {
         `<b style="--readiness-local:${Math.round(readiness.localCapacityRatio * 1000) / 10}%"></b>`,
         '</div>',
       ].join('') : '';
-      const primePower = primeState?.force
-        ? commanderForceMapCombatPower(primeState.force.army) : 0;
-      const signalBadge = apexSupport
-        ? `<i class="globe-map__ai-signal is-apex${apexProjection?.split ? ' is-split' : ''}${apexProjection?.singularityCharged ? ' is-charged' : ''}" aria-label="APEX neural shield at ${viewerApexShield.percent}% shared integrity${apexProjection?.split ? '; twin projection at 60% combat intensity' : ''}${apexProjection?.singularityCharged ? '; Singularity Pulse charged' : ''}">${apexProjection?.label ?? viewerApexShield.label}</i>`
-        : apexInbound
-          ? `<i class="globe-map__ai-signal is-apex is-inbound" aria-label="${viewerApexShield.label} inbound; not yet protecting this territory">${viewerApexShield.label} · INBOUND</i>`
+      const primeSupportPercent = primeState?.force
+        ? commanderShieldMapSupportPercent(primeState.force.shield) : 0;
+      const signalBadge = apexSignal
+        ? `<i class="globe-map__ai-signal is-apex" aria-label="APEX empire shield concentrating here at ${viewerApexPercent}% shared Energy">APEX ${viewerApexPercent}%</i>`
         : primeSignal
-          ? `<i class="globe-map__ai-signal is-prime" aria-label="ROGUE PRIME supporting with ${compactMapCombatPower(primePower)} power">+${compactMapCombatPower(primePower)} PRIME</i>`
+          ? `<i class="globe-map__ai-signal is-prime" aria-label="ROGUE PRIME amplifying the Antarctic army by ${primeSupportPercent.toFixed(1)} percent">PRIME +${primeSupportPercent.toFixed(1)}%</i>`
           : '';
       const key = `country:${definition.id}`;
       const existingLabel = this.labels.get(key);
-      const element = existingLabel?.kind === 'country'
-        ? existingLabel.element
-        : document.createElement('div');
+      const element = existingLabel?.element ?? document.createElement('div');
       const readinessPercent = Math.round(readiness.fillRatio * 100);
       const baseSemanticTitle = remotePassive
         ? `${definition.englishName} · Global power rank #${rank ?? '—'} · Live intelligence unavailable`
@@ -2558,11 +2642,9 @@ export class ThreeGlobeScene implements MapSceneAdapter {
           ? `Local power ${compactMapCombatPower(territory.army.power)}`
           : '';
       const signalSemantic = apexSupport
-        ? `APEX neural shield at ${viewerApexShield.percent}% shared integrity${apexProjection?.split ? ' with a 60% twin projection' : ''}${apexProjection?.singularityCharged ? '; Singularity Pulse charged' : ''}`
-        : apexInbound
-          ? `${viewerApexShield.label} inbound; not yet protecting this territory`
+        ? `Protected by the distributed APEX empire shield at ${viewerApexPercent}% shared Energy${apexSignal ? '; energy concentrated at this front' : ''}`
         : primeSignal
-          ? `ROGUE PRIME supporting with ${compactMapCombatPower(primePower)} power`
+          ? `ROGUE PRIME amplifying the Antarctic army by ${primeSupportPercent.toFixed(1)}%`
           : '';
       const semanticTitle = [baseSemanticTitle, signalSemantic].filter(Boolean).join(' · ');
       if (element.title !== semanticTitle) element.title = semanticTitle;
@@ -2580,7 +2662,6 @@ export class ThreeGlobeScene implements MapSceneAdapter {
         rogueTerritory.compact ? 'is-rogue-compact' : '',
         rogueTerritory.showPower ? 'is-rogue-threat' : '',
         apexSignal ? 'has-apex-signal' : '',
-        apexInbound ? 'has-apex-inbound' : '',
         primeSignal ? 'has-prime-signal' : '',
         remotePassive ? 'is-intel-veiled' : '',
         frontTerritories.has(definition.id)
@@ -2608,18 +2689,16 @@ export class ThreeGlobeScene implements MapSceneAdapter {
       ].join('');
       if (existingLabel?.className !== className) element.className = className;
       if (existingLabel?.markup !== markup) element.innerHTML = markup;
-      if (!existingLabel || existingLabel.kind !== 'country') this.labelLayer.append(element);
+      if (!existingLabel) this.labelLayer.append(element);
       nextCountryLabelKeys.add(key);
       const anchor = definition.anchor;
       const markupChanged = existingLabel?.markup !== markup;
       this.labels.set(key, {
         id: definition.id,
-        kind: 'country',
         longitude: anchor[0],
         latitude: anchor[1],
-        worldPosition: existingLabel?.kind === 'country'
-          ? existingLabel.worldPosition
-          : vectorFor(anchor[0], anchor[1], GLOBE_RADIUS * 1.025),
+        worldPosition: existingLabel?.worldPosition
+          ?? vectorFor(anchor[0], anchor[1], GLOBE_RADIUS * 1.025),
         element,
         detailElement: markupChanged
           ? element.querySelector<HTMLElement>('span') ?? undefined
@@ -2708,24 +2787,15 @@ export class ThreeGlobeScene implements MapSceneAdapter {
       ...war.attackerOperations.flatMap((operation) => [operation.sourceId, operation.targetId]),
       ...war.defenderOperations.flatMap((operation) => [operation.sourceId, operation.targetId]),
     ].join(':')).join('|');
-    const apex = apexFieldPresentationActive(engine)
-      ? engine.state.commanderForces?.[engine.state.humanPlayerId]
-      : undefined;
-    const apexShield = apexShieldPresentation(apex);
     const prime = engine.state.polarEndgame?.roguePrime;
     const fieldSignature = [
-      apex?.locationId ?? '',
-      apex?.mission ?? '',
-      apex?.transit?.path.join('>') ?? '',
-      apexShield.visible ? apexShield.label : 'shield-offline',
-      apex?.doctrineRuntime?.lancerSupportedAssaultCount ?? 0,
-      apex?.doctrineRuntime?.secondaryProjection?.locationId ?? '',
-      apex?.doctrineRuntime?.secondaryProjection?.front.targetId ?? '',
+      this.apexEmpireField.geometrySignature,
+      this.apexEmpireField.active ? `shield-${this.apexEmpireField.percent}` : 'shield-offline',
       prime?.status ?? '',
       prime?.force?.locationId ?? '',
       prime?.force?.transit?.path.join('>') ?? '',
       prime?.force
-        ? compactMapCombatPower(commanderForceMapCombatPower(prime.force.army)) : '',
+        ? commanderShieldMapSupportPercent(prime.force.shield).toFixed(1) : '',
     ].join(':');
     return `${this.intelligenceVisibility.signature}|${engine.state.humanPlayerId}|${territorySignature}|${powerSignature}|${controllerSignature}|${openingSignature}|${rankingSignature}|${warSignature}|${fieldSignature}`;
   }
@@ -2852,26 +2922,64 @@ export class ThreeGlobeScene implements MapSceneAdapter {
     let visual: CommanderForceVisual | undefined;
     let visualId: string | undefined;
     let resolution: NeuralFieldPulseResolution | undefined;
+    let role: 'apex' | 'rogue-prime' = 'apex';
+    let fieldIntensity = 0;
+
+    // The human field has no physical marker. Canonical participation sends a
+    // concentration pulse from the friendly battle territory through the one
+    // empire-wide network.
+    const engine = this.engine;
+    const viewerId = engine?.state.humanPlayerId;
+    const viewerApex = viewerId ? engine?.state.commanderForces?.[viewerId] : undefined;
+    if (viewerId && viewerApex && this.apexEmpireField.active) {
+      const coverage = new Set(this.apexEmpireField.coverageTerritoryIds);
+      const assignedFronts = viewerApex.empireShield
+        ? viewerApex.empireShield.fronts.map((front) => front.targetId)
+        : [
+          viewerApex.front,
+          viewerApex.doctrineRuntime?.secondaryProjection?.front.targetId ?? null,
+        ];
+      for (const assignedFront of assignedFronts) {
+        const candidateResolution = resolveNeuralFieldPulseTarget(
+          result,
+          new Set([viewerId]),
+          assignedFront,
+        );
+        if (!candidateResolution || !coverage.has(candidateResolution.fieldTerritoryId)) continue;
+        resolution = candidateResolution;
+        fieldIntensity = this.apexEmpireField.integrity;
+        break;
+      }
+    }
+
+    // PRIME intentionally remains a local antagonist with a real sortie
+    // lifecycle, but the crimson interception shell itself may only exist over
+    // the authored Antarctic stronghold sectors.
+    if (!resolution) {
+    const rogueCoverage = new Set(this.rogueAntarcticField.coverageTerritoryIds);
     for (const [candidateId, candidate] of this.commanderForces) {
+      if (candidate.role !== 'rogue-prime') continue;
       if (candidate.inTransit || !candidate.fieldOperational || !candidate.combatActive) continue;
-      const controllers = candidate.role === 'rogue-prime'
-        ? new Set([candidateId, 'rai', ROGUE_PRIME_RENDER_ID])
-        : new Set([candidateId]);
+      const controllers = new Set([candidateId, 'rai', ROGUE_PRIME_RENDER_ID]);
       const candidateResolution = resolveNeuralFieldPulseTarget(
         result,
         controllers,
         candidate.frontTargetId,
       );
       if (!candidateResolution) continue;
+      if (!rogueCoverage.has(candidateResolution.fieldTerritoryId as MapPolarSectorId)) continue;
       if (candidateResolution.projection
         && candidateResolution.projection !== candidate.projection) continue;
       if (candidate.coverageTerritoryId !== candidateResolution.fieldTerritoryId) continue;
       visual = candidate;
       visualId = candidateId;
       resolution = candidateResolution;
+      role = 'rogue-prime';
+      fieldIntensity = candidate.fieldIntensity;
       if (candidateResolution.interceptsIncoming) break;
     }
-    if (!visual || !visualId || !resolution) return undefined;
+    }
+    if (!resolution || fieldIntensity <= 0) return undefined;
     if (!apexTerritoryIntelVisible(
       this.intelligenceVisibility, resolution.fieldTerritoryId,
     )) return undefined;
@@ -2881,11 +2989,11 @@ export class ThreeGlobeScene implements MapSceneAdapter {
     const path = routeBetween(startId, targetId, naval ? 0.075 : 0.045, naval ? 'naval' : 'land');
     if (!path || path.length < 2) return undefined;
     if (resolution.interceptsIncoming) {
-      const shellPoint = neuralFieldDomeShellPoint(startId, targetId, {
-        angularRadiusRadians: visual.domeAngularRadiusRadians,
-        domeHeight: visual.domeHeight,
-        boundaryWorldRadius: visual.coverageBoundaryWorldRadius,
-      });
+      const shellPoint = neuralFieldDomeShellPoint(
+        startId,
+        targetId,
+        neuralFieldDomeMetrics(resolution.fieldTerritoryId),
+      );
       if (!shellPoint) return undefined;
       clipGlobeRouteToNeuralField(path, shellPoint);
     }
@@ -2909,7 +3017,7 @@ export class ThreeGlobeScene implements MapSceneAdapter {
       this.neuralConvergencePositions[offset + 1] = this.neuralConvergencePathSample.y;
       this.neuralConvergencePositions[offset + 2] = this.neuralConvergencePathSample.z;
     }
-    if (!resolution.interceptsIncoming) {
+    if (!resolution.interceptsIncoming && visual) {
       this.neuralConvergencePositions[0] = visual.worldPosition.x;
       this.neuralConvergencePositions[1] = visual.worldPosition.y;
       this.neuralConvergencePositions[2] = visual.worldPosition.z;
@@ -2921,13 +3029,15 @@ export class ThreeGlobeScene implements MapSceneAdapter {
       this.neuralConvergenceGeometry.setDrawRange(0, 0);
       return undefined;
     }
-    const style = visual.role === 'rogue-prime'
+    const style = role === 'rogue-prime'
       ? STRATEGIC_NEURAL_FIELD_STYLE.roguePrime
       : STRATEGIC_NEURAL_FIELD_STYLE.apex;
     this.neuralConvergenceMaterial.color.setHex(style.fieldColor);
     this.neuralContactMaterial.color.setHex(style.nodeColor);
     this.neuralPulseVisualId = visualId;
     this.neuralPulseTargetId = resolution.fieldTerritoryId;
+    this.neuralPulseRole = role;
+    this.neuralPulseFieldIntensity = fieldIntensity;
     this.neuralPulseInterceptsIncoming = resolution.interceptsIncoming;
     this.neuralPulseAbility = resolution.ability;
     this.neuralPulseCounterpulseDamage = resolution.counterpulseDamage;
@@ -2962,65 +3072,203 @@ export class ThreeGlobeScene implements MapSceneAdapter {
   }
 
   private rebuildTerritoryNeuralDomes(
-    entries: readonly CommanderForceRenderEntry[],
+    empireField: ApexEmpireFieldPresentation,
+    rogueField: RogueAntarcticFieldPresentation = INACTIVE_ROGUE_ANTARCTIC_PRESENTATION,
   ): void {
+    // Keep live HMR and older save/bridge snapshots fail-safe while presentation
+    // contracts update: an absent hostile field must render as a clean dormant pole.
+    const safeRogueField = Array.isArray(rogueField?.territories)
+      ? rogueField
+      : INACTIVE_ROGUE_ANTARCTIC_PRESENTATION;
+    this.host.dataset.apexEmpireNetworkRenderedEdges = '0';
+    this.host.dataset.rogueShieldDomeClusters = '0';
     let lineVertexCount = 0;
     let nodeCount = 0;
     let groundAnchorCount = 0;
     let elevatedVertexCount = 0;
-    for (const entry of entries) {
-      const mode = neuralFieldModePresentation(
-        entry.moving,
-        entry.recovering,
-        entry.fieldOperational,
-      );
-      if (!mode.fieldVisible) continue;
-      const dome = preparedTerritoryNeuralDomeGeometry(entry.force.locationId);
-      const style = entry.role === 'rogue-prime'
-        ? STRATEGIC_NEURAL_FIELD_STYLE.roguePrime
-        : STRATEGIC_NEURAL_FIELD_STYLE.apex;
-      const color = new THREE.Color(style.fieldColor).multiplyScalar(
-        (mode.recoveryField ? 0.46 : 1) * entry.fieldIntensity,
-      );
-      const availableLineVertices = NEURAL_DOME_MAX_LINE_SEGMENTS * 2 - lineVertexCount;
+    const writeLinePoint = (point: THREE.Vector3, color: THREE.Color): void => {
+      const offset = lineVertexCount * 3;
+      this.neuralDomeLinePositions[offset] = point.x;
+      this.neuralDomeLinePositions[offset + 1] = point.y;
+      this.neuralDomeLinePositions[offset + 2] = point.z;
+      this.neuralDomeLineColors[offset] = color.r;
+      this.neuralDomeLineColors[offset + 1] = color.g;
+      this.neuralDomeLineColors[offset + 2] = color.b;
+      lineVertexCount += 1;
+    };
+    const writeSegment = (
+      start: THREE.Vector3,
+      end: THREE.Vector3,
+      color: THREE.Color,
+    ): boolean => {
+      if (lineVertexCount + 2 > NEURAL_DOME_MAX_LINE_SEGMENTS * 2) return false;
+      writeLinePoint(start, color);
+      writeLinePoint(end, color);
+      return true;
+    };
+    const writeNode = (point: THREE.Vector3, color: THREE.Color): boolean => {
+      if (nodeCount >= NEURAL_DOME_MAX_NODES) return false;
+      const offset = nodeCount * 3;
+      this.neuralDomeNodePositions[offset] = point.x;
+      this.neuralDomeNodePositions[offset + 1] = point.y;
+      this.neuralDomeNodePositions[offset + 2] = point.z;
+      this.neuralDomeNodeColors[offset] = color.r;
+      this.neuralDomeNodeColors[offset + 1] = color.g;
+      this.neuralDomeNodeColors[offset + 2] = color.b;
+      nodeCount += 1;
+      return true;
+    };
+    const copyStart = new THREE.Vector3();
+    const copyEnd = new THREE.Vector3();
+    const copyNode = new THREE.Vector3();
+    const copyDomeGeometry = (
+      dome: TerritoryNeuralDomeGeometry,
+      color: THREE.Color,
+      nodeColor: THREE.Color,
+    ): void => {
       const requestedLineVertices = Math.floor(dome.linePositions.length / 3);
-      const copiedLineVertices = Math.min(
-        requestedLineVertices - requestedLineVertices % 2,
-        availableLineVertices - availableLineVertices % 2,
-      );
-      for (let index = 0; index < copiedLineVertices; index += 1) {
-        const sourceOffset = index * 3;
-        const targetOffset = (lineVertexCount + index) * 3;
-        this.neuralDomeLinePositions[targetOffset] = dome.linePositions[sourceOffset]!;
-        this.neuralDomeLinePositions[targetOffset + 1] = dome.linePositions[sourceOffset + 1]!;
-        this.neuralDomeLinePositions[targetOffset + 2] = dome.linePositions[sourceOffset + 2]!;
-        this.neuralDomeLineColors[targetOffset] = color.r;
-        this.neuralDomeLineColors[targetOffset + 1] = color.g;
-        this.neuralDomeLineColors[targetOffset + 2] = color.b;
+      for (let index = 0; index + 1 < requestedLineVertices; index += 2) {
+        const leftOffset = index * 3;
+        const rightOffset = leftOffset + 3;
+        copyStart.set(
+          dome.linePositions[leftOffset]!,
+          dome.linePositions[leftOffset + 1]!,
+          dome.linePositions[leftOffset + 2]!,
+        );
+        copyEnd.set(
+          dome.linePositions[rightOffset]!,
+          dome.linePositions[rightOffset + 1]!,
+          dome.linePositions[rightOffset + 2]!,
+        );
+        if (!writeSegment(copyStart, copyEnd, color)) break;
       }
-      lineVertexCount += copiedLineVertices;
-
-      const availableNodes = NEURAL_DOME_MAX_NODES - nodeCount;
-      const copiedNodes = Math.min(
-        Math.floor(dome.nodePositions.length / 3),
-        availableNodes,
-      );
-      const nodeColor = new THREE.Color(style.nodeColor).multiplyScalar(
-        (mode.recoveryField ? 0.46 : 1) * entry.fieldIntensity,
-      );
-      for (let index = 0; index < copiedNodes; index += 1) {
-        const sourceOffset = index * 3;
-        const targetOffset = (nodeCount + index) * 3;
-        this.neuralDomeNodePositions[targetOffset] = dome.nodePositions[sourceOffset]!;
-        this.neuralDomeNodePositions[targetOffset + 1] = dome.nodePositions[sourceOffset + 1]!;
-        this.neuralDomeNodePositions[targetOffset + 2] = dome.nodePositions[sourceOffset + 2]!;
-        this.neuralDomeNodeColors[targetOffset] = nodeColor.r;
-        this.neuralDomeNodeColors[targetOffset + 1] = nodeColor.g;
-        this.neuralDomeNodeColors[targetOffset + 2] = nodeColor.b;
+      for (let index = 0; index < dome.nodePositions.length / 3; index += 1) {
+        const offset = index * 3;
+        copyNode.set(
+          dome.nodePositions[offset]!,
+          dome.nodePositions[offset + 1]!,
+          dome.nodePositions[offset + 2]!,
+        );
+        if (!writeNode(copyNode, nodeColor)) break;
       }
-      nodeCount += copiedNodes;
       groundAnchorCount += dome.groundAnchorCount;
       elevatedVertexCount += dome.elevatedVertexCount;
+    };
+    const copyPreparedDome = (
+      territoryId: string,
+      color: THREE.Color,
+      nodeColor: THREE.Color,
+      detail: TerritoryNeuralDomeDetail,
+    ): void => copyDomeGeometry(
+      preparedTerritoryNeuralDomeGeometry(territoryId, detail),
+      color,
+      nodeColor,
+    );
+
+    if (empireField.active) {
+      const frontIds = new Set(empireField.activeFrontTerritoryIds);
+      const baseIntensity = 0.48 + empireField.integrity * 0.52;
+      const baseColor = new THREE.Color(STRATEGIC_NEURAL_FIELD_STYLE.apex.fieldColor)
+        .multiplyScalar(baseIntensity * 0.62);
+      const nodeColor = new THREE.Color(STRATEGIC_NEURAL_FIELD_STYLE.apex.nodeColor)
+        .multiplyScalar(baseIntensity * 0.82);
+      const frontColor = new THREE.Color(STRATEGIC_NEURAL_FIELD_STYLE.apex.fieldColor)
+        .multiplyScalar(baseIntensity);
+      const frontNodeColor = new THREE.Color(STRATEGIC_NEURAL_FIELD_STYLE.apex.nodeColor)
+        .multiplyScalar(baseIntensity);
+
+      // Every purified territory gets a low spatial cap rooted in its real
+      // perimeter. Fronts gain two extra silhouette arches, never a second
+      // shield pool or a floating APEX unit.
+      for (const territoryId of empireField.coverageTerritoryIds) {
+        const activeFront = frontIds.has(territoryId);
+        const territoryColor = activeFront ? frontColor : baseColor;
+        const territoryNodeColor = activeFront ? frontNodeColor : nodeColor;
+        copyPreparedDome(
+          territoryId,
+          territoryColor,
+          territoryNodeColor,
+          activeFront ? 'front' : 'calm',
+        );
+        const anchor = presentationAnchor(territoryId);
+        if (anchor) writeNode(
+          vectorFor(
+            anchor[0],
+            anchor[1],
+            NEURAL_DOME_BASE_RADIUS + (activeFront ? 0.055 : 0.018),
+          ),
+          territoryNodeColor,
+        );
+      }
+
+      // Authored adjacency arcs make disconnected territories read as one
+      // distributed APEX system. Front links are written first; a hard visual
+      // budget keeps a late-game world empire clean and stable.
+      let renderedNetworkEdges = 0;
+      for (const activePass of [true, false]) {
+        for (const edge of empireField.networkEdges) {
+          if (renderedNetworkEdges >= APEX_EMPIRE_NETWORK_RENDER_MAX_EDGES) break;
+          const edgeActive = frontIds.has(edge.sourceId) || frontIds.has(edge.targetId);
+          if (edgeActive !== activePass) continue;
+          const source = presentationAnchor(edge.sourceId);
+          const target = presentationAnchor(edge.targetId);
+          if (!source || !target) continue;
+          const sourceDirection = vectorFor(source[0], source[1], 1);
+          const targetDirection = vectorFor(target[0], target[1], 1);
+          const angle = Math.acos(THREE.MathUtils.clamp(
+            sourceDirection.dot(targetDirection),
+            -1,
+            1,
+          ));
+          const edgeColor = edgeActive ? frontColor : baseColor;
+          const arcHeight = THREE.MathUtils.clamp(
+            angle * 0.12,
+            0.018,
+            edgeActive ? 0.14 : 0.09,
+          );
+          let previous = sourceDirection.clone().multiplyScalar(NEURAL_DOME_BASE_RADIUS);
+          for (let step = 1; step <= APEX_EMPIRE_NETWORK_ARC_STEPS; step += 1) {
+            const progress = step / APEX_EMPIRE_NETWORK_ARC_STEPS;
+            const current = slerpDirection(sourceDirection, targetDirection, progress)
+              .multiplyScalar(
+                NEURAL_DOME_BASE_RADIUS + Math.sin(progress * Math.PI) * arcHeight,
+              );
+            if (!writeSegment(previous, current, edgeColor)) break;
+            elevatedVertexCount += 1;
+            previous = current;
+          }
+          renderedNetworkEdges += 1;
+        }
+        if (renderedNetworkEdges >= APEX_EMPIRE_NETWORK_RENDER_MAX_EDGES) break;
+      }
+      this.host.dataset.apexEmpireNetworkRenderedEdges = String(renderedNetworkEdges);
+    }
+
+    // One coherent hostile shell belongs to Antarctica itself. Sector
+    // integrity colors the shared stronghold; it never creates nine stacked
+    // country caps or follows PRIME into occupied supply corridors.
+    if (safeRogueField.active) {
+      const style = STRATEGIC_NEURAL_FIELD_STYLE.roguePrime;
+      const totalIntensity = safeRogueField.territories.reduce(
+        (sum, territory) => sum + territory.intensity,
+        0,
+      );
+      const averageIntensity = totalIntensity / Math.max(1, safeRogueField.territories.length);
+      const coreIntensity = safeRogueField.territories.find((territory) => territory.core)
+        ?.intensity ?? averageIntensity;
+      const strongholdIntensity = THREE.MathUtils.clamp(
+        averageIntensity * 0.42 + coreIntensity * 0.58,
+        0.28,
+        1,
+      );
+      const color = new THREE.Color(style.fieldColor).multiplyScalar(
+        strongholdIntensity,
+      );
+      const nodeColor = new THREE.Color(style.nodeColor).multiplyScalar(
+        strongholdIntensity * 0.86,
+      );
+      copyDomeGeometry(preparedRogueAntarcticNeuralDomeGeometry(), color, nodeColor);
+      this.host.dataset.rogueShieldDomeClusters = '1';
     }
     for (const attributeName of ['position', 'color'] as const) {
       this.neuralDomeLineGeometry.getAttribute(attributeName).needsUpdate = true;
@@ -3033,6 +3281,12 @@ export class ThreeGlobeScene implements MapSceneAdapter {
     this.host.dataset.neuralDomeGroundAnchors = String(groundAnchorCount);
     this.host.dataset.neuralDomeElevatedVertices = String(elevatedVertexCount);
     this.host.dataset.neuralDomeDrawCalls = lineVertexCount > 0 ? '2' : '0';
+    this.host.dataset.neuralDomeProfile = 'low-wide-3d';
+    this.host.dataset.apexEmpireTerritories = String(empireField.coverageTerritoryIds.length);
+    this.host.dataset.apexEmpireFronts = String(empireField.activeFrontTerritoryIds.length);
+    this.host.dataset.apexEmpireNetworkEdges = String(empireField.networkEdges.length);
+    this.host.dataset.rogueShieldTerritories = String(safeRogueField.coverageTerritoryIds.length);
+    this.host.dataset.rogueShieldScope = 'antarctica-only';
   }
 
   /**
@@ -3041,12 +3295,16 @@ export class ThreeGlobeScene implements MapSceneAdapter {
    * per-frame animation path only adjusts the shared material opacity.
    */
   private syncTerritoryNeuralFieldCoverage(
-    entries: readonly CommanderForceRenderEntry[],
+    empireField: ApexEmpireFieldPresentation,
+    rogueField: RogueAntarcticFieldPresentation = INACTIVE_ROGUE_ANTARCTIC_PRESENTATION,
   ): void {
-    const signature = neuralFieldCoverageGeometrySignature(entries);
+    const safeRogueField = Array.isArray(rogueField?.territories)
+      ? rogueField
+      : INACTIVE_ROGUE_ANTARCTIC_PRESENTATION;
+    const signature = `${empireField.geometrySignature}|${safeRogueField.geometrySignature}`;
     if (signature === this.neuralFieldCoverageSignature) return;
     this.neuralFieldCoverageSignature = signature;
-    this.rebuildTerritoryNeuralDomes(entries);
+    this.rebuildTerritoryNeuralDomes(empireField, safeRogueField);
     const canvas = this.neuralFieldCoverageCanvas;
     const context = canvas.getContext('2d');
     if (!context) {
@@ -3056,27 +3314,44 @@ export class ThreeGlobeScene implements MapSceneAdapter {
     context.clearRect(0, 0, canvas.width, canvas.height);
     let paintedParts = 0;
     let fieldCount = 0;
-    for (const entry of entries) {
-      const mode = neuralFieldModePresentation(
-        entry.moving,
-        entry.recovering,
-        entry.fieldOperational,
-      );
-      if (!mode.fieldVisible) continue;
-      paintedParts += drawTerritoryWideNeuralField(
-        context,
-        entry.force.locationId,
-        entry.role,
-        mode.intensity * entry.fieldIntensity,
-        canvas.width,
-        canvas.height,
-      );
+    if (empireField.active) {
+      const frontIds = new Set(empireField.activeFrontTerritoryIds);
+      const intensity = 0.52 + empireField.integrity * 0.48;
+      for (const territoryId of empireField.coverageTerritoryIds) {
+        paintedParts += drawTerritoryWideNeuralField(
+          context,
+          territoryId,
+          'apex',
+          intensity,
+          canvas.width,
+          canvas.height,
+          frontIds.has(territoryId),
+        );
+      }
+      fieldCount += 1;
+    }
+    if (safeRogueField.active) {
+      for (const territory of safeRogueField.territories) {
+        paintedParts += drawTerritoryWideNeuralField(
+          context,
+          territory.territoryId,
+          'rogue-prime',
+          territory.intensity * (territory.core ? 1 : 0.80),
+          canvas.width,
+          canvas.height,
+          territory.core,
+        );
+      }
       fieldCount += 1;
     }
     this.neuralFieldCoverageTexture.needsUpdate = true;
     this.neuralFieldCoverageLayer.visible = paintedParts > 0;
     this.host.dataset.neuralFieldCount = String(fieldCount);
     this.host.dataset.neuralFieldParts = String(paintedParts);
+    this.host.dataset.neuralFieldMode = [
+      empireField.active ? 'distributed-empire-network' : '',
+      safeRogueField.active ? 'rogue-antarctic-stronghold' : '',
+    ].filter(Boolean).join('+') || 'offline';
   }
 
   private createCommanderMarker(
@@ -3173,11 +3448,14 @@ export class ThreeGlobeScene implements MapSceneAdapter {
 
   private updateCommanderForces(engine: WorldMapEngineContract): void {
     const forces = engine.state.commanderForces ?? {};
-    // APEX intelligence is seat-local in multiplayer. Rendering another
-    // commander's mobile force or route would disclose exact remote intel.
+    // APEX is now a seat-local distributed field, never a mobile map unit.
+    // Other human seats remain private in multiplayer and PRIME keeps its own
+    // explicit hostile lifecycle below.
     const viewerForce = apexFieldPresentationActive(engine)
       ? forces[engine.state.humanPlayerId]
       : undefined;
+    this.apexEmpireField = selectApexEmpireFieldPresentation(engine, viewerForce);
+    this.rogueAntarcticField = selectRogueAntarcticFieldPresentation(engine);
     const primeState = engine.state.polarEndgame?.roguePrime;
     const primePresentation = roguePrimeMapPresentation(
       primeState,
@@ -3185,43 +3463,6 @@ export class ThreeGlobeScene implements MapSceneAdapter {
       this.intelligenceVisibility,
     );
     const entries: CommanderForceRenderEntry[] = [];
-    if (viewerForce) {
-      const recovering = mapCommanderRecoveryLifecycleActive(viewerForce);
-      const projections = apexProjectionPresentations(viewerForce);
-      for (const projection of projections) {
-        const secondary = projection.projection === 'secondary';
-        const projectionForce: MapCommanderForceState = secondary ? {
-          ...viewerForce,
-          locationId: projection.locationId,
-          mission: viewerForce.doctrineRuntime?.secondaryProjection?.mission
-            ?? 'defense',
-          front: projection.frontTargetId,
-          transit: null,
-        } : viewerForce;
-        entries.push({
-          id: secondary
-            ? `${engine.state.humanPlayerId}:twin`
-            : engine.state.humanPlayerId,
-          role: 'apex',
-          force: projectionForce,
-          projection: projection.projection,
-          tether: secondary,
-          routePath: secondary
-            ? [viewerForce.locationId, projection.locationId]
-            : viewerForce.transit?.path ?? [viewerForce.locationId],
-          routeProgress: secondary
-            ? 1 : mapCommanderTransitProgress(viewerForce, engine.state.tick),
-          routeVisible: secondary || Boolean(viewerForce.transit),
-          moving: secondary ? false : Boolean(viewerForce.transit),
-          recovering,
-          fieldOperational: true,
-          fieldIntensity: projection.integrity * projection.combatShare,
-          combatActive: Boolean(projection.frontTargetId),
-          etaTicks: secondary ? 0 : viewerForce.transit
-            ? Math.max(0, Math.ceil(viewerForce.transit.arriveTick - engine.state.tick)) : 0,
-        });
-      }
-    }
     if (primeState?.force && primePresentation.visible) entries.push({
       id: ROGUE_PRIME_RENDER_ID,
       role: 'rogue-prime',
@@ -3348,10 +3589,13 @@ export class ThreeGlobeScene implements MapSceneAdapter {
       }
 
     }
-    this.syncTerritoryNeuralFieldCoverage(entries);
-    this.host.dataset.apexProjectionCount = String(
-      Math.min(2, entries.filter((entry) => entry.role === 'apex').length),
+    this.syncTerritoryNeuralFieldCoverage(
+      this.apexEmpireField,
+      this.rogueAntarcticField,
     );
+    this.host.dataset.apexProjectionCount = '0';
+    this.host.dataset.apexPhysicalMarker = 'none';
+    this.host.dataset.apexSharedIntegrity = String(this.apexEmpireField.percent);
   }
 
   private animateCommanderForceVisual(visual: CommanderForceVisual, now: number): boolean {
@@ -3398,16 +3642,19 @@ export class ThreeGlobeScene implements MapSceneAdapter {
     const targetVisible = this.neuralPulseTargetId
       ? apexTerritoryIntelVisible(this.intelligenceVisibility, this.neuralPulseTargetId)
       : false;
-    const fieldUnavailable = Boolean(visual && !visual.fieldOperational);
-    if (!this.neuralPulseSample.active || !visual || fieldUnavailable || !targetVisible
+    const distributedApexPulse = this.neuralPulseRole === 'apex';
+    const fieldUnavailable = distributedApexPulse
+      ? !this.apexEmpireField.active
+      : !visual || !visual.fieldOperational;
+    if (!this.neuralPulseSample.active || fieldUnavailable || !targetVisible
       || this.neuralConvergencePointCount < 2) {
       this.neuralConvergenceLine.visible = false;
       this.neuralContact.visible = false;
       this.neuralConvergenceMaterial.opacity = 0;
       this.neuralContactMaterial.opacity = 0;
       this.neuralFieldCoverageMaterial.opacity = NEURAL_FIELD_COVERAGE_OPACITY;
-      this.neuralDomeLineMaterial.opacity = 0.78;
-      this.neuralDomeNodeMaterial.opacity = 0.92;
+      this.neuralDomeLineMaterial.opacity = NEURAL_DOME_LINE_BASE_OPACITY;
+      this.neuralDomeNodeMaterial.opacity = NEURAL_DOME_NODE_BASE_OPACITY;
       if (visual) {
         visual.fieldMesh.scale.set(1, 0.54, 1);
         visual.network.scale.set(1, 0.54, 1);
@@ -3417,6 +3664,8 @@ export class ThreeGlobeScene implements MapSceneAdapter {
         this.neuralPulseStartedAt = -Infinity;
         this.neuralPulseVisualId = undefined;
         this.neuralPulseTargetId = undefined;
+        this.neuralPulseRole = 'apex';
+        this.neuralPulseFieldIntensity = 0;
         this.neuralPulseInterceptsIncoming = false;
         this.neuralPulseAbility = 'standard';
         this.neuralPulseCounterpulseDamage = 0;
@@ -3426,7 +3675,9 @@ export class ThreeGlobeScene implements MapSceneAdapter {
       return;
     }
 
-    const shieldIntensity = visual.fieldIntensity;
+    const shieldIntensity = distributedApexPulse
+      ? this.apexEmpireField.integrity
+      : this.neuralPulseFieldIntensity;
     const fieldScale = 1 - (1 - this.neuralPulseSample.fieldScale) * shieldIntensity;
     // The complete territory atlas reacts as one protective network. The
     // small signal core remains reserved for canonical transit.
@@ -3438,17 +3689,21 @@ export class ThreeGlobeScene implements MapSceneAdapter {
           * shieldIntensity,
     );
     this.neuralDomeLineMaterial.opacity = Math.min(
-      0.94,
-      0.78 + this.neuralPulseSample.fieldBoost * 0.16 * shieldIntensity,
+      0.90,
+      NEURAL_DOME_LINE_BASE_OPACITY
+        + this.neuralPulseSample.fieldBoost * 0.16 * shieldIntensity,
     );
     this.neuralDomeNodeMaterial.opacity = Math.min(
-      1,
-      0.92 + this.neuralPulseSample.fieldBoost * 0.08 * shieldIntensity,
+      0.94,
+      NEURAL_DOME_NODE_BASE_OPACITY
+        + this.neuralPulseSample.fieldBoost * 0.12 * shieldIntensity,
     );
-    visual.fieldMesh.scale.set(fieldScale, 0.54 * fieldScale, 1);
-    visual.network.scale.set(fieldScale, 0.54 * fieldScale, 1);
-    visual.nodes.scale.set(fieldScale, 0.54 * fieldScale, 1);
-    if (!this.neuralPulseInterceptsIncoming) {
+    if (visual) {
+      visual.fieldMesh.scale.set(fieldScale, 0.54 * fieldScale, 1);
+      visual.network.scale.set(fieldScale, 0.54 * fieldScale, 1);
+      visual.nodes.scale.set(fieldScale, 0.54 * fieldScale, 1);
+    }
+    if (!this.neuralPulseInterceptsIncoming && visual) {
       this.neuralConvergencePositions[0] = visual.marker.position.x;
       this.neuralConvergencePositions[1] = visual.marker.position.y;
       this.neuralConvergencePositions[2] = visual.marker.position.z;
@@ -3885,38 +4140,20 @@ export class ThreeGlobeScene implements MapSceneAdapter {
     const countryLabelScale = countryLabelScaleForDistance(this.camera.position.length());
     const candidates: Array<{ label: GlobeLabel; screen: ScreenProjection; selected: boolean }> = [];
     for (const label of this.labels.values()) {
-      const selected = label.kind === 'country' && (
+      const selected = (
           label.id === this.selection.sourceId
           || label.id === this.selection.targetId
           || label.id === this.hoveredTerritoryId
           || label.id === this.hoveredPolarSectorId
           || label.id === this.focusedPolarSectorId
         );
-      if (label.kind === 'country' && !label.persistent && !selected) {
+      if (!label.persistent && !selected) {
         this.setLabelDisplayed(label, false);
         continue;
       }
       const screen = this.projectWorldPosition(label.worldPosition, viewport);
       if (!screen) {
         this.setLabelDisplayed(label, false);
-        continue;
-      }
-      if (label.kind === 'sea') {
-        const visible = this.camera.position.length() >= 7.05
-          && this.focusedPolarRegion !== 'antarctica';
-        this.setLabelDisplayed(label, visible);
-        if (visible) {
-          this.setLabelTransform(label, `translate3d(${screen.localX}px, ${screen.localY}px, 0) translate(-50%, -50%) rotate(var(--label-rotation, 0deg))`);
-        }
-        continue;
-      }
-      if (label.kind === 'access') {
-        const visible = this.hoveredPolarRegion === 'antarctica'
-          || this.focusedPolarRegion === 'antarctica';
-        this.setLabelDisplayed(label, visible);
-        if (visible) {
-          this.setLabelTransform(label, `translate3d(${screen.localX}px, ${screen.localY}px, 0) translate(-50%, -112%)`);
-        }
         continue;
       }
       candidates.push({ label, screen, selected });
@@ -4097,13 +4334,6 @@ export class ThreeGlobeScene implements MapSceneAdapter {
         );
       }
     }
-    const polarActive = this.hoveredPolarRegion === 'antarctica'
-      || this.focusedPolarRegion === 'antarctica';
-    for (const route of this.polarMaterials) {
-      route.material.opacity = route.baseOpacity
-        * (polarActive ? 2.1 : 1)
-        * (0.86 + Math.sin(seconds * 1.45 + route.phase) * 0.14);
-    }
   }
 
   private resize(): void {
@@ -4152,6 +4382,7 @@ export class ThreeGlobeScene implements MapSceneAdapter {
     }
     const presentationActive = this.battleEffects.length > 0
       || commanderMotionPending
+      || this.signalPurgeEffect.transitioning
       || this.intelligenceFogTransition.transitioning;
     const renderInterval = cameraActive || presentationActive
       ? ACTIVE_RENDER_INTERVAL_MS
@@ -4168,9 +4399,11 @@ export class ThreeGlobeScene implements MapSceneAdapter {
       MAX_CAMERA_DISTANCE,
     );
     if (!this.cameraFlight) this.controls.update();
+    this.updateCelestialBackdropParallax();
     this.updateGlobeBorderPresentation(this.camera.position.length());
     this.updateBattleEffects(now);
     this.animateCommanderForces(now);
+    this.signalPurgeEffect.animate(now);
     this.animateRoutes(now);
     this.updateApexFogVisualBlend(now);
     this.updateIntelligenceFogCloudDrift(now);

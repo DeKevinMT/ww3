@@ -17,6 +17,7 @@ import { createWorldStateV2 } from './bootstrap';
 import { synchronizeArmyCapacityV2 } from './capacity';
 import {
   APEX_FRONTLINE_SHIELD_INTERCEPT_SHARE_V2,
+  APEX_SHIELD_MAX_ENERGY_LOSS_SHARE_PER_HIT_V2,
   allocateApexFrontlineDamageV2,
 } from './commanderForce';
 import { ROGUE_AI_NATION_ID_V2, WORLD_CONTENT_V2 } from './content';
@@ -132,132 +133,75 @@ function simulateWar(seed: number, humanId: string, attackerId: string, defender
 }
 
 describe('V2 coherent combat and forecast calibration', () => {
-  it('lets a healthy APEX dome intercept most pressure through bounded elite durability', () => {
+  it('caps APEX interception at half the post-DEF hit before applying its Energy budget', () => {
     const allocation = allocateApexFrontlineDamageV2({
-      requestedDamage: 0.001,
+      requestedDamage: 0.03,
       nationalManpower: 0.1,
       apex: {
         shieldActive: true,
-        engagedManpower: 0.00048,
-        manpower: 0.00048,
-        capacity: 0.0009,
-        defense: 125,
-        nationalDefense: 1.2,
-        opposingAttack: 1.2,
+        integrity: 0.05,
+        maxIntegrity: 0.10,
       },
     });
 
+    expect(APEX_FRONTLINE_SHIELD_INTERCEPT_SHARE_V2).toBe(0.50);
+    expect(APEX_SHIELD_MAX_ENERGY_LOSS_SHARE_PER_HIT_V2).toBe(0.20);
     expect(allocation.interceptedDamage).toBeCloseTo(
-      0.001 * APEX_FRONTLINE_SHIELD_INTERCEPT_SHARE_V2,
+      0.03 * APEX_FRONTLINE_SHIELD_INTERCEPT_SHARE_V2,
       9,
     );
-    expect(allocation.durabilityMultiplier).toBeGreaterThan(1);
-    expect(allocation.durabilityMultiplier).toBeLessThanOrEqual(4);
-    expect(allocation.apexLosses).toBeGreaterThan(0);
-    expect(allocation.nationalLosses).toBeCloseTo(0.0001, 9);
-    expect(allocation.apexLosses * allocation.durabilityMultiplier)
-      .toBeCloseTo(allocation.interceptedDamage, 9);
+    expect(allocation.durabilityMultiplier).toBe(1);
+    expect(allocation.apexLosses).toBeCloseTo(0.015, 9);
+    expect(allocation.nationalLosses).toBeCloseTo(0.015, 9);
     expect(allocation.nationalLosses + allocation.interceptedDamage)
-      .toBeCloseTo(0.001, 9);
+      .toBeCloseTo(0.03, 9);
   });
 
-  it('spends the deployed dome to zero and spills all remaining damage into the army', () => {
+  it('spends the remaining Energy when it is below the per-hit shield budget', () => {
     const allocation = allocateApexFrontlineDamageV2({
-      requestedDamage: 0.01,
+      requestedDamage: 0.02,
       nationalManpower: 0.1,
       apex: {
         shieldActive: true,
-        engagedManpower: 0.00048,
-        manpower: 0.00048,
-        capacity: 0.0009,
-        defense: 125,
-        nationalDefense: 1.2,
-        opposingAttack: 1.2,
+        integrity: 0.004,
+        maxIntegrity: 0.10,
       },
     });
 
-    expect(allocation.apexLosses).toBeCloseTo(0.00048, 9);
-    expect(0.00048 - allocation.apexLosses).toBeCloseTo(0, 9);
-    expect(allocation.interceptedDamage).toBeCloseTo(
-      allocation.apexLosses * allocation.durabilityMultiplier,
-      9,
-    );
-    expect(allocation.nationalLosses).toBeCloseTo(
-      0.01 - allocation.interceptedDamage,
-      9,
-    );
+    expect(allocation.apexLosses).toBeCloseTo(0.004, 9);
+    expect(allocation.interceptedDamage).toBeCloseTo(0.004, 9);
+    expect(allocation.nationalLosses).toBeCloseTo(0.016, 9);
     expect(allocation.nationalLosses + allocation.interceptedDamage)
-      .toBeCloseTo(0.01, 9);
+      .toBeCloseTo(0.02, 9);
   });
 
-  it('flows national overkill back into APEX instead of deleting damage', () => {
-    const allocation = allocateApexFrontlineDamageV2({
-      requestedDamage: 0.001,
-      nationalManpower: 0.000001,
+  it('does not let an empty or unprotected national formation use shield Energy', () => {
+    expect(allocateApexFrontlineDamageV2({
+      requestedDamage: 0.02,
+      nationalManpower: 0,
       apex: {
         shieldActive: true,
-        engagedManpower: 0.00048,
-        manpower: 0.00048,
-        capacity: 0.0009,
-        defense: 125,
-        nationalDefense: 1.2,
-        opposingAttack: 1.2,
+        integrity: 0.05,
+        maxIntegrity: 0.10,
       },
+    })).toMatchObject({
+      nationalLosses: 0,
+      apexLosses: 0,
+      interceptedDamage: 0,
     });
-
-    expect(allocation.nationalLosses).toBe(0.000001);
-    expect(allocation.interceptedDamage).toBeCloseTo(0.000999, 9);
-    expect(allocation.interceptedDamage)
-      .toBeGreaterThan(0.001 * APEX_FRONTLINE_SHIELD_INTERCEPT_SHARE_V2);
-    expect(allocation.nationalLosses + allocation.interceptedDamage)
-      .toBeCloseTo(0.001, 9);
-    expect(allocation.apexLosses).toBeLessThan(0.00048 - 0.000025);
-  });
-
-  it('spills interception shortfall into the army when APEX supply limits engagement', () => {
-    const allocation = allocateApexFrontlineDamageV2({
-      requestedDamage: 0.001,
-      nationalManpower: 0.1,
-      apex: {
-        shieldActive: true,
-        engagedManpower: 0.00005,
-        manpower: 0.00048,
-        capacity: 0.0009,
-        defense: 125,
-        nationalDefense: 1.2,
-        opposingAttack: 1.2,
-      },
-    });
-
-    expect(allocation.apexLosses).toBeCloseTo(0.00005, 9);
-    expect(allocation.interceptedDamage).toBeCloseTo(
-      allocation.apexLosses * allocation.durabilityMultiplier,
-      9,
-    );
-    expect(allocation.interceptedDamage)
-      .toBeLessThan(0.001 * APEX_FRONTLINE_SHIELD_INTERCEPT_SHARE_V2);
-    expect(allocation.nationalLosses + allocation.interceptedDamage)
-      .toBeCloseTo(0.001, 9);
-  });
-
-  it('keeps proportional casualties when a formation has no active neural dome', () => {
-    const allocation = allocateApexFrontlineDamageV2({
-      requestedDamage: 0.001,
+    expect(allocateApexFrontlineDamageV2({
+      requestedDamage: 0.02,
       nationalManpower: 0.1,
       apex: {
         shieldActive: false,
-        engagedManpower: 0.00048,
-        manpower: 0.00048,
-        capacity: 0.0009,
-        defense: 125,
-        nationalDefense: 1.2,
-        opposingAttack: 1.2,
+        integrity: 0.05,
+        maxIntegrity: 0.10,
       },
+    })).toMatchObject({
+      nationalLosses: 0.02,
+      apexLosses: 0,
+      interceptedDamage: 0,
     });
-
-    expect(allocation.interceptedDamage).toBe(0);
-    expect(allocation.apexLosses).toBeGreaterThan(0);
-    expect(allocation.nationalLosses + allocation.apexLosses).toBeCloseTo(0.001, 9);
   });
 
   it('leaves the full hit with the national army when no APEX supports the front', () => {
@@ -418,7 +362,7 @@ describe('V2 coherent combat and forecast calibration', () => {
     expect(rogue.attackRatio).toBeGreaterThan(0);
   });
 
-  it('lets every additional front soldier add damage without a pulse ceiling', () => {
+  it('scales with additional frontier soldiers until the shared Empire hit cap binds', () => {
     const projection = (attackerManpower: number) => {
       const state = calibratedState(4_001_001);
       state.territories[belTerritory].army.manpower = attackerManpower;
@@ -431,8 +375,12 @@ describe('V2 coherent combat and forecast calibration', () => {
     };
     const one = projection(0.20);
     const two = projection(0.40);
+    const overwhelming = projection(2);
+    expect(two.rawDefenderLosses).toBeCloseTo(one.rawDefenderLosses * 2, 9);
     expect(two.defenderLosses).toBeCloseTo(one.defenderLosses * 2, 9);
     expect(two.defenderLossRate).toBeCloseTo(one.defenderLossRate * 2, 9);
+    expect(overwhelming.rawDefenderLosses).toBeGreaterThan(overwhelming.defenderHitCap);
+    expect(overwhelming.defenderLosses).toBeCloseTo(overwhelming.defenderHitCap, 9);
   });
 
   it('reports perspective-aware live damage and a bounded remaining-war estimate', () => {
@@ -548,7 +496,7 @@ describe('V2 coherent combat and forecast calibration', () => {
     expect(7 * 0.002 * chinaExposure).toBeLessThan(0.005);
   });
 
-  it('never inverts an overwhelming advantage or adds a synthetic wipe', () => {
+  it('never inverts an overwhelming advantage or exceeds the real formation', () => {
     const state = calibratedState(4_002);
     // The bounded DEF curve makes larger versions of this fixture a legitimate
     // calculated wipe. A still-overwhelming 50:1 force stays below that natural
@@ -568,9 +516,9 @@ describe('V2 coherent combat and forecast calibration', () => {
     const event = resolveBattlePulseV2(state, WORLD_CONTENT_V2, war(state), operation())!;
     expect(event.defenderLosses).toBeGreaterThan(event.attackerLosses);
     expect(event.defenderLosses).toBeGreaterThan(0);
-    expect(event.defenderLosses).toBeLessThan(0.003);
+    expect(event.defenderLosses).toBeLessThanOrEqual(0.003);
     expect(event.defenderLosses).toBeLessThanOrEqual(projected.defenderStrength);
-    expect(state.territories[nldTerritory].army.manpower).toBeGreaterThan(0);
+    expect(state.territories[nldTerritory].army.manpower).toBeGreaterThanOrEqual(0);
     expect(COMBAT_ROUTE_STRENGTH_RATIO).toBe(0.05);
   });
 

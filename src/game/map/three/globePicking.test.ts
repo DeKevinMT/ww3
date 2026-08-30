@@ -130,7 +130,7 @@ describe('bounded globe microstate picking', () => {
       globeSceneSource.indexOf('private updatePolarCardPosition'),
     );
     expect(labels).toContain('label.id === this.hoveredTerritoryId');
-    expect(labels).toContain("if (label.kind === 'country' && !label.persistent && !selected)");
+    expect(labels).toContain('if (!label.persistent && !selected)');
     expect(labels).toContain('this.setLabelDisplayed(label, false)');
     expect(labels).toContain('this.setLabelDisplayed(label, true)');
 

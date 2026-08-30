@@ -60,6 +60,8 @@ export interface MapNationView {
   sigil: string;
   capitalId: string;
   isHuman: boolean;
+  /** Account-wide world flag used for this human empire; defaults to `id`. */
+  flagCountryId?: string;
   /** Multiplayer display name; omitted for AI nations and legacy saves. */
   controllerName?: string;
 }
@@ -130,12 +132,14 @@ export interface MapCommanderForceState {
   readonly locationId: string;
   readonly mission: string;
   readonly front: string | null;
-  readonly army: {
-    readonly manpower: number;
-    readonly capacity: number;
-    readonly trainedReserves: number;
-    readonly baseAttack: number;
-    readonly baseDefense: number;
+  readonly shield: {
+    readonly integrity: number;
+    readonly maxIntegrity: number;
+    readonly rechargeBuffer: number;
+    readonly rechargeMultiplier: number;
+    readonly attackMultiplier: number;
+    readonly defenseMultiplier: number;
+    readonly pulseAttack: number;
   };
   readonly economy: {
     readonly treasury: number;
@@ -147,11 +151,30 @@ export interface MapCommanderForceState {
     readonly departTick: number;
     readonly arriveTick: number;
   } | null;
-  /**
-   * Render-only projection of the persisted APEX protocol runtime. The second
-   * projection intentionally contains placement only: both domes always read
-   * integrity and energy from the single army/economy containers above.
-   */
+  /** Canonical distributed-network projection; absent on legacy adapters. */
+  readonly empireShield?: {
+    readonly active: boolean;
+    readonly operationalState: 'operational' | 'recharging' | 'unavailable';
+    readonly integrityCurrent: number;
+    readonly integrityMax: number;
+    readonly integrityPercent: number;
+    readonly attackMultiplier: number;
+    readonly defenseMultiplier: number;
+    readonly pulseAttack: number;
+    readonly supportBonusPercent: number;
+    readonly coverageTerritoryIds: readonly string[];
+    readonly activeFrontTerritoryIds: readonly string[];
+    readonly fronts: readonly {
+      readonly warId: string;
+      readonly sourceId: string;
+      readonly targetId: string;
+      readonly friendlyTerritoryId: string;
+      readonly hostileTerritoryId: string;
+      readonly mission: 'assault-support' | 'defense';
+      readonly allocationShare: number;
+    }[];
+  };
+  /** Retired location-bound NEXUS sidecar, read only while migrating old saves. */
   readonly doctrineRuntime?: {
     readonly lancerSupportedAssaultCount: number;
     readonly secondaryProjection: {
@@ -170,7 +193,7 @@ export interface MapCommanderForceState {
  * Canonical renderer view of the APEX recovery lifecycle. The simulation keeps
  * an extracted force in one of these missions until its complete operational
  * readiness gate is satisfied, so renderers must not infer availability from a
- * tiny survivor count (for example 0.0001 active manpower).
+ * partially refilled integrity buffer.
  */
 export function mapCommanderRecoveryLifecycleActive(
   force: Pick<MapCommanderForceState, 'mission'>,

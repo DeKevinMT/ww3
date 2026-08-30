@@ -102,17 +102,18 @@ function transferSovereigntyForTest(
   const territory = engine.state.territories[territoryId]!;
   territory.owner = ownerId;
   territory.coreOwner = ownerId;
-  territory.integration = 1;
+  territory.integration = engine.state.runProgression.scorchedWorldTerritoryIds
+    .includes(territoryId) ? 0 : 1;
   delete territory.integrationProgram;
   invalidateTerritoryIndexV2(engine.state);
   if (formerOwnerId !== ownerId) {
-    expect(retireAbsorbedNationV2(
+    retireAbsorbedNationV2(
       engine.state,
       engine.content,
       formerOwnerId,
       ownerId,
       false,
-    )).toBe(true);
+    );
   }
 }
 

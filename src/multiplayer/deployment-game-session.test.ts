@@ -9,9 +9,16 @@ import {
   type CountryMasteryAllocationsV1,
 } from '../meta/commanderProfile';
 import { selectRegisteredCountryMasteryRuntimeV2 } from '../sim/v2/countryMasteryRuntime';
+import {
+  selectBestCoopFriendlyTransitRouteV2,
+  survivalCoopUsesSovereignLogisticsV2,
+} from '../sim/v2/coopAccess';
+import { selectHumanEmpireDefeatWinnerV2 } from '../sim/v2/humanPlayers';
 import { WORLD_CONTENT_V2, type WorldContentV2 } from '../sim/v2/content';
 import { createSaveV2 } from '../sim/v2/persistence';
 import { resolveScenarioV2 } from '../sim/v2/scenarios';
+import { selectSurvivalDawnlineLeaderIdV2 } from '../sim/v2/survivalEmpire';
+import { SURVIVAL_DAWNLINE_ACCORD_NAME_V2 } from '../sim/v2/survivalOrdinaryAi';
 import { nationIdV2, type PlayerId } from '../sim/v2/types';
 import { WorldEngineV2 } from '../sim/v2/WorldEngineV2';
 import type {
@@ -22,6 +29,7 @@ import {
   applyMultiplayerDeploymentsV1,
   createMultiplayerDeploymentSnapshotV1,
   registerMultiplayerDeploymentRuntimeV1,
+  resolveSurvivalCoopSeatRolesV1,
 } from './deployment';
 import { GuestGameSession, type GuestSessionTransport } from './gameSession';
 import type { MultiplayerDeploymentSnapshotV1, SnapshotMessage } from './protocol';
@@ -96,15 +104,16 @@ function accountProfile(
       ...emptyCommanderTalentsV1(),
       ...(variant === 'vanguard'
         ? {
-          'elite-vanguard': 5,
-          'volunteer-brigade': 5,
-          'science-corps': 4,
-          'treasury-reserve': 3,
-          'drill-instructors': 3,
+          'science-corps': 5,
+          'treasury-reserve': 4,
+          'elite-vanguard': 3,
+          'mobile-logistics': 5,
+          'combat-recovery': 4,
         }
         : {
-          'doctrine-command': 5,
-          'civil-defense': 5,
+          'volunteer-brigade': 5,
+          'civil-defense': 3,
+          'doctrine-command': 1,
           'reserve-cadre': 3,
         }),
     },
@@ -159,24 +168,38 @@ function expectFrozenSeatBuilds(
   const belgianApex = engine.state.commanderForces[belgium]!;
   const dutchApex = engine.state.commanderForces[netherlands]!;
 
-  expect(belgianDeployment.activeDoctrine).toBe('vanguard');
-  expect(dutchDeployment.activeDoctrine).toBe('bastion');
-  expect(belgianApex.capabilities.assaultSpecialist).toBe(true);
-  expect(dutchApex.capabilities.defenseSpecialist).toBe(true);
-  expect(belgianApex.army.baseAttack).toBe(belgianDeployment.apex.baseAttack);
-  expect(dutchApex.army.baseAttack).toBe(dutchDeployment.apex.baseAttack);
-  expect(belgianApex.army.baseDefense).toBe(belgianDeployment.apex.baseDefense);
-  expect(dutchApex.army.baseDefense).toBe(dutchDeployment.apex.baseDefense);
-  expect(belgianApex.army.capacity).toBeCloseTo(belgianDeployment.apex.capacity, 12);
-  expect(dutchApex.army.capacity).toBeCloseTo(dutchDeployment.apex.capacity, 12);
+  expect(belgianApex.shield.attackMultiplier)
+    .toBeCloseTo(belgianDeployment.apex.attackMultiplier, 12);
+  expect(dutchApex.shield.attackMultiplier)
+    .toBeCloseTo(dutchDeployment.apex.attackMultiplier, 12);
+  expect(belgianApex.shield.defenseMultiplier)
+    .toBeCloseTo(belgianDeployment.apex.defenseMultiplier, 12);
+  expect(dutchApex.shield.defenseMultiplier)
+    .toBeCloseTo(dutchDeployment.apex.defenseMultiplier, 12);
+  expect(belgianApex.shield.maxIntegrity)
+    .toBeCloseTo(belgianDeployment.apex.shield.maxIntegrity, 12);
+  expect(dutchApex.shield.maxIntegrity)
+    .toBeCloseTo(dutchDeployment.apex.shield.maxIntegrity, 12);
+  expect(belgianApex.shield.pulseAttack)
+    .toBeCloseTo(belgianDeployment.apex.shield.pulseAttack, 12);
+  expect(dutchApex.shield.pulseAttack)
+    .toBeCloseTo(dutchDeployment.apex.shield.pulseAttack, 12);
   expect(belgianApex.economy.annualOutput)
     .toBeCloseTo(belgianDeployment.apex.annualOutput, 12);
   expect(dutchApex.economy.annualOutput)
     .toBeCloseTo(dutchDeployment.apex.annualOutput, 12);
-  expect(belgianApex.army.baseAttack).not.toBe(dutchApex.army.baseAttack);
-  expect(belgianApex.army.baseDefense).not.toBe(dutchApex.army.baseDefense);
-  expect(belgianApex.army.capacity).not.toBe(dutchApex.army.capacity);
-  expect(belgianApex.economy.annualOutput).not.toBe(dutchApex.economy.annualOutput);
+  expect(belgianApex.shield.attackMultiplier)
+    .not.toBe(dutchApex.shield.attackMultiplier);
+  expect(belgianApex.shield.defenseMultiplier)
+    .not.toBe(dutchApex.shield.defenseMultiplier);
+  expect(belgianApex.shield.maxIntegrity)
+    .not.toBe(dutchApex.shield.maxIntegrity);
+  expect(belgianApex.shield.pulseAttack)
+    .not.toBe(dutchApex.shield.pulseAttack);
+  expect(belgianApex.shield.pulseProjectionRetention)
+    .not.toBe(dutchApex.shield.pulseProjectionRetention);
+  expect(belgianApex.shield.interceptEfficiency)
+    .not.toBe(dutchApex.shield.interceptEfficiency);
   const { openingArmyMultiplier: _belgianOpening, ...belgianRuntime }
     = belgianDeployment.countryMastery;
   const { openingArmyMultiplier: _dutchOpening, ...dutchRuntime }
@@ -211,7 +234,7 @@ describe('frozen multiplayer account deployment through session and reconnect', 
     const reconnectTelemetry = {
       supportedBattles: 7,
       peakPower: 143.25,
-      maxIntegrity: host.state.commanderForces[belgium]!.army.capacity,
+      maxIntegrity: host.state.commanderForces[belgium]!.shield.maxIntegrity,
       integrityLosses: 0.00031,
       supplyDelivered: 0.0042,
       supplySpent: 0.0064,
@@ -302,37 +325,102 @@ describe('frozen multiplayer account deployment through session and reconnect', 
     reloadedGuest.close(false);
   });
 
-  it('starts Survival with only the chosen human nations, never a solo unlocked roster', () => {
+  it('starts Survival as two sovereign commands with the guest leading Dawnline', () => {
     const belgium = nationIdV2('bel');
     const netherlands = nationIdV2('nld');
-    const germany = nationIdV2('deu');
     const scenario = resolveScenarioV2({ mode: 'survival', seed: 88_402 });
     const host = new WorldEngineV2(scenario.config.seed, scenario.content);
     expect(host.chooseCountry(belgium)).toEqual({ accepted: true });
     expect(host.configureHumanPlayers([belgium, netherlands], belgium))
       .toEqual({ accepted: true });
-    const germanTerritories = scenario.content.territoryIds.filter((territoryId) => (
-      host.state.territories[territoryId]?.owner === germany
+    const belgianTerritories = scenario.content.territoryIds.filter((territoryId) => (
+      host.state.territories[territoryId]?.owner === belgium
     ));
-    const germanEconomyBefore = germanTerritories.reduce((sum, territoryId) => (
-      sum + host.state.territories[territoryId]!.economy
-    ), 0);
+    const dutchTerritories = scenario.content.territoryIds.filter((territoryId) => (
+      host.state.territories[territoryId]?.owner === netherlands
+    ));
 
     expect(applyMultiplayerDeploymentsV1(host, deploymentMap()))
       .toEqual({ accepted: true });
 
     expect(host.state.humanPlayerIds).toEqual([belgium, netherlands]);
+    expect(resolveSurvivalCoopSeatRolesV1(host.state)).toEqual({
+      empireLeaderId: belgium,
+      dawnlineLeaderId: netherlands,
+    });
     expect(host.state.players[belgium]).toBeDefined();
-    expect(host.state.players[netherlands]).toBeDefined();
-    expect(host.state.players[germany]).toBeDefined();
-    expect(germanTerritories.every((territoryId) => (
-      host.state.territories[territoryId]?.owner === germany
+    expect(host.state.players[netherlands]).toMatchObject({
+      empireName: SURVIVAL_DAWNLINE_ACCORD_NAME_V2,
+    });
+    expect(selectSurvivalDawnlineLeaderIdV2(host.state)).toBe(netherlands);
+    expect(host.state.alliances).toContainEqual({
+      leftId: belgium,
+      rightId: netherlands,
+      formedTick: 0,
+    });
+    expect(host.state.commanderForces[belgium]).toBeDefined();
+    expect(host.state.commanderForces[netherlands]).toBeDefined();
+    expect(survivalCoopUsesSovereignLogisticsV2(host.state, scenario.content)).toBe(true);
+    expect(selectBestCoopFriendlyTransitRouteV2(
+      host.state,
+      scenario.content,
+      belgium,
+      dutchTerritories[0]!,
+    )).toBeUndefined();
+    expect(belgianTerritories.every((territoryId) => (
+      host.state.territories[territoryId]?.owner === belgium
     ))).toBe(true);
-    expect(germanTerritories.reduce((sum, territoryId) => (
-      sum + host.state.territories[territoryId]!.economy
-    ), 0)).toBeCloseTo(germanEconomyBefore * 0.5, 6);
+    expect(dutchTerritories.every((territoryId) => (
+      host.state.territories[territoryId]?.owner === netherlands
+    ))).toBe(true);
+    const guestTerritories = Object.entries(host.state.territories)
+      .filter(([, territory]) => territory.owner === netherlands);
+    expect(guestTerritories.length).toBeGreaterThan(dutchTerritories.length);
+    expect(guestTerritories.some(([territoryId, territory]) => (
+      !dutchTerritories.includes(territoryId as typeof dutchTerritories[number])
+        && territory.army.manpower > 0
+        && territory.economy > 0
+    ))).toBe(true);
     expect(Object.values(host.state.territories).some((territory) => (
       territory.owner === belgium && territory.coreOwner === netherlands
     ))).toBe(false);
+
+    const deployments = deploymentMap();
+    const guestContent = Object.freeze({ ...scenario.content });
+    registerMultiplayerDeploymentRuntimeV1(guestContent, deployments);
+    const guest = new GuestGameSession({
+      transport: new SnapshotGuestTransport(),
+      countryId: netherlands,
+      seatCount: 2,
+      humanPlayerIds: [belgium, netherlands],
+      content: guestContent,
+    });
+    expect(guest.acceptSnapshot({ ...snapshotFrom(host), reason: 'reconnect' }))
+      .toEqual({ accepted: true });
+    const replica = guest.engine as WorldEngineV2;
+    expect(replica.viewerPlayerId).toBe(netherlands);
+    expect(selectSurvivalDawnlineLeaderIdV2(replica.state)).toBe(netherlands);
+    expect(replica.state.players[netherlands]?.empireName)
+      .toBe(SURVIVAL_DAWNLINE_ACCORD_NAME_V2);
+    expect(replica.state.commanderForces[netherlands]).toBeDefined();
+    expect(replica.state.alliances).toContainEqual({
+      leftId: belgium,
+      rightId: netherlands,
+      formedTick: 0,
+    });
+    guest.close(false);
+
+    for (const territory of Object.values(host.state.territories)) {
+      if (territory.owner === belgium) territory.army.manpower = 0;
+    }
+    host.state.players[belgium]!.trainedReserves = 0;
+    expect(selectHumanEmpireDefeatWinnerV2(host.state)).toBeUndefined();
+    for (const territory of Object.values(host.state.territories)) {
+      if (territory.owner === netherlands) territory.army.manpower = 0;
+    }
+    host.state.players[netherlands]!.trainedReserves = 0;
+    const sharedDefeatWinner = selectHumanEmpireDefeatWinnerV2(host.state);
+    expect(sharedDefeatWinner).toBeDefined();
+    expect(host.state.humanPlayerIds).not.toContain(sharedDefeatWinner);
   });
 });

@@ -157,6 +157,7 @@ function canonicalLoadout(input: unknown): ResolvedCountryLoadoutV1 | undefined 
   const activeDoctrine = source.activeDoctrine === 'bastion'
     || source.activeDoctrine === 'rapid-response'
     || source.activeDoctrine === 'vanguard'
+    || source.activeDoctrine === 'force-multiplier'
     ? source.activeDoctrine : null;
   const masteryLevel = Math.max(1, Math.min(
     MAX_COUNTRY_MASTERY_LEVEL,

@@ -25,11 +25,14 @@ import type {
 } from './types';
 
 const APEX_FIXTURE: CommanderForceInitializationV2 = {
-  manpower: 0.0008,
-  capacity: 0.0008,
-  trainedReserves: 0.00008,
-  baseAttack: 125,
-  baseDefense: 125,
+  shield: {
+    integrity: 0.0008,
+    maxIntegrity: 0.0008,
+    rechargeBuffer: 0.00008,
+    pulseAttack: 0.001,
+  },
+  attackMultiplier: 1.25,
+  defenseMultiplier: 1.25,
   treasury: 0,
   annualOutput: 0.015,
   supplyStock: 0.010,
@@ -72,6 +75,8 @@ describe('APEX Empire replenishment network', () => {
     expect(base.empireSupport).toEqual({
       recruitmentMultiplier: 1.10,
       reserveTrainingMultiplier: 1.15,
+      armyCasualtyMultiplier: 1,
+      armyPeaceRecoveryMultiplier: 1,
       annualFoodOutput: 0,
       foodProductionMultiplier: 1,
       foodStorageMultiplier: 1,
@@ -106,8 +111,10 @@ describe('APEX Empire replenishment network', () => {
       // The pipeline stores whole soldiers; the exact 10% support bonus may
       // quantize by one soldier for a tiny national army.
       .toBeCloseTo(1.10, 2);
-    expect(activeWithApex.recruitmentAccelerationCost)
-      .toBeGreaterThan(activeWithoutApex.recruitmentAccelerationCost);
+    // Field refill is the one fixed-rate path; the retired paid fast-track
+    // stays absent even though APEX improves that passive throughput.
+    expect(activeWithApex.recruitmentAccelerationCost).toBe(0);
+    expect(activeWithoutApex.recruitmentAccelerationCost).toBe(0);
 
     setActiveFill(withApex, playerId, 1);
     setActiveFill(withoutApex, playerId, 1);

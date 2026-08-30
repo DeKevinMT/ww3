@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { createWorldStateV2 } from './bootstrap';
-import { WAR_MOBILIZATION_TICKS } from './balance';
 import {
-  COMMANDER_AUTONOMY_HYSTERESIS_TICKS_V2,
   initializeCommanderForceV2,
   processCommanderForcesV2,
+  selectApexEmpireShieldNetworkV2,
   selectCommanderAutonomyStatusV2,
+  selectCommanderBattleSupportV2,
+  selectCommanderFrontPrioritiesV2,
 } from './commanderForce';
 import { WORLD_CONTENT_V2 } from './content';
 import {
@@ -21,17 +22,15 @@ function front(
   commanderId: PlayerId,
   sourceId: TerritoryId,
   targetId: TerritoryId,
-  access: FrontOperationV2['access'] = 'land',
-  startedTick = 0,
 ): FrontOperationV2 {
   return {
     commanderId,
     sourceId,
     targetId,
     doctrine: 'pressure',
-    access,
-    startedTick,
-    lastBattleTick: 0,
+    access: 'land',
+    startedTick: 20,
+    lastBattleTick: 20,
     holdUntilTick: 0,
     momentum: 0,
   };
@@ -47,8 +46,8 @@ function war(
     id,
     attackerId,
     defenderId,
-    startedTick: 0,
-    lastBattleTick: 0,
+    startedTick: 20,
+    lastBattleTick: 20,
     warScore: 0,
     battles: 0,
     attackerLosses: 0,
@@ -68,274 +67,144 @@ function apexBelgium(seed: number) {
   state.humanPlayerId = belgium;
   state.humanPlayerIds = [belgium];
   expect(initializeCommanderForceV2(state, WORLD_CONTENT_V2, belgium, {
-    manpower: 0.00048,
-    capacity: 0.0009,
-    trainedReserves: 0.00008,
-    baseAttack: 100,
-    baseDefense: 108,
+    shield: {
+      integrity: 0.0009,
+      maxIntegrity: 0.0009,
+      rechargeBuffer: 0,
+      pulseAttack: 0.001,
+    },
+    attackMultiplier: 1.2,
+    defenseMultiplier: 1.25,
     treasury: 0,
     annualOutput: 0.015,
-    supplyStock: 0.006,
+    supplyStock: 0,
   }).accepted).toBe(true);
+  state.tick = 20;
   return { state, belgium };
 }
 
-describe('fully autonomous APEX front optimizer', () => {
-  it('keeps all routine economy, logistics and recovery work remote at half strength', () => {
+describe('autonomous distributed APEX network', () => {
+  it('normalizes every retired movement command without relocating the network', () => {
     const { state, belgium } = apexBelgium(83_007);
-    const bel = territoryIdV2('bel');
-    const lux = territoryIdV2('lux');
-    state.territories[lux]!.owner = belgium;
-    state.territories[lux]!.coreOwner = belgium;
-    state.territories[lux]!.integration = 1;
-    state.territories[lux]!.integrationProgram = null;
     const force = state.commanderForces[belgium]!;
-    force.locationId = bel;
-    force.mission = 'standby';
-    force.front = null;
-    force.transit = null;
-    force.army.manpower = force.army.capacity * 0.50;
-    force.army.trainedReserves = 0;
-    const openingManpower = force.army.manpower;
-    const openingReserves = force.army.trainedReserves;
-
-    for (let week = 0; week < 40; week += 1) {
-      state.tick += 1;
-      processCommanderForcesV2(state, WORLD_CONTENT_V2);
-      expect(force).toMatchObject({
-        locationId: bel,
-        mission: 'standby',
-        front: null,
-        transit: null,
-      });
-    }
-    expect(force.army.manpower).toBeGreaterThan(openingManpower);
-    expect(force.army.trainedReserves).toBeGreaterThan(openingReserves);
-
-    // Old saves may still contain a physical logistics deployment. It is
-    // cancelled rather than allowed to move the dome to its destination.
+    force.locationId = territoryIdV2('fra');
     force.mission = 'logistics-relief';
+    force.front = {
+      warId: 'retired',
+      sourceId: territoryIdV2('fra'),
+      targetId: territoryIdV2('bel'),
+    };
     force.transit = {
-      path: [bel, lux], distanceKm: 100, departTick: state.tick, arriveTick: state.tick + 5,
+      path: [territoryIdV2('fra'), territoryIdV2('deu')],
+      distanceKm: 5_000,
+      departTick: 0,
+      arriveTick: 500,
     };
-    state.tick += 1;
+
     processCommanderForcesV2(state, WORLD_CONTENT_V2);
+
     expect(force).toMatchObject({
-      locationId: bel,
+      locationId: state.players[belgium]!.capitalId,
       mission: 'standby',
       front: null,
       transit: null,
+      orderSource: 'autonomous',
     });
   });
 
-  it('immediately joins a fresh reachable human assault despite ordinary hysteresis', () => {
+  it('supports simultaneous assault and defence without travel or hysteresis', () => {
     const { state, belgium } = apexBelgium(83_003);
-    const netherlands = nationIdV2('nld');
-    const france = nationIdV2('fra');
-    const bel = territoryIdV2('bel');
-    const nld = territoryIdV2('nld');
-    const fra = territoryIdV2('fra');
-    state.tick = 20;
-    state.territories[bel]!.army.manpower = 0.30;
-    state.territories[nld]!.army.manpower = 0.08;
-    state.territories[fra]!.army.manpower = 0.01;
-    const oldDefense = front(france, fra, bel);
-    const freshAttack = front(belgium, bel, nld, 'land', state.tick);
-    state.wars.push(
-      war('war-old-defense', france, belgium, oldDefense),
-      { ...war('war-new-assault', belgium, netherlands, freshAttack), startedTick: state.tick },
+    const belgiumTerritory = territoryIdV2('bel');
+    const luxembourg = territoryIdV2('lux');
+    const netherlands = territoryIdV2('nld');
+    const france = territoryIdV2('fra');
+    state.territories[luxembourg]!.owner = belgium;
+    state.territories[luxembourg]!.coreOwner = belgium;
+    state.territories[luxembourg]!.integration = 1;
+    state.territories[luxembourg]!.integrationProgram = null;
+    const assault = front(belgium, belgiumTerritory, netherlands);
+    const defense = front(nationIdV2('fra'), france, luxembourg);
+    const assaultWar = war(
+      'war-a-assault', belgium, nationIdV2('nld'), assault,
     );
-    const force = state.commanderForces[belgium]!;
-    force.mission = 'defense';
-    force.front = { warId: 'war-old-defense', sourceId: fra, targetId: bel };
-    force.manualHoldUntilTick = state.tick + 100;
+    const defenseWar = war(
+      'war-b-defense', nationIdV2('fra'), belgium, defense,
+    );
+    state.wars = [assaultWar, defenseWar];
 
     processCommanderForcesV2(state, WORLD_CONTENT_V2);
 
-    expect(force).toMatchObject({
-      mission: 'assault-support',
-      front: { warId: 'war-new-assault', sourceId: bel, targetId: nld },
+    expect(state.commanderForces[belgium]).toMatchObject({
+      mission: 'standby', front: null, transit: null,
     });
-    expect(selectCommanderAutonomyStatusV2(
+    expect(selectCommanderBattleSupportV2(
+      state, assaultWar, assault, WORLD_CONTENT_V2,
+    ).attacker).not.toBeNull();
+    expect(selectCommanderBattleSupportV2(
+      state, defenseWar, defense, WORLD_CONTENT_V2,
+    ).defender).not.toBeNull();
+    expect(selectApexEmpireShieldNetworkV2(
       state, WORLD_CONTENT_V2, belgium,
-    ).reason).toContain('new human assault');
+    )?.activeFrontCount).toBe(2);
+    expect(selectCommanderFrontPrioritiesV2(
+      state, WORLD_CONTENT_V2, belgium,
+    )).toHaveLength(2);
   });
 
-  it('treats a new player offensive as the next APEX assignment even during another crisis', () => {
-    const { state, belgium } = apexBelgium(83_004);
-    const netherlands = nationIdV2('nld');
-    const france = nationIdV2('fra');
-    const bel = territoryIdV2('bel');
-    const nld = territoryIdV2('nld');
-    const fra = territoryIdV2('fra');
-    const lux = territoryIdV2('lux');
-    state.tick = 30;
-    state.territories[lux]!.owner = belgium;
-    state.territories[lux]!.coreOwner = belgium;
-    state.territories[lux]!.integration = 1;
-    state.territories[bel]!.army.manpower = 0.10;
-    state.territories[fra]!.army.manpower = 0.80;
-    state.territories[nld]!.army.manpower = 0.01;
-    const collapse = front(france, fra, bel);
-    const freshAttack = front(belgium, bel, nld, 'land', state.tick);
-    state.wars.push(
-      war('war-collapse-priority', france, belgium, collapse),
-      { ...war('war-new-but-secondary', belgium, netherlands, freshAttack), startedTick: state.tick },
-    );
-    state.commanderForces[belgium]!.locationId = lux;
-
-    processCommanderForcesV2(state, WORLD_CONTENT_V2);
-
-    expect(state.commanderForces[belgium]).toMatchObject({
-      mission: 'assault-support',
-      front: { warId: 'war-new-but-secondary', sourceId: bel, targetId: nld },
-      transit: { path: [lux, bel] },
-    });
-  });
-
-  it('does not leave damage recovery for a fresh assault', () => {
-    const { state, belgium } = apexBelgium(83_005);
-    const netherlands = nationIdV2('nld');
-    const bel = territoryIdV2('bel');
-    const nld = territoryIdV2('nld');
-    state.tick = 40;
-    const freshAttack = front(belgium, bel, nld, 'land', state.tick);
-    state.wars.push({
-      ...war('war-recovery-blocks', belgium, netherlands, freshAttack),
-      startedTick: state.tick,
-    });
-    const force = state.commanderForces[belgium]!;
-    force.mission = 'hq-training';
-    force.front = null;
-    force.army.manpower = force.army.capacity * 0.25;
-    force.army.trainedReserves = 0;
-
-    processCommanderForcesV2(state, WORLD_CONTENT_V2);
-
-    expect(force).toMatchObject({ mission: 'hq-training', front: null, transit: null });
-  });
-
-  it('pre-positions APEX during mobilisation once pinned recovery is complete', () => {
+  it('is already active during mobilisation and reports the shared front', () => {
     const { state, belgium } = apexBelgium(83_006);
-    const netherlands = nationIdV2('nld');
-    const bel = territoryIdV2('bel');
-    const nld = territoryIdV2('nld');
-    const lux = territoryIdV2('lux');
-    state.tick = 40;
-    state.territories[lux]!.owner = belgium;
-    state.territories[lux]!.coreOwner = belgium;
-    state.territories[lux]!.integration = 1;
-    state.territories[bel]!.army.manpower = state.territories[bel]!.army.capacity * 0.05;
-    state.territories[nld]!.army.manpower = state.territories[nld]!.army.capacity;
-    const mobilisingDefense = front(netherlands, nld, bel, 'land', state.tick);
-    const mobilisingWar = {
-      ...war('war-mobilising-defense', netherlands, belgium, mobilisingDefense),
-      startedTick: state.tick,
-    };
-    state.wars.push(mobilisingWar);
-    const force = state.commanderForces[belgium]!;
-    force.locationId = lux;
-    force.mission = 'hq-training';
-    force.front = null;
-    force.transit = null;
-    force.manualHoldUntilTick = state.tick;
-    force.army.manpower = force.army.capacity * 0.70;
-    force.army.trainedReserves = 0;
-    force.economy.supplyStock = force.army.capacity * 10 * 0.60;
-    const firstBattleTick = mobilisingWar.startedTick + WAR_MOBILIZATION_TICKS;
-
-    processCommanderForcesV2(state, WORLD_CONTENT_V2);
-
-    expect(mobilisingWar.battles).toBe(0);
-    expect(force).toMatchObject({
-      locationId: lux,
-      mission: 'defense',
-      front: { warId: mobilisingWar.id, sourceId: nld, targetId: bel },
-      transit: { path: [lux, bel], departTick: 40 },
-    });
-    expect(force.transit!.arriveTick).toBeGreaterThan(state.tick);
-    expect(force.transit!.arriveTick).toBeLessThanOrEqual(firstBattleTick);
-
-    while (force.transit && state.tick < firstBattleTick) {
-      state.tick += 1;
-      processCommanderForcesV2(state, WORLD_CONTENT_V2);
-    }
-    expect(force).toMatchObject({ locationId: bel, mission: 'defense', transit: null });
-    expect(state.tick).toBeLessThanOrEqual(firstBattleTick);
-  });
-
-  it('holds a useful front through small score changes, then switches on its review cadence', () => {
-    const { state, belgium } = apexBelgium(83_001);
-    const netherlands = nationIdV2('nld');
-    const france = nationIdV2('fra');
-    const bel = territoryIdV2('bel');
-    const nld = territoryIdV2('nld');
-    const fra = territoryIdV2('fra');
-    state.tick = 20;
-    state.territories[bel]!.army.manpower = 1;
-    state.territories[nld]!.army.manpower = 0.20;
-    state.territories[fra]!.army.manpower = 0.70;
-    const dutch = front(netherlands, nld, bel);
-    const french = front(france, fra, bel);
-    state.wars.push(
-      war('war-hold-dutch', netherlands, belgium, dutch),
-      war('war-better-french', france, belgium, french),
+    const defense = front(
+      nationIdV2('nld'), territoryIdV2('nld'), territoryIdV2('bel'),
     );
-    const force = state.commanderForces[belgium]!;
-    force.mission = 'defense';
-    force.front = { warId: 'war-hold-dutch', sourceId: nld, targetId: bel };
-    force.manualHoldUntilTick = state.tick + COMMANDER_AUTONOMY_HYSTERESIS_TICKS_V2;
+    const mobilisingWar = war(
+      'war-mobilising-defense', nationIdV2('nld'), belgium, defense,
+    );
+    state.wars = [mobilisingWar];
 
-    processCommanderForcesV2(state, WORLD_CONTENT_V2);
-    expect(force.front?.warId).toBe('war-hold-dutch');
-
-    const holdUntil = force.manualHoldUntilTick;
-    for (state.tick = holdUntil; state.tick <= holdUntil + 4; state.tick += 1) {
-      processCommanderForcesV2(state, WORLD_CONTENT_V2);
-      if (force.front?.warId === 'war-better-french') break;
-    }
-    expect(force.front?.warId).toBe('war-better-french');
-    const nextReview = force.manualHoldUntilTick;
-    state.territories[nld]!.army.manpower = 0.48;
-    state.tick += 1;
-    processCommanderForcesV2(state, WORLD_CONTENT_V2);
-    expect(force.front?.warId).toBe('war-better-french');
-    expect(force.manualHoldUntilTick).toBe(nextReview);
-  });
-
-  it('never crosses an enemy gap to reach a disconnected owned front', () => {
-    const { state, belgium } = apexBelgium(83_002);
-    const usa = territoryIdV2('usa');
-    const canada = territoryIdV2('can');
-    const usaNation = nationIdV2('usa');
-    const canadaNation = nationIdV2('can');
-    state.territories[usa]!.owner = belgium;
-    state.territories[usa]!.coreOwner = belgium;
-    state.territories[usa]!.integration = 1;
-    state.tick = 50;
-    const operation = front(belgium, usa, canada, 'land', state.tick);
-    state.wars.push({
-      ...war('war-disconnected-front', belgium, canadaNation, operation),
-      startedTick: state.tick,
-    });
-    state.commanderForces[belgium]!.army.manpower
-      = state.commanderForces[belgium]!.army.capacity;
-    state.commanderForces[belgium]!.army.trainedReserves = 0;
-
-    processCommanderForcesV2(state, WORLD_CONTENT_V2);
-
-    expect(state.commanderForces[belgium]).toMatchObject({
-      locationId: territoryIdV2('bel'),
-      mission: 'standby',
-      front: null,
-      transit: null,
-    });
     expect(selectCommanderAutonomyStatusV2(
       state, WORLD_CONTENT_V2, belgium,
     )).toMatchObject({
-      state: 'monitoring',
-      reason: expect.stringContaining('reachable through friendly territory'),
+      state: 'supporting',
+      etaWeeks: 0,
+      destinationId: territoryIdV2('bel'),
+      front: { warId: mobilisingWar.id },
     });
-    expect(state.players[usaNation]).toBeDefined();
+  });
+
+  it('does not require a friendly route to protect an integrated enclave', () => {
+    const { state, belgium } = apexBelgium(83_008);
+    const usa = territoryIdV2('usa');
+    const canada = territoryIdV2('can');
+    state.territories[usa]!.owner = belgium;
+    state.territories[usa]!.coreOwner = belgium;
+    state.territories[usa]!.integration = 1;
+    state.territories[usa]!.integrationProgram = null;
+    const defense = front(nationIdV2('can'), canada, usa);
+    const distantWar = war(
+      'war-distant-defense', nationIdV2('can'), belgium, defense,
+    );
+    state.wars = [distantWar];
+
+    expect(selectCommanderBattleSupportV2(
+      state, distantWar, defense, WORLD_CONTENT_V2,
+    ).defender).not.toBeNull();
+    expect(selectCommanderAutonomyStatusV2(
+      state, WORLD_CONTENT_V2, belgium,
+    )).toMatchObject({ state: 'supporting', etaWeeks: 0 });
+  });
+
+  it('keeps the complete network offline while true-zero integrity recharges', () => {
+    const { state, belgium } = apexBelgium(83_005);
+    const force = state.commanderForces[belgium]!;
+    force.mission = 'hq-training';
+    force.shield.integrity = force.shield.maxIntegrity * 0.5;
+    force.shield.rechargeBuffer = 0;
+
+    processCommanderForcesV2(state, WORLD_CONTENT_V2);
+
+    expect(force.mission).toBe('hq-training');
+    expect(selectApexEmpireShieldNetworkV2(
+      state, WORLD_CONTENT_V2, belgium,
+    )?.active).toBe(false);
   });
 });

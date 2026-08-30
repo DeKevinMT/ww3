@@ -41,7 +41,11 @@ export interface GlobeBorderBuffer {
  * keeping the cached buffer compact enough for a single border draw call.
  */
 const MAX_BORDER_ARC_RADIANS = 0.22 * Math.PI / 180;
+const REVEALED_ANTARCTICA_PHASES = new Set([
+  'warning', 'contact', 'counteroffensive', 'core-exposed', 'victory',
+]);
 export const GLOBE_BORDER_COLORS = Object.freeze({
+  hidden: Object.freeze([0, 0, 0] as const),
   neutral: Object.freeze([0.39, 0.55, 0.62] as const),
   threatened: Object.freeze([0.94, 0.59, 0.18] as const),
   acute: Object.freeze([1, 0.22, 0.13] as const),
@@ -168,6 +172,13 @@ function visibleBorderColor(
 ): UnitColor | undefined {
   if (edge.internalCanonicalEdge) return undefined;
   if (!engine) return GLOBE_BORDER_COLORS.neutral;
+  // Keep the preallocated topology stable while making dormant Antarctica
+  // visually indistinguishable from ordinary ice. Black vertex colors are
+  // invisible under the additive border material and avoid a reveal-time
+  // geometry resize or extra draw call.
+  if (edge.antarctic && !REVEALED_ANTARCTICA_PHASES.has(
+    engine.state.polarEndgame?.phase ?? 'dormant',
+  )) return GLOBE_BORDER_COLORS.hidden;
   const kind = strategicBorderKind(
     edge.territoryIds,
     engine.state.territories,
@@ -194,6 +205,9 @@ export function globeBorderOwnershipSignature(engine?: WorldMapEngineContract): 
     if (!territory) return '-';
     return territory.ownerId;
   }).join('|');
+  const antarcticPresentation = REVEALED_ANTARCTICA_PHASES.has(
+    engine.state.polarEndgame?.phase ?? 'dormant',
+  ) ? 'revealed' : 'dormant';
   const viewerId = engine.state.humanPlayerId;
   const viewerWars = engine.state.wars
     .filter((war) => war.attackerId === viewerId || war.defenderId === viewerId);
@@ -210,7 +224,7 @@ export function globeBorderOwnershipSignature(engine?: WorldMapEngineContract): 
     viewerId,
     activeWarPairs,
   );
-  return `${viewerId}|${ordinary}|antarctica:${antarctic}|wars:${warSignature}|threats:${threats}`;
+  return `${viewerId}|${ordinary}|antarctica:${antarcticPresentation}:${antarctic}|wars:${warSignature}|threats:${threats}`;
 }
 
 /**

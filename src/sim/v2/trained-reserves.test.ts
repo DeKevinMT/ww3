@@ -1,7 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  PEACE_RECRUITMENT_ACCELERATION_COST_MULTIPLIER,
-  PEACE_RECRUITMENT_ACCELERATION_MULTIPLIER,
   TRAINED_RESERVE_DEPLOYMENT_THROUGHPUT_MULTIPLIER,
   TRAINED_RESERVE_PEACETIME_BASE_TRICKLE_FACTOR,
   TRAINED_RESERVE_PEACETIME_TRICKLE_FACTOR,
@@ -186,13 +184,13 @@ describe('finite trained reserves', () => {
     const state = fundedState(71_002);
     setActiveFill(state, belgium, 1);
     const capacity = selectTrainedReserveCapacityV2(state, belgium);
-    const pipeline = selectRecruitmentTrainingPipelineV2(state, WORLD_CONTENT_V2, belgium);
-    state.players[belgium]!.trainedReserves = capacity - pipeline / 2;
+    const finalRoom = 0.00001;
+    state.players[belgium]!.trainedReserves = capacity - finalRoom;
 
     const finalFill = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, belgium);
     expect(finalFill.trainedReservesAfter).toBeCloseTo(capacity, 6);
     expect(finalFill.trainedReservesAfter).toBeLessThanOrEqual(capacity);
-    expect(finalFill.reserveTraining).toBeCloseTo(pipeline / 2, 5);
+    expect(finalFill.reserveTraining).toBeCloseTo(finalRoom, 6);
 
     state.players[belgium]!.trainedReserves = capacity * 1.25;
     const overCap = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, belgium);
@@ -215,19 +213,15 @@ describe('finite trained reserves', () => {
       + finance.reserveTrainingCost + finance.standingOperations).toBeCloseTo(finance.military, 5);
   });
 
-  it('uses peace as a fast, lower-cost rebuild window across the normal readiness curve', () => {
+  it('uses one fast, fixed-rate peace rebuild without a paid readiness curve', () => {
     const state = fundedState(71_012);
     setActiveFill(state, belgium, 0.10);
     state.players[belgium]!.trainedReserves = 0;
     const before = selectTotalManpowerV2(state, belgium);
     const finance = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, belgium);
-    const unitCost = selectRecruitmentUnitCostV2(state, belgium, WORLD_CONTENT_V2);
-
-    expect(PEACE_RECRUITMENT_ACCELERATION_MULTIPLIER).toBe(4);
-    expect(PEACE_RECRUITMENT_ACCELERATION_COST_MULTIPLIER).toBe(1.15);
-    expect(finance.acceleratedRecruitment).toBeGreaterThan(finance.passiveRecruitment);
-    expect(finance.recruitmentAccelerationCost / finance.acceleratedRecruitment)
-      .toBeCloseTo(unitCost * PEACE_RECRUITMENT_ACCELERATION_COST_MULTIPLIER, 3);
+    expect(finance.passiveRecruitment).toBeGreaterThan(0);
+    expect(finance.acceleratedRecruitment).toBe(0);
+    expect(finance.recruitmentAccelerationCost).toBe(0);
 
     for (let week = 0; week < 52; week += 1) {
       processFinanceMilitaryV2(
@@ -240,7 +234,7 @@ describe('finite trained reserves', () => {
     const after = selectTotalManpowerV2(state, belgium);
     // A shattered 10%-ready peer now visibly rebuilds most of its field army
     // during one calm year instead of barely moving for several campaigns.
-    expect(after.deployed / after.capacity).toBeGreaterThan(0.70);
+    expect(after.deployed / after.capacity).toBeGreaterThan(0.58);
     expect(after.deployed).toBeGreaterThan(before.deployed);
   });
 

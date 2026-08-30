@@ -40,16 +40,18 @@ describe('power-first War Report', () => {
       'apexMirrorCounterpulseDamage',
       'apexTwinProjectionBattles',
     ]) expect(report).toContain(`outcome.${field}`);
-    expect(report).toContain('PEAK +${compactNumber(outcome.apexPeakPower)} DOME POWER');
+    expect(report).toContain('PEAK +${compactNumber(outcome.apexPeakPower)} APEX SUPPORT');
     expect(report).toContain('Math.min(100');
-    expect(report).toContain('SHIELD DAMAGE −${format(apexIntegrityDamage, 1)}%');
-    expect(report).toContain('SHIELD DEPLETED');
+    expect(report).toContain('ENERGY LOSS −${format(apexIntegrityDamage, 1)}%');
+    expect(report).toContain('ENERGY DEPLETED');
     expect(report).toContain('APEX SHIELD');
-    expect(report).toContain('ENERGY ${format(apexSupplyCoverage, 0)}%');
-    expect(report).toContain('SINGULARITY PULSE ×${outcome.apexSingularityPulses}');
-    expect(report).toContain('MIRROR COUNTERPULSE −${people(outcome.apexMirrorCounterpulseDamage ?? 0)} HOSTILE');
-    expect(report).toContain('60% + 60% SHARED SHIELD');
+    expect(report).toContain('SUPPLY ${format(apexSupplyCoverage, 0)}%');
+    expect(report).toContain('OVERDRIVE PULSE ×${outcome.apexSingularityPulses}');
+    expect(report).toContain('COUNTERMEASURE −${people(outcome.apexMirrorCounterpulseDamage ?? 0)} HOSTILE');
+    expect(report).toContain('THEATER MESH · ${outcome.apexTwinProjectionBattles} MULTI-FRONT BATTLES');
+    expect(report).not.toContain('60% + 60% SHARED SHIELD');
     expect(report).toContain('SHIELD NOT PRESENT ON THIS FRONT');
+    expect(report).not.toMatch(/DOME POWER|SINGULARITY PULSE|MIRROR COUNTERPULSE|OMNIPRESENCE GRID/);
     expect(report).not.toContain('state.commanderForces');
   });
 

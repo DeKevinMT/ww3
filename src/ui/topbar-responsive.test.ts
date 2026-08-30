@@ -9,8 +9,8 @@ import {
 const stylesSource = readFileSync(new URL('../styles.css', import.meta.url), 'utf8');
 
 describe('responsive strategic topbar', () => {
-  it('keeps five focused status shortcuts in a horizontally accessible mobile row', () => {
-    expect(worldUiSource).toContain('grid-template-columns: repeat(5,minmax(136px,1fr)) !important');
+  it('keeps five focused status shortcuts while giving Empire Defence a wider mobile slot', () => {
+    expect(worldUiSource).toContain('grid-template-columns: 136px 136px 236px repeat(2,136px) !important');
     expect(worldUiSource).toContain('display: grid !important');
     expect(worldUiSource).toContain('overflow-x: auto !important');
     expect(worldUiSource).toContain('.command-topbar .command-identity { display: flex !important; }');
@@ -19,7 +19,7 @@ describe('responsive strategic topbar', () => {
       stylesSource.indexOf('.world-ui-v2 .topbar-status {'),
       stylesSource.indexOf('.world-ui-v2 .topbar-status::-webkit-scrollbar'),
     );
-    expect(desktopGrid).toContain('grid-template-columns: repeat(5, minmax(0, 1fr));');
+    expect(desktopGrid).toContain('grid-template-columns: minmax(126px, .92fr) minmax(112px, .78fr) minmax(244px, 1.72fr) repeat(2, minmax(108px, .78fr));');
     expect(desktopGrid).toContain('overflow: hidden;');
     expect(desktopGrid).not.toContain('overflow-x: auto');
     expect(stylesSource).toContain('font-size: 11px;');
@@ -53,7 +53,7 @@ describe('responsive strategic topbar', () => {
     const compactEnd = stylesSource.indexOf('@media (max-width: 520px)', compactStart);
     const compactStyles = stylesSource.slice(compactStart, compactEnd);
 
-    expect(compactStyles).toContain('grid-template-columns: repeat(5, minmax(136px, 1fr)) !important;');
+    expect(compactStyles).toContain('grid-template-columns: 136px 136px 236px repeat(2, 136px) !important;');
     expect(compactStyles).toContain('overflow-x: auto !important;');
     expect(compactStyles).toContain('scroll-snap-type: inline mandatory;');
     expect(compactStyles).toContain('scroll-padding-inline: 4px;');
@@ -63,7 +63,7 @@ describe('responsive strategic topbar', () => {
     expect(compactStyles).toContain('scroll-snap-align: start;');
   });
 
-  it('combines Empire and APEX Power while keeping Population and Logistics explicit', () => {
+  it('places Population beside Economy before the wider Empire Defence and War Supply meters', () => {
     const economy = worldUiSource.indexOf('class="top-metric top-metric--economy"');
     const combinedPower = worldUiSource.indexOf('class="top-metric top-metric--combined-power ');
     const population = worldUiSource.indexOf('class="top-metric top-metric--population"');
@@ -71,19 +71,23 @@ describe('responsive strategic topbar', () => {
     const research = worldUiSource.indexOf('class="top-metric top-metric--research"');
 
     expect(economy).toBeGreaterThan(0);
-    expect(combinedPower).toBeGreaterThan(economy);
-    expect(population).toBeGreaterThan(combinedPower);
-    expect(logistics).toBeGreaterThan(population);
+    expect(population).toBeGreaterThan(economy);
+    expect(combinedPower).toBeGreaterThan(population);
+    expect(logistics).toBeGreaterThan(combinedPower);
     expect(research).toBeGreaterThan(logistics);
-    expect(worldUiSource).toContain('const combinedPower = combatPower + apexPower;');
-    expect(worldUiSource).toContain('commanderForceMapCombatPower(apexForce.army)');
-    expect(worldUiSource).toContain('<span>COMBINED POWER</span>');
-    expect(worldUiSource).toContain('class="topbar-power-share"');
-    expect(worldUiSource).toContain('EMPIRE ${compactNumber(combatPower)} · ${apexPowerSummary}');
-    expect(worldUiSource).toContain('`SHIELD ${apexPowerState.integrityPercent}%`');
-    expect(worldUiSource).toContain('` · PULSE ${apexLancer.supportedAssaultCount}/3`');
+    expect(worldUiSource).toContain('const combinedPower = combatPower * apexPowerState.armyPowerMultiplier;');
+    expect(worldUiSource).not.toContain('commanderForceMapCombatPower(apexForce.army)');
+    expect(worldUiSource).toContain('<span>EMPIRE DEFENCE</span>');
+    expect(worldUiSource).toContain('class="topbar-defence-stack"');
+    expect(worldUiSource).toContain('--army-ready:${armyReadiness.percent}%');
+    expect(worldUiSource).toContain('--shield-integrity:${apexPowerState.integrityPercent}%');
+    expect(worldUiSource).toContain('data-empire-defence-glow');
+    expect(worldUiSource).toContain('private syncEmpireDefenceGlow(): void');
+    expect(worldUiSource).toContain('animation.currentTime = phase;');
+    expect(worldUiSource).not.toContain('shieldScanDelaySeconds');
+    expect(worldUiSource).toContain('ENERGY ${apexPowerState.integrityPercent}% · PULSE ${people(apexPowerState.pulseAttack)}');
     expect(worldUiSource).toContain('<span>POPULATION</span>');
-    expect(worldUiSource).toContain('<span>LOGISTICS</span>');
+    expect(worldUiSource).toContain('<span>WAR SUPPLY</span>');
     expect(worldUiSource).toContain('data-panel="research"');
     expect(worldUiSource).not.toContain('data-panel="progress"');
     expect(worldUiSource).toContain('<small><span>CASH ${cash(human.treasury)}</span>');
@@ -94,8 +98,8 @@ describe('responsive strategic topbar', () => {
     expect(worldUiSource).not.toContain('class="top-metric top-metric--people-food');
     expect(worldUiSource).not.toContain('class="top-metric top-metric--food"');
     expect(worldUiSource).toContain('including APEX income');
-    expect(worldUiSource).toContain('${armyReadiness.value} READY');
-    expect(worldUiSource).toContain('${people(human.trainedReserves)} RESERVE</small>');
+    expect(worldUiSource).toContain('${armyReadiness.value} ARMY');
+    expect(worldUiSource).toContain('${people(human.trainedReserves)} RES</span>');
     expect(worldUiSource.match(/title="[^"]+" aria-label="Open (?:Economy|War|Nation|Research)/g)).toHaveLength(5);
   });
 
@@ -107,7 +111,7 @@ describe('responsive strategic topbar', () => {
     expect(topbar.match(/<strong(?:\s|>)/g)).toHaveLength(5);
     expect(topbar.match(/<small/g)).toHaveLength(3);
     expect(topbar).not.toContain('EMPIRE TOTAL');
-    expect(topbar).toContain('aria-label="Open War. Logistics Readiness');
+    expect(topbar).toContain('aria-label="Open War. War Supply');
     expect(topbar).not.toContain('<small>${escapeHtml(logisticsDetail)}</small>');
     expect(topbar).toContain('${topbarResearchProgress}%');
     expect(topbar).toContain('${escapeHtml(topbarResearchLabel)}');
@@ -116,23 +120,24 @@ describe('responsive strategic topbar', () => {
     expect(topbar).not.toMatch(/IQ |TARGET<\/i>|\/person|upgrades<\/strong>|condition/i);
     expect(worldUiSource).toContain('topbar-war-alert');
     expect(stylesSource).toContain('.topbar-army-ready');
-    expect(stylesSource).toContain('.topbar-power-share');
+    expect(stylesSource).toContain('.topbar-defence-stack');
     expect(stylesSource).toContain('.top-metric--population');
     expect(stylesSource).toContain('.top-metric--logistics.is-critical');
     expect(worldUiSource).not.toContain('FRONT MUST CLEAR');
     expect(worldUiSource).toContain("integrationWeeks === undefined ? 'WAITING FOR SUPPLY'");
   });
 
-  it('uses the full command card as the power, logistics and research meter', () => {
+  it('uses the full command card for the layered defence, logistics and research meters', () => {
     const meterBlock = stylesSource.slice(
-      stylesSource.indexOf('.world-ui-v2 .topbar-status .topbar-power-share,'),
-      stylesSource.indexOf('.world-ui-v2 .topbar-status .topbar-power-share > b,'),
+      stylesSource.indexOf('.world-ui-v2 .topbar-status .topbar-defence-stack,'),
+      stylesSource.indexOf('.world-ui-v2 .topbar-status .topbar-defence-stack > b,'),
     );
     expect(meterBlock).toContain('position: absolute;');
     expect(meterBlock).toContain('inset: 0;');
     expect(meterBlock).toContain('pointer-events: none;');
     expect(meterBlock).not.toMatch(/height:\s*4px|border-radius:\s*999px/);
     expect(stylesSource).toContain('.top-metric--combined-power, .top-metric--logistics, .top-metric--research)::after');
+    expect(stylesSource).toContain('@keyframes topbar-shield-scan');
     expect(stylesSource).toContain('z-index: 2;');
   });
 
@@ -161,24 +166,33 @@ describe('responsive strategic topbar', () => {
 
   it('does not count an extracted APEX force before full recovery releases it', () => {
     expect(apexShieldTopbarPresentationV2(100, 0.999, 1, 'hq-training')).toEqual({
-      operationalPower: 0,
+      supportBonusPercent: 0,
+      armyPowerMultiplier: 1,
       integrityPercent: 100,
+      pulseAttack: 0,
       recovering: true,
     });
     expect(apexShieldTopbarPresentationV2(100, 1, 1, 'standby')).toEqual({
-      operationalPower: 100,
+      supportBonusPercent: 100,
+      armyPowerMultiplier: 2,
       integrityPercent: 100,
+      pulseAttack: 0,
       recovering: false,
     });
-    expect(apexShieldTopbarPresentationV2(100, 0.4, 1, 'evacuate').operationalPower).toBe(0);
+    expect(apexShieldTopbarPresentationV2(100, 0.4, 1, 'evacuate', 0.001)).toMatchObject({
+      armyPowerMultiplier: 1,
+      pulseAttack: 0,
+      recovering: true,
+    });
   });
 
   it('keeps the compact APEX readout shield-native and exposes capstone state', () => {
-    expect(worldUiSource).toContain('<span>SHIELD INTEGRITY</span>');
-    expect(worldUiSource).toContain('MAX INTEGRITY ${format(maxIntegrityRating, 0)}%');
-    expect(worldUiSource).toContain('SINGULARITY ${lancer.supportedAssaultCount}/3');
-    expect(worldUiSource).toContain('MIRROR MATRIX · 20% INTERCEPT RETURN');
-    expect(worldUiSource).toContain('TWIN SPLIT · 60% + 60% · ONE SHARED SHIELD');
+    expect(worldUiSource).toContain('<span>ENERGY</span>');
+    expect(worldUiSource).toContain('${compactNumber(force.shield.integrity)} / ${compactNumber(force.shield.maxIntegrity)} MAX');
+    expect(worldUiSource).toContain('OVERDRIVE ${lancer.supportedAssaultCount}/3');
+    expect(worldUiSource).toContain('COUNTERMEASURE · 15% INTERCEPT RETURN');
+    expect(worldUiSource).toContain('THEATER MESH · ${frontAllocationPercent}% × ${activeFrontCount} FRONTS');
+    expect(worldUiSource).toContain('EMPIRE-WIDE SHIELD NETWORK');
     expect(worldUiSource).not.toContain('COMMANDER CORPS');
     expect(worldUiSource).not.toContain('ELITE ARMY');
   });

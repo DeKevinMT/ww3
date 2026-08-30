@@ -102,7 +102,7 @@ describe('Rogue Antarctica logistics telemetry', () => {
       navalMovedManpower: 0.12,
       navalCost: 0.032,
       navalMeanDistanceKm: seaDistance,
-      frontOperationCount: 1,
+      frontOperationCount: 2,
     });
     const expectedSupply = supplyFactorV2(
       engine.state,

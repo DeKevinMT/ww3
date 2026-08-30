@@ -85,7 +85,11 @@ import {
   type RunDraftViewV2,
 } from './runProgression';
 import { resolveScenarioV2, scenarioConfigFromSaveHeaderV2 } from './scenarios';
-import { initializeSurvivalScenarioV2, rogueAiSurvivalActiveV2 } from './survival';
+import {
+  initializeSurvivalScenarioV2,
+  processRogueAiSurvivalV2,
+  rogueAiSurvivalActiveV2,
+} from './survival';
 import { formSurvivalEmpireV2 } from './survivalEmpire';
 import { reconcileSurvivalRogueFocusWarsV2 } from './survivalRogueFocus';
 import {
@@ -631,7 +635,7 @@ export class WorldEngineV2 {
         apexSupportedBattles: apexTelemetry?.supportedBattles ?? 0,
         apexPeakPower: round(apexTelemetry?.peakPower ?? 0),
         apexMaxIntegrity: apexTelemetry?.maxIntegrity
-          ?? this.state.commanderForces?.[humanId]?.army.capacity ?? 0,
+          ?? this.state.commanderForces?.[humanId]?.shield.maxIntegrity ?? 0,
         apexLosses: apexTelemetry?.integrityLosses ?? 0,
         apexSupplyDelivered: apexTelemetry?.supplyDelivered ?? 0,
         apexSupplySpent: apexTelemetry?.supplySpent ?? 0,
@@ -895,6 +899,10 @@ export class WorldEngineV2 {
       this.content,
       flagship,
     );
+    // Survival begins on contact: open the one permanent Rogue↔player war and
+    // seed its two direct border axes before the first clock tick.
+    processRogueAiSurvivalV2(this.state, this.content);
+    synchronizeWarFrontsV2(this.state, this.content);
     this.recordAppliedAction();
     if (publishAction) this.emitQueuedAction({ sequence: this.state.actionSequence, command });
     this.assertStateIntegrity(true);
@@ -1677,7 +1685,8 @@ export class WorldEngineV2 {
     // Full integration may retire the selected country's backend record before
     // global conquest. Preserve that terminal defeat while other AI owners
     // continue to exist on the map.
-    if (!this.state.players[this.state.humanPlayerId]
+    if (selectHumanPlayerIdsV2(this.state).length === 1
+      && !this.state.players[this.state.humanPlayerId]
       && this.state.winnerId && this.state.players[this.state.winnerId]) {
       this.state.gameOver = true;
       this.state.speed = 0;

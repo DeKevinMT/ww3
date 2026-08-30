@@ -6,20 +6,16 @@ import { ANTARCTIC_TERRITORY_IDS_V2, ROGUE_AI_NATION_ID_V2 } from './content';
 import { assertInvariantsV2 } from './invariants';
 import { resolveScenarioV2 } from './scenarios';
 import {
-  SURVIVAL_OCCUPATION_ECONOMY_FACTOR_V2,
-  SURVIVAL_OCCUPATION_MANPOWER_FACTOR_V2,
-  SURVIVAL_OCCUPATION_POPULATION_FACTOR_V2,
   enforceSurvivalScorchedWorldV2,
   markSurvivalScorchedTerritoryV2,
+  selectSurvivalDawnlineLeaderIdV2,
 } from './survivalEmpire';
 import {
   nationIdV2,
   territoryIdV2,
-  type FrontOperationV2,
-  type WarStateV2,
 } from './types';
-import { resolveBattlePulseV2, supplyFactorV2 } from './war';
-import { beginTerritoryIntegrationV2, retireAbsorbedNationV2 } from './integration';
+import { supplyFactorV2, synchronizeWarFrontsV2 } from './war';
+import { beginTerritoryIntegrationV2 } from './integration';
 import {
   invalidateTerritoryIndexV2,
   projectFinanceManpowerPhaseV2,
@@ -37,30 +33,18 @@ describe('Survival scorched-world occupation', () => {
     const playerId = nationIdV2('gnb');
     const ruinedId = territoryIdV2('sen');
     const baseline = structuredClone(engine.state.territories[ruinedId]!);
-    const nationBaseline = structuredClone(engine.state.players[nationIdV2('sen')]!);
     expect(engine.chooseCountry(playerId)).toEqual({ accepted: true });
     expect(engine.formSurvivalEmpire(playerId, [])).toEqual({ accepted: true });
     const ruined = engine.state.territories[ruinedId]!;
-    expect(ruined.owner).toBe(nationIdV2('sen'));
-    expect(engine.state.players[nationIdV2('sen')]).toBeDefined();
-    expect(engine.state.players[nationIdV2('sen')]!.treasury).toBeCloseTo(
-      nationBaseline.treasury * SURVIVAL_OCCUPATION_ECONOMY_FACTOR_V2,
-      8,
-    );
+    expect(ruined.owner).toBe(ROGUE_AI_NATION_ID_V2);
+    expect(engine.state.players[nationIdV2('sen')]).toBeUndefined();
     expect(Object.entries(engine.state.territories).filter(([id, territory]) => (
       territory.owner === ROGUE_AI_NATION_ID_V2
         && !ANTARCTIC_TERRITORY_IDS_V2.includes(territoryIdV2(id))
-    ))).toHaveLength(0);
-    expect(ruined.economy).toBeCloseTo(
-      Math.max(0.10, baseline.economy * SURVIVAL_OCCUPATION_ECONOMY_FACTOR_V2), 8,
-    );
-    expect(ruined.population).toBeCloseTo(
-      Math.max(0.01, baseline.population * SURVIVAL_OCCUPATION_POPULATION_FACTOR_V2), 8,
-    );
-    expect(ruined.army.manpower).toBeCloseTo(
-      baseline.army.manpower * SURVIVAL_OCCUPATION_MANPOWER_FACTOR_V2, 8,
-    );
-    expect(engine.state.runProgression.scorchedWorldTerritoryIds).not.toContain(ruinedId);
+    )).length).toBeGreaterThan(100);
+    expect(ruined.economy).toBeLessThanOrEqual(baseline.economy * 0.025 + 1e-8);
+    expect(ruined.population).toBeLessThanOrEqual(baseline.population * 0.12 + 1e-8);
+    expect(engine.state.runProgression.scorchedWorldTerritoryIds).toContain(ruinedId);
 
     const treasuryBefore = engine.state.players[playerId]!.treasury;
     const economyBeforeRecapture = selectEconomicOutputLedgerV2(
@@ -71,20 +55,11 @@ describe('Survival scorched-world occupation', () => {
     const researchBeforeRecapture = selectResearchOutputV2(
       engine.state, engine.content, playerId,
     );
-    beginTerritoryIntegrationV2(
-      engine.state, engine.content, ruinedId, ROGUE_AI_NATION_ID_V2, 'land',
-    );
-    markSurvivalScorchedTerritoryV2(engine.state, engine.content, ruinedId);
-    engine.state.players[nationIdV2('sen')]!.treasury = 0;
-    engine.state.players[nationIdV2('sen')]!.foodStock = 0;
-    engine.state.players[nationIdV2('sen')]!.trainedReserves = 0;
-    expect(engine.state.runProgression.scorchedWorldTerritoryIds).toContain(ruinedId);
-    beginTerritoryIntegrationV2(
-      engine.state, engine.content, ruinedId, playerId, 'land',
-    );
-    expect(retireAbsorbedNationV2(
-      engine.state, engine.content, nationIdV2('sen'), playerId, false,
-    )).toBe(true);
+    ruined.owner = playerId;
+    ruined.coreOwner = playerId;
+    ruined.integration = 0;
+    delete ruined.integrationProgram;
+    invalidateTerritoryIndexV2(engine.state);
     ruined.economy = baseline.economy;
     ruined.population = baseline.population;
     enforceSurvivalScorchedWorldV2(engine.state, engine.content);
@@ -108,6 +83,7 @@ describe('Survival scorched-world occupation', () => {
       engine.state, engine.content, playerId, ruinedId, 'land', territoryIdV2('gin'),
     )).toBeGreaterThanOrEqual(0.25);
     synchronizeArmyCapacityV2(engine.state, engine.content);
+    synchronizeWarFrontsV2(engine.state, engine.content);
 
     const saved = engine.save();
     const reloaded = WorldEngineV2.fromSave(saved, resolved.content);
@@ -118,71 +94,49 @@ describe('Survival scorched-world occupation', () => {
     assertInvariantsV2(reloaded.state, reloaded.content);
   });
 
-  it('keeps independent countries at 20% military scale while preserving quality and war agency', () => {
+  it('keeps Dawnline remote and intact while distant countries are Rogue transit nodes', () => {
     const resolved = resolveScenarioV2({ mode: 'survival', seed: 72_103 });
     const engine = new WorldEngineV2(72_103, resolved.content);
     const usaId = territoryIdV2('usa');
-    const canadaId = territoryIdV2('can');
-    const senegalId = territoryIdV2('sen');
     const normalUsEconomy = engine.state.territories[usaId]!.economy;
     const normalUsPower = engine.territoryPower(usaId);
     expect(engine.chooseCountry('gnb')).toEqual({ accepted: true });
     expect(engine.formSurvivalEmpire('gnb', [])).toEqual({ accepted: true });
 
     const survivalUs = engine.state.territories[usaId]!;
-    expect(survivalUs.owner).toBe(nationIdV2('usa'));
-    expect(survivalUs.economy / normalUsEconomy).toBeCloseTo(0.50, 8);
-    expect(engine.territoryPower(usaId) / normalUsPower).toBeGreaterThan(0.15);
-    expect(engine.territoryPower(usaId) / normalUsPower).toBeLessThan(0.25);
-    expect(engine.territoryPower(usaId)).toBeGreaterThan(engine.territoryPower(senegalId));
-    const recruitmentBase = selectRecruitmentBaseManpowerV2(engine.state, nationIdV2('usa'));
-    expect(recruitmentBase.capacity).toBeGreaterThan(recruitmentBase.deployed);
+    expect(survivalUs.owner).toBe(ROGUE_AI_NATION_ID_V2);
+    expect(survivalUs.economy / normalUsEconomy).toBeLessThanOrEqual(0.025);
+    expect(engine.territoryPower(usaId) / normalUsPower).toBeLessThan(0.05);
+    expect(engine.state.players[nationIdV2('usa')]).toBeUndefined();
+    const dawnlineLeader = selectSurvivalDawnlineLeaderIdV2(engine.state)!;
+    const dawnlineTerritories = engine.content.territoryIds.filter((territoryId) => (
+      engine.state.territories[territoryId]?.owner === dawnlineLeader
+    ));
+    expect(dawnlineTerritories).toHaveLength(3);
+    expect(dawnlineTerritories.every((territoryId) => (
+      !(engine.content.territories[territoryId]?.connections ?? []).some((connection) => (
+        engine.state.territories[connection.targetId]?.owner === nationIdV2('gnb')
+      ))
+    ))).toBe(true);
+    const recruitmentBase = selectRecruitmentBaseManpowerV2(engine.state, dawnlineLeader);
+    expect(recruitmentBase.capacity).toBeCloseTo(recruitmentBase.deployed, 9);
 
     const reloadedAtTickZero = WorldEngineV2.fromSave(engine.save(), resolved.content);
-    const halfEconomy = reloadedAtTickZero.state.territories[usaId]!.economy;
+    const scorchedEconomy = reloadedAtTickZero.state.territories[usaId]!.economy;
     expect(reloadedAtTickZero.formSurvivalEmpire('gnb', [])).toMatchObject({
       accepted: false,
       reason: expect.stringContaining('already formed'),
     });
-    expect(reloadedAtTickZero.state.territories[usaId]!.economy).toBe(halfEconomy);
+    expect(reloadedAtTickZero.state.territories[usaId]!.economy).toBe(scorchedEconomy);
 
-    const connection = engine.content.territories[usaId]!.connections
-      .find((candidate) => candidate.targetId === canadaId);
-    expect(connection).toBeDefined();
-    const operation: FrontOperationV2 = {
-      commanderId: nationIdV2('usa'),
-      sourceId: usaId,
-      targetId: canadaId,
-      doctrine: 'breakthrough',
-      access: connection!.kind === 'sea' ? 'naval' : 'land',
-      startedTick: engine.state.tick,
-      lastBattleTick: engine.state.tick,
-      holdUntilTick: engine.state.tick + 12,
-      momentum: 1,
-    };
-    const war: WarStateV2 = {
-      id: `war-${engine.state.nextWarId++}`,
-      attackerId: nationIdV2('usa'),
-      defenderId: nationIdV2('can'),
-      startedTick: engine.state.tick,
-      lastBattleTick: engine.state.tick,
-      warScore: 0,
-      battles: 0,
-      attackerLosses: 0,
-      defenderLosses: 0,
-      attackerCivilianLosses: 0,
-      defenderCivilianLosses: 0,
-      lastPeaceOfferTick: -1_000_000,
-      revenge: null,
-      attackerOperations: [operation],
-      defenderOperations: [],
-    };
-    engine.state.wars.push(war);
-    const attack = resolveBattlePulseV2(engine.state, engine.content, war, operation);
-    expect(attack).not.toBeNull();
-    expect((attack?.regularAttackerLosses ?? 0) + (attack?.regularDefenderLosses ?? 0))
-      .toBeGreaterThan(0);
-    expect(engine.state.wars).toContain(war);
+    const dawnlineWar = engine.state.wars.find((war) => (
+      war.attackerId === ROGUE_AI_NATION_ID_V2 && war.defenderId === dawnlineLeader
+    ));
+    expect(dawnlineWar).toBeDefined();
+    expect([
+      ...dawnlineWar!.attackerOperations,
+      ...dawnlineWar!.defenderOperations,
+    ]).toHaveLength(1);
   });
 
   it('turns a captured world country into a zero-production transit node', () => {
@@ -261,21 +215,16 @@ describe('Survival scorched-world occupation', () => {
     const engine = new WorldEngineV2(72_106, resolved.content);
     expect(engine.chooseCountry('gnb')).toEqual({ accepted: true });
     expect(engine.formSurvivalEmpire('gnb', [])).toEqual({ accepted: true });
-    const captureIds = engine.content.territoryIds.filter((territoryId) => (
-      !ANTARCTIC_TERRITORY_IDS_V2.includes(territoryId)
-        && engine.state.territories[territoryId]?.owner !== nationIdV2('gnb')
-    )).slice(0, 24);
+    const registryBefore = [...engine.state.runProgression.scorchedWorldTerritoryIds];
+    const captureIds = registryBefore.slice(0, 24);
     const capacitySync = vi.spyOn(capacityV2, 'synchronizeArmyCapacityV2');
 
     for (const territoryId of captureIds) {
-      beginTerritoryIntegrationV2(
-        engine.state, engine.content, territoryId, ROGUE_AI_NATION_ID_V2, 'land',
-      );
       markSurvivalScorchedTerritoryV2(engine.state, engine.content, territoryId);
     }
 
     expect(capacitySync).not.toHaveBeenCalled();
-    expect(engine.state.runProgression.scorchedWorldTerritoryIds).toHaveLength(captureIds.length);
+    expect(engine.state.runProgression.scorchedWorldTerritoryIds).toEqual(registryBefore);
     expect(captureIds.every((territoryId) => (
       engine.state.territories[territoryId]?.integration === 0
         && engine.state.territories[territoryId]?.integrationProgram === undefined

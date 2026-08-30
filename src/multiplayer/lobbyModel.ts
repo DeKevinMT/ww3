@@ -15,6 +15,7 @@ import {
 } from '../sim/v2/scenarios';
 
 export const LOBBY_REJOIN_GRACE_MS = 2 * 60_000;
+export const SURVIVAL_COOP_PLAYER_COUNT_V1 = 2;
 
 function cleanName(value: string): string {
   return value.trim().replace(/\s+/g, ' ').slice(0, 40);
@@ -210,6 +211,10 @@ export class HostLobbyModel {
     this.releaseExpiredDisconnected();
     const connected = [...this.players.values()].filter((player) => player.connected);
     if (connected.length < MIN_MULTIPLAYER_PLAYERS) return 'At least two connected players are required.';
+    if (this.scenario.mode === 'survival'
+      && connected.length !== SURVIVAL_COOP_PLAYER_COUNT_V1) {
+      return 'Survival co-op deploys exactly two sovereign commands.';
+    }
     if (connected.some((player) => !player.countryId || !player.deployment)) {
       return 'Every connected player must choose a country.';
     }

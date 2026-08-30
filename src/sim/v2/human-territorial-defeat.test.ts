@@ -6,21 +6,28 @@ import { WORLD_CONTENT_V2 } from './content';
 import { beginTerritoryIntegrationV2 } from './integration';
 import { createSaveV2, loadSaveV2 } from './persistence';
 import { selectHumanEmpireDefeatWinnerV2 } from './humanPlayers';
+import type { CommanderForceInitializationV2 } from './types';
+
+const TEST_APEX_PROFILE: CommanderForceInitializationV2 = {
+  shield: {
+    integrity: 0.0008,
+    maxIntegrity: 0.0008,
+    pulseAttack: 0.0008,
+  },
+  attackMultiplier: 1.10,
+  defenseMultiplier: 1.10,
+  treasury: 0,
+  annualOutput: 0.015,
+  supplyStock: 0.010,
+};
 
 function conqueredHumanState(seed: number) {
   const state = createWorldStateV2(seed, WORLD_CONTENT_V2);
   const humanId = state.humanPlayerId;
   const victorId = WORLD_CONTENT_V2.nationIds.find((id) => id !== humanId)!;
-  expect(initializeCommanderForceV2(state, WORLD_CONTENT_V2, humanId, {
-    manpower: 0.0008,
-    capacity: 0.0008,
-    trainedReserves: 0.00008,
-    baseAttack: 125,
-    baseDefense: 125,
-    treasury: 0,
-    annualOutput: 0.015,
-    supplyStock: 0.010,
-  }).accepted).toBe(true);
+  expect(initializeCommanderForceV2(
+    state, WORLD_CONTENT_V2, humanId, TEST_APEX_PROFILE,
+  ).accepted).toBe(true);
   for (const territoryId of WORLD_CONTENT_V2.territoryIds) {
     if (state.territories[territoryId]!.owner === humanId) {
       beginTerritoryIntegrationV2(state, WORLD_CONTENT_V2, territoryId, victorId);
@@ -46,7 +53,8 @@ describe('human territorial defeat', () => {
       front: null,
       transit: null,
     });
-    expect(engine.state.commanderForces[humanId]!.army.manpower).toBeGreaterThan(0);
+    expect(engine.state.commanderForces[humanId]!.shield.integrity).toBeGreaterThan(0);
+    expect(engine.state.commanderForces[humanId]).not.toHaveProperty('army');
   });
 
   it('does not end multiplayer while any human seat still controls land', () => {
@@ -61,16 +69,9 @@ describe('human territorial defeat', () => {
   it('ends a landed empire when APEX is the only military force left', () => {
     const state = createWorldStateV2(290_004, WORLD_CONTENT_V2);
     const humanId = state.humanPlayerId;
-    expect(initializeCommanderForceV2(state, WORLD_CONTENT_V2, humanId, {
-      manpower: 0.0008,
-      capacity: 0.0008,
-      trainedReserves: 0.00008,
-      baseAttack: 125,
-      baseDefense: 125,
-      treasury: 0,
-      annualOutput: 0.015,
-      supplyStock: 0.010,
-    }).accepted).toBe(true);
+    expect(initializeCommanderForceV2(
+      state, WORLD_CONTENT_V2, humanId, TEST_APEX_PROFILE,
+    ).accepted).toBe(true);
     for (const territory of Object.values(state.territories)) {
       if (territory.owner === humanId) territory.army.manpower = 0;
     }
@@ -79,12 +80,14 @@ describe('human territorial defeat', () => {
     const winnerId = selectHumanEmpireDefeatWinnerV2(state);
     expect(winnerId).toBeDefined();
     expect(winnerId).not.toBe(humanId);
-    expect(state.commanderForces[humanId]!.army.manpower).toBeGreaterThan(0);
+    expect(state.commanderForces[humanId]!.shield.integrity).toBeGreaterThan(0);
+    expect(state.commanderForces[humanId]).not.toHaveProperty('army');
 
     const loaded = loadSaveV2(createSaveV2(state, WORLD_CONTENT_V2), WORLD_CONTENT_V2);
     expect(loaded.gameOver).toBe(true);
     expect(loaded.winnerId).toBe(winnerId);
-    expect(loaded.commanderForces[humanId]!.army.manpower).toBeGreaterThan(0);
+    expect(loaded.commanderForces[humanId]!.shield.integrity).toBeGreaterThan(0);
+    expect(loaded.commanderForces[humanId]).not.toHaveProperty('army');
   });
 
   it('keeps the campaign alive when trained national reserves can still deploy', () => {

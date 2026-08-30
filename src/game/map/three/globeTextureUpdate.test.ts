@@ -9,6 +9,7 @@ import {
   globeFlagRingPolicy,
   globeFlagProjectionKey,
   globePoliticalStateSignature,
+  globeTerritoryFlagCountryId,
   globeTerritoryFlagOwnerId,
   globeTerritoryIsIntegrating,
   globeTextureSelectionSignature,
@@ -87,6 +88,36 @@ describe('globe political texture update cache', () => {
       kind: 'capture',
       territoryIds: ['a'],
     });
+  });
+
+  it('treats an account flag change as one full political repaint', () => {
+    const fixture = textureEngine();
+    const countryId = COUNTRIES[0]!.id;
+    fixture.state.territories[countryId] = {
+      ...fixture.state.territories[countryId]!,
+      ownerId: 'owner-a',
+      coreOwnerId: 'owner-a',
+      integration: 1,
+    };
+    let flagCountryId = 'grl';
+    const engine: WorldMapEngineContract = {
+      ...fixture.engine,
+      player: (playerId) => playerId === 'owner-a' ? {
+        id: 'owner-a', name: 'Human Empire', color: 0x71e9ff, cssColor: '#71e9ff',
+        sigil: 'AX', capitalId: countryId, isHuman: true, flagCountryId,
+      } : undefined,
+    };
+    const beforeSignature = globePoliticalStateSignature(engine);
+    const before = captureGlobePoliticalPaintSnapshot(engine);
+    expect(globeTerritoryFlagCountryId(engine, fixture.state.territories[countryId]!))
+      .toBe('grl');
+
+    flagCountryId = 'jpn';
+    const after = captureGlobePoliticalPaintSnapshot(engine);
+    expect(globePoliticalStateSignature(engine)).not.toBe(beforeSignature);
+    expect(globeTerritoryFlagCountryId(engine, fixture.state.territories[countryId]!))
+      .toBe('jpn');
+    expect(classifyGlobePoliticalAtlasUpdate(before, after)).toEqual({ kind: 'full' });
   });
 
   it('batches simultaneous captures into one local atlas update', () => {
@@ -500,6 +531,16 @@ describe('globe political texture update cache', () => {
     expect(polarBody).toContain('drawFlagIntoProjection(');
     expect(polarBody).toContain('drawIntegrationOverlay(');
     expect(globeTextureSource).toContain('this.drawAntarcticTerritories(');
+  });
+
+  it('never paints black intelligence fog over dormant or awakened Antarctica', () => {
+    const fogBody = globeTextureSource.slice(
+      globeTextureSource.indexOf('private drawApexIntelligenceFog('),
+      globeTextureSource.indexOf('private redraw(): void'),
+    );
+    expect(fogBody).toContain('ordinary unmarked ice');
+    expect(fogBody).toContain('PREPARED_COUNTRIES.map');
+    expect(fogBody).not.toContain('PREPARED_ANTARCTICA_SECTORS.map');
   });
 
   it('normalises legal-target ordering and ignores non-texture hint targets', () => {

@@ -7,7 +7,6 @@ import {
 import {
   BATTLE_INTERVAL_TICKS,
   WAR_MOBILIZATION_TICKS,
-  warAccessSupplyMultiplierV2,
 } from './balance';
 import { WorldEngineV2 } from './WorldEngineV2';
 import { selectCampaignFirstStrikeTargetV2 } from './campaignFirstStrike';
@@ -93,8 +92,9 @@ describe('Greenland first campaign war cadence', () => {
       etaWeeks: CAMPAIGN_FIRST_STRIKE_MOBILIZATION_TICKS_V2,
     });
     expect(distanceKm).toBeGreaterThan(6_000);
-    expect(target!.frontSupply).toBeLessThan(0.75);
-    expect(warAccessSupplyMultiplierV2('naval', distanceKm)).toBeLessThan(0.85);
+    expect(target!.frontSupply).toBe(1);
+    expect(target!.transferThroughput).toBe(0.5);
+    expect(target!.preparationWeeks).toBeGreaterThan(0);
   });
 
   it('uses the normal war clock while APEX reaches the guided front before its first pulse', () => {

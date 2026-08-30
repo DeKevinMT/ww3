@@ -16,6 +16,12 @@ export const ANTARCTIC_GATEWAY_IDS_V2 = Object.freeze([
 export const SURVIVAL_FIRST_GATEWAY_BREACH_TICKS_V2 = 6;
 export const CAMPAIGN_FIRST_GATEWAY_BREACH_TICKS_V2 = 13;
 export const LATER_GATEWAY_BREACH_TICKS_V2 = 13;
+/**
+ * Survival usually reveals the shortest Pacific approach first, without
+ * turning every seed into the same run. Ross is the authored New Zealand
+ * corridor; the other two authored routes remain real opening possibilities.
+ */
+export const SURVIVAL_NEW_ZEALAND_FIRST_WEIGHT_V2 = 0.70;
 
 /** The gateway-sector ids deliberately share their authored string with a
  * real territory. Keep the brand conversion in one typed boundary instead of
@@ -47,6 +53,34 @@ export function deterministicAntarcticGatewayOrderV2(
   ));
 }
 
+/**
+ * Save-stable Survival order with a strong, deliberately non-guaranteed Ross
+ * (New Zealand) opening. Only the first pick is weighted. The two remaining
+ * authored corridors keep their normal deterministic seeded order.
+ */
+export function deterministicSurvivalAntarcticGatewayOrderV2(
+  seed: number,
+): AntarcticSectorIdV2[] {
+  const rossGateway = 'ross-entry' as const satisfies AntarcticSectorIdV2;
+  const firstDraw = seededGatewayHashV2(seed ^ 0x6d2b79f5, rossGateway) / 0x1_0000_0000;
+  const candidates = ANTARCTIC_GATEWAY_IDS_V2.filter((gatewayId) => gatewayId !== rossGateway);
+  const first = firstDraw < SURVIVAL_NEW_ZEALAND_FIRST_WEIGHT_V2
+    ? rossGateway
+    : [...candidates].sort((left, right) => (
+      seededGatewayHashV2(seed ^ 0xa511e9b3, left)
+        - seededGatewayHashV2(seed ^ 0xa511e9b3, right)
+        || left.localeCompare(right)
+    ))[0]!;
+  const remaining = ANTARCTIC_GATEWAY_IDS_V2
+    .filter((gatewayId) => gatewayId !== first)
+    .sort((left, right) => (
+      seededGatewayHashV2(seed ^ 0x63d83595, left)
+        - seededGatewayHashV2(seed ^ 0x63d83595, right)
+        || left.localeCompare(right)
+    ));
+  return [first, ...remaining];
+}
+
 function freshBreachV2(gatewayId: AntarcticSectorIdV2): AntarcticGatewayBreachStateV2 {
   return {
     gatewayId,
@@ -75,7 +109,9 @@ export function initializeAntarcticGatewayBreachesV2(
 
 /** Reveals the seeded order while keeping all physical routes sealed. */
 export function prepareAntarcticGatewayBreachesV2(state: WorldStateV2): void {
-  const canonicalOrder = deterministicAntarcticGatewayOrderV2(state.seed);
+  const canonicalOrder = state.contentVersion.startsWith('survival-v')
+    ? deterministicSurvivalAntarcticGatewayOrderV2(state.seed)
+    : deterministicAntarcticGatewayOrderV2(state.seed);
   const existingOrder = state.polarEndgame.gatewayBreachOrder;
   const validExisting = existingOrder.length === ANTARCTIC_GATEWAY_IDS_V2.length
     && ANTARCTIC_GATEWAY_IDS_V2.every((gatewayId) => existingOrder.includes(gatewayId));

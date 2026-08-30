@@ -5,7 +5,11 @@ import {
   ROGUE_AI_NATION_ID_V2,
   type WorldContentV2,
 } from './content';
-import { selectCommanderRouteV2 } from './commanderForce';
+import {
+  NEUTRAL_COMMANDER_EMPIRE_SUPPORT_V2,
+  normalizeCommanderForceRuntimeV2,
+  selectCommanderRouteV2,
+} from './commanderForce';
 import { addWorldEventV2 } from './events';
 import { isAntarcticGatewayOpenV2 } from './antarcticGateways';
 import type {
@@ -53,33 +57,43 @@ function deterministicPrimeValueV2(
 
 function createPrimeForceV2(state: WorldStateV2): CommanderForceStateV2 {
   const wave = Math.max(1, Math.floor(state.polarEndgame.globalWave));
-  const manpower = primeActiveTargetV2(state);
-  const capacity = round(0.00052 + Math.min(0.00030, (wave - 1) * 0.00002), 9);
+  const integrity = primeActiveTargetV2(state);
+  const maxIntegrity = round(0.00052 + Math.min(0.00030, (wave - 1) * 0.00002), 9);
   return {
-    army: {
-      manpower,
-      capacity,
-      trainedReserves: 0,
-      baseAttack: round(Math.min(104, 62 + (wave - 1) * 2.2), 9),
-      baseDefense: round(Math.min(112, 72 + (wave - 1) * 2.25), 9),
+    shield: {
+      integrity,
+      maxIntegrity,
+      rechargeBuffer: 0,
+      rechargeMultiplier: 1,
+      attackMultiplier: round(Math.min(1.35, 1.12 + (wave - 1) * 0.01), 9),
+      defenseMultiplier: round(Math.min(1.40, 1.15 + (wave - 1) * 0.012), 9),
+      pulseAttack: round(Math.min(0.008, 0.0015 + (wave - 1) * 0.00015), 9),
+      pulseProjectionRetention: 0,
+      pulseChargeBonusPerStep: 0,
+      interceptEfficiency: 1,
+      impactRecoveryShare: 0,
+      defensivePulseMultiplier: 1,
     },
     economy: {
       treasury: 20,
       annualOutput: 0,
-      supplyStock: round(manpower * 26, 9),
+      supplyStock: round(integrity * 26, 9),
       priorities: { training: 0, logistics: 100, development: 0 },
     },
     capabilities: {
       mobileHeadquarters: true,
       fieldHospital: false,
-      rapidResponse: true,
-      assaultSpecialist: true,
-      defenseSpecialist: true,
+      rapidResponse: false,
+      forceMultiplier: false,
+      assaultSpecialist: false,
+      defenseSpecialist: false,
       emergencyExtractionCharges: 0,
     },
     empireSupport: {
       recruitmentMultiplier: 1,
       reserveTrainingMultiplier: 1,
+      armyCasualtyMultiplier: 1,
+      armyPeaceRecoveryMultiplier: 1,
       annualFoodOutput: 0,
       foodProductionMultiplier: 1,
       foodStorageMultiplier: 1,
@@ -119,33 +133,15 @@ export function cloneRoguePrimeStateV2(
   source: RoguePrimeStateV2 | undefined,
 ): RoguePrimeStateV2 {
   if (!source) return createInitialRoguePrimeStateV2();
+  const force = source.force
+    ? normalizeCommanderForceRuntimeV2(
+        source.force,
+        NEUTRAL_COMMANDER_EMPIRE_SUPPORT_V2,
+      )
+    : null;
   return {
     ...source,
-    force: source.force ? {
-      ...source.force,
-      army: { ...source.force.army },
-      economy: {
-        ...source.force.economy,
-        priorities: { ...source.force.economy.priorities },
-      },
-      capabilities: { ...source.force.capabilities },
-      empireSupport: source.force.empireSupport ? {
-        ...source.force.empireSupport,
-        annualFoodOutput: source.force.empireSupport.annualFoodOutput ?? 0,
-      } : {
-        recruitmentMultiplier: 1,
-        reserveTrainingMultiplier: 1,
-        annualFoodOutput: 0,
-        foodProductionMultiplier: 1,
-        foodStorageMultiplier: 1,
-        foodImportCostMultiplier: 1,
-      },
-      front: source.force.front ? { ...source.force.front } : null,
-      transit: source.force.transit ? {
-        ...source.force.transit,
-        path: [...source.force.transit.path],
-      } : null,
-    } : null,
+    force,
   };
 }
 
@@ -166,9 +162,7 @@ function spendAntarcticBuildResourcesV2(state: WorldStateV2, force: CommanderFor
   const rogue = state.players[ROGUE_AI_NATION_ID_V2];
   if (!rogue || state.territories[ROGUE_PRIME_CORE_TERRITORY_ID_V2]?.owner
     !== ROGUE_AI_NATION_ID_V2) return false;
-  if (rogue.trainedReserves + EPSILON < force.army.manpower
-    || rogue.treasury + EPSILON < ROGUE_PRIME_REBUILD_TREASURY_COST_V2) return false;
-  rogue.trainedReserves = round(rogue.trainedReserves - force.army.manpower, 9);
+  if (rogue.treasury + EPSILON < ROGUE_PRIME_REBUILD_TREASURY_COST_V2) return false;
   rogue.treasury = round(rogue.treasury - ROGUE_PRIME_REBUILD_TREASURY_COST_V2, 9);
   return true;
 }
@@ -469,7 +463,7 @@ function refillPrimeFromCoreV2(
       state, content, ROGUE_AI_NATION_ID_V2,
       ROGUE_PRIME_CORE_TERRITORY_ID_V2, force.locationId,
     )) return;
-  const capacity = force.army.manpower * 26;
+  const capacity = force.shield.maxIntegrity * 26;
   const requested = Math.min(0.0005, Math.max(0, capacity - force.economy.supplyStock));
   const cost = requested * 20;
   if (requested <= EPSILON || rogue.treasury + EPSILON < cost) return;
@@ -486,18 +480,17 @@ function recoverPrimePersonnelAtCoreV2(state: WorldStateV2): void {
     || state.territories[ROGUE_PRIME_CORE_TERRITORY_ID_V2]?.owner !== ROGUE_AI_NATION_ID_V2
     || !rogue) return;
   const room = Math.max(0, Math.min(
-    force.army.capacity,
+    force.shield.maxIntegrity,
     primeActiveTargetV2(state),
-  ) - force.army.manpower);
-  const requested = Math.min(ROGUE_PRIME_REPLACEMENT_PER_TICK_V2, room, rogue.trainedReserves);
+  ) - force.shield.integrity);
+  const requested = Math.min(ROGUE_PRIME_REPLACEMENT_PER_TICK_V2, room);
   const treasuryCost = requested * ROGUE_PRIME_REPLACEMENT_COST_PER_MILLION_V2;
   const supplyCost = requested * ROGUE_PRIME_REPLACEMENT_SUPPLY_PER_MILLION_V2;
   if (requested <= EPSILON || rogue.treasury + EPSILON < treasuryCost
     || force.economy.supplyStock + EPSILON < supplyCost) return;
-  rogue.trainedReserves = round(rogue.trainedReserves - requested, 9);
   rogue.treasury = round(rogue.treasury - treasuryCost, 9);
   force.economy.supplyStock = round(force.economy.supplyStock - supplyCost, 9);
-  force.army.manpower = round(force.army.manpower + requested, 9);
+  force.shield.integrity = round(force.shield.integrity + requested, 9);
 }
 
 /** Pre-war lifecycle. A sortie can support one authored gateway front only. */
@@ -593,7 +586,7 @@ export function reconcileRoguePrimeV2(state: WorldStateV2): void {
     prime.nextSortieTick = state.tick + ROGUE_PRIME_SORTIE_COOLDOWN_MIN_TICKS_V2;
     clearSortieV2(prime);
   }
-  if (!prime.force || prime.force.army.manpower > EPSILON) return;
+  if (!prime.force || prime.force.shield.integrity > EPSILON) return;
   prime.force = null;
   prime.status = 'rebuilding';
   prime.nextSortieTick = null;

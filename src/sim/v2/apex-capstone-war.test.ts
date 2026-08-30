@@ -14,14 +14,21 @@ import {
   type WarStateV2,
   type WorldStateV2,
 } from './types';
-import { resolveBattlePulseV2 } from './war';
+import {
+  resolveApexPulseDamageV2,
+  resolveBattlePulseV2,
+} from './war';
 
 const apexProfile = (capabilities: Partial<CommanderCapabilitiesV2>) => ({
-  manpower: 0.1,
-  capacity: 0.1,
-  trainedReserves: 0,
-  baseAttack: 5,
-  baseDefense: 125,
+  shield: {
+    integrity: 0.1,
+    maxIntegrity: 0.1,
+    rechargeBuffer: 0,
+    rechargeMultiplier: 1,
+    pulseAttack: 0.001,
+  },
+  attackMultiplier: 1.10,
+  defenseMultiplier: 1.12,
   treasury: 0,
   annualOutput: 0,
   supplyStock: 10,
@@ -107,6 +114,34 @@ function assignApexFront(
 }
 
 describe('APEX capstones at the live war boundary', () => {
+  it('gates Pulse Attack on real armies and leaves its only cap to the shared hit resolver', () => {
+    expect(resolveApexPulseDamageV2({
+      pulseAttack: 10,
+      nationalParticipatingManpower: 10,
+      hostileCurrentManpower: 2,
+    })).toBe(10);
+    expect(resolveApexPulseDamageV2({
+      pulseAttack: 10,
+      nationalParticipatingManpower: 0.05,
+      hostileCurrentManpower: 2,
+    })).toBe(10);
+    expect(resolveApexPulseDamageV2({
+      pulseAttack: 10,
+      nationalParticipatingManpower: 10,
+      hostileCurrentManpower: 0.001,
+    })).toBe(10);
+    expect(resolveApexPulseDamageV2({
+      pulseAttack: 10,
+      nationalParticipatingManpower: 0,
+      hostileCurrentManpower: 2,
+    })).toBe(0);
+    expect(resolveApexPulseDamageV2({
+      pulseAttack: 10,
+      nationalParticipatingManpower: 2,
+      hostileCurrentManpower: 0,
+    })).toBe(0);
+  });
+
   it('fires Singularity on the third actually resolved supported assault', () => {
     const { state, humanId } = belgiumWorld(96_101, {
       assaultSpecialist: true,
@@ -136,9 +171,15 @@ describe('APEX capstones at the live war boundary', () => {
     expect(first.commanderAttackerSingularityPulse).toBe(false);
     expect(second.commanderAttackerSingularityPulse).toBe(false);
     expect(third.commanderAttackerSingularityPulse).toBe(true);
-    expect(third.commanderAttackerPower).toBeGreaterThan(
-      second.commanderAttackerPower * 1.4,
-    );
+    // Normal combat receives the shared 10% hit budget first, so an otherwise
+    // valid Pulse can contribute zero whenever that battle already fills it.
+    expect(first.commanderAttackerPulseDamage
+      + second.commanderAttackerPulseDamage
+      + third.commanderAttackerPulseDamage).toBeGreaterThan(0);
+    // Overdrive doubles only the separate Pulse request. The army-support
+    // Power naturally falls as the real national formation takes losses.
+    expect(battleWar.apexTelemetryByPlayer?.[humanId])
+      .toMatchObject({ singularityPulses: 1 });
     expect(state.commanderForces[humanId]!.doctrineRuntime)
       .toMatchObject({ lancerSupportedAssaultCount: 0 });
   });
@@ -165,6 +206,7 @@ describe('APEX capstones at the live war boundary', () => {
     )!;
 
     expect(event.commanderDefenderCounterpulseDamage).toBeGreaterThan(0);
+    expect(event.commanderDefenderPulseDamage).toBeGreaterThan(0);
     expect(event.commanderDefenderCounterpulseDamage)
       .toBeLessThanOrEqual(hostileBefore);
     expect(hostileBefore - state.territories[sourceId]!.army.manpower)
@@ -204,7 +246,7 @@ describe('APEX capstones at the live war boundary', () => {
     expect(event.commanderAttackerInterceptedDamage).toBeGreaterThan(0);
     expect(event.commanderAttackerCounterpulseDamage).toBeGreaterThan(0);
     expect(event.commanderAttackerCounterpulseDamage).toBeCloseTo(
-      event.commanderAttackerInterceptedDamage! * 0.20,
+      event.commanderAttackerInterceptedDamage! * 0.15,
       9,
     );
     expect(event.commanderDefenderCounterpulseDamage).toBe(0);
@@ -218,9 +260,9 @@ describe('APEX capstones at the live war boundary', () => {
     });
   });
 
-  it('resolves both Twin fronts at 60% against one shared Integrity and energy pool', () => {
+  it('resolves two Theater Mesh fronts at 60% against one shared Integrity pool', () => {
     const { state, humanId } = belgiumWorld(96_103, {
-      rapidResponse: true,
+      forceMultiplier: true,
     });
     const primarySourceId = territoryIdV2('bel');
     const primaryTargetId = territoryIdV2('nld');
@@ -269,6 +311,7 @@ describe('APEX capstones at the live war boundary', () => {
     };
     force.doctrineRuntime = {
       lancerSupportedAssaultCount: 0,
+      emergencyRebootUsed: false,
       secondaryProjection: {
         locationId: secondarySourceId,
         mission: 'assault-support',
@@ -280,13 +323,13 @@ describe('APEX capstones at the live war boundary', () => {
         pairedPrimaryFront: primaryAssignment,
       },
     };
-    const integrityBefore = force.army.manpower;
+    const integrityBefore = force.shield.integrity;
     const energyBefore = force.economy.supplyStock;
 
     const primary = resolveBattlePulseV2(
       state, WORLD_CONTENT_V2, primaryWar, primaryFront,
     )!;
-    const integrityAfterPrimary = force.army.manpower;
+    const integrityAfterPrimary = force.shield.integrity;
     const energyAfterPrimary = force.economy.supplyStock;
     const secondary = resolveBattlePulseV2(
       state, WORLD_CONTENT_V2, secondaryWar, secondaryFront,
@@ -297,9 +340,11 @@ describe('APEX capstones at the live war boundary', () => {
     expect(primary.commanderAttackerProjectionShare).toBe(0.6);
     expect(secondary.commanderAttackerProjectionShare).toBe(0.6);
     expect(integrityAfterPrimary).toBeLessThan(integrityBefore);
-    expect(force.army.manpower).toBeLessThan(integrityAfterPrimary);
-    expect(energyAfterPrimary).toBeLessThan(energyBefore);
-    expect(force.economy.supplyStock).toBeLessThan(energyAfterPrimary);
+    expect(force.shield.integrity).toBeLessThan(integrityAfterPrimary);
+    // Human APEX no longer spends a second, location-bound supply pool. Both
+    // fronts draw damage from the same integrity record above.
+    expect(energyAfterPrimary).toBe(energyBefore);
+    expect(force.economy.supplyStock).toBe(energyAfterPrimary);
     expect(force.doctrineRuntime.secondaryProjection).not.toHaveProperty('army');
     expect(force.doctrineRuntime.secondaryProjection).not.toHaveProperty('economy');
   });

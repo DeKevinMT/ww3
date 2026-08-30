@@ -11,7 +11,7 @@ const criticalStyleEnd = indexSource.indexOf('</style>', criticalStyleStart);
 const criticalStyleSource = indexSource.slice(criticalStyleStart, criticalStyleEnd);
 
 describe('boot and timeline deployment loaders', () => {
-  it('paints a complete dark loader before modules or application CSS are available', () => {
+  it('paints the cinematic APEX loader before modules or application CSS are available', () => {
     const moduleTag = '<script type="module" src="/src/main.ts"></script>';
     expect(indexSource).toContain('<meta name="theme-color" content="#030a12" />');
     expect(indexSource).toContain('<meta name="color-scheme" content="dark" />');
@@ -25,23 +25,33 @@ describe('boot and timeline deployment loaders', () => {
     expect(criticalStyleSource).toContain('position: fixed;');
     expect(criticalStyleSource).toContain('inset: 0;');
     expect(criticalStyleSource).toContain('min-height: 100dvh;');
+    expect(criticalStyleSource).toContain('url("./src/assets/apex-reclamation-bg.jpg")');
     expect(criticalStyleSource).toContain('@keyframes startup-uplink-progress');
     expect(criticalStyleSource).toContain('@media (prefers-reduced-motion: reduce)');
+    expect(indexSource).toContain('rel="preload" as="image" href="./src/assets/apex-reclamation-bg.jpg"');
     expect(stylesSource).not.toContain('#startup-loader');
     expect(stylesSource).not.toContain('.startup-loader__');
   });
 
-  it('shows a short APEX account uplink before revealing the Commander main menu', () => {
+  it('shows one quiet brand, one progress bar and one loading tip', () => {
     expect(indexSource.match(/id="startup-loader"/g)).toHaveLength(1);
     expect(indexSource).toContain('id="startup-loader" role="status"');
     expect(indexSource).toContain('aria-live="polite" aria-atomic="true" aria-hidden="false"');
     expect(indexSource).toContain('data-loader-variant="boot" data-loader-stage="boot"');
     expect(indexSource).toContain('<span class="startup-loader__sr-only">Connecting to APEX account</span>');
-    expect(indexSource).toContain('APEX UPLINK');
-    expect(indexSource).toContain('LOADING PROFILE &amp; ACTIVE TIMELINE');
-    expect(indexSource).not.toContain('DEPLOYING COMMAND MAP');
+    expect(indexSource).toContain('<span>APEX</span><strong>RECLAMATION</strong>');
+    expect(indexSource.match(/class="startup-loader__track"/g)).toHaveLength(1);
+    expect(indexSource.match(/data-loader-tip/g)).toHaveLength(1);
+    expect(indexSource).toContain('FIELD INTEL');
+    expect(indexSource).not.toContain('LOADING PROFILE &amp; ACTIVE TIMELINE');
+    expect(indexSource).not.toContain('TIMELINE DEPLOYMENT');
+    expect(indexSource).not.toContain('01 · TIMELINE');
+    expect(indexSource).not.toContain('02 · WORLD MAP');
+    expect(indexSource).not.toContain('03 · APEX');
     expect(indexSource).toContain('aria-hidden="false"');
     expect(mainSource).toContain("document.querySelector<HTMLElement>('#startup-loader')");
+    expect(mainSource).toContain("showFreshLoadingTip('boot');");
+    expect(mainSource).toContain("window.sessionStorage.setItem(LAST_LOADING_TIP_STORAGE_KEY, tip.id)");
     expect(mainSource).toContain('const BOOT_LOADER_MIN_VISIBLE_MS = 450;');
     const bootDismissal = mainSource.slice(
       mainSource.indexOf('async function dismissBootLoaderAfterReady()'),
@@ -54,7 +64,7 @@ describe('boot and timeline deployment loaders', () => {
     expect(mainSource).not.toContain('await renderer.firstFrameReady;');
   });
 
-  it('activates the distinct deployment surface only after an accepted country confirmation', () => {
+  it('refreshes one mode-aware tip only when an accepted deployment starts a new loading cycle', () => {
     const chooseCountryBody = worldUiSource.slice(
       worldUiSource.indexOf("case 'choose-country':"),
       worldUiSource.indexOf("case 'open-multiplayer':"),
@@ -67,18 +77,12 @@ describe('boot and timeline deployment loaders', () => {
     );
     expect(confirmationCallback).toContain('showDeploymentLoader(countryId, scenarioConfigFromEngineV2(engine));');
     expect(confirmationCallback).toContain('void beginStoredCampaign(engine, countryId);');
-    expect(indexSource).toContain('class="startup-loader__deployment"');
-    expect(indexSource).toContain('data-loader-country-flag');
-    expect(indexSource).toContain('data-loader-country');
-    expect(indexSource).toContain('data-loader-mode');
-    expect(indexSource).toContain('data-loader-year');
-    expect(indexSource).toContain('01 · TIMELINE');
-    expect(indexSource).toContain('02 · WORLD MAP');
-    expect(indexSource).toContain('03 · APEX');
     expect(mainSource).toContain("startupLoader.dataset.loaderVariant = 'deployment';");
     expect(mainSource).toContain("startupLoader.dataset.loaderStage = 'world';");
-    expect(mainSource).toContain("scenario.mode === 'survival' ? 2096 : 2026");
-    expect(mainSource).toContain('countryFlagHtml(country.id, country.sigil, true)');
+    expect(mainSource).toContain("const beginsNewLoadingCycle = startupLoaderState === 'idle';");
+    expect(mainSource).toContain('if (beginsNewLoadingCycle) {\n    showFreshLoadingTip(loadingTipAudienceForModeV1(scenario.mode));\n  }');
+    expect(mainSource).not.toContain('data-loader-country-flag');
+    expect(mainSource).not.toContain('countryFlagHtml(country.id, country.sigil, true)');
     expect(mainSource).toContain("startupLoaderState: 'idle' | 'active' | 'complete' = startupLoader?.isConnected");
     expect(mainSource).toContain("startupLoader.classList.remove('is-hidden', 'is-ready')");
   });

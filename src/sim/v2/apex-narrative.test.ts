@@ -248,10 +248,14 @@ describe('APEX narrative transmissions', () => {
     const state = createWorldStateV2(903, WORLD_CONTENT_V2);
     const playerId = state.humanPlayerId;
     expect(initializeCommanderForceV2(state, WORLD_CONTENT_V2, playerId, {
-      manpower: 0.01,
-      capacity: 0.02,
-      baseAttack: 5,
-      baseDefense: 5,
+      shield: {
+        integrity: 0.01,
+        maxIntegrity: 0.02,
+        rechargeBuffer: 0,
+        pulseAttack: 0.001,
+      },
+      attackMultiplier: 1.25,
+      defenseMultiplier: 1.25,
       treasury: 0,
       annualOutput: 0,
       supplyStock: 1,
@@ -304,12 +308,11 @@ describe('APEX narrative transmissions', () => {
       annualCost: 0,
     };
     const force = state.commanderForces[playerId]!;
-    const originId = force.locationId;
     force.mission = 'standby';
     force.front = null;
     state.tick += APEX_TRANSMISSION_MIN_SPACING_TICKS_V2;
-    // Liberation is deliberately held behind the physical-purge tutorial:
-    // recovery first, then a confirmed on-site dome.
+    // Liberation is deliberately held behind the recovery tutorial. The
+    // distributed network can then focus purge bandwidth without travelling.
     expect(processApexNarrativeV2(state, WORLD_CONTENT_V2)).toBe(0);
     const progress = state.polarEndgame.apexNarrative.players[playerId]!;
     progress.transmissions.push({
@@ -323,16 +326,7 @@ describe('APEX narrative transmissions', () => {
       choice: 'acknowledge',
       resolvedTick: state.tick,
     });
-    force.transit = {
-      path: [originId, targetId],
-      distanceKm: 2_000,
-      departTick: state.tick,
-      arriveTick: state.tick + 5,
-    };
     state.tick += APEX_TRANSMISSION_MIN_SPACING_TICKS_V2;
-    expect(processApexNarrativeV2(state, WORLD_CONTENT_V2)).toBe(0);
-    force.locationId = targetId;
-    force.transit = null;
     expect(processApexNarrativeV2(state, WORLD_CONTENT_V2)).toBe(1);
     expect(selectApexTransmissionsV2(state, playerId).at(-1)?.id)
       .toBe('campaign-first-purge-arrival');

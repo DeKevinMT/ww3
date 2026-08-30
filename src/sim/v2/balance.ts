@@ -7,7 +7,7 @@ import type {
   TerrainType,
 } from './types';
 
-export const V2_RULES_VERSION = 'frontier-command-v2.76-logistics-readiness';
+export const V2_RULES_VERSION = 'frontier-command-v2.77-apex-shield-multipliers';
 export const V2_CONTENT_VERSION = 'natural-earth-countries-2026-v8-antarctica-survival';
 export const V2_MAP_ID = 'natural-earth-countries-2026';
 export const V2_TICK_DURATION_MS = 1_000;
@@ -69,7 +69,14 @@ export const EXTREME_CRISIS_MAX_UPKEEP_FUNDING = 0.50;
 export const EXTREME_CRISIS_DEMOBILIZATION_RATE = 0.0005;
 /** Even an extreme fiscal collapse preserves one quarter of live capacity as a home guard. */
 export const EXTREME_CRISIS_HOME_GUARD_CAPACITY_SHARE = 0.25;
-/** Peace is the visible rebuild phase: 0.135% of live capacity per week before modifiers. */
+/**
+ * Active field armies refill from the current effective cap, never from an
+ * opening benchmark. The fixed rates keep the pacing controller-neutral and
+ * deliberately avoid any hidden low-readiness acceleration curve.
+ */
+export const PEACE_ARMY_REFILL_CAPACITY_RATE_V2 = 0.01;
+export const SURVIVAL_REAR_ARMY_REFILL_CAPACITY_RATE_V2 = 0.0035;
+/** Legacy reserve-training cadence; active army refill uses the rates above. */
 export const PASSIVE_RECRUITMENT_CAPACITY_RATE = 0.00135;
 /**
  * One smooth 0–100% peacetime recovery curve. A nearly empty army has the
@@ -136,13 +143,18 @@ export const ATTACKER_CIVILIAN_LOSS_DEFENDER_SHARE = 0.625;
  */
 export const COMBAT_POWER_RATIO_EXPONENT = 1;
 /**
- * Converts effective opposing combat pressure into real manpower damage.
- * Every soldier present contributes; the former per-pulse casualty ceiling is
- * deliberately gone. A 1.25% peer baseline makes each fortnightly field
- * engagement strategically visible and lets depleted peer wars resolve in a
- * natural campaign timescale, while still requiring many real battle pulses.
+ * Converts effective opposing combat pressure into raw manpower damage.
+ * Every soldier physically present on the front contributes. The shared
+ * frontline resolver applies the single 10%-of-Empire-cap ceiling afterwards.
+ * A 1.25% peer baseline keeps ordinary exchanges visible below that ceiling.
  */
 export const COMBAT_DAMAGE_EFFECTIVENESS = 0.0125;
+/**
+ * A single field engagement can remove at most ten percent of a side's full
+ * Empire army capacity. The actual armies stationed on the two border
+ * territories still generate the hit and remain the local overkill bound.
+ */
+export const COMBAT_HIT_EMPIRE_CAP_SHARE_V2 = 0.10;
 /** Individual pulses use a much wider ±25% band than the former ±6%. */
 export const BATTLE_DAMAGE_VARIANCE_HALF_RANGE_V2 = 0.25;
 /** Expected damage starts slightly above the old baseline and rises through year one. */
@@ -170,12 +182,6 @@ export function battleDamageVarianceV2(randomDraw: number, warAgeWeeks: number):
 }
 /** Offensive formations take a modest extra exposure penalty in every exchange. */
 export const ATTACKER_MILITARY_LOSS_MULTIPLIER = 1.08;
-/** Local overmatch does not add exposure until the attacker fields more than 3:1. */
-export const ATTACKER_CONCENTRATION_EXPOSURE_START_RATIO = 3;
-/** At 8:1 and above, exposure has reached its deliberately bounded maximum. */
-export const ATTACKER_CONCENTRATION_EXPOSURE_MAX_RATIO = 8;
-/** Extreme force concentration can at most add 500% to real defender counter-fire. */
-export const ATTACKER_CONCENTRATION_EXPOSURE_MAX_BONUS = 5;
 /** Front-planning threshold for viability and initiative reassessment; it never adds casualties. */
 export const COMBAT_ROUTE_STRENGTH_RATIO = 0.05;
 /** Defensive research saturates at +20%; level 20 reaches +10%. */
@@ -223,6 +229,8 @@ export function combatDefenseEffectV2(
 }
 /** A fresh entrant cannot claim a force another war already destroyed. */
 export const CAPTURE_MIN_CONTRIBUTION_SHARE = 0.10;
+/** A local formation at one percent readiness capitulates after the next battle pulse. */
+export const LOCAL_FORMATION_CAPITULATION_MAX_FILL_V2 = 0.01;
 /** Every accepted declaration immediately commits one percent of the attacker's deployed army. */
 export const WAR_DECLARATION_ATTACKER_LOSS_SHARE = 0.01;
 /**

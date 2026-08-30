@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
   WAR_ACCESS_ASSAULT_MULTIPLIER,
   WAR_ACCESS_COST_MULTIPLIER,
-  WAR_ACCESS_SUPPLY_MULTIPLIER,
   WAR_MOBILIZATION_TICKS,
 } from './balance';
 import {
@@ -15,6 +14,10 @@ import { WORLD_CONTENT_V2 } from './content';
 import { addWorldEventV2, pruneWorldHistoryV2 } from './events';
 import { STRATEGIC_SEA_ROUTE_PAIRS } from '../../game/data/worldMap';
 import { assertInvariantsV2 } from './invariants';
+import {
+  LAND_ARMY_CAPACITY_SUPPLY_SHARE_V2,
+  NAVAL_ARMY_CAPACITY_SUPPLY_SHARE_V2,
+} from './logistics';
 import { canonicalStateHashV2, createSaveV2, loadSaveV2 } from './persistence';
 import {
   selectCanonicalWarFrontV2,
@@ -22,7 +25,11 @@ import {
   selectWarMobilizationCostV2,
 } from './selectors';
 import { nationIdV2 } from './types';
-import { declareWarV2, processWarsV2, supplyFactorV2 } from './war';
+import {
+  declareWarV2,
+  frontCapacitySupplyQuoteV2,
+  processWarsV2,
+} from './war';
 import { WorldEngineV2 } from './WorldEngineV2';
 import {
   acknowledgeCampaignBlackoutForTestV2,
@@ -185,31 +192,32 @@ describe('2026 conflicts and strategic naval warfare', () => {
     expect(navalCost).toBe(0);
     expect(landCost).toBe(0);
     expect(WAR_ACCESS_COST_MULTIPLIER.naval).toBeGreaterThan(WAR_ACCESS_COST_MULTIPLIER.land);
-    expect(WAR_ACCESS_SUPPLY_MULTIPLIER.land).toBeGreaterThan(WAR_ACCESS_SUPPLY_MULTIPLIER.naval);
+    expect(LAND_ARMY_CAPACITY_SUPPLY_SHARE_V2).toBe(0.08);
+    expect(NAVAL_ARMY_CAPACITY_SUPPLY_SHARE_V2).toBe(0.04);
     expect(WAR_ACCESS_ASSAULT_MULTIPLIER.naval).toBe(WAR_ACCESS_ASSAULT_MULTIPLIER.land);
     expect(STRATEGIC_SEA_ROUTE_PAIRS.length).toBeGreaterThan(100);
     expect(STRATEGIC_SEA_ROUTE_PAIRS.length).toBeLessThan(170);
   });
 
-  it('creates a live naval front with weaker supply and a real battle pulse', () => {
+  it('creates a live naval front with half the field budget and a real battle pulse', () => {
     const state = createWorldStateV2(91);
     state.wars = [];
     enterPostBlackoutCampaignForTestV2(state);
     state.players[bel]!.treasury = 10_000;
     const capital = state.players[bel]!.capitalId;
-    const landSupply = supplyFactorV2(state, WORLD_CONTENT_V2, bel, capital, 'land');
-    const navalSupply = supplyFactorV2(state, WORLD_CONTENT_V2, bel, capital, 'naval');
-    expect(navalSupply).toBeLessThan(landSupply);
+    const landQuote = frontCapacitySupplyQuoteV2(state, capital, 'land');
+    const navalQuote = frontCapacitySupplyQuoteV2(state, capital, 'naval');
+    expect(landQuote.readiness).toBe(1);
+    expect(navalQuote.readiness).toBe(1);
+    expect(navalQuote.capacityBudget).toBeCloseTo(landQuote.capacityBudget * 0.5, 9);
     expect(declareWarV2(state, WORLD_CONTENT_V2, bel, gbr).accepted).toBe(true);
     state.tick = WAR_MOBILIZATION_TICKS;
     const battles = processWarsV2(state, WORLD_CONTENT_V2);
     expect(battles).toHaveLength(1);
     expect(state.wars[0] && selectCanonicalWarFrontV2(state.wars[0])?.access).toBe('naval');
-    // National research can still make an attacker better supplied than its
-    // opponent. The identical-source comparison above proves
-    // the route penalty; the live pulse confirms that it stays deliberately mild.
-    expect(battles[0]!.attackerSupply).toBeGreaterThanOrEqual(0.80);
-    expect(battles[0]!.attackerSupply).toBeLessThanOrEqual(0.90);
+    // Readiness is fulfilment of the smaller naval budget, not a hidden
+    // distance or research penalty layered over the battle.
+    expect(battles[0]!.attackerSupply).toBe(navalQuote.readiness);
     assertInvariantsV2(state, WORLD_CONTENT_V2);
   });
 });

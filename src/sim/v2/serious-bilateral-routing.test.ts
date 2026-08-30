@@ -7,8 +7,8 @@ import { resolveScenarioV2 } from './scenarios';
 import { accessibleRogueTargetsV2 } from './survival';
 import { nationIdV2, territoryIdV2 } from './types';
 import {
+  frontCapacitySupplyQuoteV2,
   internalArmyTransferLogisticsTermsV2,
-  supplyFactorV2,
 } from './war';
 
 describe('serious-mode bilateral wars and expedition routing', () => {
@@ -41,7 +41,7 @@ describe('serious-mode bilateral wars and expedition routing', () => {
     expect(naval.expeditionRunwayWeeks).toBeGreaterThan(4);
   });
 
-  it('keeps long naval invasion viable but materially slower and less supplied than land', () => {
+  it('keeps long naval invasion viable with half-throughput and explicit staging time', () => {
     const engine = new WorldEngineV2(73_003);
     const elSalvador = nationIdV2('slv');
     const naval = internalArmyTransferLogisticsTermsV2(
@@ -51,17 +51,17 @@ describe('serious-mode bilateral wars and expedition routing', () => {
       engine.state, engine.content, elSalvador, territoryIdV2('slv'), territoryIdV2('gtm'), 0.001,
     );
     expect(naval.access).toBe('naval');
-    expect(naval.throughputMultiplier).toBeGreaterThanOrEqual(0.10);
-    expect(naval.throughputMultiplier).toBeLessThan(land.throughputMultiplier);
+    expect(naval.throughputMultiplier).toBe(0.5);
+    expect(land.throughputMultiplier).toBe(1);
     expect(naval.logisticsCost).toBeGreaterThan(0);
-    const navalSupply = supplyFactorV2(
-      engine.state, engine.content, elSalvador, territoryIdV2('slv'), 'naval', territoryIdV2('png'),
+    const navalQuote = frontCapacitySupplyQuoteV2(
+      engine.state, territoryIdV2('slv'), 'naval',
     );
-    const landSupply = supplyFactorV2(
-      engine.state, engine.content, elSalvador, territoryIdV2('slv'), 'land', territoryIdV2('gtm'),
+    const landQuote = frontCapacitySupplyQuoteV2(
+      engine.state, territoryIdV2('slv'), 'land',
     );
-    expect(navalSupply).toBeGreaterThanOrEqual(0.12);
-    expect(navalSupply).toBeLessThan(landSupply);
+    expect(navalQuote.readiness).toBe(landQuote.readiness);
+    expect(navalQuote.capacityBudget).toBeCloseTo(landQuote.capacityBudget * 0.5, 9);
   });
 
   it('uses land-only Rogue expansion whenever a contiguous human objective exists', () => {
@@ -69,14 +69,20 @@ describe('serious-mode bilateral wars and expedition routing', () => {
     const engine = new WorldEngineV2(73_004, resolved.content);
     expect(engine.chooseCountry('gnb')).toEqual({ accepted: true });
     expect(engine.formSurvivalEmpire('gnb', [])).toEqual({ accepted: true });
-    // Simulate the first real post-gateway capture. Independent countries at
-    // tick zero are not Rogue sources; only a conquered transit node carrying
-    // Antarctic-origin personnel may project the next contiguous front.
+    const humanId = nationIdV2('gnb');
+    // The formed opening already owns Senegal and already has the permanent
+    // human war. Remove only that war so this selector can quote the same
+    // contiguous objective as a fresh expansion candidate; keep Dawnline's
+    // separate bilateral conflict active.
+    engine.state.wars = engine.state.wars.filter((war) => !(
+      war.defenderId === humanId && war.attackerId === nationIdV2('rai')
+    ));
     engine.state.territories[territoryIdV2('sen')]!.owner = nationIdV2('rai');
     engine.state.territories[territoryIdV2('sen')]!.coreOwner = nationIdV2('rai');
+    engine.state.territories[territoryIdV2('sen')]!.army.manpower = 1;
     engine.state.polarEndgame.rogueWaveManpowerByTerritory[territoryIdV2('sen')] = 1;
-    const candidates = accessibleRogueTargetsV2(engine.state, engine.content);
-    expect(candidates.length).toBeGreaterThan(0);
-    expect(candidates.every((candidate) => candidate.access === 'land')).toBe(true);
+    const candidates = accessibleRogueTargetsV2(engine.state, engine.content)
+      .filter((candidate) => candidate.targetId === humanId);
+    expect(candidates).toEqual([{ targetId: humanId, access: 'land' }]);
   });
 });

@@ -10,7 +10,6 @@ import {
   ECONOMY_ANNUAL_GROWTH_MIN,
   TERRAIN_DEFENSE_MODIFIER,
   TERRAIN_ECONOMY_GROWTH_ADJUSTMENT,
-  WAR_ACCESS_SUPPLY_MULTIPLIER,
   clamp,
 } from './balance';
 import {
@@ -23,7 +22,7 @@ import { selectWeeklyFinanceBreakdownV2 } from './selectors';
 import { traitTerritoryContextV2 } from './traitContext';
 import { countryTraitFactorV2 } from './traits';
 import { nationIdV2, territoryIdV2 } from './types';
-import { supplyFactorV2 } from './war';
+import { frontCapacitySupplyQuoteV2 } from './war';
 
 describe('multi-terrain runtime', () => {
   it('keeps map validation strict, including the landlocked coastal rule', () => {
@@ -74,24 +73,19 @@ describe('multi-terrain runtime', () => {
       .some((connection) => connection.kind === 'sea')).toBe(false);
   });
 
-  it('keeps the naval supply penalty visible after a strong route reaches its cap', () => {
+  it('keeps naval capacity at half while full-budget readiness stays readable', () => {
     const state = createWorldStateV2(90_202);
     const belgium = nationIdV2('bel');
     const territory = territoryIdV2('bel');
     state.players[belgium]!.research.effectLevels.supply = 100;
 
-    const landSupply = supplyFactorV2(
-      state, WORLD_CONTENT_V2, belgium, territory, 'land',
-    );
-    const navalSupply = supplyFactorV2(
-      state, WORLD_CONTENT_V2, belgium, territory, 'naval',
-    );
+    const landQuote = frontCapacitySupplyQuoteV2(state, territory, 'land');
+    const navalQuote = frontCapacitySupplyQuoteV2(state, territory, 'naval');
 
-    expect(landSupply).toBe(1);
-    expect(navalSupply / landSupply).toBeCloseTo(
-      WAR_ACCESS_SUPPLY_MULTIPLIER.naval / WAR_ACCESS_SUPPLY_MULTIPLIER.land,
-      10,
-    );
+    expect(landQuote.readiness).toBe(1);
+    expect(navalQuote.readiness).toBe(1);
+    expect(navalQuote.capacityShare).toBe(0.04);
+    expect(navalQuote.capacityBudget).toBeCloseTo(landQuote.capacityBudget * 0.5, 9);
   });
 
   it('projects weighted terrain growth inside the national cap and applies it once', () => {

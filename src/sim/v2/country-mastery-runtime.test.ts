@@ -296,7 +296,7 @@ describe('Country Mastery simulation runtime', () => {
       / baselineOperatingCost).toBeCloseTo(blend.standingOperatingCostMultiplier, 6);
   });
 
-  it('uses source-country land/naval logistics mastery on a fused empire route', () => {
+  it('keeps legacy logistics mastery neutral under the fixed Army Capacity contract', () => {
     const routeContent = (
       kind: 'land' | 'sea',
       distanceKm?: number,
@@ -366,17 +366,13 @@ describe('Country Mastery simulation runtime', () => {
       LUXEMBOURG_TERRITORY,
       BELGIUM_TERRITORY,
     );
-    expect(landSupplyAfter).toBeCloseTo(Math.min(1, landSupplyBefore * 1.10), 9);
-    expect(landTransferAfter.throughputMultiplier)
-      .toBeCloseTo(Math.min(1, landTransferBefore.throughputMultiplier * 1.20), 8);
+    expect(landSupplyAfter).toBe(landSupplyBefore);
+    expect(landTransferAfter).toEqual(landTransferBefore);
 
     const navalContent = routeContent('sea', 7_000);
     const navalState = createWorldStateV2(95_106, navalContent);
     navalState.territories[LUXEMBOURG_TERRITORY]!.owner = BELGIUM;
     navalState.territories[LUXEMBOURG_TERRITORY]!.integration = 1;
-    // A displaced capital leaves meaningful route headroom below the physical
-    // naval ceiling, making the supply mastery contribution observable.
-    navalState.players[BELGIUM]!.capitalId = territoryIdV2('usa');
     const navalSupplyBefore = supplyFactorV2(
       navalState,
       navalContent,
@@ -423,13 +419,8 @@ describe('Country Mastery simulation runtime', () => {
       BELGIUM_TERRITORY,
       1,
     );
-    expect(navalSupplyAfter).toBeGreaterThan(navalSupplyBefore);
-    expect(navalTransferAfter.throughputMultiplier).toBeCloseTo(
-      Math.min(0.75, navalTransferBefore.throughputMultiplier * 1.10),
-      8,
-    );
-    expect(navalTransferAfter.costPerMillion)
-      .toBeCloseTo(navalTransferBefore.costPerMillion * 0.80, 10);
+    expect(navalSupplyAfter).toBe(navalSupplyBefore);
+    expect(navalTransferAfter).toEqual(navalTransferBefore);
   });
 
   it('applies field-medicine mastery to the local army taking casualties', () => {

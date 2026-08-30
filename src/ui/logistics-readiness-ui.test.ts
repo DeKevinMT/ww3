@@ -11,11 +11,11 @@ function methodSource(start: string, end: string): string {
 
 describe('Logistics Readiness UI contract', () => {
   it('keeps the topbar actionable and honest in peace and across multiple fronts', () => {
-    expect(worldUiSource).toContain("? 'IDLE'");
+    expect(worldUiSource).toContain("? 'NO ACTIVE FRONTS'");
     expect(worldUiSource).toContain('WEAK ${logisticsReadiness.weakest?.percent');
-    expect(worldUiSource).toContain('<span>LOGISTICS</span>');
+    expect(worldUiSource).toContain('<span>WAR SUPPLY</span>');
     expect(worldUiSource).not.toContain('<small>${escapeHtml(logisticsDetail)}</small>');
-    expect(worldUiSource).toContain('class="topbar-progress-bar" role="progressbar" aria-label="Logistics readiness"');
+    expect(worldUiSource).toContain('class="topbar-progress-bar" role="progressbar" aria-label="War supply delivered"');
     expect(worldUiSource).toMatch(/top-metric--logistics[\s\S]*data-panel="war"/);
   });
 
@@ -24,12 +24,11 @@ describe('Logistics Readiness UI contract', () => {
     const card = methodSource('  private renderWarCard(', '  private renderTerritoryPanel(');
     expect(panel).toContain('logisticsReadiness: EmpireLogisticsReadinessV2');
     expect(worldUiSource.match(/selectEmpireLogisticsReadinessV2\(/g)).toHaveLength(1);
-    expect(panel).toContain('${logisticsReadiness.percent}% ${logisticsReadiness.statusLabel}');
+    expect(panel).toContain("${logisticsReadiness.percent}% ${logisticsReadiness.frontCount === 0 ? 'NO WAR' : logisticsReadiness.statusLabel}");
     expect(panel).toContain('weakest ${logisticsReadiness.weakest?.percent');
-    expect(card).toContain("'WEAKEST LOGISTICS' : 'LOGISTICS'");
-    expect(card).toContain('${frontLogistics.percent}% ${frontLogistics.statusLabel}');
-    expect(card).toContain('${frontLogistics.routeLabel}');
-    expect(card).toContain('${frontLogistics.limitingReason}');
+    expect(card).toContain('<small>WAR SUPPLY</small>');
+    expect(card).toContain('${frontLogistics.percent}% SUPPLIED');
+    expect(card).toContain('frontLogistics?.ruleLabel');
     expect(card).toContain('NEXT BATTLE ${frontLogistics.nextBattleWeeks}W');
   });
 
@@ -42,12 +41,12 @@ describe('Logistics Readiness UI contract', () => {
       '  private renderWarConfirmation(',
       '  private cachedWarLogisticsPreview(',
     );
-    expect(target).toContain('LOGISTICS ${readiness.percent}% ${readiness.statusLabel}');
+    expect(target).toContain('${readiness.percent}% SUPPLIED');
+    expect(target).toContain('${supplyRule}');
     expect(target).toContain('${escapeHtml(readiness.limitingReason)}');
-    expect(target.match(/LOGISTICS \$\{/g)).toHaveLength(1);
-    expect(review).toContain('<span>LOGISTICS READINESS</span>');
-    expect(review).toContain('${reviewLogistics.percent}% ${reviewLogistics.statusLabel}');
-    expect(review).toContain('${escapeHtml(reviewLogistics.limitingReason)}');
+    expect(review).toContain('<span>WAR SUPPLY</span>');
+    expect(review).toContain('${reviewLogistics.percent}% SUPPLIED');
+    expect(review).toContain('${supplyRule}');
     expect(review).toContain('NAVAL ROUTE');
     expect(review).toContain('LAND ROUTE');
     const reviewReadinessStart = review.indexOf(

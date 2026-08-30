@@ -10,6 +10,21 @@ import {
 } from './WorldUIV2';
 
 describe('viewer-local map knowledge', () => {
+  it('projects account-selected flags for human empires without mutating simulation state', () => {
+    const engine = new WorldEngineV2(96_409);
+    const playerId = engine.state.humanPlayerId;
+    const adapter = createMapEngineAdapter(
+      engine,
+      () => engine.globalRanking(),
+      new Map(),
+      {},
+      new Map([[playerId, 'jpn']]),
+    );
+    adapter.refreshSnapshot?.();
+    expect(adapter.player(playerId)?.flagCountryId).toBe('jpn');
+    expect(engine.state.players[playerId]).not.toHaveProperty('flagCountryId');
+  });
+
   it('projects only scenario identity and strategic connection targets', () => {
     const engine = new WorldEngineV2(96_410);
     const projection = mapWorldContentProjectionV2(engine.content);

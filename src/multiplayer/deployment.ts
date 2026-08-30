@@ -8,8 +8,19 @@ import {
   registerCountryMasteryRuntimeV2,
   resetCountryMasteryRuntimeV2,
 } from '../sim/v2/countryMasteryRuntime';
-import { prepareMultiplayerSurvivalRosterV2 } from '../sim/v2/survivalEmpire';
-import { nationIdV2, type CommandResultV2, type PlayerId } from '../sim/v2/types';
+import { processRogueAiSurvivalV2 } from '../sim/v2/survival';
+import {
+  prepareMultiplayerSurvivalRosterV2,
+  selectSurvivalDawnlineLeaderIdV2,
+} from '../sim/v2/survivalEmpire';
+import { SURVIVAL_DAWNLINE_ACCORD_NAME_V2 } from '../sim/v2/survivalOrdinaryAi';
+import {
+  nationIdV2,
+  type CommandResultV2,
+  type PlayerId,
+  type WorldStateV2,
+} from '../sim/v2/types';
+import { synchronizeWarFrontsV2 } from '../sim/v2/war';
 import { WorldEngineV2 } from '../sim/v2/WorldEngineV2';
 import {
   MULTIPLAYER_DEPLOYMENT_SCHEMA_VERSION,
@@ -24,6 +35,7 @@ export function createNeutralMultiplayerDeploymentSnapshotV1(
   return {
     schemaVersion: MULTIPLAYER_DEPLOYMENT_SCHEMA_VERSION,
     countryId: nationIdV2(countryId),
+    empireFlag: { kind: 'country', countryId: nationIdV2(countryId) },
     activeDoctrine: null,
     countryMastery: {
       openingArmyMultiplier: 1,
@@ -42,12 +54,22 @@ export function createNeutralMultiplayerDeploymentSnapshotV1(
       casualtyMultiplier: 1,
     },
     apex: {
-      // Compatibility keys: current / maximum neural-shield integrity.
-      manpower: 0.0008,
-      capacity: 0.0008,
-      trainedReserves: 0.00008,
-      baseAttack: 125,
-      baseDefense: 125,
+      shield: {
+        integrity: 0.0004,
+        maxIntegrity: 0.0004,
+        rechargeBuffer: 0.00004,
+        rechargeMultiplier: 1,
+        pulseAttack: 0.001,
+        pulseProjectionRetention: 0,
+        pulseChargeBonusPerStep: 0,
+        interceptEfficiency: 1,
+        impactRecoveryShare: 0,
+        defensivePulseMultiplier: 1,
+      },
+      attackMultiplier: 1.12,
+      defenseMultiplier: 1.07,
+      armyCasualtyMultiplier: 1,
+      armyPeaceRecoveryMultiplier: 1,
       treasury: 0,
       annualOutput: 0.015,
       supplyStock: 0.010,
@@ -58,11 +80,14 @@ export function createNeutralMultiplayerDeploymentSnapshotV1(
         rapidResponse: false,
         assaultSpecialist: false,
         defenseSpecialist: false,
+        forceMultiplier: false,
         emergencyExtractionCharges: 0,
       },
       empireSupport: {
         recruitmentMultiplier: 1,
         reserveTrainingMultiplier: 1,
+        armyCasualtyMultiplier: 1,
+        armyPeaceRecoveryMultiplier: 1,
         annualFoodOutput: 0,
         foodProductionMultiplier: 1,
         foodStorageMultiplier: 1,
@@ -82,6 +107,7 @@ export function createMultiplayerDeploymentSnapshotV1(
   return validateMultiplayerDeploymentSnapshotV1({
     schemaVersion: MULTIPLAYER_DEPLOYMENT_SCHEMA_VERSION,
     countryId: canonicalCountryId,
+    empireFlag: profile.empireFlag,
     activeDoctrine: loadout.activeDoctrine,
     countryMastery: {
       openingArmyMultiplier: loadout.masteryMilitary.openingArmyMultiplier,
@@ -118,6 +144,49 @@ export function registerMultiplayerDeploymentRuntimeV1(
   }
 }
 
+export interface SurvivalCoopSeatRolesV1 {
+  readonly empireLeaderId: PlayerId;
+  readonly dawnlineLeaderId: PlayerId;
+}
+
+/**
+ * The canonical primary country is selected by the room host before seats are
+ * configured. The only other Survival seat therefore becomes Dawnline's
+ * sovereign human command, independent of peer sorting and reconnect order.
+ */
+export function resolveSurvivalCoopSeatRolesV1(
+  state: Pick<WorldStateV2, 'humanPlayerId' | 'humanPlayerIds' | 'players'>,
+): SurvivalCoopSeatRolesV1 | undefined {
+  const humanIds = [...new Set(state.humanPlayerIds)]
+    .sort((left, right) => left.localeCompare(right));
+  if (humanIds.length !== 2 || !humanIds.includes(state.humanPlayerId)) return undefined;
+  const dawnlineLeaderId = humanIds.find((playerId) => playerId !== state.humanPlayerId);
+  if (!dawnlineLeaderId || !state.players[state.humanPlayerId]
+    || !state.players[dawnlineLeaderId]) return undefined;
+  return {
+    empireLeaderId: state.humanPlayerId,
+    dawnlineLeaderId,
+  };
+}
+
+function establishSurvivalCoopAllianceV1(
+  state: WorldStateV2,
+  roles: SurvivalCoopSeatRolesV1,
+): void {
+  const [leftId, rightId] = [roles.empireLeaderId, roles.dawnlineLeaderId]
+    .sort((left, right) => left.localeCompare(right)) as [PlayerId, PlayerId];
+  state.players[roles.dawnlineLeaderId]!.empireName = SURVIVAL_DAWNLINE_ACCORD_NAME_V2;
+  state.allianceOffers = state.allianceOffers.filter((offer) => (
+    offer.fromId !== roles.empireLeaderId && offer.fromId !== roles.dawnlineLeaderId
+      && offer.toId !== roles.empireLeaderId && offer.toId !== roles.dawnlineLeaderId
+  ));
+  if (!state.alliances.some((alliance) => (
+    alliance.leftId === leftId && alliance.rightId === rightId
+  ))) state.alliances.push({ leftId, rightId, formedTick: state.tick });
+  state.alliances.sort((left, right) => left.leftId.localeCompare(right.leftId)
+    || left.rightId.localeCompare(right.rightId));
+}
+
 /**
  * Tick-zero host authority: all chosen countries keep their own mastery and
  * receive their own APEX. Survival never expands these seats to a solo roster.
@@ -145,12 +214,21 @@ export function applyMultiplayerDeploymentsV1(
   }
 
   if (engine.content.metadata?.scenarioId === 'survival') {
+    const roles = resolveSurvivalCoopSeatRolesV1(engine.state);
+    if (!roles) {
+      return { accepted: false, reason: 'Survival co-op requires one Empire seat and one Dawnline seat.' };
+    }
     const prepared = prepareMultiplayerSurvivalRosterV2(
       engine.state,
       engine.content,
       humanIds,
     );
     if (!prepared.accepted) return prepared;
+    if (prepared.dawnlineLeaderId !== roles.dawnlineLeaderId
+      || selectSurvivalDawnlineLeaderIdV2(engine.state) !== roles.dawnlineLeaderId) {
+      return { accepted: false, reason: 'The Dawnline command could not be assigned deterministically.' };
+    }
+    establishSurvivalCoopAllianceV1(engine.state, roles);
   }
 
   for (const countryId of humanIds) {
@@ -170,5 +248,9 @@ export function applyMultiplayerDeploymentsV1(
     };
   }
   synchronizeArmyCapacityV2(engine.state, engine.content);
+  if (engine.content.metadata?.scenarioId === 'survival') {
+    processRogueAiSurvivalV2(engine.state, engine.content);
+    synchronizeWarFrontsV2(engine.state, engine.content);
+  }
   return { accepted: true };
 }

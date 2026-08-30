@@ -24,6 +24,24 @@ describe('Direct Connect lobby model', () => {
     expect(lobby.snapshot().started).toBe(true);
   });
 
+  it('keeps Survival co-op to one Empire command and one Dawnline command', () => {
+    const survival = normalizeScenarioConfigV2({ mode: 'survival', seed: 404_456 });
+    const lobby = new HostLobbyModel('host', 'Alice', survival);
+    expect(lobby.connect('guest', 'Bob').accepted).toBe(true);
+    expect(lobby.connect('third', 'Charlie').accepted).toBe(true);
+    lobby.apply('host', selection(nationIdV2('grl')));
+    lobby.apply('guest', selection(nationIdV2('can')));
+    lobby.apply('third', selection(nationIdV2('isl')));
+    for (const peerId of ['host', 'guest', 'third']) {
+      lobby.apply(peerId, { type: 'set-ready', ready: true });
+    }
+
+    expect(lobby.startBlockReason()).toBe(
+      'Survival co-op deploys exactly two sovereign commands.',
+    );
+    expect(lobby.apply('host', { type: 'start' }).accepted).toBe(false);
+  });
+
   it('does not let a guest start and reserves its country during reconnect grace', () => {
     let now = 1_000;
     const lobby = new HostLobbyModel('host', 'Alice', undefined, () => now, 5_000);

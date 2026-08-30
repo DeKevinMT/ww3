@@ -58,7 +58,10 @@ function createTerritoryState(id: TerritoryId, content: WorldContentV2): Territo
   const unmodifiedCapacity = initialTerritoryArmyCapacityV2(content, id);
   const capacity = round(unmodifiedCapacity
     * countryTraitFactorV2(definition.initialOwnerId, 'army-capacity'));
-  const openingFill = initialArmyCapacityRatioV2(content, definition.initialOwnerId);
+  const isSovereignCountry = (definition.kind ?? 'sovereign') === 'sovereign';
+  const openingFill = isSovereignCountry
+    ? 1
+    : initialArmyCapacityRatioV2(content, definition.initialOwnerId);
   return {
     owner: definition.initialOwnerId,
     coreOwner: definition.initialOwnerId,
@@ -66,11 +69,9 @@ function createTerritoryState(id: TerritoryId, content: WorldContentV2): Territo
     economy: definition.baseline.gdp,
     integration: 1,
     army: {
-      // Capacity traits create future room, not a free opening army.
-      manpower: round(Math.min(
-        capacity,
-        unmodifiedCapacity * openingFill,
-      )),
+      // Countries enter fully ready. Antarctic machine infrastructure retains
+      // authored staging room for the separate, provenance-tracked wave flow.
+      manpower: round(Math.min(capacity, unmodifiedCapacity * openingFill)),
       capacity,
       baseAttack: origin.militaryAttackRating ?? origin.militaryQuality ?? 1,
       baseDefense: origin.militaryDefenseRating ?? origin.militaryQuality ?? 1,
@@ -84,11 +85,11 @@ function seedScenarioPressureV2(state: WorldStateV2, content: WorldContentV2): v
   // They begin with damaged forces and output and remain visible in the
   // campaign report while the national AI works on stabilisation.
   const crises = [
-    { nation: 'sdn', label: 'Sudan civil war', economy: 0.78, army: 0.72 },
-    { nation: 'mmr', label: 'Myanmar conflict', economy: 0.84, army: 0.82 },
-    { nation: 'yem', label: 'Yemen conflict', economy: 0.72, army: 0.78 },
-    { nation: 'som', label: 'Somalia conflict', economy: 0.80, army: 0.82 },
-    { nation: 'cod', label: 'Eastern DR Congo conflict', economy: 0.88, army: 0.85 },
+    { nation: 'sdn', label: 'Sudan civil war', economy: 0.78 },
+    { nation: 'mmr', label: 'Myanmar conflict', economy: 0.84 },
+    { nation: 'yem', label: 'Yemen conflict', economy: 0.72 },
+    { nation: 'som', label: 'Somalia conflict', economy: 0.80 },
+    { nation: 'cod', label: 'Eastern DR Congo conflict', economy: 0.88 },
   ] as const;
   for (const crisis of crises) {
     const nationId = content.nationIds.find((id) => String(id) === crisis.nation);
@@ -96,13 +97,12 @@ function seedScenarioPressureV2(state: WorldStateV2, content: WorldContentV2): v
     for (const [territoryId, territory] of Object.entries(state.territories) as Array<[TerritoryId, TerritoryStateV2]>) {
       if (territory.owner !== nationId) continue;
       territory.economy = round(Math.max(0.10, territory.economy * crisis.economy));
-      territory.army.manpower = round(Math.min(territory.army.capacity, territory.army.manpower * crisis.army));
       state.events.push({
         id: state.nextEventId++,
         tick: 0,
         kind: 'critical',
         severity: 'info',
-        message: `${crisis.label} is disrupting national output and forces.`,
+        message: `${crisis.label} is disrupting national output.`,
         territoryId,
         playerId: nationId,
         unread: true,
@@ -352,6 +352,14 @@ export function createWorldStateV2(
   // selected opening country's capacity trait onto the same live-context path
   // used after every later lobby roster change.
   synchronizeArmyCapacityV2(state, content);
+  for (const [territoryId, territory] of Object.entries(state.territories) as Array<[
+    TerritoryId,
+    TerritoryStateV2,
+  ]>) {
+    if ((content.territories[territoryId]?.kind ?? 'sovereign') === 'sovereign') {
+      territory.army.manpower = territory.army.capacity;
+    }
+  }
   // Storage selection builds an ephemeral ownership index. A freshly created
   // state is intentionally returned with that cache cold so callers may still
   // prepare fixtures/scenarios before the first derived selection.

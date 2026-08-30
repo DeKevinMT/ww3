@@ -1,9 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { createWorldStateV2 } from './bootstrap';
-import {
-  NAVAL_ROUTE_SUPPLY_MULTIPLIER_MIN,
-  WAR_ACCESS_SUPPLY_MULTIPLIER,
-} from './balance';
 import { WORLD_CONTENT_V2, type WorldContentV2 } from './content';
 import { nationIdV2, territoryIdV2 } from './types';
 import { enterPostBlackoutCampaignForTestV2 } from './testSupport';
@@ -30,12 +26,9 @@ describe('attack review logistics preview', () => {
     expect(preview.mobilizationCost).toBe(0);
     expect(preview.routeOperationMultiplier).toBeGreaterThanOrEqual(1.35);
     expect(preview.routeOperationMultiplier).toBeLessThanOrEqual(2.15);
-    expect(preview.routeSupplyMultiplier).toBeLessThanOrEqual(
-      WAR_ACCESS_SUPPLY_MULTIPLIER.naval,
-    );
-    expect(preview.routeSupplyMultiplier).toBeGreaterThanOrEqual(
-      NAVAL_ROUTE_SUPPLY_MULTIPLIER_MIN,
-    );
+    expect(preview.routeSupplyMultiplier).toBe(0.5);
+    expect(preview.attackCapacityShare).toBe(0.04);
+    expect(preview.attackSupplyLabel).toBe('4% CAP / ATTACK · NAVAL');
     expect(preview.projectedWeeklyWarOperations).toBeGreaterThan(
       preview.currentWeeklyWarOperations,
     );
@@ -60,6 +53,8 @@ describe('attack review logistics preview', () => {
     expect(preview.distanceKm).toBeUndefined();
     expect(preview.routeOperationMultiplier).toBe(1);
     expect(preview.routeSupplyMultiplier).toBe(1);
+    expect(preview.attackCapacityShare).toBe(0.08);
+    expect(preview.attackSupplyLabel).toBe('8% CAP / ATTACK');
     expect(preview.routeDistancePressure).toBe(0);
     expect(preview.projectedWeeklyWarOperations).toBeGreaterThan(
       preview.currentWeeklyWarOperations,
@@ -115,10 +110,9 @@ describe('attack review logistics preview', () => {
       .toBeGreaterThan(regional.additionalWeeklyWarOperations);
     expect(pacific.additionalWeeklyWarOperations)
       .toBeGreaterThan(longRange.additionalWeeklyWarOperations);
-    expect(regional.routeSupplyMultiplier).toBeGreaterThan(longRange.routeSupplyMultiplier);
-    expect(longRange.routeSupplyMultiplier).toBeGreaterThan(pacific.routeSupplyMultiplier);
-    expect(regional.routeSupplyMultiplier).toBeCloseTo(0.8481, 3);
-    expect(longRange.routeSupplyMultiplier).toBeCloseTo(0.7528, 3);
-    expect(pacific.routeSupplyMultiplier).toBe(NAVAL_ROUTE_SUPPLY_MULTIPLIER_MIN);
+    expect(regional.routeSupplyMultiplier).toBe(0.5);
+    expect(longRange.routeSupplyMultiplier).toBe(0.5);
+    expect(pacific.routeSupplyMultiplier).toBe(0.5);
+    expect(regional.attackCapacityShare).toBe(0.04);
   });
 });

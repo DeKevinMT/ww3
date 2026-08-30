@@ -48,8 +48,8 @@ const sizeBoundsCache = new WeakMap<WorldContentV2, { min: SizeAxesV2; max: Size
  * Signal Purge is now a campaign-paced liberation project rather than a
  * multi-generation occupation. The immutable size curve runs from one year
  * for the smallest countries to six years for the single largest country.
- * Physical APEX presence then compresses that work to roughly four months up
- * to two years, while a remote relay remains deliberately slower.
+ * APEX priority bandwidth then compresses that work to roughly four months up
+ * to two years, while secondary network relays remain deliberately slower.
  */
 const SMALL_COUNTRY_INTEGRATION_YEARS = 1;
 const INTEGRATION_LINEAR_YEARS = 2;
@@ -187,9 +187,9 @@ export interface IntegrationCompletionV2 {
 
 /** Remote neural relays continue every purge without pretending APEX is physically present. */
 export const APEX_SIGNAL_PURGE_RELAY_PERCENT_V2 = 50;
-/** Physical APEX presence turns one calendar week into three weeks of purge work. */
+/** APEX priority bandwidth turns one calendar week into three weeks of purge work. */
 export const APEX_SIGNAL_PURGE_ON_SITE_SPEED_V2 = 3;
-/** A supplied live front contributes exactly one third of APEX's on-site work rate. */
+/** A supplied live front contributes exactly one third of APEX's focused work rate. */
 export const APEX_SIGNAL_PURGE_FRONT_SPEED_V2 = 1;
 const APEX_SIGNAL_PURGE_RELAY_WINDOW_TICKS_V2 = 10;
 const APEX_SIGNAL_PURGE_RELAY_PRODUCTIVE_TICKS_V2 = Math.round(
@@ -198,6 +198,8 @@ const APEX_SIGNAL_PURGE_RELAY_PRODUCTIVE_TICKS_V2 = Math.round(
 );
 
 export type ApexSignalPurgeModeV2 =
+  | 'network-focus'
+  /** Deprecated compatibility modes; the distributed network never emits these. */
   | 'on-site'
   | 'en-route'
   | 'relay'
@@ -211,7 +213,7 @@ export interface ApexSignalPurgeStatusV2 {
   mode: ApexSignalPurgeModeV2;
   label: string;
   focused: boolean;
-  /** Calendar ETA under the present physical/front state; absent only while front supply is lost. */
+  /** Calendar ETA under the present network/front state; absent only while front supply is lost. */
   projectedCompletesTick?: number;
   remainingWeeks?: number;
 }
@@ -236,43 +238,30 @@ export function apexSignalPurgeRelayActiveV2(
   return phase < APEX_SIGNAL_PURGE_RELAY_PRODUCTIVE_TICKS_V2;
 }
 
-function apexSignalPurgePhysicalStateV2(
+function apexSignalPurgeNetworkStateV2(
   state: WorldStateV2,
   ownerId: PlayerId,
-  focusId: TerritoryId,
 ): {
-  onSite: boolean;
-  enRoute: boolean;
-  travelRemaining: number;
+  focused: boolean;
   legacyWithoutForce: boolean;
 } {
   const force = state.commanderForces?.[ownerId];
-  const operational = Boolean(force
-    && force.army.manpower > 0.000000001
-    && force.economy.supplyStock > 0.000000001);
-  const recovering = force?.mission === 'evacuate' || force?.mission === 'hq-training';
-  const destinationId = force?.transit?.path.at(-1);
-  const enRoute = Boolean(operational
-    && !recovering
-    && force?.transit
-    && destinationId === focusId
-    && !force.front);
-  const onSite = Boolean(operational
-    && !recovering
-    && !force?.transit
-    && !force?.front
-    && force?.mission === 'standby'
-    && force.locationId === focusId);
+  const ownerAtWar = state.wars.some((war) => (
+    war.attackerId === ownerId || war.defenderId === ownerId
+  ));
+  const focused = Boolean(force
+    && state.players[ownerId]
+    && force.shield.integrity > 0.000000001
+    && force.mission !== 'evacuate'
+    && force.mission !== 'hq-training'
+    // The distributed network always protects live wars first. A supplied
+    // purge front keeps 1x work and remote nodes keep their relay cadence;
+    // full 3x focus resumes automatically as soon as the Empire is at peace.
+    && !ownerAtWar);
   return {
-    onSite,
-    enRoute,
-    travelRemaining: enRoute && force?.transit
-      ? Math.max(0, force.transit.arriveTick - state.tick)
-      : 0,
+    focused,
     // Pre-APEX authenticated saves and focused simulation fixtures never had
-    // a physical force. Keep their already-promised calendar unchanged; every
-    // new account campaign installs APEX at week zero and uses the physical
-    // on-site/relay rules below.
+    // a force. Keep their already-promised calendar unchanged.
     legacyWithoutForce: !force,
   };
 }
@@ -366,7 +355,7 @@ function relayProductiveWeeksV2(
 
 /**
  * Compact, truthful presentation model. The same work rates drive both the
- * live simulation and these ETAs: on-site APEX 3×, supplied fronts 1× and
+ * live simulation and these ETAs: focused network bandwidth 3×, supplied fronts 1× and
  * remote neural relay 50%. Only a genuinely unsupplied live front has no ETA.
  */
 export function selectApexSignalPurgeStatusesV2(
@@ -407,26 +396,23 @@ export function selectApexSignalPurgeStatusesV2(
       territoryIntegrationDurationWeeksV2(content, territoryId),
     ));
     const focused = index === 0;
-    const physical = focused
-      ? apexSignalPurgePhysicalStateV2(state, ownerId, territoryId)
-      : { onSite: false, enRoute: false, travelRemaining: 0, legacyWithoutForce: false };
+    const network = focused
+      ? apexSignalPurgeNetworkStateV2(state, ownerId)
+      : { focused: false, legacyWithoutForce: false };
     let mode: ApexSignalPurgeModeV2;
     let label: string;
-    if (focused && physical.onSite) {
-      mode = 'on-site';
-      label = `ON-SITE PURGE · ${APEX_SIGNAL_PURGE_ON_SITE_SPEED_V2}×`;
+    if (focused && network.focused) {
+      mode = 'network-focus';
+      label = `APEX PRIORITY PURGE · ${APEX_SIGNAL_PURGE_ON_SITE_SPEED_V2}×`;
     } else if (front.supplied) {
       mode = 'front';
       label = `FRONT PURGE · ${APEX_SIGNAL_PURGE_FRONT_SPEED_V2}×`;
     } else if (front.active) {
       mode = 'paused-front';
       label = 'WAITING FOR FRONT SUPPLY';
-    } else if (focused && physical.legacyWithoutForce) {
+    } else if (focused && network.legacyWithoutForce) {
       mode = 'standard';
       label = 'INTEGRATING';
-    } else if (focused && physical.enRoute) {
-      mode = 'en-route';
-      label = 'APEX EN ROUTE';
     } else {
       mode = 'relay';
       label = `REMOTE RELAY ${APEX_SIGNAL_PURGE_RELAY_PERCENT_V2}%`;
@@ -434,34 +420,11 @@ export function selectApexSignalPurgeStatusesV2(
 
     let projectedCompletesTick: number | undefined;
     if (mode !== 'paused-front') {
-      if (mode === 'on-site') {
+      if (mode === 'network-focus') {
         projectedCompletesTick = state.tick
           + Math.ceil(productiveWeeks / APEX_SIGNAL_PURGE_ON_SITE_SPEED_V2);
       } else if (mode === 'standard' || mode === 'front') {
         projectedCompletesTick = state.tick + productiveWeeks;
-      } else if (mode === 'en-route') {
-        const arrivalTick = state.tick + physical.travelRemaining;
-        const relayCompletesTick = relayCompletionTickV2(
-          territoryId,
-          state.tick,
-          productiveWeeks,
-        );
-        if (relayCompletesTick <= arrivalTick) {
-          // Integration advances before APEX travel on each authoritative
-          // tick. A nearly complete purge can therefore finish through the
-          // relay while the dome is still moving; never hold its HUD ETA at
-          // the later arrival tick.
-          projectedCompletesTick = relayCompletesTick;
-        } else {
-          const remoteProgress = relayProductiveWeeksV2(
-            territoryId,
-            state.tick,
-            physical.travelRemaining,
-          );
-          projectedCompletesTick = arrivalTick
-            + Math.ceil((productiveWeeks - remoteProgress)
-              / APEX_SIGNAL_PURGE_ON_SITE_SPEED_V2);
-        }
       } else {
         projectedCompletesTick = relayCompletionTickV2(
           territoryId,
@@ -485,8 +448,8 @@ export function selectApexSignalPurgeStatusesV2(
 
 /**
  * Narrative hand-off: callers key their exactly-once transmission to the
- * returned territory id. A result exists only after the projected APEX dome and
- * its neural dome have arrived and the full-speed purge is genuinely active.
+ * returned territory id. A result exists only after the distributed APEX
+ * network has committed priority bandwidth and the full-speed purge is active.
  */
 export function selectApexSignalPurgeArrivalV2(
   state: WorldStateV2,
@@ -494,7 +457,7 @@ export function selectApexSignalPurgeArrivalV2(
   ownerId: PlayerId,
 ): ApexSignalPurgeStatusV2 | undefined {
   return selectApexSignalPurgeStatusesV2(state, content, ownerId)
-    .find((status) => status.focused && status.mode === 'on-site');
+    .find((status) => status.focused && status.mode === 'network-focus');
 }
 
 export function selectApexSignalPurgeStatusV2(
@@ -964,20 +927,20 @@ export function advanceTerritoryIntegrationProgramsV2(
         program.completesTick,
         state.tick + territoryIntegrationDurationWeeksV2(content, territoryId),
       );
-      const physical = focused
-        ? apexSignalPurgePhysicalStateV2(state, territory.owner, territoryId)
-        : { onSite: false, enRoute: false, travelRemaining: 0, legacyWithoutForce: false };
-      const apexOnSiteBoost = focused && physical.onSite;
-      const frontWork = !apexOnSiteBoost && front.supplied;
+      const network = focused
+        ? apexSignalPurgeNetworkStateV2(state, territory.owner)
+        : { focused: false, legacyWithoutForce: false };
+      const apexPriorityBoost = focused && network.focused;
+      const frontWork = !apexPriorityBoost && front.supplied;
       const standardLegacyWork = focused
-        && physical.legacyWithoutForce
+        && network.legacyWithoutForce
         && !front.active;
-      const remoteRelayWork = !apexOnSiteBoost
+      const remoteRelayWork = !apexPriorityBoost
         && !frontWork
         && !standardLegacyWork
         && !front.active
         && apexSignalPurgeRelayActiveV2(territoryId, state.tick);
-      const workRate = apexOnSiteBoost
+      const workRate = apexPriorityBoost
         ? APEX_SIGNAL_PURGE_ON_SITE_SPEED_V2
         : frontWork ? APEX_SIGNAL_PURGE_FRONT_SPEED_V2
           : standardLegacyWork || remoteRelayWork ? 1 : 0;

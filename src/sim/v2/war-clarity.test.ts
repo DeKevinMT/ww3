@@ -55,8 +55,13 @@ describe('clear war decisions and attrition', () => {
 
   it('cuts active-war recruitment to zero for every participant', () => {
     const engine = isolatedEngine(1_502, 'chn');
-    // The Netherlands has no recruitment trait, so this remains a clean test
-    // of the global wartime factor rather than India's peacetime-only bonus.
+    // Sovereign countries now start full, so author a real peacetime gap before
+    // comparing it with the wartime freeze.
+    for (const territory of Object.values(engine.state.territories)) {
+      if (territory.owner === id('nld')) {
+        territory.army.manpower = territory.army.capacity * 0.50;
+      }
+    }
     const peace = selectRecruitmentThroughputV2(engine.state, WORLD_CONTENT_V2, id('nld'));
     engine.state.wars.push({
       id: 'war-training', attackerId: id('chn'), defenderId: id('nld'),

@@ -113,7 +113,7 @@ describe('larger, supply-bound V2 field battles', () => {
     expect(land.defenderLosses).toBeLessThan(land.defenderStrength);
   });
 
-  it('keeps a naval engagement smaller through physical route supply', () => {
+  it('reports full readiness for both fully funded land and naval attacks', () => {
     const state = peerState(9_120_002, 0.10);
     const land = projectCombatExchangeV2(
       state, WORLD_CONTENT_V2, belgium, netherlands,
@@ -124,8 +124,9 @@ describe('larger, supply-bound V2 field battles', () => {
       belgiumTerritory, netherlandsTerritory, 'naval', 1, 1,
     )!;
 
-    expect(naval.attackerSupply).toBeLessThan(land.attackerSupply);
-    expect(naval.defenderLosses).toBeLessThan(land.defenderLosses);
+    expect(naval.attackerSupply).toBe(1);
+    expect(land.attackerSupply).toBe(1);
+    expect(naval.defenderLosses).toBeCloseTo(land.defenderLosses, 9);
     expect(naval.defenderLosses).toBeGreaterThan(0);
   });
 
@@ -139,12 +140,11 @@ describe('larger, supply-bound V2 field battles', () => {
 
     expect(fullStrengthPulses).toBeGreaterThan(20);
     expect(depletedPulses).toBeGreaterThan(20);
-    // The fixed peer fixture resolves in 106 weeks at either force scale. Keep
-    // regression room for adjacent balance changes while protecting the
-    // intended roughly two-year, never near-five-year campaign length.
+    // A force below one complete 8%-capacity supply package fights less
+    // efficiently, but both fixtures must still resolve far before five years.
     expect(fullStrengthWeeks).toBeLessThanOrEqual(130);
     expect(depletedWeeks).toBeLessThanOrEqual(130);
-    expect(Math.abs(fullStrengthPulses - depletedPulses)).toBeLessThanOrEqual(2);
+    expect(depletedPulses).not.toBe(fullStrengthPulses);
   });
 
   it('outpaces normal wartime recovery in the authoritative weekly simulation', () => {

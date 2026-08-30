@@ -31,6 +31,7 @@ import {
 import {
   ANTARCTIC_GATEWAY_IDS_V2,
   deterministicAntarcticGatewayOrderV2,
+  deterministicSurvivalAntarcticGatewayOrderV2,
 } from './antarcticGateways';
 import { contentVersionForWorldContentV2 } from './scenarios';
 import {
@@ -96,23 +97,31 @@ const ARMY_KEYS = ['baseAttack', 'baseDefense', 'capacity', 'manpower'];
 const PROPAGANDA_PROGRAM_KEYS = ['endsTick', 'startedTick', 'totalSuspicionReduction', 'weeklySuspicionReduction'];
 const OPENING_ARMY_BONUS_KEYS = ['expiresTick', 'initialManpower', 'remainingManpower', 'startedTick'];
 const LEGACY_COMMANDER_FORCE_KEYS = [
-  'army', 'capabilities', 'countryTraitScale', 'economy', 'empireSupport', 'front', 'locationId', 'manualHoldUntilTick', 'mission', 'orderSource', 'transit',
+  'capabilities', 'countryTraitScale', 'economy', 'empireSupport', 'front', 'locationId', 'manualHoldUntilTick', 'mission', 'orderSource', 'shield', 'transit',
 ];
 const COMMANDER_FORCE_KEYS = [...LEGACY_COMMANDER_FORCE_KEYS, 'doctrineRuntime'];
 const COMMANDER_CAPABILITY_KEYS = [
   'assaultSpecialist', 'defenseSpecialist', 'emergencyExtractionCharges',
-  'fieldHospital', 'mobileHeadquarters', 'rapidResponse',
+  'fieldHospital', 'forceMultiplier', 'mobileHeadquarters', 'rapidResponse',
 ];
-const COMMANDER_ARMY_KEYS = ['baseAttack', 'baseDefense', 'capacity', 'manpower', 'trainedReserves'];
+const COMMANDER_SHIELD_KEYS = [
+  'attackMultiplier', 'defenseMultiplier', 'integrity', 'maxIntegrity',
+  'pulseAttack', 'rechargeBuffer', 'rechargeMultiplier',
+  'pulseProjectionRetention', 'pulseChargeBonusPerStep',
+  'interceptEfficiency', 'impactRecoveryShare', 'defensivePulseMultiplier',
+];
 const COMMANDER_ECONOMY_KEYS = ['annualOutput', 'priorities', 'supplyStock', 'treasury'];
 const COMMANDER_PRIORITY_KEYS = ['development', 'logistics', 'training'];
 const COMMANDER_EMPIRE_SUPPORT_KEYS = [
   'annualFoodOutput', 'foodImportCostMultiplier', 'foodProductionMultiplier', 'foodStorageMultiplier',
+  'armyCasualtyMultiplier', 'armyPeaceRecoveryMultiplier',
   'recruitmentMultiplier', 'reserveTrainingMultiplier',
 ];
 const COMMANDER_FRONT_KEYS = ['sourceId', 'targetId', 'warId'];
 const COMMANDER_TRANSIT_KEYS = ['arriveTick', 'departTick', 'distanceKm', 'path'];
-const APEX_DOCTRINE_RUNTIME_KEYS = ['lancerSupportedAssaultCount', 'secondaryProjection'];
+const APEX_DOCTRINE_RUNTIME_KEYS = [
+  'emergencyRebootUsed', 'lancerSupportedAssaultCount', 'secondaryProjection',
+];
 const APEX_SECONDARY_PROJECTION_KEYS = [
   'front', 'locationId', 'mission', 'pairedPrimaryFront',
 ];
@@ -183,6 +192,8 @@ function commanderEmpireSupportValidV2(support: CommanderEmpireSupportV2): boole
     && [
       support.recruitmentMultiplier,
       support.reserveTrainingMultiplier,
+      support.armyCasualtyMultiplier,
+      support.armyPeaceRecoveryMultiplier,
       support.annualFoodOutput,
       support.foodProductionMultiplier,
       support.foodStorageMultiplier,
@@ -190,6 +201,9 @@ function commanderEmpireSupportValidV2(support: CommanderEmpireSupportV2): boole
     ].every(Number.isFinite)
     && support.recruitmentMultiplier >= 1 && support.recruitmentMultiplier <= 1.50
     && support.reserveTrainingMultiplier >= 1 && support.reserveTrainingMultiplier <= 1.75
+    && support.armyCasualtyMultiplier >= 0.82 && support.armyCasualtyMultiplier <= 1
+    && support.armyPeaceRecoveryMultiplier >= 1
+    && support.armyPeaceRecoveryMultiplier <= 1.75
     && support.annualFoodOutput >= 0 && support.annualFoodOutput <= 1.56
     && support.foodProductionMultiplier >= 1 && support.foodProductionMultiplier <= 1.50
     && support.foodStorageMultiplier >= 1 && support.foodStorageMultiplier <= 1.75
@@ -224,7 +238,9 @@ function apexDoctrineRuntimeValidV2(
     || !Number.isSafeInteger(runtime.lancerSupportedAssaultCount)
     || runtime.lancerSupportedAssaultCount < 0
     || runtime.lancerSupportedAssaultCount > 2
+    || typeof runtime.emergencyRebootUsed !== 'boolean'
     || (!force.capabilities.assaultSpecialist
+      && (force.shield.pulseChargeBonusPerStep ?? 0) <= 0.000000001
       && runtime.lancerSupportedAssaultCount !== 0)) return false;
   const secondary = runtime.secondaryProjection;
   if (secondary === null) return true;
@@ -234,7 +250,7 @@ function apexDoctrineRuntimeValidV2(
     || !['assault-support', 'defense'].includes(secondary.mission)
     || !force.capabilities.rapidResponse
     || Boolean(force.transit)
-    || force.army.manpower <= 0
+    || force.shield.integrity <= 0
     || !force.front
     || !['assault-support', 'defense'].includes(force.mission)
     || !sameCommanderFrontV2(force.front, secondary.pairedPrimaryFront)
@@ -342,7 +358,7 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
     const playerId = rawPlayerId as PlayerId;
     const narrativeSurvivor = Boolean(force
       && !Object.values(state.territories).some((territory) => territory.owner === playerId)
-      && force.army.manpower > 0
+      && force.shield.integrity > 0
       && force.mission === 'standby'
       && !force.front
       && !force.transit);
@@ -358,7 +374,7 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
     if (!force || !humanPlayerIds.includes(playerId)
       || !state.players[playerId] && !narrativeSurvivor
       || !commanderForceKeysValidV2(force)
-      || !exactKeys(force.army, COMMANDER_ARMY_KEYS)
+      || !exactKeys(force.shield, COMMANDER_SHIELD_KEYS)
       || !exactKeys(force.capabilities, COMMANDER_CAPABILITY_KEYS)
       || !commanderEmpireSupportValidV2(force.empireSupport)
       || !exactKeys(force.economy, COMMANDER_ECONOMY_KEYS)
@@ -374,6 +390,7 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
         force.capabilities.mobileHeadquarters,
         force.capabilities.fieldHospital,
         force.capabilities.rapidResponse,
+        force.capabilities.forceMultiplier,
         force.capabilities.assaultSpecialist,
         force.capabilities.defenseSpecialist,
       ].every((value) => typeof value === 'boolean')
@@ -387,21 +404,38 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
       errors.push(`Commander force ${rawPlayerId} has invalid canonical state.`);
       continue;
     }
-    const army = force.army;
+    const shield = force.shield;
     const economy = force.economy;
     const priorities = economy.priorities;
-    if (![army.manpower, army.capacity, army.trainedReserves, army.baseAttack, army.baseDefense,
+    if (![shield.integrity, shield.maxIntegrity, shield.rechargeBuffer,
+      shield.rechargeMultiplier,
+      shield.attackMultiplier, shield.defenseMultiplier, shield.pulseAttack,
+      shield.pulseProjectionRetention, shield.pulseChargeBonusPerStep,
+      shield.interceptEfficiency, shield.impactRecoveryShare,
+      shield.defensivePulseMultiplier,
       economy.treasury, economy.annualOutput, economy.supplyStock].every(Number.isFinite)
-      || army.manpower < 0 || army.capacity <= 0 || army.trainedReserves < 0
-      || army.manpower > army.capacity + 0.000000001
-      || army.trainedReserves > army.capacity + 0.000000001
-      || army.baseAttack <= 0 || army.baseAttack > 160
-      || army.baseDefense <= 0 || army.baseDefense > 160
+      || shield.integrity < 0 || shield.maxIntegrity <= 0 || shield.rechargeBuffer < 0
+      || shield.integrity > shield.maxIntegrity + 0.000000001
+      || shield.rechargeBuffer > shield.maxIntegrity + 0.000000001
+      || shield.rechargeMultiplier < 1 || shield.rechargeMultiplier > 3.5
+      || shield.attackMultiplier < 1 || shield.attackMultiplier > 2.5
+      || shield.defenseMultiplier < 1 || shield.defenseMultiplier > 2.5
+      || shield.pulseAttack < 0 || shield.pulseAttack > 1
+      || (shield.pulseProjectionRetention ?? 0) < 0
+      || (shield.pulseProjectionRetention ?? 0) > 0.35
+      || (shield.pulseChargeBonusPerStep ?? 0) < 0
+      || (shield.pulseChargeBonusPerStep ?? 0) > 0.45
+      || (shield.interceptEfficiency ?? 1) < 1
+      || (shield.interceptEfficiency ?? 1) > 1.45
+      || (shield.impactRecoveryShare ?? 0) < 0
+      || (shield.impactRecoveryShare ?? 0) > 0.35
+      || (shield.defensivePulseMultiplier ?? 1) < 1
+      || (shield.defensivePulseMultiplier ?? 1) > 1.75
       || economy.treasury < 0 || economy.annualOutput < 0 || economy.supplyStock < 0
       || ![priorities.training, priorities.logistics, priorities.development]
         .every((value) => Number.isInteger(value) && value >= 0 && value <= 100)
       || priorities.training + priorities.logistics + priorities.development !== 100) {
-      errors.push(`Commander force ${rawPlayerId} has invalid economy or army values.`);
+      errors.push(`Commander force ${rawPlayerId} has invalid economy or shield values.`);
     }
     if (frontMissions.has(force.mission) !== Boolean(force.front)) {
       errors.push(`Commander force ${rawPlayerId} has an invalid mission/front pairing.`);
@@ -621,7 +655,7 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
       }
       if (force) {
         const priorities = force.economy.priorities;
-        const army = force.army;
+        const shield = force.shield;
         const directSortieRoute = prime.gatewayId === null || prime.targetId === null
           ? true
           : ANTARCTIC_GATEWAY_COUNTRY_ROUTES_V2.some((route) => (
@@ -631,7 +665,7 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
           || !apexDoctrineRuntimeValidV2(
             state, content, ROGUE_AI_NATION_ID_V2, force,
           )
-          || !exactKeys(force.army, COMMANDER_ARMY_KEYS)
+          || !exactKeys(force.shield, COMMANDER_SHIELD_KEYS)
           || !exactKeys(force.capabilities, COMMANDER_CAPABILITY_KEYS)
           || !commanderEmpireSupportValidV2(force.empireSupport)
           || !exactKeys(force.economy, COMMANDER_ECONOMY_KEYS)
@@ -641,13 +675,31 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
           || !['standby', 'assault-support', 'defense'].includes(force.mission)
           || force.orderSource !== 'autonomous' || force.manualHoldUntilTick !== 0
           || force.countryTraitScale !== 0
-          || ![army.manpower, army.capacity, army.trainedReserves,
-            army.baseAttack, army.baseDefense, force.economy.treasury,
+          || ![shield.integrity, shield.maxIntegrity, shield.rechargeBuffer,
+            shield.rechargeMultiplier,
+            shield.attackMultiplier, shield.defenseMultiplier, shield.pulseAttack,
+            shield.pulseProjectionRetention, shield.pulseChargeBonusPerStep,
+            shield.interceptEfficiency, shield.impactRecoveryShare,
+            shield.defensivePulseMultiplier,
+            force.economy.treasury,
             force.economy.annualOutput, force.economy.supplyStock].every(Number.isFinite)
-          || army.manpower < 0 || army.capacity <= 0 || army.trainedReserves < 0
-          || army.manpower + army.trainedReserves > army.capacity + 0.000000001
-          || army.baseAttack <= 0 || army.baseAttack > 120
-          || army.baseDefense <= 0 || army.baseDefense > 120
+          || shield.integrity < 0 || shield.maxIntegrity <= 0 || shield.rechargeBuffer < 0
+          || shield.integrity > shield.maxIntegrity + 0.000000001
+          || shield.rechargeBuffer > shield.maxIntegrity + 0.000000001
+          || shield.rechargeMultiplier < 1 || shield.rechargeMultiplier > 3.5
+          || shield.attackMultiplier < 1 || shield.attackMultiplier > 2.5
+          || shield.defenseMultiplier < 1 || shield.defenseMultiplier > 2.5
+          || shield.pulseAttack < 0 || shield.pulseAttack > 1
+          || (shield.pulseProjectionRetention ?? 0) < 0
+          || (shield.pulseProjectionRetention ?? 0) > 0.35
+          || (shield.pulseChargeBonusPerStep ?? 0) < 0
+          || (shield.pulseChargeBonusPerStep ?? 0) > 0.45
+          || (shield.interceptEfficiency ?? 1) < 1
+          || (shield.interceptEfficiency ?? 1) > 1.45
+          || (shield.impactRecoveryShare ?? 0) < 0
+          || (shield.impactRecoveryShare ?? 0) > 0.35
+          || (shield.defensivePulseMultiplier ?? 1) < 1
+          || (shield.defensivePulseMultiplier ?? 1) > 1.75
           || force.economy.treasury < 0 || force.economy.annualOutput !== 0
           || force.economy.supplyStock < 0
           || priorities.training + priorities.logistics + priorities.development !== 100
@@ -742,14 +794,23 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
     }
     const gatewayOrder = polar.gatewayBreachOrder;
     const activeGatewayCampaign = gatewayOrder.length > 0;
+    const acceptedGatewayOrders = state.contentVersion.startsWith('survival-v')
+      ? [
+        deterministicSurvivalAntarcticGatewayOrderV2(state.seed),
+        // Existing Survival saves keep the pre-weighting seeded permutation;
+        // changing it mid-breach would reroute a convoy after reconnect.
+        deterministicAntarcticGatewayOrderV2(state.seed),
+      ]
+      : [deterministicAntarcticGatewayOrderV2(state.seed)];
     const gatewayOrderValid = gatewayOrder.length === (activeGatewayCampaign
       ? ANTARCTIC_GATEWAY_IDS_V2.length : 0)
       && new Set(gatewayOrder).size === gatewayOrder.length
       && gatewayOrder.every((gatewayId) => ANTARCTIC_GATEWAY_IDS_V2.includes(
         gatewayId as (typeof ANTARCTIC_GATEWAY_IDS_V2)[number],
       ))
-      && (!activeGatewayCampaign || gatewayOrder.join('|')
-        === deterministicAntarcticGatewayOrderV2(state.seed).join('|'));
+      && (!activeGatewayCampaign || acceptedGatewayOrders.some((acceptedOrder) => (
+        gatewayOrder.join('|') === acceptedOrder.join('|')
+      )));
     if (!gatewayOrderValid) errors.push('Antarctic gateway breach order is invalid.');
     const gatewayBreachKeys = Object.keys(polar.gatewayBreaches).sort();
     const expectedGatewayKeys = activeGatewayCampaign
@@ -1148,8 +1209,15 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
       errors.push(`War ${war.id} has invalid operation lists.`);
       continue;
     }
-    if (war.attackerOperations.length + war.defenderOperations.length > 1) {
+    const survivalRogueHumanWar = content.metadata?.scenarioId === 'survival'
+      && war.attackerId === ROGUE_AI_NATION_ID_V2
+      && isHumanPlayerV2(state, war.defenderId);
+    const operationLimit = survivalRogueHumanWar ? 2 : 1;
+    if (war.attackerOperations.length + war.defenderOperations.length > operationLimit) {
       errors.push(`War ${war.id} has more than one canonical front.`);
+    }
+    if (survivalRogueHumanWar && war.defenderOperations.length > 0) {
+      errors.push(`Survival Rogue war ${war.id} has a defender-owned front.`);
     }
     const usedSources = new Set<TerritoryId>();
     for (const [commanderId, opponentId, operations] of [

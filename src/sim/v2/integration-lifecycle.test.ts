@@ -307,11 +307,13 @@ describe('V2 permanent territory integration lifecycle', () => {
     const state = createWorldStateV2(260827);
     state.humanPlayerId = luxembourg;
     expect(initializeCommanderForceV2(state, WORLD_CONTENT_V2, luxembourg, {
-      manpower: 0.00048,
-      capacity: 0.0009,
-      trainedReserves: 0,
-      baseAttack: 125,
-      baseDefense: 125,
+      shield: {
+        integrity: 0.00048,
+        maxIntegrity: 0.0009,
+        pulseAttack: 0.0008,
+      },
+      attackMultiplier: 1.10,
+      defenseMultiplier: 1.10,
       treasury: 0,
       annualOutput: 0.015,
       supplyStock: 0.006,
@@ -330,7 +332,8 @@ describe('V2 permanent territory integration lifecycle', () => {
       front: null,
       transit: null,
     });
-    expect(state.commanderForces[luxembourg]!.army.manpower).toBeGreaterThan(0);
+    expect(state.commanderForces[luxembourg]!.shield.integrity).toBeGreaterThan(0);
+    expect(state.commanderForces[luxembourg]).not.toHaveProperty('army');
     expect(invariantErrorsV2(state, WORLD_CONTENT_V2)).toEqual([]);
 
     const reloaded = loadSaveV2(createSaveV2(state, WORLD_CONTENT_V2), WORLD_CONTENT_V2);

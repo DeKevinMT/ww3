@@ -1,9 +1,12 @@
 import {
   navalRouteDistancePressureV2,
   warAccessOperationMultiplierV2,
-  warAccessSupplyMultiplierV2,
 } from './balance';
 import type { WorldContentV2 } from './content';
+import {
+  armyCapacitySupplyLabelV2,
+  armyCapacitySupplyShareV2,
+} from './logistics';
 import {
   selectWarRouteDistanceKmV2,
   selectWeeklyFinanceBreakdownV2,
@@ -20,6 +23,8 @@ export interface WarLogisticsPreviewV2 {
   readonly routeOperationMultiplier: number;
   /** Canonical distance-only supply factor before terrain and country-trait adjustments. */
   readonly routeSupplyMultiplier: number;
+  readonly attackCapacityShare: number;
+  readonly attackSupplyLabel: '8% CAP / ATTACK' | '4% CAP / ATTACK · NAVAL';
   readonly routeDistancePressure: number;
   readonly currentWeeklyWarOperations: number;
   readonly projectedWeeklyWarOperations: number;
@@ -73,7 +78,11 @@ export function previewWarLogisticsV2(
     distanceKm,
     mobilizationCost: declaration.mobilizationCost,
     routeOperationMultiplier: warAccessOperationMultiplierV2(modeledAccess, distanceKm),
-    routeSupplyMultiplier: warAccessSupplyMultiplierV2(modeledAccess, distanceKm),
+    // Retained for save/UI compatibility: it now means relative throughput
+    // against the land rule, not a hidden distance curve.
+    routeSupplyMultiplier: modeledAccess === 'naval' ? 0.5 : 1,
+    attackCapacityShare: armyCapacitySupplyShareV2(modeledAccess),
+    attackSupplyLabel: armyCapacitySupplyLabelV2(modeledAccess),
     routeDistancePressure: access === 'naval' ? navalRouteDistancePressureV2(distanceKm) : 0,
     currentWeeklyWarOperations: currentFinance.warOperations,
     projectedWeeklyWarOperations,

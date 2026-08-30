@@ -3,6 +3,7 @@ import { validateMap } from './game/data/worldMap';
 import { createWorldMapRenderer } from './game/map/createWorldMapRenderer';
 import { CommanderDatabaseV1 } from './meta/commanderDatabase';
 import {
+  acknowledgeCampaignProgressionTutorialV1,
   allocateCountryMasteryPointV1,
   allocateCommanderTalentV1,
   buildCountryUnlockCatalogV1,
@@ -12,15 +13,19 @@ import {
   countryMasteryXpDifficultyMultiplierV1,
   createCommanderProfileV1,
   grantStarterCountriesV1,
+  queueCampaignProgressionTutorialV1,
   renameCommanderV1,
   renameEmpireV1,
+  selectEmpireFlagV1,
   respecCountryMasteryV1,
   respecCommanderTalentsV1,
   recordCampaignDefeatedCountriesV1,
   recordCampaignTutorialExperiencedV1,
+  refundSurvivalDeploymentCreditsV1,
   resolveCommanderForceInitializationV1,
   resolveCountryLoadoutV1,
   selectCommanderDoctrineV1,
+  spendSurvivalDeploymentCreditsV1,
   type CommanderProfileV1,
   type CountryMasteryTrackV1,
   type ResolvedCountryLoadoutV1,
@@ -86,8 +91,13 @@ import {
   type CommanderCountryCatalogEntryV1,
 } from './ui/CommanderMenu';
 import { CampaignReportV1 } from './ui/CampaignReport';
-import { countryFlagHtml } from './ui/countryFlags';
+import {
+  loadingTipAudienceForModeV1,
+  selectLoadingTipV1,
+  type LoadingTipAudience,
+} from './ui/loadingTips';
 import { IntroOpeningMetricsCacheV2, WorldUIV2 } from './ui/WorldUIV2';
+import './ui/ApexReclamationTheme.css';
 
 const mapErrors = validateMap();
 if (mapErrors.length > 0) throw new Error(`Invalid map:\n${mapErrors.join('\n')}`);
@@ -204,6 +214,7 @@ let unsubscribeSessionStatus: (() => void) | undefined;
 let unsubscribeCampaignAutosave: (() => void) | undefined;
 let campaignAutosaveTimer: number | undefined;
 let activeControllerNames: ReadonlyMap<PlayerId, string> = new Map();
+let activeEmpireFlagCountryIds: ReadonlyMap<PlayerId, string> = new Map();
 let activeScenario = initialScenarioFromLocation();
 let commanderMenu: CommanderMenuV1 | undefined;
 let campaignReport: CampaignReportV1 | undefined;
@@ -219,7 +230,7 @@ const gameVersionBadge = document.createElement('aside');
 const compactGameVersion = V2_RULES_VERSION.match(/v\d+(?:\.\d+)*/i)?.[0] ?? V2_RULES_VERSION;
 gameVersionBadge.className = 'game-version-badge';
 gameVersionBadge.textContent = compactGameVersion.toUpperCase();
-gameVersionBadge.setAttribute('aria-label', 'Frontier Command ' + compactGameVersion);
+gameVersionBadge.setAttribute('aria-label', 'APEX: Reclamation ' + compactGameVersion);
 document.body.append(gameVersionBadge);
 const worldMapRenderer = createWorldMapRenderer();
 let startupLoaderState: 'idle' | 'active' | 'complete' = startupLoader?.isConnected
@@ -228,6 +239,29 @@ let startupLoaderFallbackTimer: number | undefined;
 let startupLoaderShownAt = performance.now();
 const BOOT_LOADER_MIN_VISIBLE_MS = 450;
 const STARTUP_LOADER_MIN_VISIBLE_MS = 2_800;
+const LAST_LOADING_TIP_STORAGE_KEY = 'frontier-command:last-loading-tip:v1';
+let currentLoadingTipId: string | undefined;
+
+try {
+  currentLoadingTipId = window.sessionStorage.getItem(LAST_LOADING_TIP_STORAGE_KEY) ?? undefined;
+} catch {
+  // Private browsing can deny storage while the game itself remains playable.
+}
+
+function showFreshLoadingTip(audience: LoadingTipAudience): void {
+  const target = startupLoader?.querySelector<HTMLElement>('[data-loader-tip]');
+  if (!target) return;
+  const tip = selectLoadingTipV1(audience, currentLoadingTipId);
+  target.textContent = tip.text;
+  currentLoadingTipId = tip.id;
+  try {
+    window.sessionStorage.setItem(LAST_LOADING_TIP_STORAGE_KEY, tip.id);
+  } catch {
+    // A fresh in-memory tip is enough when session storage is unavailable.
+  }
+}
+
+showFreshLoadingTip('boot');
 
 if (startupLoaderState === 'active') {
   startupLoaderFallbackTimer = window.setTimeout(dismissStartupLoader, 12_000);
@@ -245,24 +279,19 @@ function showStartupLoader(): void {
 
 function showDeploymentLoader(countryId: PlayerId, scenario: ScenarioConfigV2): void {
   if (!startupLoader?.isConnected) return;
+  const beginsNewLoadingCycle = startupLoaderState === 'idle';
   const country = commanderCountryCatalog.find((entry) => entry.id === countryId);
   const mode = scenario.mode === 'standard-2026' ? 'Campaign'
     : scenario.mode === 'survival' ? 'Survival' : 'Alternative Universe';
-  const year = scenario.mode === 'survival' ? 2096 : 2026;
   startupLoader.dataset.loaderVariant = 'deployment';
   startupLoader.dataset.loaderStage = 'world';
   const accessible = startupLoader.querySelector<HTMLElement>('.startup-loader__sr-only');
-  const flag = startupLoader.querySelector<HTMLElement>('[data-loader-country-flag]');
-  const countryName = startupLoader.querySelector<HTMLElement>('[data-loader-country]');
-  const modeName = startupLoader.querySelector<HTMLElement>('[data-loader-mode]');
-  const yearLabel = startupLoader.querySelector<HTMLElement>('[data-loader-year]');
   if (accessible) accessible.textContent = `Deploying ${country?.name ?? countryId.toUpperCase()} into ${mode}`;
-  if (flag) flag.innerHTML = country
-    ? countryFlagHtml(country.id, country.sigil, true)
-    : '<span aria-hidden="true">◆</span>';
-  if (countryName) countryName.textContent = country?.name ?? countryId.toUpperCase();
-  if (modeName) modeName.textContent = mode;
-  if (yearLabel) yearLabel.textContent = String(year);
+  // Keep one tip stable for the entire loading cycle. Redundant safety calls may
+  // advance the stage, but must never visibly swap the player's current tip.
+  if (beginsNewLoadingCycle) {
+    showFreshLoadingTip(loadingTipAudienceForModeV1(scenario.mode));
+  }
   showStartupLoader();
 }
 
@@ -377,6 +406,7 @@ function destroyActiveGame(closeSession = true): void {
     activeGuestReconnectSession = undefined;
   }
   activeControllerNames = new Map();
+  activeEmpireFlagCountryIds = new Map();
 }
 
 function refreshActiveGuestReconnectSession(force = false): void {
@@ -399,6 +429,34 @@ function clearActiveGuestReconnectSession(): void {
 
 function campaignId(): string {
   return `campaign-${Date.now().toString(36)}-${randomSeed().toString(36)}`;
+}
+
+async function chargeSurvivalDeploymentV1(
+  mode: GameModeV2,
+  deploymentId: string,
+): Promise<void> {
+  if (mode !== 'survival') return;
+  const spent = spendSurvivalDeploymentCreditsV1(commanderProfile, deploymentId);
+  if (!spent.accepted) {
+    throw new Error(spent.reason ?? 'This account cannot fund a Survival deployment.');
+  }
+  if (!spent.charged) return;
+  commanderProfile = spent.profile;
+  commanderProfile = await commanderDatabase.saveProfile(commanderProfile);
+}
+
+async function refundSurvivalDeploymentV1(
+  mode: GameModeV2,
+  deploymentId: string,
+): Promise<void> {
+  if (mode !== 'survival') return;
+  const refunded = refundSurvivalDeploymentCreditsV1(commanderProfile, deploymentId);
+  if (!refunded.accepted) {
+    throw new Error(refunded.reason ?? 'The failed Survival deployment could not be refunded.');
+  }
+  if (!refunded.refunded) return;
+  commanderProfile = refunded.profile;
+  commanderProfile = await commanderDatabase.saveProfile(commanderProfile);
 }
 
 function persistCampaignTutorialExperience(persist = true): boolean {
@@ -539,9 +597,15 @@ async function settleActiveCampaign(
   const claimed = snapshot.rewardEligible
     ? claimCampaignRewardV1(commanderProfile, snapshot.reward)
     : { accepted: false, profile: commanderProfile, reason: 'This mode has no account progression.' };
+  const progressionTutorial = queueCampaignProgressionTutorialV1(
+    claimed.accepted ? claimed.profile : commanderProfile,
+    campaign.scenario.mode,
+  );
+  const settledProfile = progressionTutorial.accepted
+    ? progressionTutorial.profile : claimed.accepted ? claimed.profile : commanderProfile;
   try {
-    if (claimed.accepted) {
-      commanderProfile = await commanderDatabase.saveProfile(claimed.profile);
+    if (claimed.accepted || progressionTutorial.accepted) {
+      commanderProfile = await commanderDatabase.saveProfile(settledProfile);
     } else if (tutorialRecorded) {
       commanderProfile = await commanderDatabase.saveProfile(commanderProfile);
     }
@@ -560,6 +624,7 @@ async function settleActiveCampaign(
         sigil: countryDefinition?.sigil,
         cssColor: countryDefinition?.cssColor,
       },
+      flagCountryId: commanderProfile.empireFlag.countryId,
       masteryBeforeSettlement,
       commanderBeforeSettlement,
       unlockedCountries: campaign.defeatedCountryIds
@@ -698,29 +763,42 @@ async function beginStoredCampaign(engine: WorldEngineV2, countryId: PlayerId): 
       return false;
     }
   }
-  const newCampaign: StoredCampaignV1 = {
-    schemaVersion: 1,
-    campaignId: campaignId(),
-    scenario,
-    countryId,
-    defeatedCountryIds: [],
-    signalPurgedCountryIds: [],
-    warOutcomes: [],
-    warOutcomeLedgerStartedTick: engine.state.tick,
-    profileRevisionAtStart: commanderProfile.revision,
-    loadout,
-    rewardEligible: scenario.mode !== 'random-world',
-    stateSave: engine.save(),
-    baseline: {
-      startingTerritoryIds: engine.territoriesOf(countryId).map((territory) => territory.id),
-      startingMilitaryLosses: 0,
-      startingTick: engine.state.tick,
-    },
-    startedAt: now,
-    updatedAt: now,
-  };
+  const newCampaignId = campaignId();
+  let newCampaign: StoredCampaignV1;
+  try {
+    await chargeSurvivalDeploymentV1(scenario.mode, newCampaignId);
+    newCampaign = {
+      schemaVersion: 1,
+      campaignId: newCampaignId,
+      scenario,
+      countryId,
+      defeatedCountryIds: [],
+      signalPurgedCountryIds: [],
+      warOutcomes: [],
+      warOutcomeLedgerStartedTick: engine.state.tick,
+      profileRevisionAtStart: commanderProfile.revision,
+      loadout,
+      rewardEligible: scenario.mode !== 'random-world',
+      stateSave: engine.save(),
+      baseline: {
+        startingTerritoryIds: engine.territoriesOf(countryId).map((territory) => territory.id),
+        startingMilitaryLosses: 0,
+        startingTick: engine.state.tick,
+      },
+      startedAt: now,
+      updatedAt: now,
+    };
+    await commanderDatabase.saveCampaign(newCampaign);
+  } catch (error) {
+    try {
+      await refundSurvivalDeploymentV1(scenario.mode, newCampaignId);
+    } catch (refundError) {
+      console.error('The failed Survival deployment refund could not be persisted.', refundError);
+    }
+    console.error('The campaign deployment could not be committed.', error);
+    return false;
+  }
   campaignSlot = newCampaign;
-  await commanderDatabase.saveCampaign(newCampaign);
   attachCampaignAutosave(engine);
   return true;
 }
@@ -811,6 +889,9 @@ function showCommanderMenu(keepStartupLoader = false): void {
       void commanderDatabase.clearCampaign();
     },
     onResetAccount: () => { void resetCommanderAccount(); },
+    onAcknowledgeCampaignProgressionTutorial: () => persistProfileResult(
+      acknowledgeCampaignProgressionTutorialV1(commanderProfile),
+    ),
     onAllocateCountryMasteryPoint: (countryId, track: CountryMasteryTrackV1) => (
       persistProfileResult(allocateCountryMasteryPointV1(
         commanderProfile,
@@ -832,6 +913,11 @@ function showCommanderMenu(keepStartupLoader = false): void {
     ),
     onRenameCommander: (name) => persistProfileResult(renameCommanderV1(commanderProfile, name)),
     onRenameEmpire: (name) => persistProfileResult(renameEmpireV1(commanderProfile, name)),
+    onSelectEmpireFlag: (flag) => persistProfileResult(selectEmpireFlagV1(
+      commanderProfile,
+      flag,
+      commanderCountryCatalog.map((country) => country.id),
+    )),
   });
 }
 
@@ -877,11 +963,18 @@ function mountWorldUi(
   if (activeEngine && activeEngine !== engine) activeEngine.stopClock();
   activeUi?.destroy();
   activeEngine = engine;
+  const empireFlagCountryIds = multiplayer
+    ? activeEmpireFlagCountryIds
+    : new Map<PlayerId, string>(engine.state.humanPlayerIds.map((playerId) => [
+      playerId,
+      commanderProfile.empireFlag.countryId,
+    ]));
   activeUi = new WorldUIV2(engine, multiplayer
     ? {
       introOpen: false,
       multiplayer: true,
       controllerNames,
+      empireFlagCountryIds,
       // Viewer-local dossiers may differ between peers and never enter the
       // authoritative multiplayer snapshot.
       availableCountryIds: new Set(commanderProfile.unlockedCountryIds as PlayerId[]),
@@ -889,6 +982,7 @@ function mountWorldUi(
     : {
       introOpen,
       initialPreviewCountryId,
+      empireFlagCountryIds,
       availableCountryIds: new Set(commanderProfile.unlockedCountryIds as PlayerId[]),
       countryMasteryLevels: new Map(commanderProfile.unlockedCountryIds.map((countryId) => [
         countryId as PlayerId,
@@ -1046,10 +1140,21 @@ async function launchHostGame(launch: MultiplayerHostLaunch): Promise<void> {
     session.close(false);
     throw new Error(deployed.reason ?? 'The co-op deployments could not be initialized.');
   }
-  const started = session.start();
-  if (!started.accepted) {
+  const deploymentId = `coop:${launch.transport.roomId}:${launch.transport.hostPeerId}`;
+  try {
+    await chargeSurvivalDeploymentV1(scenario.config.mode, deploymentId);
+    const started = session.start();
+    if (!started.accepted) {
+      throw new Error(started.reason ?? 'The host session could not start.');
+    }
+  } catch (error) {
     session.close(false);
-    throw new Error(started.reason ?? 'The host session could not start.');
+    try {
+      await refundSurvivalDeploymentV1(scenario.config.mode, deploymentId);
+    } catch (refundError) {
+      console.error('The failed co-op Survival deployment refund could not be persisted.', refundError);
+    }
+    throw error;
   }
 
   activeLobby?.destroy(false);
@@ -1060,6 +1165,10 @@ async function launchHostGame(launch: MultiplayerHostLaunch): Promise<void> {
   activeScenario = scenario.config;
   publishScenarioToLocation(activeScenario);
   activeControllerNames = controllerNames;
+  activeEmpireFlagCountryIds = new Map([...deployments].map(([seatId, deployment]) => [
+    seatId,
+    deployment.empireFlag.countryId,
+  ]));
   activeSession = session;
   activeHostReconnect = new HostReconnectCoordinator({
     transport: launch.transport,
@@ -1098,6 +1207,15 @@ async function launchGuestGame(launch: MultiplayerGuestLaunch): Promise<void> {
     session.close(false);
     throw new Error('The host snapshot does not match the lobby game mode and seed.');
   }
+  try {
+    await chargeSurvivalDeploymentV1(
+      scenario.config.mode,
+      `coop:${launch.transport.roomId}:${launch.transport.peerId}`,
+    );
+  } catch (error) {
+    session.close(false);
+    throw error;
+  }
 
   activeLobby?.destroy(false);
   activeLobby = undefined;
@@ -1107,6 +1225,10 @@ async function launchGuestGame(launch: MultiplayerGuestLaunch): Promise<void> {
   activeScenario = scenario.config;
   publishScenarioToLocation(activeScenario);
   activeControllerNames = controllerNames;
+  activeEmpireFlagCountryIds = new Map([...deployments].map(([seatId, deployment]) => [
+    seatId,
+    deployment.empireFlag.countryId,
+  ]));
   activeSession = session;
   const reconnectCredential = launch.transport.reconnectCredential;
   if (reconnectCredential) {
@@ -1174,6 +1296,10 @@ function resumeStoredGuestMatch(): void {
     deployment.countryId,
     deployment,
   ] as const));
+  activeEmpireFlagCountryIds = new Map([...deployments].map(([seatId, deployment]) => [
+    seatId,
+    deployment.empireFlag.countryId,
+  ]));
   const controllerNames = new Map(stored.controllerNames.map(([id, name]) => [
     id as PlayerId,
     name,

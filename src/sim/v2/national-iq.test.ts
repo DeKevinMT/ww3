@@ -161,7 +161,7 @@ describe('national IQ gameplay proxy', () => {
     expect(higherIq.defense).toBeGreaterThan(low.defense);
   });
 
-  it('applies bounded IQ effects to economy, research, logistics and population growth', () => {
+  it('applies bounded IQ effects without changing fixed logistics throughput', () => {
     const belgium = nationIdV2('bel');
     const state = createWorldStateV2(8_201);
     const lowContent = contentWithIq(belgium, NATIONAL_IQ_SCORE_MIN);
@@ -180,7 +180,8 @@ describe('national IQ gameplay proxy', () => {
     expect(selectResearchOutputV2(state, highContent, belgium, lowFinance, 1))
       .toBeGreaterThan(selectResearchOutputV2(state, lowContent, belgium, lowFinance, 1));
     expect(logisticsThroughputShareV2(0.25, 0, highView.logisticsMultiplier))
-      .toBeGreaterThan(logisticsThroughputShareV2(0.25, 0, lowView.logisticsMultiplier));
+      .toBe(logisticsThroughputShareV2(0.25, 0, lowView.logisticsMultiplier));
+    expect(logisticsThroughputShareV2(0.25, 0, highView.logisticsMultiplier)).toBe(0.08);
     expect(selectPopulationDynamicsV2(state, highContent, belgium, 0).annualNetRate)
       .toBeLessThan(selectPopulationDynamicsV2(state, lowContent, belgium, 0).annualNetRate);
   });

@@ -27,21 +27,20 @@ export interface NeuralFieldRouteSignatureEntry {
 
 export const NEURAL_FIELD_PULSE_DURATION_MS = 720;
 export const NEURAL_FIELD_PULSE_REDUCED_MOTION_MS = 260;
-export const APEX_TWIN_PROJECTION_COMBAT_SHARE = 0.6;
 
 export const STRATEGIC_NEURAL_FIELD_STYLE = Object.freeze({
   apex: Object.freeze({
     fieldColor: 0x52e9ff,
-    nodeColor: 0xd9fbff,
+    nodeColor: 0xa8f6ff,
     fieldOpacity: 0.14,
     networkOpacity: 0.72,
     routeOpacity: 0.58,
   }),
   roguePrime: Object.freeze({
-    fieldColor: 0xd92c83,
-    nodeColor: 0xff8ed0,
-    fieldOpacity: 0.17,
-    networkOpacity: 0.76,
+    fieldColor: 0xff3048,
+    nodeColor: 0xff715f,
+    fieldOpacity: 0.16,
+    networkOpacity: 0.70,
     routeOpacity: 0.62,
   }),
 });
@@ -83,15 +82,15 @@ export interface ApexShieldPresentation {
 }
 
 /**
- * Map-only APEX identity: active manpower is shield integrity, never a troop or
- * army count. The recovery mission is the hysteresis gate, so a 0.0001 survivor
- * cannot flash the shield back before canonical operational release.
+ * Map-only APEX identity reads canonical shield integrity directly. The
+ * recovery mission is the hysteresis gate, so a partial recharge cannot flash
+ * the shield back before canonical operational release.
  */
 export function apexShieldPresentation(
-  force: Pick<MapCommanderForceState, 'mission' | 'army'> | undefined,
+  force: Pick<MapCommanderForceState, 'mission' | 'shield'> | undefined,
 ): ApexShieldPresentation {
-  const capacityValue = force?.army.capacity ?? 0;
-  const activeValue = force?.army.manpower ?? 0;
+  const capacityValue = force?.shield.maxIntegrity ?? 0;
+  const activeValue = force?.shield.integrity ?? 0;
   const capacity = Number.isFinite(capacityValue) ? Math.max(0, capacityValue) : 0;
   const active = Number.isFinite(activeValue) ? Math.max(0, activeValue) : 0;
   const integrity = capacity > 0 ? Math.max(0, Math.min(1, active / capacity)) : 0;
@@ -121,49 +120,29 @@ export interface ApexProjectionPresentation {
 }
 
 /**
- * Builds at most two distinct APEX dome placements from one shared force. The
- * secondary record never carries army/economy state, so presentation cannot
- * accidentally imply a cloned shield pool or create a third projection.
+ * Legacy flat-map adapter. Omnipresence Grid has no second placement: every
+ * live front is represented by the empire-field network, while this adapter
+ * exposes at most the one historical anchor needed by older renderers.
  */
 export function apexProjectionPresentations(
   force: MapCommanderForceState | undefined,
 ): readonly ApexProjectionPresentation[] {
   const shield = apexShieldPresentation(force);
   if (!force || !shield.visible) return [];
-  const secondary = force.doctrineRuntime?.secondaryProjection;
-  const split = Boolean(
-    secondary?.locationId
-      && secondary.locationId !== force.locationId,
-  );
-  const combatShare = split ? APEX_TWIN_PROJECTION_COMBAT_SHARE : 1;
   const singularityCharged = force.doctrineRuntime?.lancerSupportedAssaultCount === 2;
-  const label = `APEX ${shield.percent}%${split ? ' · SPLIT' : ''}${singularityCharged ? ' · ◆' : ''}`;
+  const label = `APEX ${shield.percent}%${singularityCharged ? ' · ◆' : ''}`;
   const primary: ApexProjectionPresentation = Object.freeze({
     projection: 'primary',
     locationId: force.locationId,
     frontTargetId: force.front,
-    combatShare,
+    combatShare: 1,
     integrity: shield.integrity,
     percent: shield.percent,
-    split,
+    split: false,
     singularityCharged,
     label,
   });
-  if (!split || !secondary) return Object.freeze([primary]);
-  return Object.freeze([
-    primary,
-    Object.freeze({
-      projection: 'secondary' as const,
-      locationId: secondary.locationId,
-      frontTargetId: secondary.front.targetId,
-      combatShare,
-      integrity: shield.integrity,
-      percent: shield.percent,
-      split: true,
-      singularityCharged,
-      label,
-    }),
-  ]);
+  return Object.freeze([primary]);
 }
 
 /** Geometry-only key for the flat-map transit lanes. Progress moves the signal

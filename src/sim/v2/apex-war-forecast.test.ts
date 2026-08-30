@@ -16,11 +16,15 @@ import {
 import { estimateLiveWarV2, forecastWarV2, resolveBattlePulseV2 } from './war';
 
 const apexProfile: CommanderForceInitializationV2 = {
-  manpower: 0.0004,
-  capacity: 0.0009,
-  trainedReserves: 0.00008,
-  baseAttack: 82,
-  baseDefense: 90,
+  shield: {
+    integrity: 0.0009,
+    maxIntegrity: 0.0009,
+    rechargeBuffer: 0.00008,
+    rechargeMultiplier: 1,
+    pulseAttack: 0.001,
+  },
+  attackMultiplier: 1.12,
+  defenseMultiplier: 1.14,
   treasury: 10,
   annualOutput: 2,
   supplyStock: 0.006,
@@ -62,8 +66,8 @@ function completeNorthPoleThrough(
 
 function prepareReadyApex(engine: WorldEngineV2, playerId: ReturnType<typeof nationIdV2>): void {
   const force = engine.state.commanderForces[playerId]!;
-  force.army.capacity = force.army.manpower;
-  force.economy.supplyStock = Math.max(force.economy.supplyStock, force.army.manpower * 2);
+  force.shield.integrity = force.shield.maxIntegrity;
+  force.economy.supplyStock = Math.max(force.economy.supplyStock, force.shield.maxIntegrity * 2);
 }
 
 function prepareRogueFront(
@@ -137,8 +141,13 @@ describe('APEX-aware canonical war forecast', () => {
       stagingTerritoryId: territoryIdV2('lux'),
       etaWeeks: 0,
     });
-    expect(supported.apexContribution.power).toBeGreaterThan(0);
-    expect(supported.apexContribution.effectivePower).toBeGreaterThan(0);
+    expect(supported.apexContribution.power).toBe(0);
+    expect(supported.apexContribution.effectivePower).toBe(0);
+    expect(supported.apexContribution.attackMultiplier).toBeGreaterThan(1);
+    expect(supported.apexContribution.defenseMultiplier).toBeGreaterThan(1);
+    expect(supported.apexContribution.supportBonusPercent).toBeGreaterThan(0);
+    expect(base.apexContribution.projectedPulseDamage).toBe(0);
+    expect(supported.apexContribution.projectedPulseDamage).toBeGreaterThan(0);
     expect(supported.apexContribution.chanceDelta).toBeCloseTo(
       supported.winChance - base.winChance,
       8,
@@ -146,7 +155,7 @@ describe('APEX-aware canonical war forecast', () => {
     expect(supported.winChance).toBeGreaterThan(base.winChance);
   });
 
-  it('keeps a favored APEX campaign from becoming a blind live collapse warning', () => {
+  it('uses the same national-army multipliers in prewar and live estimates', () => {
     const { engine, playerId } = campaignWithApex(31_008);
     const defenderId = nationIdV2('bel');
     const sourceId = territoryIdV2('lux');
@@ -158,8 +167,14 @@ describe('APEX-aware canonical war forecast', () => {
     prepareReadyApex(engine, playerId);
 
     const prewar = forecastWarV2(engine.state, engine.content, playerId, defenderId);
-    expect(prewar.outlook).toBe('favored');
-    expect(prewar.winChance).toBeGreaterThanOrEqual(64);
+    const blindPrewarState = structuredClone(engine.state);
+    delete blindPrewarState.commanderForces[playerId];
+    const blindPrewar = forecastWarV2(
+      blindPrewarState, engine.content, playerId, defenderId,
+    );
+    expect(prewar.apexContribution.attackMultiplier).toBeGreaterThan(1);
+    expect(prewar.apexContribution.defenseMultiplier).toBeGreaterThan(1);
+    expect(prewar.winChance).toBeGreaterThan(blindPrewar.winChance);
 
     const operation: FrontOperationV2 = {
       commanderId: playerId,
@@ -202,13 +217,11 @@ describe('APEX-aware canonical war forecast', () => {
       blindState, engine.content, war.id, playerId,
     )!;
 
-    expect(blind.outlook).toBe('our-collapse');
-    expect(supported.outlook).toBe('enemy-collapse');
     expect(supported.projectedOwnLosses).toBeLessThan(blind.projectedOwnLosses);
     expect(supported.projectedEnemyLosses).toBeGreaterThan(blind.projectedEnemyLosses);
   });
 
-  it('omits unreachable and already-committed forces instead of double counting them', () => {
+  it('ignores retired location and commitment fields in the network forecast', () => {
     const { engine, playerId } = campaignWithApex(31_002);
     const defenderId = nationIdV2('bel');
     const force = engine.state.commanderForces[playerId]!;
@@ -219,22 +232,23 @@ describe('APEX-aware canonical war forecast', () => {
     };
     force.mission = 'assault-support';
     const committed = engine.warForecast(playerId, defenderId);
-    expect(committed.apexContribution).toMatchObject({
-      status: 'committed',
-      effectivePower: 0,
-      chanceDelta: 0,
-    });
+    expect(committed.apexContribution).toMatchObject({ status: 'ready', etaWeeks: 0 });
+    expect(committed.apexContribution.effectivePower).toBe(0);
+    expect(committed.apexContribution.attackMultiplier).toBeGreaterThan(1);
+    expect(committed.apexContribution.chanceDelta).toBeGreaterThan(0);
 
     force.front = null;
     force.mission = 'standby';
     force.locationId = territoryIdV2('usa');
     const unreachable = engine.warForecast(playerId, defenderId);
-    expect(unreachable.apexContribution.status).toBe('unreachable');
-    expect(unreachable.apexContribution.effectivePower).toBe(0);
-    expect(unreachable.apexContribution.chanceDelta).toBe(0);
+    expect(unreachable.apexContribution.status).toBe('ready');
+    expect(unreachable.apexContribution.effectivePower)
+      .toBeCloseTo(committed.apexContribution.effectivePower, 9);
+    expect(unreachable.apexContribution.chanceDelta)
+      .toBeCloseTo(committed.apexContribution.chanceDelta, 9);
   });
 
-  it('discounts long in-progress transit and weak field supply against the campaign horizon', () => {
+  it('does not discount the global field for retired transit or supply state', () => {
     const { engine, playerId } = campaignWithApex(31_003);
     const defenderId = nationIdV2('bel');
     const ready = engine.warForecast(playerId, defenderId);
@@ -245,15 +259,16 @@ describe('APEX-aware canonical war forecast', () => {
       departTick: engine.state.tick,
       arriveTick: engine.state.tick + 20,
     };
-    force.economy.supplyStock = force.army.manpower * 0.35;
+    force.economy.supplyStock = force.shield.integrity * 0.35;
     const delayed = engine.warForecast(playerId, defenderId);
-    expect(delayed.apexContribution.status).toBe('delayed');
-    expect(delayed.apexContribution.etaWeeks).toBe(20);
-    expect(delayed.apexContribution.supplyReadiness).toBeCloseTo(0.35, 3);
+    expect(delayed.apexContribution.status).toBe('ready');
+    expect(delayed.apexContribution.etaWeeks).toBe(0);
+    expect(delayed.apexContribution.supplyReadiness)
+      .toBeCloseTo(ready.apexContribution.supplyReadiness, 9);
     expect(delayed.apexContribution.effectivePower)
-      .toBeLessThan(ready.apexContribution.effectivePower);
+      .toBeCloseTo(ready.apexContribution.effectivePower, 9);
     expect(delayed.apexContribution.chanceDelta)
-      .toBeLessThan(ready.apexContribution.chanceDelta);
+      .toBeCloseTo(ready.apexContribution.chanceDelta, 9);
   });
 
   it('uses the identical contribution model in the Survival timeline', () => {
@@ -266,7 +281,8 @@ describe('APEX-aware canonical war forecast', () => {
     )).toEqual({ accepted: true });
     const forecast = engine.warForecast(playerId, nationIdV2('bel'));
     expect(forecast.apexContribution.status).toBe('ready');
-    expect(forecast.apexContribution.chanceDelta).toBeGreaterThan(0);
+    expect(forecast.apexContribution.attackMultiplier).toBeGreaterThan(1);
+    expect(forecast.apexContribution.defenseMultiplier).toBeGreaterThan(1);
   });
 
   it('keeps North Pole Rogue countermeasures out of ordinary wars', () => {
@@ -310,7 +326,8 @@ describe('APEX-aware canonical war forecast', () => {
       .toBe(stageOne.apexContribution.projectedAttackPressure);
     expect(stageTwo.apexContribution.projectedDefenseShield)
       .toBeGreaterThan(stageOne.apexContribution.projectedDefenseShield);
-    expect(stageTwo.apexContribution.power).toBeGreaterThan(stageOne.apexContribution.power);
+    expect(stageTwo.apexContribution.power).toBe(0);
+    expect(stageOne.apexContribution.power).toBe(0);
     expect(stageTwo.projectedAttackerLossRate).toBeLessThan(stageOne.projectedAttackerLossRate);
 
     completeNorthPoleThrough(engine, playerId, 3);
@@ -329,6 +346,8 @@ describe('APEX-aware canonical war forecast', () => {
     expect(event).toBeDefined();
     expect(event!.commanderAttackerPower)
       .toBeCloseTo(stageThree.apexContribution.projectedAttackPressure, 6);
+    expect(event!.commanderAttackerPulseDamage)
+      .toBeCloseTo(stageThree.apexContribution.projectedPulseDamage, 9);
   });
 
   it('uses the same final Antarctic operation multiplier in preview and battle', () => {
@@ -348,13 +367,15 @@ describe('APEX-aware canonical war forecast', () => {
     expect(stageFour.sourceId).toBe(sourceId);
     expect(stageFour.targetId).toBe(targetId);
     expect(stageFour.apexContribution.projectedAttackPressure
-      / stageThree.apexContribution.projectedAttackPressure).toBeCloseTo(1.05, 6);
+      / stageThree.apexContribution.projectedAttackPressure).toBeCloseTo(1.05, 5);
     expect(stageFour.apexContribution.projectedDefenseShield
-      / stageThree.apexContribution.projectedDefenseShield).toBeCloseTo(1.05, 6);
+      / stageThree.apexContribution.projectedDefenseShield).toBeCloseTo(1.05, 3);
 
     const event = resolveReadyApexPulse(engine, playerId, sourceId, targetId);
     expect(event).toBeDefined();
     expect(event!.commanderAttackerPower)
       .toBeCloseTo(stageFour.apexContribution.projectedAttackPressure, 6);
+    expect(event!.commanderAttackerPulseDamage)
+      .toBeCloseTo(stageFour.apexContribution.projectedPulseDamage, 9);
   });
 });

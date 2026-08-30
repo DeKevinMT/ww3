@@ -10,6 +10,7 @@ import type {
 } from '../sim/v2/types';
 import type { CountryMasteryRuntimeModifiersV2 } from '../sim/v2/countryMasteryRuntime';
 import { APEX_EMPIRE_ANNUAL_FOOD_OUTPUT_CAP_V2 } from '../sim/v2/commanderForce';
+import type { EmpireFlagIdentityV1 } from '../meta/commanderProfile';
 
 export const MULTIPLAYER_PROTOCOL_VERSION = 6 as const;
 export const MULTIPLAYER_DEPLOYMENT_SCHEMA_VERSION = 1 as const;
@@ -90,12 +91,14 @@ export interface LobbyPlayer {
 export interface MultiplayerDeploymentSnapshotV1 {
   schemaVersion: typeof MULTIPLAYER_DEPLOYMENT_SCHEMA_VERSION;
   countryId: PlayerId;
+  /** Account identity projected by this seat; independent of its starting nation. */
+  empireFlag: EmpireFlagIdentityV1;
   countryMastery: CountryMasteryRuntimeModifiersV2 & {
     /** Free mastery-level opening cadre, separate from Force capacity. */
     openingArmyMultiplier: number;
   };
   /** Kept explicit for the lobby/reconnect audit; effects are resolved in apex. */
-  activeDoctrine: 'vanguard' | 'bastion' | 'rapid-response' | null;
+  activeDoctrine: 'vanguard' | 'bastion' | 'rapid-response' | 'force-multiplier' | null;
   apex: CommanderForceInitializationV2;
 }
 
@@ -333,8 +336,10 @@ export function validateMultiplayerDeploymentSnapshotV1(
   label = 'deployment',
 ): MultiplayerDeploymentSnapshotV1 {
   const deployment = requireRecord(value, label);
+  const hasEmpireFlag = Object.prototype.hasOwnProperty.call(deployment, 'empireFlag');
   requireExactKeys(deployment, [
     'schemaVersion', 'countryId', 'countryMastery', 'activeDoctrine', 'apex',
+    ...(hasEmpireFlag ? ['empireFlag'] : []),
   ], label);
   if (deployment.schemaVersion !== MULTIPLAYER_DEPLOYMENT_SCHEMA_VERSION) {
     fail(`${label}.schemaVersion must be ${MULTIPLAYER_DEPLOYMENT_SCHEMA_VERSION}.`);
@@ -361,40 +366,94 @@ export function validateMultiplayerDeploymentSnapshotV1(
 
   const apexLabel = `${label}.apex`;
   const apex = requireRecord(deployment.apex, apexLabel);
-  requireExactKeys(apex, [
+  const canonicalShieldLoadout = Object.prototype.hasOwnProperty.call(apex, 'shield');
+  const transitionalShieldLoadout = !canonicalShieldLoadout && (
+    Object.prototype.hasOwnProperty.call(apex, 'rechargeMultiplier')
+    || Object.hasOwn(apex, 'armyCasualtyMultiplier')
+    || Object.hasOwn(apex, 'armyPeaceRecoveryMultiplier')
+  );
+  const shieldNativeLoadout = canonicalShieldLoadout || transitionalShieldLoadout;
+  const apexKeys = canonicalShieldLoadout ? [
+    'shield', 'attackMultiplier', 'defenseMultiplier',
+    'armyCasualtyMultiplier', 'armyPeaceRecoveryMultiplier',
+    'treasury', 'annualOutput', 'supplyStock', 'countryTraitScale',
+    'capabilities', 'empireSupport',
+  ] : [
     'manpower', 'capacity', 'trainedReserves', 'baseAttack', 'baseDefense',
     'treasury', 'annualOutput', 'supplyStock', 'countryTraitScale',
     'capabilities', 'empireSupport',
-  ], apexLabel);
+    ...(transitionalShieldLoadout ? [
+      'attackMultiplier', 'defenseMultiplier', 'rechargeMultiplier',
+      'armyCasualtyMultiplier', 'armyPeaceRecoveryMultiplier',
+    ] : []),
+  ];
+  requireExactKeys(apex, apexKeys, apexLabel);
+  const shieldLabel = `${apexLabel}.shield`;
+  const shield = canonicalShieldLoadout ? requireRecord(apex.shield, shieldLabel) : undefined;
+  const hasShieldTalentTuning = Boolean(shield
+    && Object.prototype.hasOwnProperty.call(shield, 'interceptEfficiency'));
+  if (shield) {
+    requireExactKeys(shield, [
+      'integrity', 'maxIntegrity', 'rechargeBuffer', 'rechargeMultiplier', 'pulseAttack',
+      ...(hasShieldTalentTuning ? [
+        'pulseProjectionRetention', 'pulseChargeBonusPerStep',
+        'interceptEfficiency', 'impactRecoveryShare', 'defensivePulseMultiplier',
+      ] : []),
+    ], shieldLabel);
+  }
   const capabilitiesLabel = `${apexLabel}.capabilities`;
   const capabilities = requireRecord(apex.capabilities, capabilitiesLabel);
   requireExactKeys(capabilities, [
     'mobileHeadquarters', 'fieldHospital', 'rapidResponse',
     'assaultSpecialist', 'defenseSpecialist', 'emergencyExtractionCharges',
+    ...(shieldNativeLoadout ? ['forceMultiplier'] : []),
   ], capabilitiesLabel);
   const supportLabel = `${apexLabel}.empireSupport`;
   const support = requireRecord(apex.empireSupport, supportLabel);
   requireExactKeys(support, [
     'recruitmentMultiplier', 'reserveTrainingMultiplier', 'annualFoodOutput',
     'foodProductionMultiplier', 'foodStorageMultiplier', 'foodImportCostMultiplier',
+    ...(shieldNativeLoadout ? ['armyCasualtyMultiplier', 'armyPeaceRecoveryMultiplier'] : []),
   ], supportLabel);
 
   const countryId = requirePlayerId(deployment.countryId, `${label}.countryId`);
+  let empireFlag: EmpireFlagIdentityV1 = { kind: 'country', countryId };
+  if (hasEmpireFlag) {
+    const flagLabel = `${label}.empireFlag`;
+    const flag = requireRecord(deployment.empireFlag, flagLabel);
+    requireExactKeys(flag, ['kind', 'countryId'], flagLabel);
+    if (flag.kind !== 'country') fail(`${flagLabel}.kind is invalid.`);
+    empireFlag = {
+      kind: 'country',
+      countryId: requirePlayerId(flag.countryId, `${flagLabel}.countryId`),
+    };
+  }
   const activeDoctrine = deployment.activeDoctrine === null
     || deployment.activeDoctrine === 'vanguard'
     || deployment.activeDoctrine === 'bastion'
     || deployment.activeDoctrine === 'rapid-response'
+    || deployment.activeDoctrine === 'force-multiplier'
     ? deployment.activeDoctrine : fail(`${label}.activeDoctrine is invalid.`);
-  const manpower = requireBoundedNumber(apex.manpower, `${apexLabel}.manpower`, 0, 10_000);
-  const capacity = requireBoundedNumber(apex.capacity, `${apexLabel}.capacity`, 0.000001, 10_000);
-  const trainedReserves = requireBoundedNumber(
-    apex.trainedReserves,
-    `${apexLabel}.trainedReserves`,
+  const integrity = requireBoundedNumber(
+    shield?.integrity ?? apex.manpower,
+    canonicalShieldLoadout ? `${shieldLabel}.integrity` : `${apexLabel}.manpower`,
     0,
     10_000,
   );
-  if (manpower > capacity || trainedReserves > capacity) {
-    fail(`${apexLabel} integrity and recharge buffer must fit inside max integrity.`);
+  const maxIntegrity = requireBoundedNumber(
+    shield?.maxIntegrity ?? apex.capacity,
+    canonicalShieldLoadout ? `${shieldLabel}.maxIntegrity` : `${apexLabel}.capacity`,
+    0.000001,
+    10_000,
+  );
+  const rechargeBuffer = requireBoundedNumber(
+    shield?.rechargeBuffer ?? apex.trainedReserves,
+    canonicalShieldLoadout ? `${shieldLabel}.rechargeBuffer` : `${apexLabel}.trainedReserves`,
+    0,
+    10_000,
+  );
+  if (integrity > maxIntegrity || rechargeBuffer > maxIntegrity) {
+    fail(`${apexLabel} Energy and Reserve Energy must fit inside Max Energy.`);
   }
   const assaultSpecialist = requireBoolean(
     capabilities.assaultSpecialist,
@@ -408,14 +467,29 @@ export function validateMultiplayerDeploymentSnapshotV1(
     capabilities.rapidResponse,
     `${capabilitiesLabel}.rapidResponse`,
   );
-  if (assaultSpecialist !== (activeDoctrine === 'vanguard')
-    || defenseSpecialist !== (activeDoctrine === 'bastion')
-    || rapidResponse !== (activeDoctrine === 'rapid-response')) {
+  const forceMultiplier = shieldNativeLoadout
+    ? requireBoolean(capabilities.forceMultiplier, `${capabilitiesLabel}.forceMultiplier`)
+    : false;
+  const emergencyReboot = requireBoolean(
+    capabilities.fieldHospital,
+    `${capabilitiesLabel}.fieldHospital`,
+  );
+  const doctrineMismatch = shieldNativeLoadout
+    ? assaultSpecialist !== (activeDoctrine === 'vanguard')
+      || defenseSpecialist !== (activeDoctrine === 'bastion')
+      || emergencyReboot !== (activeDoctrine === 'rapid-response')
+      || forceMultiplier !== (activeDoctrine === 'force-multiplier')
+      || rapidResponse
+    : assaultSpecialist !== (activeDoctrine === 'vanguard')
+      || defenseSpecialist !== (activeDoctrine === 'bastion')
+      || rapidResponse !== (activeDoctrine === 'rapid-response');
+  if (doctrineMismatch) {
     fail(`${label}.activeDoctrine must match its one resolved APEX specialist capability.`);
   }
   return {
     schemaVersion: MULTIPLAYER_DEPLOYMENT_SCHEMA_VERSION,
     countryId,
+    empireFlag,
     activeDoctrine,
     countryMastery: {
       openingArmyMultiplier: growth('openingArmyMultiplier'),
@@ -434,19 +508,55 @@ export function validateMultiplayerDeploymentSnapshotV1(
       casualtyMultiplier: reduction('casualtyMultiplier'),
     },
     apex: {
-      manpower,
-      capacity,
-      trainedReserves,
-      baseAttack: requireBoundedNumber(apex.baseAttack, `${apexLabel}.baseAttack`, 1, 160),
-      baseDefense: requireBoundedNumber(apex.baseDefense, `${apexLabel}.baseDefense`, 1, 160),
+      shield: {
+        integrity,
+        maxIntegrity,
+        rechargeBuffer,
+        pulseAttack: canonicalShieldLoadout
+          ? requireBoundedNumber(shield!.pulseAttack, `${shieldLabel}.pulseAttack`, 0, 1)
+          : 0.001,
+        rechargeMultiplier: canonicalShieldLoadout
+          ? requireBoundedNumber(shield!.rechargeMultiplier, `${shieldLabel}.rechargeMultiplier`, 1, 3.5)
+          : transitionalShieldLoadout
+            ? requireBoundedNumber(apex.rechargeMultiplier, `${apexLabel}.rechargeMultiplier`, 1, 3.5)
+            : 1,
+        pulseProjectionRetention: hasShieldTalentTuning
+          ? requireBoundedNumber(shield!.pulseProjectionRetention, `${shieldLabel}.pulseProjectionRetention`, 0, 0.35)
+          : 0,
+        pulseChargeBonusPerStep: hasShieldTalentTuning
+          ? requireBoundedNumber(shield!.pulseChargeBonusPerStep, `${shieldLabel}.pulseChargeBonusPerStep`, 0, 0.45)
+          : 0,
+        interceptEfficiency: hasShieldTalentTuning
+          ? requireBoundedNumber(shield!.interceptEfficiency, `${shieldLabel}.interceptEfficiency`, 1, 1.45)
+          : 1,
+        impactRecoveryShare: hasShieldTalentTuning
+          ? requireBoundedNumber(shield!.impactRecoveryShare, `${shieldLabel}.impactRecoveryShare`, 0, 0.35)
+          : 0,
+        defensivePulseMultiplier: hasShieldTalentTuning
+          ? requireBoundedNumber(shield!.defensivePulseMultiplier, `${shieldLabel}.defensivePulseMultiplier`, 1, 1.75)
+          : 1,
+      },
+      attackMultiplier: shieldNativeLoadout
+        ? requireBoundedNumber(apex.attackMultiplier, `${apexLabel}.attackMultiplier`, 1, 2.5)
+        : 1.08,
+      defenseMultiplier: shieldNativeLoadout
+        ? requireBoundedNumber(apex.defenseMultiplier, `${apexLabel}.defenseMultiplier`, 1, 2.5)
+        : 1.08,
+      armyCasualtyMultiplier: shieldNativeLoadout
+        ? requireBoundedNumber(apex.armyCasualtyMultiplier, `${apexLabel}.armyCasualtyMultiplier`, 0.82, 1)
+        : 1,
+      armyPeaceRecoveryMultiplier: shieldNativeLoadout
+        ? requireBoundedNumber(apex.armyPeaceRecoveryMultiplier, `${apexLabel}.armyPeaceRecoveryMultiplier`, 1, 1.75)
+        : 1,
       treasury: requireBoundedNumber(apex.treasury, `${apexLabel}.treasury`, 0, 1_000_000_000),
       annualOutput: requireBoundedNumber(apex.annualOutput, `${apexLabel}.annualOutput`, 0, 1_000_000_000),
       supplyStock: requireBoundedNumber(apex.supplyStock, `${apexLabel}.supplyStock`, 0, 1_000_000_000),
       countryTraitScale: requireBoundedNumber(apex.countryTraitScale, `${apexLabel}.countryTraitScale`, 0, 1),
       capabilities: {
         mobileHeadquarters: requireBoolean(capabilities.mobileHeadquarters, `${capabilitiesLabel}.mobileHeadquarters`),
-        fieldHospital: requireBoolean(capabilities.fieldHospital, `${capabilitiesLabel}.fieldHospital`),
-        rapidResponse,
+        fieldHospital: emergencyReboot,
+        rapidResponse: false,
+        forceMultiplier,
         assaultSpecialist,
         defenseSpecialist,
         emergencyExtractionCharges: requireInteger(
@@ -459,6 +569,12 @@ export function validateMultiplayerDeploymentSnapshotV1(
       empireSupport: {
         recruitmentMultiplier: requireBoundedNumber(support.recruitmentMultiplier, `${supportLabel}.recruitmentMultiplier`, 1, 1.50),
         reserveTrainingMultiplier: requireBoundedNumber(support.reserveTrainingMultiplier, `${supportLabel}.reserveTrainingMultiplier`, 1, 1.75),
+        armyCasualtyMultiplier: shieldNativeLoadout
+          ? requireBoundedNumber(support.armyCasualtyMultiplier, `${supportLabel}.armyCasualtyMultiplier`, 0.82, 1)
+          : 1,
+        armyPeaceRecoveryMultiplier: shieldNativeLoadout
+          ? requireBoundedNumber(support.armyPeaceRecoveryMultiplier, `${supportLabel}.armyPeaceRecoveryMultiplier`, 1, 1.75)
+          : 1,
         annualFoodOutput: requireBoundedNumber(support.annualFoodOutput, `${supportLabel}.annualFoodOutput`, 0, APEX_EMPIRE_ANNUAL_FOOD_OUTPUT_CAP_V2),
         foodProductionMultiplier: requireBoundedNumber(support.foodProductionMultiplier, `${supportLabel}.foodProductionMultiplier`, 1, 1.50),
         foodStorageMultiplier: requireBoundedNumber(support.foodStorageMultiplier, `${supportLabel}.foodStorageMultiplier`, 1, 1.75),
@@ -1179,7 +1295,7 @@ export function decodeSignalCode(code: string): DirectSignal {
   }
   const compact = code.trim();
   if (!compact.startsWith(`${SIGNAL_CODE_PREFIX}.`)) {
-    throw new MultiplayerProtocolError('invalid-signal', 'This is not a Frontier Command Direct Connect code.');
+    throw new MultiplayerProtocolError('invalid-signal', 'This is not an APEX: Reclamation Direct Connect code.');
   }
   const maximumEncodedLength = SIGNAL_CODE_PREFIX.length + 1 + Math.ceil(MAX_SIGNAL_CODE_BYTES * 4 / 3);
   if (compact.length > maximumEncodedLength) {

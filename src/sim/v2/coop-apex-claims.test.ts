@@ -15,11 +15,14 @@ import {
 } from './types';
 
 const ACCOUNT_APEX: CommanderForceInitializationV2 = {
-  manpower: 0.00048,
-  capacity: 0.0009,
-  trainedReserves: 0.00008,
-  baseAttack: 125,
-  baseDefense: 125,
+  shield: {
+    integrity: 0.0009,
+    maxIntegrity: 0.0009,
+    rechargeBuffer: 0.00008,
+    pulseAttack: 0.001,
+  },
+  attackMultiplier: 1.25,
+  defenseMultiplier: 1.25,
   treasury: 0,
   annualOutput: 0.015,
   supplyStock: 0.006,
@@ -77,7 +80,7 @@ describe('co-op APEX claim invariant', () => {
     expect(() => assertInvariantsV2(state, WORLD_CONTENT_V2)).not.toThrow();
   });
 
-  it('never stacks two domes on one canonical front', () => {
+  it('retires duplicate front claims because each seat owns a distributed network', () => {
     const { state, belgium, netherlands } = twoSeatApex(97_003);
     const sharedFront: CommanderFrontAssignmentV2 = {
       warId: 'coop-front',
@@ -90,13 +93,13 @@ describe('co-op APEX claim invariant', () => {
     state.commanderForces[netherlands]!.mission = 'assault-support';
 
     expect(reconcileCoopApexClaimsV2(state, WORLD_CONTENT_V2)).toBe(true);
-    expect(state.commanderForces[belgium]?.front).toEqual(sharedFront);
+    expect(state.commanderForces[belgium]?.front).toBeNull();
     expect(state.commanderForces[netherlands]).toMatchObject({
       front: null,
       mission: 'standby',
     });
     const assigned = Object.values(state.commanderForces)
       .filter((force) => force.front?.warId === sharedFront.warId);
-    expect(assigned).toHaveLength(1);
+    expect(assigned).toHaveLength(0);
   });
 });

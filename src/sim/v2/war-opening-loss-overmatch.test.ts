@@ -1,8 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  ATTACKER_CONCENTRATION_EXPOSURE_MAX_BONUS,
-  ATTACKER_CONCENTRATION_EXPOSURE_MAX_RATIO,
-  ATTACKER_CONCENTRATION_EXPOSURE_START_RATIO,
   WAR_DECLARATION_ATTACKER_LOSS_SHARE,
   round,
 } from './balance';
@@ -18,7 +15,6 @@ import {
   type FrontOperationV2,
 } from './types';
 import {
-  attackerConcentrationExposureMultiplierV2,
   declareWarV2,
   estimateLiveWarV2,
   projectCombatExchangeV2,
@@ -28,8 +24,6 @@ import { enterPostBlackoutCampaignForTestV2 } from './testSupport';
 
 const belgium = nationIdV2('bel');
 const netherlands = nationIdV2('nld');
-const china = nationIdV2('chn');
-const india = nationIdV2('ind');
 const belgiumTerritory = territoryIdV2('bel');
 const netherlandsTerritory = territoryIdV2('nld');
 const luxembourgTerritory = territoryIdV2('lux');
@@ -59,36 +53,7 @@ function declarationFixture() {
   return state;
 }
 
-function projectedExchange(
-  attackerManpower: number,
-  defenderManpower: number,
-) {
-  const state = createWorldStateV2(81_101);
-  state.wars = [];
-  state.territories[belgiumTerritory]!.army = {
-    ...state.territories[belgiumTerritory]!.army,
-    manpower: attackerManpower,
-    capacity: attackerManpower,
-  };
-  state.territories[netherlandsTerritory]!.army = {
-    ...state.territories[netherlandsTerritory]!.army,
-    manpower: defenderManpower,
-    capacity: Math.max(0.10, defenderManpower),
-  };
-  return projectCombatExchangeV2(
-    state,
-    WORLD_CONTENT_V2,
-    belgium,
-    netherlands,
-    belgiumTerritory,
-    netherlandsTerritory,
-    'land',
-    1,
-    1,
-  )!;
-}
-
-describe('V2 declaration loss and extreme-overmatch exposure', () => {
+describe('V2 declaration loss and frontline-only combat', () => {
   it('charges exactly one percent across deployed attacker armies and records it immediately', () => {
     const state = declarationFixture();
     const belgiumCapacityBefore = state.territories[belgiumTerritory]!.army.capacity;
@@ -159,39 +124,57 @@ describe('V2 declaration loss and extreme-overmatch exposure', () => {
     expect(war.attackerLosses).toBeGreaterThanOrEqual(openingLoss);
   });
 
-  it('activates only for true local-and-national overmatch and stays bounded', () => {
-    expect(ATTACKER_CONCENTRATION_EXPOSURE_START_RATIO).toBe(3);
-    expect(ATTACKER_CONCENTRATION_EXPOSURE_MAX_RATIO).toBe(8);
-    expect(ATTACKER_CONCENTRATION_EXPOSURE_MAX_BONUS).toBe(5);
-    expect(attackerConcentrationExposureMultiplierV2(1, 1, 1, 1)).toBe(1);
-    expect(attackerConcentrationExposureMultiplierV2(3, 1, 3, 1)).toBe(1);
-    expect(attackerConcentrationExposureMultiplierV2(8, 1, 8, 1)).toBe(6);
-    expect(attackerConcentrationExposureMultiplierV2(80, 1, 80, 1)).toBe(6);
-    expect(attackerConcentrationExposureMultiplierV2(8, 1, 8, 8)).toBe(1);
-    expect(attackerConcentrationExposureMultiplierV2(8, 0, 8, 1)).toBe(1);
-  });
+  it('keeps remote armies out of the raw exchange while retaining their capacity ceiling', () => {
+    const state = createWorldStateV2(81_101);
+    state.wars = [];
+    state.territories[belgiumTerritory]!.army = {
+      ...state.territories[belgiumTerritory]!.army,
+      manpower: 0.80,
+      capacity: 0.80,
+    };
+    state.territories[netherlandsTerritory]!.army = {
+      ...state.territories[netherlandsTerritory]!.army,
+      manpower: 0.10,
+      capacity: 0.10,
+    };
+    const remoteId = territoryIdV2('usa');
+    state.territories[remoteId]!.owner = belgium;
+    state.territories[remoteId]!.coreOwner = belgium;
+    state.territories[remoteId]!.integration = 1;
+    delete state.territories[remoteId]!.integrationProgram;
+    state.territories[remoteId]!.army = {
+      ...state.territories[remoteId]!.army,
+      manpower: 0,
+      capacity: 0,
+      baseAttack: state.territories[belgiumTerritory]!.army.baseAttack,
+      baseDefense: state.territories[belgiumTerritory]!.army.baseDefense,
+    };
+    invalidateTerritoryIndexV2(state);
+    const project = (fixture: typeof state) => projectCombatExchangeV2(
+      fixture,
+      WORLD_CONTENT_V2,
+      belgium,
+      netherlands,
+      belgiumTerritory,
+      netherlandsTerritory,
+      'land',
+      1,
+      1,
+    )!;
+    const localOnly = project(state);
 
-  it('keeps the live China-India peer baseline outside the exposure rule', () => {
-    const state = createWorldStateV2(81_102);
-    const chinaStrength = selectTotalManpowerV2(state, china).deployed;
-    const indiaStrength = selectTotalManpowerV2(state, india).deployed;
-    expect(attackerConcentrationExposureMultiplierV2(
-      chinaStrength,
-      indiaStrength,
-      chinaStrength,
-      indiaStrength,
-    )).toBe(1);
-  });
+    const withRearArmy = structuredClone(state);
+    withRearArmy.territories[remoteId]!.army = {
+      ...withRearArmy.territories[remoteId]!.army,
+      manpower: 8,
+      capacity: 8,
+    };
+    const reinforced = project(withRearArmy);
 
-  it('raises real counter-fire in giant-vs-small battles without changing ordinary exchanges', () => {
-    const equal = projectedExchange(0.10, 0.10);
-    const threshold = projectedExchange(0.30, 0.10);
-    const extreme = projectedExchange(0.80, 0.10);
-    const collapsed = projectedExchange(0.80, 0);
-
-    expect(threshold.attackerLosses).toBeCloseTo(equal.attackerLosses, 9);
-    expect(extreme.attackerLosses).toBeCloseTo(threshold.attackerLosses * 6, 9);
-    expect(extreme.attackerLosses).toBeGreaterThan(threshold.attackerLosses * 5.5);
-    expect(collapsed.attackerLosses).toBe(0);
+    expect(reinforced.rawAttackerLosses).toBeCloseTo(localOnly.rawAttackerLosses, 9);
+    expect(reinforced.rawDefenderLosses).toBeCloseTo(localOnly.rawDefenderLosses, 9);
+    expect(reinforced.attackPressure).toBeCloseTo(localOnly.attackPressure, 9);
+    expect(reinforced.counterPressure).toBeCloseTo(localOnly.counterPressure, 9);
+    expect(reinforced.attackerHitCap).toBeGreaterThan(localOnly.attackerHitCap);
   });
 });

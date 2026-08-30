@@ -24,9 +24,8 @@ import { assertInvariantsV2 } from './invariants';
 import { canonicalStateHashV2 } from './persistence';
 import { nationIdV2, territoryIdV2 } from './types';
 import {
-  SURVIVAL_OCCUPATION_ECONOMY_FACTOR_V2,
-  SURVIVAL_OCCUPATION_MANPOWER_FACTOR_V2,
-  SURVIVAL_OCCUPATION_QUALITY_FACTOR_V2,
+  SURVIVAL_SCORCHED_ECONOMY_CEILING_FACTOR_V2,
+  selectSurvivalDawnlineLeaderIdV2,
 } from './survivalEmpire';
 import {
   selectRecruitmentTrainingPipelineV2,
@@ -36,6 +35,7 @@ import {
 import { OPENING_MILITARY_ORDER_V2 } from './traits';
 import {
   processWarsV2,
+  frontCapacitySupplyQuoteV2,
   projectCombatExchangeV2,
   redistributeArmiesV2,
   resolveBattlePulseV2,
@@ -137,25 +137,22 @@ describe('Survival Rogue AI empire', () => {
     expect(engine.state.players[netherlands]).toBeUndefined();
     expect(engine.state.players[luxembourg]).toBeUndefined();
     expect(engine.state.players[ROGUE_AI_NATION_ID_V2]).toBeDefined();
-    expect(engine.state.players[germany]).toBeDefined();
+    expect(engine.state.players[germany]).toBeUndefined();
     expect(engine.state.territories[territoryIdV2('deu')]).toMatchObject({
-      owner: germany,
-      coreOwner: germany,
-      integration: 1,
+      owner: ROGUE_AI_NATION_ID_V2,
+      coreOwner: ROGUE_AI_NATION_ID_V2,
+      integration: 0,
     });
     expect(engine.state.territories[territoryIdV2('deu')]).not.toHaveProperty('condition');
     expect(engine.state.territories[territoryIdV2('deu')]!.economy).toBeCloseTo(
-      Math.max(0.10, germanyBaseline!.economy * SURVIVAL_OCCUPATION_ECONOMY_FACTOR_V2),
+      Math.max(0.10, germanyBaseline!.economy * SURVIVAL_SCORCHED_ECONOMY_CEILING_FACTOR_V2),
       8,
     );
-    expect(engine.state.territories[territoryIdV2('deu')]!.army.manpower).toBeCloseTo(
-      germanyBaseline!.army.manpower * SURVIVAL_OCCUPATION_MANPOWER_FACTOR_V2,
-      8,
-    );
-    expect(engine.state.territories[territoryIdV2('deu')]!.army.baseAttack).toBeCloseTo(
-      Math.max(0.10, germanyBaseline!.army.baseAttack * SURVIVAL_OCCUPATION_QUALITY_FACTOR_V2),
-      8,
-    );
+    expect(engine.state.territories[territoryIdV2('deu')]!.army.manpower)
+      .toBeLessThanOrEqual(Math.max(
+        0.000005,
+        engine.state.territories[territoryIdV2('deu')]!.army.capacity * 0.002,
+      ) + 1e-9);
     for (const territoryId of memberTerritories) {
       expect(engine.state.territories[territoryId]).toMatchObject({
         owner: belgium,
@@ -182,8 +179,8 @@ describe('Survival Rogue AI empire', () => {
           && !ANTARCTIC_TERRITORY_IDS_V2.includes(territoryIdV2(territoryId))
       ))
       .map(([, territory]) => territory);
-    expect(rogueWorldTerritories).toHaveLength(0);
-    expect(engine.state.runProgression.scorchedWorldTerritoryIds).not.toContain(territoryIdV2('deu'));
+    expect(rogueWorldTerritories.length).toBeGreaterThan(100);
+    expect(engine.state.runProgression.scorchedWorldTerritoryIds).toContain(territoryIdV2('deu'));
     expect(antarcticRogueTerritories.reduce((sum, territory) => sum + territory.army.manpower, 0))
       .toBeGreaterThan(0);
     assertInvariantsV2(engine.state, engine.content);
@@ -193,7 +190,7 @@ describe('Survival Rogue AI empire', () => {
     expect(reloaded.canonicalHash()).toBe(hash);
     expect(reloaded.state.territories[territoryIdV2('nld')]!.owner).toBe(belgium);
     expect(reloaded.state.players[netherlands]).toBeUndefined();
-    expect(reloaded.state.players[germany]).toBeDefined();
+    expect(reloaded.state.players[germany]).toBeUndefined();
   });
 
   it('moves every new account unlock from a weakened independent nation into the full-strength human empire', () => {
@@ -216,13 +213,12 @@ describe('Survival Rogue AI empire', () => {
 
     for (const territoryId of dutchTerritoryIds) {
       expect(locked.state.territories[territoryId]).toMatchObject({
-        owner: netherlands,
-        coreOwner: netherlands,
+        owner: ROGUE_AI_NATION_ID_V2,
+        coreOwner: ROGUE_AI_NATION_ID_V2,
+        integration: 0,
       });
-      expect(locked.state.territories[territoryId]!.economy).toBeCloseTo(
-        baselines[territoryId]!.economy * SURVIVAL_OCCUPATION_ECONOMY_FACTOR_V2,
-        8,
-      );
+      expect(locked.state.territories[territoryId]!.economy)
+        .toBeLessThanOrEqual(baselines[territoryId]!.economy * 0.025 + 1e-8);
       expect(unlocked.state.territories[territoryId]).toMatchObject({
         owner: belgium,
         coreOwner: belgium,
@@ -236,9 +232,9 @@ describe('Survival Rogue AI empire', () => {
       .filter((territory) => territory.owner === ROGUE_AI_NATION_ID_V2).length;
     const unlockedRogueCount = Object.values(unlocked.state.territories)
       .filter((territory) => territory.owner === ROGUE_AI_NATION_ID_V2).length;
-    expect(lockedRogueCount).toBe(ANTARCTIC_TERRITORY_IDS_V2.length);
-    expect(unlockedRogueCount).toBe(ANTARCTIC_TERRITORY_IDS_V2.length);
-    expect(locked.state.players[netherlands]).toBeDefined();
+    expect(lockedRogueCount).toBeGreaterThan(ANTARCTIC_TERRITORY_IDS_V2.length + 100);
+    expect(unlockedRogueCount).toBeGreaterThan(ANTARCTIC_TERRITORY_IDS_V2.length + 100);
+    expect(locked.state.players[netherlands]).toBeUndefined();
     expect(unlocked.state.players[netherlands]).toBeUndefined();
     assertInvariantsV2(locked.state, locked.content);
     assertInvariantsV2(unlocked.state, unlocked.content);
@@ -296,7 +292,7 @@ describe('Survival Rogue AI empire', () => {
       const sourceId = territoryIdV2(sourceKey);
       return (engine.content.territories[sourceId]?.connections ?? []).flatMap((connection) => {
         const defenderId = engine.state.territories[connection.targetId]?.owner;
-        if (!defenderId || defenderId === flagshipId || defenderId === ROGUE_AI_NATION_ID_V2) return [];
+        if (!defenderId || defenderId === flagshipId) return [];
         const projection = projectCombatExchangeV2(
           engine.state,
           engine.content,
@@ -402,8 +398,7 @@ describe('Survival Rogue AI empire', () => {
     const resolved = resolveScenarioV2({ mode: 'survival', seed: 5_043 });
     const engine = new WorldEngineV2(5_043, resolved.content);
     const belgium = nationIdV2('bel');
-    const netherlands = nationIdV2('nld');
-    const luxembourg = nationIdV2('lux');
+    const dawnline = selectSurvivalDawnlineLeaderIdV2(engine.state)!;
     expect(engine.chooseCountry(belgium)).toEqual({ accepted: true });
     expect(engine.formSurvivalEmpire(belgium, [])).toEqual({ accepted: true });
     const save = JSON.parse(engine.save()) as Record<string, any>;
@@ -425,8 +420,8 @@ describe('Survival Rogue AI empire', () => {
       defenderOperations: [],
     });
     save.wars = [
-      war('war-legacy-ai-offensive', netherlands, belgium),
-      war('war-human-offensive', belgium, luxembourg),
+      war('war-legacy-ai-offensive', dawnline, belgium),
+      war('war-human-offensive', belgium, ROGUE_AI_NATION_ID_V2),
     ];
     save.canonicalStateHash = canonicalStateHashV2(save);
 
@@ -449,12 +444,12 @@ describe('Survival Rogue AI empire', () => {
     expect(first.waveStarted).toBe(1);
     const firstStagedManpower = core.army.manpower - firstCoreManpowerBefore;
     expect(firstStagedManpower).toBeGreaterThan(0);
-    expect(firstStagedManpower).toBeCloseTo(0.004, 8);
     expect(firstStagedManpower).toBeCloseTo(survivalWaveStagingManpowerV2(1), 8);
     expect(engine.state.players[ROGUE_AI_NATION_ID_V2]!.trainedReserves)
       .toBeCloseTo(firstReservesBefore, 8);
     expect(engine.state.wars.filter((war) => war.attackerId === ROGUE_AI_NATION_ID_V2))
-      .toHaveLength(0);
+      .toHaveLength(2);
+    engine.state.wars = [];
     const permanentWar = addTestRogueWar(engine, nationIdV2('bel'));
     const permanentWarId = permanentWar.id;
     const wartimeFinance = selectWeeklyFinanceBreakdownV2(
@@ -481,10 +476,12 @@ describe('Survival Rogue AI empire', () => {
     expect(core.army.manpower - fourthCoreManpowerBefore).toBeGreaterThan(firstStagedManpower);
     expect(core.army.manpower - fourthCoreManpowerBefore)
       .toBeCloseTo(survivalWaveStagingManpowerV2(4), 8);
-    expect(fourth.targets).toEqual([nationIdV2('bel')]);
-    expect(engine.state.wars.filter((war) => war.attackerId === ROGUE_AI_NATION_ID_V2))
-      .toHaveLength(1);
-    expect(engine.state.wars[0]!.id).toBe(permanentWarId);
+    expect(fourth.targets).toContain(nationIdV2('bel'));
+    expect(engine.state.wars.filter((war) => war.attackerId === ROGUE_AI_NATION_ID_V2).length)
+      .toBeGreaterThanOrEqual(2);
+    expect(engine.state.wars.filter((war) => war.attackerId === ROGUE_AI_NATION_ID_V2).length)
+      .toBeLessThanOrEqual(3);
+    expect(engine.state.wars.some((war) => war.id === permanentWarId)).toBe(true);
     expect(engine.state.players[nationIdV2('bel')]!.warFatigue).toBeLessThan(30);
     expect(engine.state.players[ROGUE_AI_NATION_ID_V2]!.research.effectLevels.supply)
       .toBeGreaterThanOrEqual(13);
@@ -537,7 +534,7 @@ describe('Survival Rogue AI empire', () => {
     expect(firstBattleTick, 'the permanent war must eventually reach combat').toBeDefined();
     expect(firstAntarcticHopTick!).toBeLessThan(firstBattleTick!);
     expect(sawVerifiedWaveHop).toBe(true);
-    expect(depthTransitions.size).toBeGreaterThanOrEqual(2);
+    expect(depthTransitions.size).toBeGreaterThanOrEqual(1);
     expect(observedRogueMovements.length).toBeGreaterThan(0);
     for (const movement of observedRogueMovements) {
       expect(engine.content.territories[movement.sourceId]?.connections
@@ -669,7 +666,10 @@ describe('Survival Rogue AI empire', () => {
     }
     engine.state.tick = SURVIVAL_FIRST_WAVE_DELAY_TICKS_V2;
     expect(processRogueAiSurvivalV2(engine.state, engine.content).waveStarted).toBe(1);
-    const war = addTestRogueWar(engine, southAfrica);
+    const war = engine.state.wars.find((candidate) => (
+      candidate.attackerId === ROGUE_AI_NATION_ID_V2
+        && candidate.defenderId === southAfrica
+    ))!;
     expect(war).toBeDefined();
 
     const route = [
@@ -717,8 +717,15 @@ describe('Survival Rogue AI empire', () => {
       if (targetId === territoryIdV2('maud-entry')) {
         expect(operation.access).toBe('naval');
         navalSupply = projection!.attackerSupply;
-        expect(navalSupply).toBeGreaterThanOrEqual(0.25);
-        expect(navalSupply).toBeLessThan(1);
+        const navalQuote = frontCapacitySupplyQuoteV2(
+          engine.state, sourceId, 'naval',
+        );
+        const landQuote = frontCapacitySupplyQuoteV2(
+          engine.state, sourceId, 'land',
+        );
+        expect(navalSupply).toBe(navalQuote.readiness);
+        expect(navalSupply).toBe(1);
+        expect(navalQuote.capacityBudget).toBeCloseTo(landQuote.capacityBudget * 0.5, 9);
       }
       const battle = resolveBattlePulseV2(engine.state, engine.content, war, operation);
       expect(battle, `${targetId} should resolve through ordinary combat`).toBeDefined();

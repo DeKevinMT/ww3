@@ -88,6 +88,9 @@ describe('V2 clock lifecycle', () => {
     home.army.manpower = home.army.capacity * 0.95;
     front.army.manpower = front.army.capacity * 0.05;
     enemy.army.manpower = enemy.army.capacity * 0.95;
+    // This fixture authors its own force distribution and is not exercising
+    // Belgium's temporary opening-force entitlement.
+    state.players[BEL]!.openingArmyBonus = null;
     const operation: FrontOperationV2 = {
       commanderId: BEL,
       sourceId: BEL_FRONT,

@@ -13,6 +13,7 @@ import {
   coopRouteLogisticsTermsV2,
   declareWarV2,
   resolveBattlePulseV2,
+  frontCapacitySupplyQuoteV2,
   supplyFactorV2,
   warDeclarationStatusV2,
 } from './war';
@@ -94,7 +95,7 @@ describe('explicit co-op access and battlefield support', () => {
     expect(selectWarAccessTypeV2(state, content, bel, deu)).toBe('none');
   });
 
-  it('keeps a friendly naval relay authored, distance-bound, costly and throughput-limited', () => {
+  it('keeps a friendly naval relay authored, range-bound, cheap and half-throughput', () => {
     const content = fixtureContent([
       [bel, nld, 'sea', 3_200],
       [nld, deu, 'land'],
@@ -113,9 +114,12 @@ describe('explicit co-op access and battlefield support', () => {
     expect(route).toMatchObject({ access: 'naval', distanceKm: 3_200, seaHops: 1 });
     expect(route.path).toEqual([bel, nld, deu]);
     expect(terms.costPerMillion).toBeGreaterThan(0);
-    expect(terms.throughputMultiplier).toBeGreaterThanOrEqual(0.1);
-    expect(terms.throughputMultiplier).toBeLessThan(1);
-    expect(supplyFactorV2(state, content, bel, bel, 'naval', deu)).toBeLessThan(0.85);
+    expect(terms.throughputMultiplier).toBe(0.5);
+    const sourceId = state.players[bel]!.capitalId;
+    const navalQuote = frontCapacitySupplyQuoteV2(state, sourceId, 'naval');
+    const landQuote = frontCapacitySupplyQuoteV2(state, sourceId, 'land');
+    expect(navalQuote.readiness).toBe(landQuote.readiness);
+    expect(navalQuote.capacityBudget).toBeCloseTo(landQuote.capacityBudget * 0.5, 9);
 
     const overRangeContent = fixtureContent([
       [bel, nld, 'sea', 13_000],

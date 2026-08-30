@@ -4,14 +4,13 @@ import { synchronizeArmyCapacityV2 } from './capacity';
 import {
   APEX_AEGIS_COUNTERPULSE_SHARE_V2,
   APEX_LANCER_PULSE_ATTACK_MULTIPLIER_V2,
-  APEX_NEXUS_PROJECTION_COMBAT_SHARE_V2,
   allocateApexFrontlineDamageV2,
-  applyApexShieldDamageV2,
+  applyCommanderCasualtiesV2,
   cloneCommanderForcesV2,
-  consumeCommanderSupplyV2,
   initializeCommanderForceV2,
   reconcileApexTwinProjectionV2,
   registerApexSupportedAssaultBattleV2,
+  selectApexEmpireShieldNetworkV2,
   selectApexLancerPulseStatusV2,
   selectApexTwinProjectionStatusV2,
   selectCommanderBattleSupportV2,
@@ -32,11 +31,15 @@ import {
 } from './types';
 
 const apexProfile: CommanderForceInitializationV2 = {
-  manpower: 0.001,
-  capacity: 0.001,
-  trainedReserves: 0,
-  baseAttack: 100,
-  baseDefense: 120,
+  shield: {
+    integrity: 0.001,
+    maxIntegrity: 0.001,
+    rechargeBuffer: 0,
+    rechargeMultiplier: 1,
+    pulseAttack: 0.001,
+  },
+  attackMultiplier: 1.10,
+  defenseMultiplier: 1.12,
   treasury: 0,
   annualOutput: 0,
   supplyStock: 1,
@@ -99,7 +102,7 @@ function war(
 }
 
 describe('APEX doctrine capstones', () => {
-  it('rejects multi-capstone launches and repairs authenticated mixed saves to one protocol', () => {
+  it('rejects multi-capstone launches, runtime state and authenticated mixed current saves', () => {
     const rejectedState = createWorldStateV2(95_000, WORLD_CONTENT_V2);
     const rejectedPlayerId = rejectedState.humanPlayerId;
     expect(initializeCommanderForceV2(
@@ -124,55 +127,19 @@ describe('APEX doctrine capstones', () => {
     state.commanderForces[playerId]!.doctrineRuntime = {
       lancerSupportedAssaultCount: 2,
       secondaryProjection: null,
+      emergencyRebootUsed: false,
     };
     const mixedSave = structuredClone(createSaveV2(state, WORLD_CONTENT_V2));
     mixedSave.commanderForces[playerId]!.capabilities.defenseSpecialist = true;
     mixedSave.commanderForces[playerId]!.capabilities.rapidResponse = true;
     mixedSave.canonicalStateHash = canonicalStateHashV2(mixedSave);
-
-    const loaded = loadSaveV2(mixedSave, WORLD_CONTENT_V2);
-    expect(loaded.commanderForces[playerId]!.capabilities).toMatchObject({
-      assaultSpecialist: true,
-      defenseSpecialist: false,
-      rapidResponse: false,
-    });
-    expect(selectApexLancerPulseStatusV2(loaded, playerId)).toMatchObject({
-      supportedAssaultCount: 2,
-      nextPulseCharged: true,
-    });
-    expect(selectApexTwinProjectionStatusV2(
-      loaded, playerId, WORLD_CONTENT_V2,
-    )).toMatchObject({
-      active: false,
-      combatShare: 1,
-      secondaryProjection: null,
-    });
-
-    const sourceId = loaded.players[playerId]!.capitalId;
-    const targetId = WORLD_CONTENT_V2.territories[sourceId]!.connections
-      .map((connection) => connection.targetId)
-      .find((territoryId) => loaded.territories[territoryId]?.owner !== playerId)!;
-    const activeOperation = operation(playerId, sourceId, targetId);
-    const activeWar = war(
-      'war-normalized-protocol',
-      playerId,
-      loaded.territories[targetId]!.owner,
-      activeOperation,
-    );
-    loaded.wars.push(activeWar);
-    const force = loaded.commanderForces[playerId]!;
-    force.locationId = sourceId;
-    force.mission = 'assault-support';
-    force.front = { warId: activeWar.id, sourceId, targetId };
-    const support = selectCommanderBattleSupportV2(
-      loaded, activeWar, activeOperation, WORLD_CONTENT_V2,
-    ).attacker!;
-    expect(support.singularityPulseCharged).toBe(true);
-    expect(support.mirrorMatrixEligible).toBe(false);
-    expect(support.projectionCombatShare).toBe(1);
+    // Current-rule saves are strict. Only authenticated legacy rulesets may be
+    // normalized during migration; a mixed current protocol must be rejected.
+    expect(() => loadSaveV2(mixedSave, WORLD_CONTENT_V2))
+      .toThrow(/Commander force .* invalid canonical state/i);
   });
 
-  it('charges LANCER only on resolved supported assaults and pulses on exactly every third', () => {
+  it('charges only APEX Pulse on resolved assaults and Overdrives exactly every third', () => {
     const state = createWorldStateV2(95_001, WORLD_CONTENT_V2);
     const playerId = installApex(state, { assaultSpecialist: true });
     const sourceId = state.players[playerId]!.capitalId;
@@ -184,6 +151,7 @@ describe('APEX doctrine capstones', () => {
     const activeWar = war('war-lancer-cadence', playerId, defenderId, activeOperation);
     state.wars.push(activeWar);
     const force = state.commanderForces[playerId]!;
+    force.shield.pulseChargeBonusPerStep = 0.10;
     force.locationId = sourceId;
     force.mission = 'assault-support';
     force.front = { warId: activeWar.id, sourceId, targetId };
@@ -191,7 +159,8 @@ describe('APEX doctrine capstones', () => {
     const firstPreview = selectCommanderBattleSupportV2(
       state, activeWar, activeOperation, WORLD_CONTENT_V2,
     ).attacker!;
-    expect(firstPreview.baseAttack).toBe(100);
+    expect(firstPreview.attackMultiplier).toBe(1.10);
+    expect(firstPreview.pulseAttack).toBe(0.001);
     expect(firstPreview.singularityPulseCharged).toBe(false);
     expect(selectApexLancerPulseStatusV2(state, playerId).supportedAssaultCount).toBe(0);
     // Repeated previews are pure and cannot arm the pulse.
@@ -211,6 +180,8 @@ describe('APEX doctrine capstones', () => {
     const secondPreview = selectCommanderBattleSupportV2(
       state, activeWar, activeOperation, WORLD_CONTENT_V2,
     ).attacker!;
+    expect(secondPreview.attackMultiplier).toBe(1.10);
+    expect(secondPreview.pulseAttack).toBeCloseTo(0.0011, 9);
     expect(registerApexSupportedAssaultBattleV2(state, secondPreview)).toMatchObject({
       recorded: true,
       singularityPulse: false,
@@ -232,40 +203,88 @@ describe('APEX doctrine capstones', () => {
     expect(selectApexLancerPulseStatusV2(loaded, playerId)).toMatchObject({
       supportedAssaultCount: 2,
       nextPulseCharged: true,
-      nextAttackMultiplier: APEX_LANCER_PULSE_ATTACK_MULTIPLIER_V2,
+      nextAttackMultiplier: 1.2 * APEX_LANCER_PULSE_ATTACK_MULTIPLIER_V2,
     });
     const loadedWar = loaded.wars.find((candidate) => candidate.id === activeWar.id)!;
     const loadedOperation = loadedWar.attackerOperations[0]!;
     const pulsePreview = selectCommanderBattleSupportV2(
       loaded, loadedWar, loadedOperation, WORLD_CONTENT_V2,
     ).attacker!;
-    expect(pulsePreview.baseAttack).toBe(
-      apexProfile.baseAttack * APEX_LANCER_PULSE_ATTACK_MULTIPLIER_V2,
+    expect(pulsePreview.attackMultiplier).toBe(apexProfile.attackMultiplier);
+    expect(pulsePreview.pulseAttack).toBeCloseTo(
+      apexProfile.shield.pulseAttack * 1.2 * APEX_LANCER_PULSE_ATTACK_MULTIPLIER_V2,
+      9,
     );
     expect(pulsePreview.singularityPulseCharged).toBe(true);
+    const energyBeforeOverdrive = loaded.commanderForces[playerId]!.shield.integrity;
     expect(registerApexSupportedAssaultBattleV2(loaded, pulsePreview)).toMatchObject({
       recorded: true,
       singularityPulse: true,
       supportedAssaultCount: 0,
       nextPulseCharged: false,
     });
+    expect(loaded.commanderForces[playerId]!.shield.integrity).toBeCloseTo(
+      energyBeforeOverdrive - loaded.commanderForces[playerId]!.shield.maxIntegrity * 0.02,
+      9,
+    );
     expect(selectCommanderBattleSupportV2(
       loaded, loadedWar, loadedOperation, WORLD_CONTENT_V2,
-    ).attacker!.baseAttack).toBe(apexProfile.baseAttack);
+    ).attacker).toMatchObject({
+      attackMultiplier: apexProfile.attackMultiplier,
+      pulseAttack: apexProfile.shield.pulseAttack,
+    });
   });
 
-  it('reflects exactly 20% of intercepted damage for AEGIS, bounded by the hostile formation', () => {
+  it('makes interception more efficient without raising the 20% Max Energy spend limit', () => {
+    const baseline = allocateApexFrontlineDamageV2({
+      requestedDamage: 1,
+      nationalManpower: 1,
+      apex: {
+        shieldActive: true,
+        integrity: 1,
+        maxIntegrity: 1,
+        interceptEfficiency: 1,
+      },
+    });
+    const efficient = allocateApexFrontlineDamageV2({
+      requestedDamage: 1,
+      nationalManpower: 1,
+      apex: {
+        shieldActive: true,
+        integrity: 1,
+        maxIntegrity: 1,
+        interceptEfficiency: 1.45,
+      },
+    });
+
+    expect(baseline.apexLosses).toBeCloseTo(0.2, 12);
+    expect(efficient.apexLosses).toBeCloseTo(0.2, 12);
+    expect(efficient.interceptedDamage).toBeCloseTo(0.29, 12);
+    expect(efficient.interceptedDamage).toBeGreaterThan(baseline.interceptedDamage);
+    expect(efficient.nationalLosses).toBeCloseTo(0.71, 12);
+  });
+
+  it('banks Impact Recovery as offline Reserve Energy without repairing the live shield', () => {
+    const state = createWorldStateV2(95_007, WORLD_CONTENT_V2);
+    const playerId = installApex(state, {});
+    const force = state.commanderForces[playerId]!;
+    force.shield.rechargeBuffer = 0;
+    force.shield.impactRecoveryShare = 0.25;
+
+    expect(applyCommanderCasualtiesV2(state, playerId, 0.0002))
+      .toBeCloseTo(0.0002, 12);
+    expect(force.shield.integrity).toBeCloseTo(0.0008, 12);
+    expect(force.shield.rechargeBuffer).toBeCloseTo(0.00005, 12);
+  });
+
+  it('reflects exactly 15% of intercepted damage without a second hidden hostile cap', () => {
     const baseInput = {
       requestedDamage: 0.1,
       nationalManpower: 1,
       apex: {
         shieldActive: true,
-        engagedManpower: 1,
-        manpower: 1,
-        capacity: 1,
-        defense: 1,
-        nationalDefense: 1,
-        opposingAttack: 1,
+        integrity: 1,
+        maxIntegrity: 1,
         mirrorMatrixEligible: true,
       },
     };
@@ -277,11 +296,15 @@ describe('APEX doctrine capstones', () => {
       reflected.interceptedDamage * APEX_AEGIS_COUNTERPULSE_SHARE_V2,
       12,
     );
-    const bounded = allocateApexFrontlineDamageV2({
+    const smallHostile = allocateApexFrontlineDamageV2({
       ...baseInput,
       hostileManpower: 0.001,
     });
-    expect(bounded.counterpulseDamage).toBe(0.001);
+    expect(smallHostile.counterpulseDamage).toBeCloseTo(
+      smallHostile.interceptedDamage * APEX_AEGIS_COUNTERPULSE_SHARE_V2,
+      12,
+    );
+    expect(smallHostile.counterpulseDamage).toBeGreaterThan(0.001 * 0.01);
     expect(allocateApexFrontlineDamageV2({
       ...baseInput,
       hostileManpower: 1,
@@ -296,19 +319,24 @@ describe('APEX doctrine capstones', () => {
 
     expect(() => assertInvariantsV2(state, WORLD_CONTENT_V2)).not.toThrow();
     expect(cloneCommanderForcesV2(state.commanderForces)[playerId]!.doctrineRuntime)
-      .toEqual({ lancerSupportedAssaultCount: 0, secondaryProjection: null });
+      .toEqual({
+        lancerSupportedAssaultCount: 0,
+        secondaryProjection: null,
+        emergencyRebootUsed: false,
+      });
 
     state.commanderForces[playerId]!.doctrineRuntime = {
       lancerSupportedAssaultCount: 3,
       secondaryProjection: null,
+      emergencyRebootUsed: false,
     };
     expect(() => assertInvariantsV2(state, WORLD_CONTENT_V2))
       .toThrow(/invalid canonical state/i);
   });
 
-  it('maintains at most two deterministic NEXUS projections over one shared integrity and energy pool', () => {
+  it('uses Theater Mesh as bounded efficiency across every network front without cloning state', () => {
     const state = createWorldStateV2(95_003, WORLD_CONTENT_V2);
-    const playerId = installApex(state, { rapidResponse: true });
+    const playerId = installApex(state, { forceMultiplier: true });
     const primaryLocationId = state.players[playerId]!.capitalId;
     const adjacent = WORLD_CONTENT_V2.territories[primaryLocationId]!.connections
       .map((connection) => connection.targetId)
@@ -379,113 +407,33 @@ describe('APEX doctrine capstones', () => {
       targetId: primaryTargetId,
     };
 
-    expect(reconcileApexTwinProjectionV2(state, WORLD_CONTENT_V2, playerId)).toBe(true);
-    const twin = selectApexTwinProjectionStatusV2(
-      state, playerId, WORLD_CONTENT_V2,
-    );
-    expect(twin).toMatchObject({
-      active: true,
-      combatShare: APEX_NEXUS_PROJECTION_COMBAT_SHARE_V2,
-      primaryLocationId,
-    });
-    expect(twin.secondaryProjection).not.toBeNull();
-    expect(twin.secondaryProjection!.locationId).not.toBe(primaryLocationId);
-
-    const primarySupport = selectCommanderBattleSupportV2(
-      state, primaryWar, primaryOperation, WORLD_CONTENT_V2,
-    ).attacker!;
-    const otherSupports = [
-      selectCommanderBattleSupportV2(
-        state, secondaryWar, secondaryOperation, WORLD_CONTENT_V2,
-      ).attacker,
-      selectCommanderBattleSupportV2(
-        state, thirdWar, thirdOperation, WORLD_CONTENT_V2,
-      ).attacker,
-    ];
-    expect(primarySupport).toMatchObject({
-      projection: 'primary',
-      projectionCombatShare: APEX_NEXUS_PROJECTION_COMBAT_SHARE_V2,
-      manpower: apexProfile.manpower,
-      availableSupply: apexProfile.supplyStock,
-    });
-    expect(primarySupport.baseAttack).toBe(
-      apexProfile.baseAttack * APEX_NEXUS_PROJECTION_COMBAT_SHARE_V2,
-    );
-    expect(primarySupport.baseDefense).toBe(
-      apexProfile.baseDefense * APEX_NEXUS_PROJECTION_COMBAT_SHARE_V2,
-    );
-    expect(otherSupports.filter(Boolean)).toHaveLength(1);
-    expect(otherSupports.find(Boolean)).toMatchObject({
-      projection: 'secondary',
-      projectionCombatShare: APEX_NEXUS_PROJECTION_COMBAT_SHARE_V2,
-      manpower: apexProfile.manpower,
-      availableSupply: apexProfile.supplyStock,
-    });
-    expect(Object.keys(force.doctrineRuntime!.secondaryProjection!).sort()).toEqual([
-      'front', 'locationId', 'mission', 'pairedPrimaryFront',
-    ]);
-
-    const selectedBeforeSave = structuredClone(force.doctrineRuntime!.secondaryProjection);
-    // The third legal candidate proved that NEXUS never created a third
-    // projection; remove that unrelated war before the save round-trip so the
-    // fixture stays a canonical one-war-per-opponent campaign state.
-    state.wars = state.wars.filter((candidate) => (
-      candidate.id === primaryWar.id || candidate.id === selectedBeforeSave!.front.warId
-    ));
-    assertInvariantsV2(state, WORLD_CONTENT_V2);
-    const loaded = loadSaveV2(createSaveV2(state, WORLD_CONTENT_V2), WORLD_CONTENT_V2);
-    expect(loaded.commanderForces[playerId]!.doctrineRuntime!.secondaryProjection)
-      .toEqual(selectedBeforeSave);
-    expect(reconcileApexTwinProjectionV2(loaded, WORLD_CONTENT_V2, playerId)).toBe(false);
-
-    const loadedForce = loaded.commanderForces[playerId]!;
-    const integrityBefore = loadedForce.army.manpower;
-    const energyBefore = loadedForce.economy.supplyStock;
-    expect(applyApexShieldDamageV2(loaded, playerId, 0.0001)).toBe(0.0001);
-    expect(applyApexShieldDamageV2(loaded, playerId, 0.0002)).toBe(0.0002);
-    expect(loadedForce.army.manpower).toBeCloseTo(integrityBefore - 0.0003, 9);
-    expect(consumeCommanderSupplyV2(loaded, playerId, 0.1)).toBe(0.1);
-    expect(consumeCommanderSupplyV2(loaded, playerId, 0.2)).toBe(0.2);
-    expect(loadedForce.economy.supplyStock).toBeCloseTo(energyBefore - 0.3, 9);
-    expect(loadedForce.doctrineRuntime!.secondaryProjection).not.toHaveProperty('army');
-    expect(loadedForce.doctrineRuntime!.secondaryProjection).not.toHaveProperty('economy');
-
-    const exhausted = structuredClone(loaded);
-    expect(applyApexShieldDamageV2(exhausted, playerId, 1)).toBeGreaterThan(0);
-    expect(exhausted.commanderForces[playerId]!.army.manpower).toBe(0);
-    expect(exhausted.commanderForces[playerId]!.doctrineRuntime!.secondaryProjection)
-      .toBeNull();
-    expect(selectApexTwinProjectionStatusV2(
-      exhausted, playerId, WORLD_CONTENT_V2,
-    ).active).toBe(false);
-
-    const selectedWarId = loadedForce.doctrineRuntime!.secondaryProjection!.front.warId;
-    loaded.wars = loaded.wars.filter((candidate) => (
-      candidate.id !== selectedWarId
-    ));
-    expect(reconcileApexTwinProjectionV2(loaded, WORLD_CONTENT_V2, playerId)).toBe(true);
-    expect(selectApexTwinProjectionStatusV2(
-      loaded, playerId, WORLD_CONTENT_V2,
-    )).toMatchObject({
-      active: false,
-      combatShare: 1,
-      secondaryProjection: null,
-    });
-    const recombinedWar = loaded.wars.find((candidate) => candidate.id === primaryWar.id)!;
-    const recombinedOperation = recombinedWar.attackerOperations[0]!;
-    expect(selectCommanderBattleSupportV2(
-      loaded, recombinedWar, recombinedOperation, WORLD_CONTENT_V2,
-    ).attacker).toMatchObject({
-      projection: 'primary',
-      projectionCombatShare: 1,
-      baseAttack: apexProfile.baseAttack,
-      baseDefense: apexProfile.baseDefense,
-    });
+    expect(reconcileApexTwinProjectionV2(state, WORLD_CONTENT_V2, playerId)).toBe(false);
+    const network = selectApexEmpireShieldNetworkV2(
+      state, WORLD_CONTENT_V2, playerId,
+    )!;
+    expect(network.activeFrontCount).toBe(3);
+    expect(network.fronts.map((front) => front.allocationShare))
+      .toEqual([0.466666667, 0.466666667, 0.466666667]);
+    expect(network.fronts.reduce(
+      (sum, front) => sum + front.allocationShare,
+      0,
+    )).toBeCloseTo(1.4, 8);
+    expect(force.doctrineRuntime?.secondaryProjection).toBeNull();
+    expect([
+      [primaryWar, primaryOperation],
+      [secondaryWar, secondaryOperation],
+      [thirdWar, thirdOperation],
+    ].map(([activeWar, activeFront]) => selectCommanderBattleSupportV2(
+      state,
+      activeWar as WarStateV2,
+      activeFront as FrontOperationV2,
+      WORLD_CONTENT_V2,
+    ).attacker)).toHaveLength(3);
   });
 
-  it('recombines a NEXUS secondary when its owned route is severed and preserves the primary front', () => {
+  it('keeps Omnipresence route-independent and stores no location sidecar', () => {
     const state = createWorldStateV2(95_006, WORLD_CONTENT_V2);
-    const playerId = installApex(state, { rapidResponse: true });
+    const playerId = installApex(state, { forceMultiplier: true });
     const primaryLocationId = state.players[playerId]!.capitalId;
     const primaryConnections = [...WORLD_CONTENT_V2.territories[primaryLocationId]!.connections]
       .sort((left, right) => left.targetId.localeCompare(right.targetId));
@@ -593,73 +541,13 @@ describe('APEX doctrine capstones', () => {
       targetId: primaryTargetId,
     };
 
-    expect(reconcileApexTwinProjectionV2(state, WORLD_CONTENT_V2, playerId)).toBe(true);
+    expect(reconcileApexTwinProjectionV2(state, WORLD_CONTENT_V2, playerId)).toBe(false);
     expect(selectApexTwinProjectionStatusV2(
       state, playerId, WORLD_CONTENT_V2,
     )).toMatchObject({
       active: true,
-      secondaryProjection: { locationId: secondaryLocationId },
+      combatShare: 0.6,
     });
-    assertInvariantsV2(state, WORLD_CONTENT_V2);
-    const loaded = loadSaveV2(createSaveV2(state, WORLD_CONTENT_V2), WORLD_CONTENT_V2);
-    expect(loaded.commanderForces[playerId]!.doctrineRuntime!.secondaryProjection)
-      .toEqual(state.commanderForces[playerId]!.doctrineRuntime!.secondaryProjection);
-
-    const loadedForce = loaded.commanderForces[playerId]!;
-    const primaryBefore = {
-      locationId: loadedForce.locationId,
-      mission: loadedForce.mission,
-      front: structuredClone(loadedForce.front),
-      manpower: loadedForce.army.manpower,
-      supplyStock: loadedForce.economy.supplyStock,
-    };
-    const warsBefore = structuredClone(loaded.wars);
-    const corridorCaptorId = loaded.territories[secondaryTargetId]!.owner;
-    const corridor = loaded.territories[intermediateId]!;
-    corridor.owner = corridorCaptorId;
-    corridor.coreOwner = corridorCaptorId;
-    corridor.integration = 1;
-    corridor.integrationProgram = null;
-    invalidateTerritoryIndexV2(loaded);
-    synchronizeArmyCapacityV2(loaded, WORLD_CONTENT_V2);
-
-    expect(selectCommanderRouteV2(
-      loaded, WORLD_CONTENT_V2, playerId, primaryLocationId, secondaryLocationId,
-    )).toBeUndefined();
-    // Read-only consumers stop granting the remote 60% formation even before
-    // the canonical weekly reconciliation clears the stale sidecar.
-    expect(selectApexTwinProjectionStatusV2(
-      loaded, playerId, WORLD_CONTENT_V2,
-    )).toMatchObject({ active: false, combatShare: 1, secondaryProjection: null });
-    const loadedSecondaryWar = loaded.wars.find((candidate) => (
-      candidate.id === secondaryWar.id
-    ))!;
-    expect(selectCommanderBattleSupportV2(
-      loaded,
-      loadedSecondaryWar,
-      loadedSecondaryWar.attackerOperations[0]!,
-      WORLD_CONTENT_V2,
-    ).attacker).toBeNull();
-
-    expect(reconcileApexTwinProjectionV2(loaded, WORLD_CONTENT_V2, playerId)).toBe(true);
-    expect(loadedForce.doctrineRuntime!.secondaryProjection).toBeNull();
-    expect({
-      locationId: loadedForce.locationId,
-      mission: loadedForce.mission,
-      front: loadedForce.front,
-      manpower: loadedForce.army.manpower,
-      supplyStock: loadedForce.economy.supplyStock,
-    }).toEqual(primaryBefore);
-    expect(loaded.wars).toEqual(warsBefore);
-    assertInvariantsV2(loaded, WORLD_CONTENT_V2);
-
-    const recombinedSave = createSaveV2(loaded, WORLD_CONTENT_V2);
-    const reloaded = loadSaveV2(recombinedSave, WORLD_CONTENT_V2);
-    expect(reloaded.commanderForces[playerId]!.doctrineRuntime!.secondaryProjection)
-      .toBeNull();
-    expect(reloaded.commanderForces[playerId]!.front).toEqual(primaryBefore.front);
-    expect(reloaded.wars).toEqual(warsBefore);
-    expect(createSaveV2(reloaded, WORLD_CONTENT_V2).canonicalStateHash)
-      .toBe(recombinedSave.canonicalStateHash);
+    expect(force.doctrineRuntime?.secondaryProjection).toBeNull();
   });
 });

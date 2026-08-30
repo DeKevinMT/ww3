@@ -32,6 +32,19 @@ interface RouteSearchNodeV2 {
   readonly distanceKm: number;
 }
 
+/**
+ * Survival co-op deliberately fields two sovereign fronts. The host Empire
+ * and the Dawnline Accord share the outcome, but never pool territory,
+ * formations or logistics. Other modes retain the authored co-op relay model.
+ */
+export function survivalCoopUsesSovereignLogisticsV2(
+  state: Pick<WorldStateV2, 'humanPlayerId' | 'humanPlayerIds' | 'players'>,
+  content: WorldContentV2,
+): boolean {
+  return content.metadata?.scenarioId === 'survival'
+    && selectHumanPlayerIdsV2(state).length > 1;
+}
+
 function pathKeyV2(path: readonly TerritoryId[]): string {
   return path.join('>');
 }
@@ -135,7 +148,9 @@ export function selectCoopMilitaryAccessRoutesV2(
     .filter((sourceId) => state.territories[sourceId]?.owner === moverId)
     .sort((left, right) => left.localeCompare(right));
   const humanIds = selectHumanPlayerIdsV2(state);
-  const expandedCoopAccess = humanIds.length > 1 && humanIds.includes(moverId);
+  const expandedCoopAccess = humanIds.length > 1
+    && humanIds.includes(moverId)
+    && !survivalCoopUsesSovereignLogisticsV2(state, content);
   if (!expandedCoopAccess) {
     return directRoutesV2(state, content, moverId, opponentId, canonicalSources);
   }
@@ -237,6 +252,7 @@ export function selectBestCoopFriendlyTransitRouteV2(
     .filter(([, territory]) => territory.owner === moverId)
     .map(([territoryId]) => territoryId as TerritoryId),
 ): CoopMilitaryAccessRouteV2 | undefined {
+  if (survivalCoopUsesSovereignLogisticsV2(state, content)) return undefined;
   const destinationOwner = state.territories[destinationId]?.owner;
   if (!destinationOwner || !areHumanTeammatesV2(state, moverId, destinationOwner)) return undefined;
   const canonicalSources = [...new Set(sourceIds)]

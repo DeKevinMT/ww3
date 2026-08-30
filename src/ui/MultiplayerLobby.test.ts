@@ -517,6 +517,32 @@ describe('multiplayer lobby launch recovery', () => {
     ui.destroy(false);
   });
 
+  it('explains the two sovereign Survival commands without implying shared logistics', () => {
+    const scenario = normalizeScenarioConfigV2({ mode: 'survival', seed: 404_456 });
+    const ui = new MultiplayerLobby({
+      onClose: vi.fn(), onHostLaunch: vi.fn(), onGuestLaunch: vi.fn(), openingMetrics,
+      scenarioConfig: scenario,
+    });
+    const internals = ui as unknown as LobbyInternals;
+    const model = new HostLobbyModel('host', 'Alice', scenario);
+    model.connect('guest', 'Bob');
+    model.apply('host', selection(nationIdV2('grl')));
+    model.apply('guest', selection(nationIdV2('can')));
+    internals.mode = 'host';
+    internals.host = { hostPeerId: 'host', roomId: 'room', broadcast: vi.fn() };
+    internals.hostModel = model;
+    internals.lobby = model.snapshot();
+
+    internals.render();
+
+    expect(internals.root.innerHTML).toContain('EMPIRE COMMAND');
+    expect(internals.root.innerHTML).toContain('DAWNLINE ACCORD');
+    expect(internals.root.innerHTML).toContain('Shared outcome, separate forces.');
+    expect(internals.root.innerHTML).toContain('/2 CONNECTED');
+    expect(internals.root.innerHTML).not.toContain('allied territory carries team supply');
+    ui.destroy(false);
+  });
+
   it('keeps lobby type floors readable and mobile inputs at 16px', () => {
     expect(stylesSource).toContain('.mp-deployment-summary__item span');
     expect(stylesSource).toMatch(/\.mp-deployment-summary__item span\s*\{[^}]*font-size:\s*11px/s);

@@ -16,6 +16,7 @@ import {
   ROGUE_PRIME_REBUILD_MAX_TICKS_V2,
   ROGUE_PRIME_REBUILD_MIN_TICKS_V2,
   ROGUE_PRIME_REPLACEMENT_PER_TICK_V2,
+  ROGUE_PRIME_REPLACEMENT_SUPPLY_PER_MILLION_V2,
   ROGUE_PRIME_SORTIE_WARNING_MAX_TICKS_V2,
   ROGUE_PRIME_SORTIE_WARNING_MIN_TICKS_V2,
   processRoguePrimeV2,
@@ -204,11 +205,14 @@ describe('ROGUE PRIME', () => {
     const human = nationIdV2('chl');
     expect(engine.chooseCountry(human)).toEqual({ accepted: true });
     expect(engine.initializeCommanderForce(human, {
-      manpower: 0.0004,
-      capacity: 0.0009,
-      trainedReserves: 0.00008,
-      baseAttack: 82,
-      baseDefense: 90,
+      shield: {
+        integrity: 0.0004,
+        maxIntegrity: 0.0009,
+        rechargeBuffer: 0.00008,
+        pulseAttack: 0.001,
+      },
+      attackMultiplier: 1.12,
+      defenseMultiplier: 1.18,
       treasury: 20,
       annualOutput: 4,
       supplyStock: 0.006,
@@ -235,14 +239,14 @@ describe('ROGUE PRIME', () => {
     );
     expect(opposed.attacker).toMatchObject({ playerId: human });
     expect(opposed.defender).toMatchObject({ playerId: ROGUE_AI_NATION_ID_V2 });
-    const apexBefore = apex.army.manpower;
-    const primeBefore = prime.force!.army.manpower;
+    const apexBefore = apex.shield.integrity;
+    const primeBefore = prime.force!.shield.integrity;
     expect(applyCommanderCasualtiesV2(engine.state, human, 0.00002)).toBeGreaterThan(0);
     expect(applyCommanderCasualtiesV2(
       engine.state, ROGUE_AI_NATION_ID_V2, 0.00002,
     )).toBeGreaterThan(0);
-    expect(apex.army.manpower).toBeLessThan(apexBefore);
-    expect(prime.force!.army.manpower).toBeLessThan(primeBefore);
+    expect(apex.shield.integrity).toBeLessThan(apexBefore);
+    expect(prime.force!.shield.integrity).toBeLessThan(primeBefore);
 
     engine.state.wars = [];
     prime.force!.locationId = territoryIdV2('drake-entry');
@@ -256,21 +260,32 @@ describe('ROGUE PRIME', () => {
     expect(prime.force!.locationId).toBe(territoryIdV2('drake-entry'));
   });
 
-  it('rebuilds deterministically only at Zero Point and partial recovery spends real reserves', () => {
+  it('rebuilds deterministically only at Zero Point and partial recovery spends real Energy reserves', () => {
     const engine = survival(91_005);
     const prime = engine.state.polarEndgame.roguePrime;
     const force = prime.force!;
     const rogue = engine.state.players[ROGUE_AI_NATION_ID_V2]!;
-    force.army.manpower -= 0.00005;
-    const manpowerBefore = force.army.manpower;
-    const reservesBefore = rogue.trainedReserves;
+    force.shield.integrity -= 0.00005;
+    const integrityBefore = force.shield.integrity;
+    const supplyBefore = force.economy.supplyStock;
+    const coreSupplyRefill = Math.min(
+      0.0005,
+      force.shield.maxIntegrity * 26 - supplyBefore,
+    );
+    const nationalReservesBefore = rogue.trainedReserves;
     const treasuryBefore = rogue.treasury;
     processRoguePrimeV2(engine.state, engine.content);
-    expect(force.army.manpower - manpowerBefore).toBeCloseTo(
+    expect(force.shield.integrity - integrityBefore).toBeCloseTo(
       ROGUE_PRIME_REPLACEMENT_PER_TICK_V2,
       9,
     );
-    expect(rogue.trainedReserves).toBeLessThan(reservesBefore);
+    expect(force.economy.supplyStock).toBeCloseTo(
+      supplyBefore + coreSupplyRefill
+        - ROGUE_PRIME_REPLACEMENT_PER_TICK_V2
+          * ROGUE_PRIME_REPLACEMENT_SUPPLY_PER_MILLION_V2,
+      9,
+    );
+    expect(rogue.trainedReserves).toBe(nationalReservesBefore);
     expect(rogue.treasury).toBeLessThan(treasuryBefore);
 
     // PRIME is deliberately not covered by the human APEX narrative floor:
@@ -278,9 +293,9 @@ describe('ROGUE PRIME', () => {
     expect(applyCommanderCasualtiesV2(
       engine.state,
       ROGUE_AI_NATION_ID_V2,
-      force.army.manpower + 1,
+      force.shield.integrity + 1,
     )).toBeGreaterThan(0);
-    expect(force.army.manpower).toBe(0);
+    expect(force.shield.integrity).toBe(0);
     reconcileRoguePrimeV2(engine.state);
     expect(prime.status).toBe('rebuilding');
     expect(prime.rebuildReadyTick! - engine.state.tick).toBeGreaterThanOrEqual(

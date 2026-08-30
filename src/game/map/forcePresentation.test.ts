@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  commanderForceMapCombatPower,
+  commanderShieldMapSupportPercent,
   forcePresentationSignature,
   mapCombatPowerLabel,
 } from './forcePresentation';
@@ -44,16 +44,18 @@ describe('force presentation signature', () => {
     expect(mapCombatPowerLabel(12_345.678)).not.toMatch(/ATK|DEF|COMBAT POWER/);
   });
 
-  it('projects Commander Corps power on the same neutral map scale', () => {
-    expect(commanderForceMapCombatPower({
-      manpower: 0.012,
-      baseAttack: 3.2,
-      baseDefense: 2.8,
-    })).toBe(36.24);
-    expect(commanderForceMapCombatPower({
-      manpower: -1,
-      baseAttack: Number.NaN,
-      baseDefense: 4,
+  it('projects APEX only as a bounded national-army support percentage', () => {
+    expect(commanderShieldMapSupportPercent({
+      integrity: 0.012,
+      maxIntegrity: 0.02,
+      attackMultiplier: 1.32,
+      defenseMultiplier: 1.28,
+    })).toBe(30.2);
+    expect(commanderShieldMapSupportPercent({
+      integrity: 0,
+      maxIntegrity: 0.02,
+      attackMultiplier: Number.NaN,
+      defenseMultiplier: 1.4,
     })).toBe(0);
   });
 });

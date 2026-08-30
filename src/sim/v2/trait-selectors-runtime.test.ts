@@ -289,8 +289,11 @@ describe('retired country-trait selector runtime', () => {
     const korNeutral = selectWeeklyFinanceBreakdownV2(
       korea.neutralState, korea.neutralContent, korea.neutralId,
     );
-    expect(korTrait.acceleratedRecruitment / korNeutral.acceleratedRecruitment)
-      .toBeCloseTo(countryTraitFactorV2(korea.traitId, 'accelerated-recruitment'), 3);
+    // The paid readiness curve is retired; both identities therefore expose
+    // the same neutral zero rather than an undefined 0 / 0 ratio.
+    expect(korTrait.acceleratedRecruitment).toBe(0);
+    expect(korNeutral.acceleratedRecruitment).toBe(0);
+    expect(countryTraitFactorV2(korea.traitId, 'accelerated-recruitment')).toBe(1);
 
     const cuba = identityFixtureV2('cub', 82_022);
     configureBothV2(cuba, (state, playerId) => {

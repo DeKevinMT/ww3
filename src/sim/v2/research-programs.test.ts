@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   PASSIVE_RECRUITMENT_CAPACITY_RATE,
+  PEACE_ARMY_REFILL_CAPACITY_RATE_V2,
   PEACE_READINESS_RECOVERY_MAX_MULTIPLIER,
   RESEARCH_BRANCHES,
   RESEARCH_BRANCH_EFFECTS,
@@ -121,7 +122,7 @@ describe('V2 integrated research programs and army economy', () => {
     expect(selectRecruitmentThroughputV2(state, WORLD_CONTENT_V2, bel)).toBe(trained);
   });
 
-  it('recruits every baseline more slowly while smaller maximum armies fill sooner', () => {
+  it('uses one capacity-proportional field refill rate for small and large armies', () => {
     const state = createWorldStateV2(4_040_4);
     for (const id of [bel, ind]) {
       state.players[id].research.effectLevels.training = 0;
@@ -132,10 +133,10 @@ describe('V2 integrated research programs and army economy', () => {
     const largePipeline = selectRecruitmentTrainingPipelineV2(state, WORLD_CONTENT_V2, ind);
 
     expect(PASSIVE_RECRUITMENT_CAPACITY_RATE).toBe(0.00135);
+    expect(PEACE_ARMY_REFILL_CAPACITY_RATE_V2).toBe(0.01);
     expect(small.capacity).toBeLessThan(large.capacity);
-    expect(smallPipeline).toBeLessThan(small.capacity * 0.006);
-    expect(largePipeline).toBeLessThan(large.capacity * 0.006);
-    expect(small.capacity / smallPipeline).toBeLessThan(large.capacity / largePipeline);
+    expect(smallPipeline / small.capacity).toBeCloseTo(0.01, 4);
+    expect(largePipeline / large.capacity).toBeCloseTo(0.01, 4);
   });
 
   it('uses one smooth peacetime recovery curve from empty to full readiness', () => {
@@ -191,40 +192,36 @@ describe('V2 integrated research programs and army economy', () => {
     territory.army.capacity = selectArmyCapacityTargetV2(state, WORLD_CONTENT_V2, bel);
     territory.army.manpower = territory.army.capacity * 0.50;
     const annualRecruitment = selectRecruitmentThroughputV2(state, WORLD_CONTENT_V2, bel) * 52;
-    expect(annualRecruitment).toBeGreaterThan(territory.army.capacity * 0.08);
-    expect(annualRecruitment).toBeLessThan(territory.army.capacity * 0.14);
+    expect(annualRecruitment / territory.army.capacity).toBeCloseTo(0.52, 3);
   });
 
-  it('starts partially staffed at the complete population-based cap', () => {
+  it('starts fully staffed at the complete effective cap', () => {
     const state = createWorldStateV2(406);
     const small = selectArmyStrengthV2(state, WORLD_CONTENT_V2, isl);
     const large = selectArmyStrengthV2(state, WORLD_CONTENT_V2, usa);
-    expect(small.fillRatio).toBeCloseTo(
-      initialArmyCapacityRatioV2(WORLD_CONTENT_V2, isl)
-        / countryTraitFactorV2(isl, 'army-capacity'),
-      3,
-    );
-    expect(large.fillRatio).toBeCloseTo(
-      initialArmyCapacityRatioV2(WORLD_CONTENT_V2, usa)
-        / countryTraitFactorV2(usa, 'army-capacity'),
-      3,
-    );
+    expect(initialArmyCapacityRatioV2(WORLD_CONTENT_V2, isl)).toBe(1);
+    expect(initialArmyCapacityRatioV2(WORLD_CONTENT_V2, usa)).toBe(1);
+    expect(countryTraitFactorV2(isl, 'army-capacity')).toBe(1);
+    expect(countryTraitFactorV2(usa, 'army-capacity')).toBe(1);
+    expect(small.fillRatio).toBe(1);
+    expect(large.fillRatio).toBe(1);
     expect(small.capacity).toBeCloseTo(small.capacityTarget, 6);
     expect(large.capacity).toBeCloseTo(large.capacityTarget, 6);
   });
 
-  it('makes supply research improve a real route without exceeding one', () => {
+  it('keeps supply research out of the fixed Army Capacity route budget', () => {
     const state = createWorldStateV2(407);
     const routeTerritory = territoryIdV2('lux');
     state.territories[routeTerritory].owner = bel;
     state.territories[routeTerritory].coreOwner = bel;
     state.territories[routeTerritory].integration = 1;
+    state.territories[routeTerritory].army.manpower *= 0.50;
     invalidateTerritoryIndexV2(state);
     const base = supplyFactorV2(state, WORLD_CONTENT_V2, bel, routeTerritory, false);
     state.players[bel].research.effectLevels.supply = 20;
     const improved = supplyFactorV2(state, WORLD_CONTENT_V2, bel, routeTerritory, false);
-    expect(improved).toBeGreaterThan(base);
-    expect(improved).toBeLessThanOrEqual(1);
+    expect(improved).toBe(base);
+    expect(improved).toBe(1);
   });
 
   it('anchors initial upkeep to real defence spending and charges advanced weapons', () => {
@@ -273,7 +270,9 @@ describe('V2 integrated research programs and army economy', () => {
     const reservesBefore = state.players[bel].trainedReserves;
     const before = { ...state.territories[belTerritory].army };
     const plans = createFinancePlansV2(state, WORLD_CONTENT_V2);
-    expect(plans.get(bel)!.recruitment).toBeGreaterThan(0);
+    expect(plans.get(bel)!.passiveRecruitment).toBeGreaterThan(0);
+    expect(plans.get(bel)!.acceleratedRecruitment).toBe(0);
+    expect(plans.get(bel)!.recruitment).toBe(0);
     expect(plans.get(bel)!.reserveTraining).toBeGreaterThan(0);
     processFinanceMilitaryV2(state, WORLD_CONTENT_V2, plans);
     expect(state.territories[belTerritory].army.capacity).toBe(before.capacity);

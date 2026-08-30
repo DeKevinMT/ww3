@@ -89,7 +89,7 @@ export function selectCampaignFirstStrikeTargetV2(
       frontSupply: forecast.attackerSupply,
       transferThroughput: declaration.access === 'land'
         ? clamp(forecast.attackerSupply, 0, 1)
-        : clamp(forecast.attackerSupply * 0.75, 0, 0.85),
+        : clamp(forecast.attackerSupply * 0.5, 0, 0.5),
       stagingReadiness,
       preparationWeeks,
       // APEX has already completed this route planning inside the briefing;

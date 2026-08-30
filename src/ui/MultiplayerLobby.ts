@@ -89,7 +89,7 @@ function gameModeLabel(mode: GameModeV2): string {
 
 function gameModeBrief(mode: GameModeV2): string {
   return mode === 'standard-2026' ? '2026 world campaign'
-    : mode === 'survival' ? 'Rogue AI survival front'
+    : mode === 'survival' ? 'Two sovereign fronts against the Rogue AI'
       : 'Unranked random world';
 }
 
@@ -195,7 +195,7 @@ export class MultiplayerLobby {
     this.root.className = 'multiplayer-lobby-layer';
     this.root.setAttribute('role', 'dialog');
     this.root.setAttribute('aria-modal', 'true');
-    this.root.setAttribute('aria-label', 'Frontier Command multiplayer lobby');
+    this.root.setAttribute('aria-label', 'APEX: Reclamation multiplayer lobby');
     this.root.addEventListener('click', this.onClick);
     this.root.addEventListener('input', this.onInput);
     this.root.addEventListener('change', this.onChange);
@@ -929,10 +929,14 @@ export class MultiplayerLobby {
   private renderPlayers(): string {
     if (!this.lobby) return '<div class="mp-empty">Waiting for the host lobby…</div>';
     const localId = this.host?.hostPeerId ?? this.guest?.peerId;
+    const survival = this.lobby.scenario.mode === 'survival';
     return `<div class="mp-player-list">${this.lobby.players.map((player) => {
       const local = player.peerId === localId;
       const country = player.countryId ? this.resolvedScenario.content.nations[player.countryId] : undefined;
-      return `<article class="mp-player ${local ? 'is-local' : ''} ${player.connected ? '' : 'is-offline'}"><div class="mp-player__identity"><span>${country?.sigil ?? '◇'}</span><div><strong>${escapeHtml(player.displayName)}${player.peerId === this.lobby!.hostPeerId ? ' · HOST' : ''}</strong><small>${player.connected ? player.ready ? 'READY' : 'CHOOSING' : 'DISCONNECTED'}</small></div></div><b>${escapeHtml(country?.name ?? (local ? 'Choose below' : 'No country'))}</b></article>`;
+      const survivalRole = player.peerId === this.lobby!.hostPeerId
+        ? 'EMPIRE COMMAND' : 'DAWNLINE ACCORD';
+      const connection = player.connected ? player.ready ? 'READY' : 'CHOOSING' : 'DISCONNECTED';
+      return `<article class="mp-player ${local ? 'is-local' : ''} ${player.connected ? '' : 'is-offline'}"><div class="mp-player__identity"><span>${country?.sigil ?? '◇'}</span><div><strong>${escapeHtml(player.displayName)}${player.peerId === this.lobby!.hostPeerId ? ' · HOST' : ''}</strong><small>${survival ? `${survivalRole} · ` : ''}${connection}</small></div></div><b>${escapeHtml(country?.name ?? (local ? 'Choose below' : 'No country'))}</b></article>`;
     }).join('')}</div>`;
   }
 
@@ -943,7 +947,13 @@ export class MultiplayerLobby {
       ?? this.pickerPreviewCountryId;
     const country = this.resolvedScenario.content.nations[countryId];
     const mastery = this.countryMasteryLevels?.get(countryId);
-    return `<section class="mp-deployment-summary" aria-label="Selected co-op deployment"><div class="mp-deployment-summary__sigil" aria-hidden="true">${country?.sigil ?? '◇'}</div><div class="mp-deployment-summary__item"><span>YOUR CO-OP NATION</span><strong>${escapeHtml(country?.name ?? 'Nation pending')}</strong><small>${mastery ? `Mastery level ${mastery}` : 'Your unlocked command'}</small></div><div class="mp-deployment-summary__item is-mission"><span>SHARED MISSION</span><strong>${escapeHtml(gameModeLabel(scenario.mode))}</strong><small>${escapeHtml(gameModeBrief(scenario.mode))}</small></div></section>`;
+    const localPeerId = this.host?.hostPeerId ?? this.guest?.peerId;
+    const survivalRole = scenario.mode === 'survival'
+      ? localPeerId && this.lobby
+        ? localPeerId === this.lobby.hostPeerId ? 'YOUR EMPIRE' : 'DAWNLINE LEADER'
+        : 'YOUR SURVIVAL NATION'
+      : 'YOUR CO-OP NATION';
+    return `<section class="mp-deployment-summary" aria-label="Selected co-op deployment"><div class="mp-deployment-summary__sigil" aria-hidden="true">${country?.sigil ?? '◇'}</div><div class="mp-deployment-summary__item"><span>${survivalRole}</span><strong>${escapeHtml(country?.name ?? 'Nation pending')}</strong><small>${mastery ? `Mastery level ${mastery}` : 'Your unlocked command'}</small></div><div class="mp-deployment-summary__item is-mission"><span>SHARED MISSION</span><strong>${escapeHtml(gameModeLabel(scenario.mode))}</strong><small>${escapeHtml(gameModeBrief(scenario.mode))}</small></div></section>`;
   }
 
   private renderMenu(): string {
@@ -967,6 +977,7 @@ export class MultiplayerLobby {
     const connected = this.lobby?.players.filter((player) => player.connected).length ?? 0;
     const block = isHost ? this.hostModel?.startBlockReason() : undefined;
     const mode = this.lobby?.scenario.mode ?? this.resolvedScenario.config.mode;
+    const survival = mode === 'survival';
     let action: string;
     if (!local?.countryId) {
       action = '<button class="primary-button mp-room__next" disabled>CONFIRMING NATION…</button>';
@@ -980,7 +991,10 @@ export class MultiplayerLobby {
       action = '<button class="secondary-button mp-room__next is-ready" data-mp-action="toggle-ready">✓ READY · CANCEL</button>';
     }
     const connection = isHost ? 'ROOM LEADER' : connectionLabel(this.guest?.state ?? 'connecting').toUpperCase();
-    return `<div class="mp-direct-room"><div class="mp-room__head"><div><div class="panel-kicker">CO-OP TEAM</div><h2>${isHost ? 'Confirm the deployment' : 'Prepare for deployment'}</h2></div><span>${connected}/8 · ${escapeHtml(connection)}</span></div>${this.renderDeploymentSummary()}<p class="mp-one-line-help">Your countries stay independent; allied territory carries team supply. Victory and defeat are shared, and disconnected seats can rejoin.</p>${this.renderPlayers()}<div class="mp-direct-room__next">${action}${block && local?.ready ? `<small>${escapeHtml(block)}</small>` : ''}</div></div>`;
+    const missionHelp = survival
+      ? 'Your Empire and the Dawnline Accord keep separate armies, APEX shields and logistics. Victory, defeat and reconnect are shared.'
+      : 'Your countries stay independent; allied territory carries team supply. Victory and defeat are shared, and disconnected seats can rejoin.';
+    return `<div class="mp-direct-room"><div class="mp-room__head"><div><div class="panel-kicker">CO-OP TEAM</div><h2>${isHost ? 'Confirm the deployment' : 'Prepare for deployment'}</h2></div><span>${connected}/${survival ? 2 : 8} · ${escapeHtml(connection)}</span></div>${this.renderDeploymentSummary()}<p class="mp-one-line-help">${missionHelp}</p>${this.renderPlayers()}<div class="mp-direct-room__next">${action}${block && local?.ready ? `<small>${escapeHtml(block)}</small>` : ''}</div></div>`;
   }
 
   private renderHost(): string {
@@ -988,15 +1002,23 @@ export class MultiplayerLobby {
     if (!this.host) return `<div class="mp-setup"><div class="panel-kicker">HOST A DIRECT GAME</div><h2>Create your room</h2><label class="mp-field"><span>YOUR NAME</span><input id="mp-player-name" maxlength="40" value="${escapeHtml(this.displayName)}" autocomplete="nickname"></label><button class="primary-button" data-mp-action="create-room">CREATE ROOM</button></div>`;
     const local = this.localPlayer();
     const block = this.hostModel?.startBlockReason();
-    const rail = `<div class="mp-room__rail"><div class="mp-room__head"><div><div class="panel-kicker">CO-OP HOST · ${escapeHtml(this.host.roomId.slice(-8).toUpperCase())}</div><h2>Your team</h2></div><span>${this.lobby?.players.filter((player) => player.connected).length ?? 1}/8 CONNECTED</span></div><p class="mp-one-line-help">One nation each · permanent team · shared victory or defeat · reconnect enabled.</p>${this.renderPlayers()}<div class="mp-connect-grid"><section><h3>1 · Invite one friend</h3><p>Create a private code and send it to that friend.</p>${this.inviteCode ? `<textarea readonly aria-label="Host invite code">${escapeHtml(this.inviteCode)}</textarea><button class="secondary-button" data-mp-action="copy-invite">COPY INVITE</button>` : '<button class="secondary-button" data-mp-action="create-invite">CREATE FRIEND INVITE</button>'}</section><section><h3>2 · Accept their answer</h3><p>Paste the answer they send back.</p><textarea id="mp-answer-input" placeholder="Paste friend answer…">${escapeHtml(this.pastedAnswer)}</textarea><button class="secondary-button" data-mp-action="accept-answer">CONNECT FRIEND</button></section></div><div class="mp-room__actions"><button class="secondary-button ${local?.ready ? 'is-ready' : ''}" data-mp-action="toggle-ready" ${local?.countryId ? '' : 'disabled'}>${local?.ready ? '✓ READY' : 'MARK READY'}</button><button class="primary-button" data-mp-action="start" ${block ? 'disabled' : ''}>START CO-OP</button></div>${block ? `<small class="mp-start-note">${escapeHtml(block)}</small>` : ''}</div>`;
+    const survival = this.lobby?.scenario.mode === 'survival';
+    const help = survival
+      ? 'You command your Empire; your friend leads the separate Dawnline Accord. Shared outcome, separate forces.'
+      : 'One nation each · permanent team · shared victory or defeat · reconnect enabled.';
+    const rail = `<div class="mp-room__rail"><div class="mp-room__head"><div><div class="panel-kicker">CO-OP HOST · ${escapeHtml(this.host.roomId.slice(-8).toUpperCase())}</div><h2>Your team</h2></div><span>${this.lobby?.players.filter((player) => player.connected).length ?? 1}/${survival ? 2 : 8} CONNECTED</span></div><p class="mp-one-line-help">${help}</p>${this.renderPlayers()}<div class="mp-connect-grid"><section><h3>1 · Invite one friend</h3><p>Create a private code and send it to that friend.</p>${this.inviteCode ? `<textarea readonly aria-label="Host invite code">${escapeHtml(this.inviteCode)}</textarea><button class="secondary-button" data-mp-action="copy-invite">COPY INVITE</button>` : '<button class="secondary-button" data-mp-action="create-invite">CREATE FRIEND INVITE</button>'}</section><section><h3>2 · Accept their answer</h3><p>Paste the answer they send back.</p><textarea id="mp-answer-input" placeholder="Paste friend answer…">${escapeHtml(this.pastedAnswer)}</textarea><button class="secondary-button" data-mp-action="accept-answer">CONNECT FRIEND</button></section></div><div class="mp-room__actions"><button class="secondary-button ${local?.ready ? 'is-ready' : ''}" data-mp-action="toggle-ready" ${local?.countryId ? '' : 'disabled'}>${local?.ready ? '✓ READY' : 'MARK READY'}</button><button class="primary-button" data-mp-action="start" ${block ? 'disabled' : ''}>START CO-OP</button></div>${block ? `<small class="mp-start-note">${escapeHtml(block)}</small>` : ''}</div>`;
     return `<div class="mp-room mp-room--with-picker">${rail}${this.renderNationPicker()}</div>`;
   }
 
   private renderGuest(): string {
     if (this.directMatchmaking && this.guest && this.lobby) return this.renderDirectMatchRoom(false);
-    if (!this.guest) return `<div class="mp-setup"><div class="panel-kicker">JOIN A DIRECT GAME</div><h2>Paste your friend’s invite</h2><label class="mp-field"><span>YOUR NAME</span><input id="mp-player-name" maxlength="40" value="${escapeHtml(this.displayName)}" autocomplete="nickname"></label><label class="mp-field"><span>HOST INVITE</span><textarea id="mp-invite-input" placeholder="Paste the long Frontier Command invite code…">${escapeHtml(this.pastedInvite)}</textarea></label><button class="primary-button" data-mp-action="join-room">CREATE ANSWER</button></div>`;
+    if (!this.guest) return `<div class="mp-setup"><div class="panel-kicker">JOIN A DIRECT GAME</div><h2>Paste your friend’s invite</h2><label class="mp-field"><span>YOUR NAME</span><input id="mp-player-name" maxlength="40" value="${escapeHtml(this.displayName)}" autocomplete="nickname"></label><label class="mp-field"><span>HOST INVITE</span><textarea id="mp-invite-input" placeholder="Paste the long APEX: Reclamation invite code…">${escapeHtml(this.pastedInvite)}</textarea></label><button class="primary-button" data-mp-action="join-room">CREATE ANSWER</button></div>`;
     const local = this.localPlayer();
-    const rail = `<div class="mp-room__rail"><div class="mp-room__head"><div><div class="panel-kicker">CO-OP GUEST · ${escapeHtml(this.guest.hostName.toUpperCase())}</div><h2>Your team</h2></div><span>${escapeHtml(connectionLabel(this.guest.state).toUpperCase())}</span></div><p class="mp-one-line-help">Your nation stays yours. Teammates cannot fight each other; the outcome is shared.</p>${this.answerCode ? `<div class="mp-answer-callout"><h3>Send this answer back to the host</h3><p>The connection completes only after the host pastes it.</p><textarea readonly aria-label="Friend answer code">${escapeHtml(this.answerCode)}</textarea><button class="secondary-button" data-mp-action="copy-answer">COPY ANSWER</button></div>` : ''}${this.renderPlayers()}${this.lobby ? `<div class="mp-room__actions"><button class="secondary-button ${local?.ready ? 'is-ready' : ''}" data-mp-action="toggle-ready" ${local?.countryId ? '' : 'disabled'}>${local?.ready ? '✓ READY' : 'MARK READY'}</button><span>Only the host starts the shared campaign.</span></div>` : ''}</div>`;
+    const survival = this.lobby?.scenario.mode === 'survival';
+    const help = survival
+      ? 'You lead the Dawnline Accord with your own nation, Army, APEX and logistics. The final outcome is shared.'
+      : 'Your nation stays yours. Teammates cannot fight each other; the outcome is shared.';
+    const rail = `<div class="mp-room__rail"><div class="mp-room__head"><div><div class="panel-kicker">CO-OP GUEST · ${escapeHtml(this.guest.hostName.toUpperCase())}</div><h2>Your team</h2></div><span>${escapeHtml(connectionLabel(this.guest.state).toUpperCase())}</span></div><p class="mp-one-line-help">${help}</p>${this.answerCode ? `<div class="mp-answer-callout"><h3>Send this answer back to the host</h3><p>The connection completes only after the host pastes it.</p><textarea readonly aria-label="Friend answer code">${escapeHtml(this.answerCode)}</textarea><button class="secondary-button" data-mp-action="copy-answer">COPY ANSWER</button></div>` : ''}${this.renderPlayers()}${this.lobby ? `<div class="mp-room__actions"><button class="secondary-button ${local?.ready ? 'is-ready' : ''}" data-mp-action="toggle-ready" ${local?.countryId ? '' : 'disabled'}>${local?.ready ? '✓ READY' : 'MARK READY'}</button><span>Only the host starts the shared campaign.</span></div>` : ''}</div>`;
     return this.lobby
       ? `<div class="mp-room mp-room--with-picker">${rail}${this.renderNationPicker()}</div>`
       : `<div class="mp-room">${rail}</div>`;

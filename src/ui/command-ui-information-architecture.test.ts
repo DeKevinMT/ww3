@@ -38,9 +38,8 @@ describe('command UI information architecture', () => {
     expect(panel).toContain('war-primary-front');
     expect(panel).toContain('Best targets');
     expect(panel).toContain('Power · chance · route · recurring cost');
-    expect(panel).toContain('APEX deploys autonomously · click to focus');
-    expect(panel).toContain('data-action="focus-war"');
-    expect(panel).toContain('FOCUS FRONT');
+    expect(panel).toContain('APEX allocates the shared shield automatically');
+    expect(panel).not.toContain('FOCUS FRONT');
     expect(panel).toContain('decision-details');
     expect(panel.indexOf('this.renderAntarcticaGatewayCard()'))
       .toBeGreaterThan(panel.indexOf('Best targets'));
@@ -49,14 +48,27 @@ describe('command UI information architecture', () => {
     expect(panel).toContain('const humanWarsUnlocked = campaignHumanWarsUnlockedV2(');
     expect(panel).toContain('const recommendations = humanWarsUnlocked');
     expect(panel).toMatch(
-      /const targetIntel = humanWarsUnlocked[\s\S]*No legal target is currently in land or naval range\.[\s\S]*: warsUnlocked[\s\S]*FIRST-STRIKE BRIEFING PENDING[\s\S]*CAMPAIGN_HUMAN_WAR_STORY_LOCK_REASON_V2/,
+      /const targetIntel = humanWarsUnlocked[\s\S]*No legal target is currently in land or naval range\.[\s\S]*: warsUnlocked[\s\S]*APEX IS PREPARING YOUR FIRST TARGET/,
     );
+    expect(panel).not.toContain('FIRST-STRIKE BRIEFING PENDING');
+    expect(panel).not.toContain('INTELLIGENCE PENDING');
     expect(panel).toContain('INITIAL SCAN IN PROGRESS');
     expect(panel).toMatch(
       /apexOpeningBriefingKnown[\s\S]*SIGNAL TRIANGULATION REQUIRED[\s\S]*INITIAL SCAN IN PROGRESS/,
     );
     expect(panel).toContain('data-panel="research">OPEN RESEARCH');
     expect(panel).not.toMatch(/FOCUS \+ SEND APEX|focus-apex-front|commander-order|SEND APEX/);
+  });
+
+  it('shows one APEX-inclusive win chance and only decision-grade target intel', () => {
+    const target = methodSource('  private renderTargetRecommendation(', '  private renderWarCard(');
+    expect(target.match(/\$\{format\(candidate\.chance, 1\)\}/g)).toHaveLength(1);
+    expect(target).toContain('war-intel-card__decision');
+    expect(target).toContain('ENEMY POWER ${compactNumber(targetPower)}');
+    expect(target).toContain('${readiness.percent}% SUPPLIED');
+    expect(target).toContain('${supplyRule}');
+    expect(target).toContain("candidate.access === 'naval' ? 'naval' : 'land'");
+    expect(target).not.toMatch(/WITH APEX|WITHOUT APEX|chanceDelta|IQ gain|army ·|reserve ·/);
   });
 
   it('shows annual funded and required upkeep before readiness', () => {
@@ -91,13 +103,17 @@ describe('command UI information architecture', () => {
     expect(apex).toContain('<h2>APEX</h2>');
     expect(apex).toContain('selectCommanderAutonomyStatusV2');
     expect(apex).toContain('AUTO · ${escapeHtml(networkStatus)}');
-    for (const label of ['DOME POWER', 'SHIELD INTEGRITY', 'DOME ATK / DEF', 'ENERGY', 'EMPIRE CONTRIBUTION', 'NETWORK SUPPORT']) {
+    for (const label of ['ENERGY', 'ARMY MULTIPLIER', 'RESERVE ENERGY', 'EMPIRE CONTRIBUTION', 'NETWORK SUPPORT']) {
       expect(apex).toContain(label);
     }
-    expect(apex).toContain('SINGULARITY ${lancer.supportedAssaultCount}/3');
-    expect(apex).toContain('MIRROR MATRIX · 20% INTERCEPT RETURN');
-    expect(apex).toContain('TWIN SPLIT · 60% + 60% · ONE SHARED SHIELD');
+    expect(apex).toContain('OVERDRIVE ${lancer.supportedAssaultCount}/3');
+    expect(apex).toContain('COUNTERMEASURE · 15% INTERCEPT RETURN');
+    expect(apex).toContain('THEATER MESH · ${frontAllocationPercent}% × ${activeFrontCount} FRONTS');
+    expect(apex).toContain('EMPIRE-WIDE SHIELD NETWORK');
+    expect(apex).toContain('PULSE ${people(network?.pulseAttack ?? 0)}');
+    expect(apex).toContain('${totalProjectionBudgetPercent}% total grid budget');
     expect(apex).toContain('finance.apexContribution');
+    expect(apex).not.toMatch(/DOME POWER|SHIELD INTEGRITY|SINGULARITY|MIRROR MATRIX|OMNIPRESENCE/);
     expect(apex).not.toMatch(/MOVE<\/button>|LASER|commander-order|APEX economy|TREASURY|UPKEEP|INVEST/);
   });
 
@@ -137,9 +153,9 @@ describe('command UI information architecture', () => {
     expect(territory).toContain('COMBAT POWER</span>');
     expect(terrainIndex).toBeLessThan(markup.indexOf('SELECTED LAND'));
     expect(markup.indexOf('SELECTED LAND')).toBeLessThan(markup.indexOf('${ownerIntel}'));
-    expect(territory).toContain('APEX SUPPORTING');
-    expect(territory).toContain('FOCUS FRONT');
-    expect(territory).toContain('data-action="focus-war"');
+    expect(territory).toContain('ACTIVE FRONT · APEX AUTO-SHIELD');
+    expect(territory).not.toContain('FOCUS FRONT');
+    expect(territory).not.toContain('commander-front-quick');
     expect(territory).toContain('SUPPLY CORRIDOR');
     expect(territory).toContain('TRANSIT ONLY');
     expect(territory).not.toMatch(/SEND APEX|commander-order/);
@@ -149,15 +165,16 @@ describe('command UI information architecture', () => {
     const review = methodSource('  private renderWarConfirmation(', '  private renderSurrenderConfirmation(');
     for (const label of [
       'YOUR TOTAL POWER', 'ENEMY POWER', 'WIN CHANCE',
-      'LOGISTICS READINESS', 'PREPARATION', 'OPERATION COST',
+      'WAR SUPPLY', 'PREPARATION', 'OPERATION COST',
       'YOUR FRONT SOLDIERS', 'ENEMY FRONT SOLDIERS', 'FIRST BATTLE ESTIMATE',
       'START OPERATION',
     ]) expect(review).toContain(label);
-    expect(review).toContain('ownTotalPower = ownPower + apexPower');
-    expect(review).toContain('INCLUDES +${compactNumber(apexPower)} APEX');
+    expect(review).toContain('ownTotalPower = ownPower * (1 + apexSupportBonus / 100)');
+    expect(review).toContain('APEX +${format(apexSupportBonus, 1)}%');
     expect(review).toContain('APEX UNAVAILABLE');
     expect(review).toContain('review-apex-contribution');
-    expect(review).toContain('apexForecast.effectivePower');
+    expect(review).toContain('apexForecast.supportBonusPercent');
+    expect(review).not.toMatch(/ownPower \+ apexPower|INCLUDES \+\$\{compactNumber\(apexPower\)\} APEX/);
     expect(review).toContain('logisticsPreview.additionalWeeklyWarOperations');
     expect(review).toContain('annual(logisticsPreview.additionalWeeklyWarOperations)');
     expect(review).toContain('criticalRisks.slice(0, 3)');
@@ -193,11 +210,38 @@ describe('command UI information architecture', () => {
     expect(tracker).toContain('Your combined Power');
     expect(tracker).toContain('Combined Power balance');
     expect(tracker).toContain('${wars.map((war) => {');
-    expect(tracker).toContain('APEX +${compactNumber(assignedCommanderPower)}');
-    expect(tracker).toContain('APEX TWIN 60% · +${compactNumber(assignedCommanderPower)} · SHARED SHIELD');
-    expect(tracker).toContain('data-action="focus-war"');
+    expect(tracker).toContain('APEX GRID ${Math.round(networkFront!.allocationShare * 100)}%');
+    expect(tracker).toContain('combinedOwnPower = own.power * (1 + assignedSupportPercent / 100)');
+    expect(tracker).toContain('+${format(assignedSupportPercent, 1)}% ARMY');
+    expect(tracker).not.toContain('assignedCommanderPower');
+    expect(tracker).not.toMatch(/APEX ETA|APEX TWIN|60% ·|SHARED SHIELD/);
+    expect(tracker).toContain('aria-label="Open war with');
     expect(tracker).not.toContain('data-action="request-ceasefire"');
     expect(tracker).not.toMatch(/COMBAT POWER|CUMULATIVE LOSSES|ACTIVE ARMY|ACTIVE FRONTS|FOCUS LEAD FRONT|REQUEST PEACE|war-command-campaign|war-command-fronts|frontRows|CHOOSE EXACT FRONT|CLICK TO CHECK ROUTE|commander-order|SEND APEX/);
+  });
+
+  it('anchors Active Wars directly below the current topbar at every breakpoint', () => {
+    const trackerStylesStart = stylesSource.indexOf(
+      '.world-ui-v2 .war-command-overlay.war-tracker--compact {',
+    );
+    const trackerStylesEnd = stylesSource.indexOf(
+      '/* Compact live conflicts:',
+      trackerStylesStart,
+    );
+    const trackerStyles = stylesSource.slice(trackerStylesStart, trackerStylesEnd);
+    expect(trackerStyles).toContain('top: 84px;');
+    expect(trackerStyles).toContain('max-height: min(300px, calc(100dvh - 216px));');
+    expect(trackerStyles).not.toMatch(/top:\s*(?:168|206|258)px/);
+
+    const compactTopbarStart = stylesSource.lastIndexOf(
+      '@media (max-width: 900px)',
+      stylesSource.indexOf('.world-ui-v2 .unified-topbar.command-topbar.v2-topbar'),
+    );
+    const compactTopbarStyles = stylesSource.slice(
+      compactTopbarStart,
+      stylesSource.indexOf('@media (max-width: 520px)', compactTopbarStart),
+    );
+    expect(compactTopbarStyles).toContain('.world-ui-v2 .war-tracker { top: 132px !important; }');
   });
 
   it('contains no retired political or manual-APEX controls', () => {

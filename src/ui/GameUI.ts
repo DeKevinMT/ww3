@@ -351,7 +351,7 @@ export class GameUI {
       <header class="topbar glass-panel">
         <div class="brand">
           <div class="brand__mark">FC</div>
-          <div><strong>FRONTIER COMMAND</strong><span>TACTICAL ATLAS · PROTOTYPE</span></div>
+          <div><strong>APEX: RECLAMATION</strong><span>TACTICAL WORLD NETWORK</span></div>
         </div>
         <div class="phase-strip" aria-label="Beurtfases">
           ${phaseOrder.map((phase, index) => `
@@ -573,7 +573,7 @@ export class GameUI {
     return `
       <div class="modal-backdrop">
         <section class="intro-card modal-card">
-          <div class="intro-card__map"><div class="orb orb--one"></div><div class="orb orb--two"></div><span>TACTICAL ATLAS / 01</span><strong>FRONTIER<br>COMMAND</strong></div>
+          <div class="intro-card__map"><div class="orb orb--one"></div><div class="orb orb--two"></div><span>APEX NETWORK / 01</span><strong>RECLAIM<br>THE FUTURE</strong></div>
           <div class="intro-card__content">
             <div class="panel-kicker">SPEELBARE VERTICALE SLICE</div>
             <h1>Verover de wereld.<br><em>Zonder dobbelpech.</em></h1>

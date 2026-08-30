@@ -6,7 +6,10 @@ import {
   COUNTRY_MASTERY_TRACK_IDS_V1,
   MAX_COUNTRY_MASTERY_LEVEL,
   MAX_COUNTRY_UPGRADE_LEVEL,
+  SURVIVAL_DEPLOYMENT_CREDIT_COST_V1,
   commanderTalentAllocationQuoteV1,
+  commanderMaxIntegrityV1,
+  commanderPulseAttackV1,
   commanderTalentPointsAvailableV1,
   commanderTalentRankLevelRequirementV1,
   commanderXpForLevelV1,
@@ -17,8 +20,10 @@ import {
   resolveCommanderTalentEffectsV1,
   resolveCountryLoadoutV1,
   resolveCountryMasteryMilitaryEffectsV1,
+  quoteSurvivalDeploymentCreditsV1,
   type CommanderProfileV1,
   type CommanderDoctrineV1,
+  type EmpireFlagIdentityV1,
   type CommanderTalentBranchV1,
   type CommanderTalentId,
   type CountryMasteryTrackV1,
@@ -84,6 +89,8 @@ export interface CommanderMenuOptionsV1 {
   onDiscardMultiplayerResume?: () => void;
   onDeleteCampaign: () => void;
   onResetAccount: () => void;
+  /** Durably consumes the one-time post-Campaign progression guide. */
+  onAcknowledgeCampaignProgressionTutorial: () => ProgressionActionResultV1;
   onAllocateCountryMasteryPoint: (
     countryId: string,
     track: CountryMasteryTrackV1,
@@ -94,6 +101,7 @@ export interface CommanderMenuOptionsV1 {
   onRespecCommanderTalents: () => ProgressionActionResultV1;
   onRenameCommander: (name: string) => ProgressionActionResultV1;
   onRenameEmpire: (name: string) => ProgressionActionResultV1;
+  onSelectEmpireFlag: (flag: EmpireFlagIdentityV1) => ProgressionActionResultV1;
 }
 
 type CommanderMenuView = 'home' | 'country' | 'mode' | 'arsenal' | 'talents';
@@ -115,32 +123,44 @@ const TALENT_BRANCH_PRESENTATION: Readonly<Record<CommanderTalentBranchV1, {
   label: string;
   kicker: string;
   icon: string;
+  color: string;
   description: string;
 }>> = {
-  lancer: {
-    label: 'Lancer',
-    kicker: 'OFFENSIVE PULSE',
+  offensive: {
+    label: 'Pulse Warfare',
+    kicker: 'APEX OFFENCE',
     icon: '△',
-    description: 'Attack, targeting and decisive front pressure.',
+    color: '#ff8f67',
+    description: 'Build Pulse damage, multi-front reach and charge-powered Overdrive.',
   },
-  aegis: {
-    label: 'Aegis',
-    kicker: 'INTERCEPTION SHELL',
+  defensive: {
+    label: 'Reactive Matrix',
+    kicker: 'APEX INTERCEPTION',
     icon: '⬡',
-    description: 'Max Integrity, Defense and emergency reboot.',
+    color: '#59dcff',
+    description: 'Block more damage per Energy, recover impact charge and strengthen defensive Pulse.',
   },
-  nexus: {
-    label: 'Nexus',
-    kicker: 'PROJECTION NETWORK',
+  'shield-core': {
+    label: 'Energy Core',
+    kicker: 'APEX ENDURANCE',
     icon: '◎',
-    description: 'Projection speed, Recharge and active uptime.',
+    color: '#b58cff',
+    description: 'Expand Max Energy, recharge speed, Reserve Energy and one emergency reboot.',
+  },
+  'military-command': {
+    label: 'Empire Warfare',
+    kicker: 'ONLY ARMY PATH',
+    icon: '◇',
+    color: '#73e5a8',
+    description: 'The only path that improves national Army ATK, DEF and recovery.',
   },
 };
 
 const TALENT_BRANCH_DOCTRINE: Readonly<Record<CommanderTalentBranchV1, CommanderDoctrineV1>> = {
-  lancer: 'vanguard',
-  aegis: 'bastion',
-  nexus: 'rapid-response',
+  offensive: 'vanguard',
+  defensive: 'bastion',
+  'shield-core': 'rapid-response',
+  'military-command': 'force-multiplier',
 };
 
 const MODE_PRESENTATION: Readonly<Record<GameModeV2, {
@@ -248,7 +268,11 @@ function campaignDashboardSnapshotV1(campaign: StoredCampaignV1): CampaignDashbo
       players?: Record<string, { treasury?: unknown }>;
       territories?: Record<string, { owner?: unknown; army?: { manpower?: unknown } }>;
       wars?: Array<{ attackerId?: unknown; defenderId?: unknown }>;
-      commanderForces?: Record<string, { army?: { manpower?: unknown; capacity?: unknown } }>;
+      commanderForces?: Record<string, {
+        shield?: { integrity?: unknown; maxIntegrity?: unknown };
+        /** One-read migration fallback for pre-shield saves. */
+        army?: { manpower?: unknown; capacity?: unknown };
+      }>;
       polarEndgame?: { globalWave?: unknown; bossIntegrity?: unknown };
     };
     const controlledTerritories = Object.entries(save.territories ?? {})
@@ -264,14 +288,14 @@ function campaignDashboardSnapshotV1(campaign: StoredCampaignV1): CampaignDashbo
       ), 0),
       treasury: Number(save.players?.[campaign.countryId]?.treasury) || 0,
       activeWars,
-      shieldIntegrity: Math.max(
-        0,
-        Number(save.commanderForces?.[campaign.countryId]?.army?.manpower) || 0,
-      ),
-      maxShieldIntegrity: Math.max(
-        0,
-        Number(save.commanderForces?.[campaign.countryId]?.army?.capacity) || 0,
-      ),
+      shieldIntegrity: Math.max(0, Number(
+        save.commanderForces?.[campaign.countryId]?.shield?.integrity
+          ?? save.commanderForces?.[campaign.countryId]?.army?.manpower,
+      ) || 0),
+      maxShieldIntegrity: Math.max(0, Number(
+        save.commanderForces?.[campaign.countryId]?.shield?.maxIntegrity
+          ?? save.commanderForces?.[campaign.countryId]?.army?.capacity,
+      ) || 0),
       globalWave: Math.max(0, Math.floor(Number(save.polarEndgame?.globalWave) || 0)),
       coreIntegrity: Math.max(0, Math.min(
         100,
@@ -286,6 +310,21 @@ function campaignDashboardSnapshotV1(campaign: StoredCampaignV1): CampaignDashbo
 
 function peopleFromMillions(value: number): string {
   return compact(Math.max(0, value) * 1_000_000);
+}
+
+/** Shield Energy uses the simulation's million-unit scale, just like Army values. */
+function shieldHp(value: number): string {
+  return new Intl.NumberFormat('en', { maximumFractionDigits: 0 }).format(
+    Math.max(0, Math.round(value * 1_000_000)),
+  );
+}
+
+function scaledDelta(value: number): string {
+  const scaled = Math.max(0, value * 1_000_000);
+  if (scaled > 0 && scaled < 10 && !Number.isInteger(scaled)) {
+    return scaled.toFixed(1).replace(/\.0$/, '');
+  }
+  return new Intl.NumberFormat('en', { maximumFractionDigits: 0 }).format(Math.round(scaled));
 }
 
 function moneyFromBillions(value: number): string {
@@ -329,15 +368,19 @@ function commanderTalentEffectDeltaV1(
   target: ResolvedCommanderTalentEffectsV1,
 ): ResolvedCommanderTalentEffectsV1 {
   return {
-    activeManpower: target.activeManpower - current.activeManpower,
-    capacity: target.capacity - current.capacity,
-    trainedReserves: target.trainedReserves - current.trainedReserves,
-    attack: target.attack - current.attack,
-    defense: target.defense - current.defense,
-    supplyStock: target.supplyStock - current.supplyStock,
-    empireRecruitmentBonus: target.empireRecruitmentBonus - current.empireRecruitmentBonus,
-    empireReserveTrainingBonus: target.empireReserveTrainingBonus
-      - current.empireReserveTrainingBonus,
+    maxIntegrityBonus: target.maxIntegrityBonus - current.maxIntegrityBonus,
+    rechargeBufferBonus: target.rechargeBufferBonus - current.rechargeBufferBonus,
+    rechargeRateBonus: target.rechargeRateBonus - current.rechargeRateBonus,
+    armyAttackBonus: target.armyAttackBonus - current.armyAttackBonus,
+    pulseAttackBonus: target.pulseAttackBonus - current.pulseAttackBonus,
+    pulseProjectionRetention: target.pulseProjectionRetention - current.pulseProjectionRetention,
+    pulseChargeBonusPerStep: target.pulseChargeBonusPerStep - current.pulseChargeBonusPerStep,
+    interceptEfficiencyBonus: target.interceptEfficiencyBonus - current.interceptEfficiencyBonus,
+    impactRecoveryShare: target.impactRecoveryShare - current.impactRecoveryShare,
+    defensivePulseBonus: target.defensivePulseBonus - current.defensivePulseBonus,
+    armyDefenseBonus: target.armyDefenseBonus - current.armyDefenseBonus,
+    armyCasualtyReduction: target.armyCasualtyReduction - current.armyCasualtyReduction,
+    armyPeaceRecoveryBonus: target.armyPeaceRecoveryBonus - current.armyPeaceRecoveryBonus,
   };
 }
 
@@ -355,51 +398,46 @@ export function commanderTalentEffectCopyV1(
       current,
       commanderTalentOnlyEffectsV1(talentId, safeRank + 1),
     );
-  const integrityPercent = talentPositive(
-    100 * effects.activeManpower / BASE_COMMANDER_FORCE_V1.activeManpower,
-    '%',
+  const attack = talentPositive(100 * effects.armyAttackBonus, '% Army Attack');
+  const pulse = talentPositive(100 * effects.pulseAttackBonus, '% Pulse Attack');
+  const pulseProjection = talentPositive(
+    100 * effects.pulseProjectionRetention,
+    '% Split Pulse Retained',
   );
-  const maxIntegrityPercent = talentPositive(
-    100 * effects.capacity / BASE_COMMANDER_FORCE_V1.capacity,
-    '%',
+  const pulseCharge = talentPositive(
+    100 * effects.pulseChargeBonusPerStep,
+    '% Pulse per Charge',
   );
-  const rechargeBufferPercent = talentPositive(
-    100 * effects.trainedReserves / BASE_COMMANDER_FORCE_V1.capacity,
-    '%',
+  const interceptEfficiency = talentPositive(
+    100 * effects.interceptEfficiencyBonus,
+    '% Damage Blocked per Energy',
   );
-  const rechargePercent = talentPositive(
-    100 * effects.supplyStock / Math.max(0.000_001, BASE_COMMANDER_FORCE_V1.supplyStock),
-    '%',
+  const impactRecovery = talentPositive(
+    100 * effects.impactRecoveryShare,
+    '% Impact Energy to Reserve',
   );
+  const defensivePulse = talentPositive(
+    100 * effects.defensivePulseBonus,
+    '% Defensive Pulse',
+  );
+  const defense = talentPositive(100 * effects.armyDefenseBonus, '% Army Defense');
+  const maxIntegrity = talentPositive(100 * effects.maxIntegrityBonus, '% Max Energy');
+  const rechargeBuffer = talentPositive(100 * effects.rechargeBufferBonus, '% Reserve Energy');
+  const recharge = talentPositive(100 * effects.rechargeRateBonus, '% Energy Recharge');
+  const recovery = talentPositive(100 * effects.armyPeaceRecoveryBonus, '% Peace Recovery');
 
-  if (talentId === 'elite-vanguard') {
-    return `${integrityPercent} Shield Integrity · ${maxIntegrityPercent} Max Integrity · ${talentPositive(effects.attack)} Attack`;
-  }
-  if (talentId === 'volunteer-brigade') {
-    return `${maxIntegrityPercent} Max Integrity`;
-  }
-  if (talentId === 'reserve-cadre') {
-    return `${maxIntegrityPercent} Max Integrity · ${rechargeBufferPercent} Recharge Buffer`;
-  }
-  if (talentId === 'drill-instructors') {
-    return `${integrityPercent} Shield Integrity · ${maxIntegrityPercent} Max Integrity · ${rechargeBufferPercent} Recharge Buffer · ${rechargePercent} Recharge`;
-  }
-  if (talentId === 'mobile-logistics') {
-    return `${rechargePercent} Recharge`;
-  }
-  if (talentId === 'frugal-quartermaster') {
-    return `${maxIntegrityPercent} Max Integrity · ${rechargeBufferPercent} Recharge Buffer · ${rechargePercent} Recharge`;
-  }
-  if (talentId === 'science-corps') {
-    return `${talentPositive(effects.attack)} Attack`;
-  }
-  if (talentId === 'treasury-reserve') {
-    return `${talentPositive(effects.attack)} Attack`;
-  }
-  if (talentId === 'civil-defense') {
-    return `${talentPositive(effects.defense)} Defense · ${rechargePercent} Recharge`;
-  }
-  return `${talentPositive(effects.defense)} Defense`;
+  if (talentId === 'science-corps') return pulse;
+  if (talentId === 'treasury-reserve') return pulseProjection;
+  if (talentId === 'elite-vanguard') return pulseCharge;
+  if (talentId === 'volunteer-brigade') return interceptEfficiency;
+  if (talentId === 'civil-defense') return impactRecovery;
+  if (talentId === 'doctrine-command') return defensivePulse;
+  if (talentId === 'reserve-cadre') return maxIntegrity;
+  if (talentId === 'drill-instructors') return recharge;
+  if (talentId === 'frugal-quartermaster') return rechargeBuffer;
+  if (talentId === 'mobile-logistics') return attack;
+  if (talentId === 'combat-recovery') return defense;
+  return recovery;
 }
 
 /** Exact total shown on one repeatable military-mastery track. */
@@ -572,6 +610,36 @@ export function renderCommanderTalentBranchesV1(
     ?? COMMANDER_TALENTS_V1[0]!;
   const selectedRank = profile.commanderTalents[selectedTalent.id] ?? 0;
   const selectedQuote = commanderTalentAllocationQuoteV1(profile, selectedTalent.id);
+  const currentMaxIntegrity = commanderMaxIntegrityV1(
+    profile.commanderLevel,
+    profile.commanderTalents,
+  );
+  const nextLevelMaxIntegrity = commanderMaxIntegrityV1(
+    profile.commanderLevel + 1,
+    profile.commanderTalents,
+  );
+  const currentPulseAttack = commanderPulseAttackV1(
+    profile.commanderLevel,
+    profile.commanderTalents,
+  );
+  const nextLevelPulseAttack = commanderPulseAttackV1(
+    profile.commanderLevel + 1,
+    profile.commanderTalents,
+  );
+  const nextRankTalents = {
+    ...profile.commanderTalents,
+    [selectedTalent.id]: selectedQuote.targetRank,
+  };
+  const nextRankMaxIntegrity = commanderMaxIntegrityV1(
+    profile.commanderLevel,
+    nextRankTalents,
+  );
+  const nextRankPulseAttack = commanderPulseAttackV1(
+    profile.commanderLevel,
+    nextRankTalents,
+  );
+  const selectedChangesMaxIntegrity = nextRankMaxIntegrity > currentMaxIntegrity;
+  const selectedChangesPulseAttack = nextRankPulseAttack > currentPulseAttack;
   const selectedBranch = TALENT_BRANCH_PRESENTATION[selectedTalent.branch];
   const selectedPips = Array.from({ length: selectedTalent.coreRank }, (_, index) => (
     `<i class="${index < selectedRank ? 'is-filled' : ''}"></i>`
@@ -580,22 +648,25 @@ export function renderCommanderTalentBranchesV1(
     `<li class="${selectedRank >= milestone.rank ? 'is-unlocked' : ''}"><b>R${milestone.rank} · ${escapeHtml(milestone.label)}</b><span>${escapeHtml(milestone.description)}</span></li>`
   )).join('');
   const prerequisiteCopy = selectedTalent.prerequisites.length === 0
-    ? 'ROOT NODE · AVAILABLE FROM APEX LEVEL 1'
+    ? 'ROOT NODE'
     : selectedTalent.prerequisites.map((prerequisite) => {
       const definition = COMMANDER_TALENTS_V1.find((entry) => entry.id === prerequisite.talentId)!;
       return `${definition.label} Rank ${prerequisite.rank}`;
     }).join(' + ');
+  const pathRequirement = selectedTalent.outsideBranchPoints > 0
+    ? `${prerequisiteCopy} · ${selectedTalent.outsideBranchPoints} points outside ${selectedBranch.label}`
+    : prerequisiteCopy;
   const inspectorState = selectedQuote.available
     ? 'AVAILABLE NOW'
-    : selectedQuote.unmetPrerequisite ? 'BRANCH LOCKED'
+    : selectedQuote.unmetPrerequisite || selectedQuote.unmetBreadth ? 'BUILD REQUIRED'
       : profile.commanderLevel < selectedQuote.requiredLevel
         ? `APEX LEVEL ${selectedQuote.requiredLevel}` : 'NO FREE POINT';
-  const inspector = `<section class="commander-talent-inspector commander-talent-inspector--${selectedTalent.branch}" style="--branch:${selectedTalent.branch === 'lancer' ? '#ff9b66' : selectedTalent.branch === 'aegis' ? '#67e6ff' : '#c88cff'}">
+  const inspector = `<section class="commander-talent-inspector commander-talent-inspector--${selectedTalent.branch}" style="--branch:${selectedBranch.color}">
     <header><div><span>${selectedBranch.label.toUpperCase()} · TIER ${selectedTalent.tier}</span><h2>${escapeHtml(selectedTalent.label)}</h2><p>${escapeHtml(selectedTalent.description)}</p></div><b>${inspectorState}</b></header>
-    <div class="commander-talent-inspector__stats"><article><small>CURRENT · RANK ${selectedRank}</small><strong>${escapeHtml(commanderTalentEffectCopyV1(selectedTalent.id, selectedRank, 'current'))}</strong></article><article class="is-next"><small>NEXT RANK · ${selectedQuote.targetRank} · LV ${selectedQuote.requiredLevel}</small><strong>${escapeHtml(commanderTalentEffectCopyV1(selectedTalent.id, selectedRank, 'next'))}</strong></article></div>
-    <div class="commander-talent-inspector__path"><span>PATH REQUIREMENT</span><strong>${escapeHtml(prerequisiteCopy)}</strong><small>${escapeHtml(selectedQuote.reason ?? selectedTalent.perRank)}</small></div>
+    <div class="commander-talent-inspector__stats"><article><small>CURRENT · RANK ${selectedRank}</small><strong>${escapeHtml(commanderTalentEffectCopyV1(selectedTalent.id, selectedRank, 'current'))}</strong>${selectedChangesMaxIntegrity ? `<em>APEX TOTAL · ${shieldHp(currentMaxIntegrity)} MAX ENERGY</em>` : ''}${selectedChangesPulseAttack ? `<em>APEX TOTAL · PULSE ATTACK ${shieldHp(currentPulseAttack)}</em>` : ''}</article><article class="is-next"><small>NEXT RANK · ${selectedQuote.targetRank} · LV ${selectedQuote.requiredLevel}</small><strong>${escapeHtml(commanderTalentEffectCopyV1(selectedTalent.id, selectedRank, 'next'))}</strong>${selectedChangesMaxIntegrity ? `<em>TALENT GAIN · +${scaledDelta(nextRankMaxIntegrity - currentMaxIntegrity)} MAX ENERGY</em>` : ''}${selectedChangesPulseAttack ? `<em>TALENT GAIN · +${scaledDelta(nextRankPulseAttack - currentPulseAttack)} PULSE ATTACK</em>` : ''}</article></div>
+    <div class="commander-talent-inspector__path"><span>PATH REQUIREMENT</span><strong>${escapeHtml(pathRequirement)}</strong><small>${escapeHtml(selectedQuote.reason ?? selectedTalent.perRank)}</small></div>
     <ol class="commander-talent-inspector__milestones">${selectedMilestones}</ol>
-    <footer><em>${selectedPips}</em><button data-action="allocate-commander-talent" data-talent="${selectedTalent.id}" ${selectedQuote.available ? '' : 'disabled'}>${selectedQuote.available ? 'ADD SHIELD POINT · 1 PT' : inspectorState}</button></footer>
+    <footer><em>${selectedPips}</em><button data-action="allocate-commander-talent" data-talent="${selectedTalent.id}" ${selectedQuote.available ? '' : 'disabled'}>${selectedQuote.available ? 'ADD TALENT POINT · 1 PT' : inspectorState}</button></footer>
   </section>`;
 
   const lanes = (Object.keys(TALENT_BRANCH_PRESENTATION) as CommanderTalentBranchV1[]).map((branch) => {
@@ -607,9 +678,9 @@ export function renderCommanderTalentBranchesV1(
         const rank = profile.commanderTalents[talent.id] ?? 0;
         const quote = commanderTalentAllocationQuoteV1(profile, talent.id);
         const selected = talent.id === selectedTalent.id;
-        const locked = Boolean(quote.unmetPrerequisite)
+        const locked = Boolean(quote.unmetPrerequisite || quote.unmetBreadth)
           || profile.commanderLevel < quote.requiredLevel;
-        const nodeState = locked ? quote.unmetPrerequisite ? 'LOCKED' : `LV ${quote.requiredLevel}`
+        const nodeState = locked ? quote.unmetPrerequisite || quote.unmetBreadth ? 'LOCKED' : `LV ${quote.requiredLevel}`
           : quote.available ? 'AVAILABLE' : rank > 0 ? 'INVESTED' : 'READY';
         const nodeClasses = [
           selected ? 'is-selected' : '', rank > 0 ? 'is-invested' : '',
@@ -633,8 +704,8 @@ export function renderCommanderTalentBranchesV1(
     </section>`;
   }).join('');
 
-  return `<section class="commander-shield-tree" aria-label="APEX neural shield specialization tree">
-    <header class="commander-shield-core"><i aria-hidden="true"><b>AX</b></i><div><span>NEURAL ENERGY SHIELD</span><strong>APEX CORE</strong><small>One dome · three specialization paths · one active capstone protocol</small></div><b>${commanderTalentPointsAvailableV1(profile)} <small>SHIELD POINT${commanderTalentPointsAvailableV1(profile) === 1 ? '' : 'S'}</small></b></header>
+  return `<section class="commander-shield-tree" aria-label="APEX specialization tree with three APEX paths and one Army path">
+    <header class="commander-shield-core"><i aria-hidden="true"><b>AX</b></i><div><span>EMPIRE ENERGY SHIELD</span><strong>APEX CORE</strong><small>ENERGY ${shieldHp(currentMaxIntegrity)} / ${shieldHp(currentMaxIntegrity)} · PULSE ATTACK ${shieldHp(currentPulseAttack)} · NEXT LEVEL +${scaledDelta(nextLevelMaxIntegrity - currentMaxIntegrity)} ENERGY / +${scaledDelta(nextLevelPulseAttack - currentPulseAttack)} PULSE</small></div><b>${commanderTalentPointsAvailableV1(profile)} <small>TALENT POINT${commanderTalentPointsAvailableV1(profile) === 1 ? '' : 'S'}</small></b></header>
     ${inspector}
     <div class="commander-talent-lanes">${lanes}</div>
   </section>`;
@@ -667,6 +738,8 @@ export class CommanderMenuV1 {
   private resetConfirmationOpen = false;
   private activeCampaignChoiceOpen = false;
   private multiplayerDeployment = false;
+  private empireFlagPickerOpen = false;
+  private empireFlagSearch = '';
 
   constructor(private readonly options: CommanderMenuOptionsV1) {
     this.host = document.querySelector<HTMLElement>('#hud')!;
@@ -712,6 +785,11 @@ export class CommanderMenuV1 {
     if (target.id === 'commander-arsenal-search') {
       this.search = target.value;
       this.renderArsenalListOnly();
+      return;
+    }
+    if (target.id === 'commander-empire-flag-search') {
+      this.empireFlagSearch = target.value;
+      this.renderEmpireFlagResultsOnly();
     }
   };
 
@@ -749,9 +827,32 @@ export class CommanderMenuV1 {
     const target = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-action]') : null;
     if (!target) return;
     const action = target.dataset.action;
+    if (action === 'dismiss-progression-tutorial'
+      || action === 'tutorial-open-talents'
+      || action === 'tutorial-open-arsenal') {
+      const acknowledged = this.options.onAcknowledgeCampaignProgressionTutorial();
+      this.profile = acknowledged.profile;
+      this.statusMessage = '';
+      if (action === 'tutorial-open-talents') {
+        this.view = 'talents';
+      } else if (action === 'tutorial-open-arsenal') {
+        this.selectedCountryId = this.countryWithMostUnspentMasteryPoints()
+          ?? this.selectedCountryId;
+        this.arsenalReturnView = 'home';
+        this.view = 'arsenal';
+        this.search = '';
+        this.resetScrollSession('commander:country-list');
+      }
+      this.render();
+      return;
+    }
     if (action === 'open-arsenal') {
+      this.selectedCountryId = this.countryWithMostUnspentMasteryPoints()
+        ?? this.selectedCountryId;
       this.arsenalReturnView = 'home';
       this.view = 'arsenal';
+      this.search = '';
+      this.resetScrollSession('commander:country-list');
       this.statusMessage = '';
       this.render();
       return;
@@ -855,6 +956,14 @@ export class CommanderMenuV1 {
         return;
       }
       const mode = target.dataset.mode as GameModeV2;
+       if (mode === 'survival') {
+         const quote = quoteSurvivalDeploymentCreditsV1(this.profile);
+         if (!quote.affordable) {
+           this.statusMessage = `Survival requires ${quote.cost} Credits. You have ${quote.balance}; earn more in Campaign.`;
+           this.render();
+           return;
+         }
+       }
        if (MODE_PRESENTATION[mode]) {
          if (this.multiplayerDeployment && this.options.onMultiplayerRequested) {
            this.options.onMultiplayerRequested(mode, countryId);
@@ -915,6 +1024,28 @@ export class CommanderMenuV1 {
       this.consumeProgressionResult(
         this.options.onRenameEmpire(input.value),
         'Empire identity saved for every new solo campaign.',
+      );
+      return;
+    }
+    if (action === 'toggle-empire-flag-picker') {
+      this.empireFlagPickerOpen = !this.empireFlagPickerOpen;
+      this.empireFlagSearch = '';
+      this.resetScrollSession('commander:empire-flags');
+      this.render();
+      if (this.empireFlagPickerOpen) {
+        this.host.querySelector<HTMLInputElement>('#commander-empire-flag-search')
+          ?.focus({ preventScroll: true });
+      }
+      return;
+    }
+    if (action === 'select-empire-flag') {
+      const countryId = target.dataset.country;
+      if (!countryId) return;
+      this.empireFlagPickerOpen = false;
+      this.empireFlagSearch = '';
+      this.consumeProgressionResult(
+        this.options.onSelectEmpireFlag({ kind: 'country', countryId }),
+        'Empire flag updated across every mode and active timeline.',
       );
       return;
     }
@@ -990,6 +1121,17 @@ export class CommanderMenuV1 {
     this.profile = result.profile;
     this.statusMessage = result.accepted ? acceptedMessage : result.reason ?? 'Action unavailable.';
     this.render();
+  }
+
+  private countryWithMostUnspentMasteryPoints(): string | undefined {
+    return this.profile.unlockedCountryIds
+      .map((countryId) => ({
+        countryId,
+        points: resolveCountryLoadoutV1(this.profile, countryId).masteryPointsAvailable,
+      }))
+      .filter((entry) => entry.points > 0)
+      .sort((left, right) => right.points - left.points
+        || left.countryId.localeCompare(right.countryId, 'en'))[0]?.countryId;
   }
 
   private resetScrollSession(session: string): void {
@@ -1124,10 +1266,95 @@ export class CommanderMenuV1 {
     const xpLabel = `${compact(progress.xpIntoLevel)} / ${compact(progress.xpForNextLevel)} XP`;
     const levelContent = `<span><small>APEX LEVEL</small><strong>LV ${progress.level}</strong></span><span class="commander-profile-strip__xp"><b style="--progress:${progress.progressPercent}%"><i></i></b><em>${xpLabel}</em></span>${progress.availableTalentPoints > 0 ? `<mark>${progress.availableTalentPoints} PT${progress.availableTalentPoints === 1 ? '' : 'S'} FREE</mark>` : ''}`;
     return `<header class="commander-profile-strip">
-      <div class="commander-profile-strip__identity"><i>AX</i><div><small>GLOBAL APEX ACCOUNT</small><strong>${escapeHtml(this.profile.displayName)}</strong></div></div>
+      <div class="commander-profile-strip__identity"><i>AX</i><div><small>APEX: RECLAMATION · GLOBAL ACCOUNT</small><strong>${escapeHtml(this.profile.displayName)}</strong></div></div>
       ${linkToTalents ? `<button class="commander-profile-strip__level" data-action="open-talents" aria-label="Open APEX shield specialization">${levelContent}</button>` : `<div class="commander-profile-strip__level is-static">${levelContent}</div>`}
-      <div class="commander-profile-strip__record"><span><b>${this.profile.unlockedCountryIds.length}</b> nations</span><span><b>${this.profile.victories}</b> victories</span><span><b>${this.profile.completedCampaigns}</b> campaigns</span></div>
+      <div class="commander-profile-strip__record"><span class="commander-profile-strip__credits"><b>${this.profile.commandCredits}</b> Credits</span><span><b>${this.profile.unlockedCountryIds.length}</b> nations</span><span><b>${this.profile.victories}</b> victories</span><span><b>${this.profile.completedCampaigns}</b> campaigns</span></div>
     </header>`;
+  }
+
+  private empireFlagCountry(): CommanderCountryCatalogEntryV1 | undefined {
+    if (this.profile.empireFlag.kind === 'country') {
+      const selected = this.options.countries.find((country) => (
+        country.id === this.profile.empireFlag.countryId
+      ));
+      if (selected) return selected;
+    }
+    return this.options.countries.find((country) => country.quote.starterEligible)
+      ?? this.options.countries[0];
+  }
+
+  private filteredEmpireFlagCountries(): readonly CommanderCountryCatalogEntryV1[] {
+    const query = this.empireFlagSearch.trim().toLocaleLowerCase('en');
+    return this.options.countries
+      .filter((country) => !query || [
+        country.name,
+        country.shortName,
+        country.continent,
+        country.subregion,
+      ].some((value) => value.toLocaleLowerCase('en').includes(query)))
+      .sort((left, right) => left.name.localeCompare(right.name, 'en'));
+  }
+
+  private renderEmpireFlagResults(): string {
+    const countries = this.filteredEmpireFlagCountries();
+    const currentCountryId = this.empireFlagCountry()?.id;
+    if (countries.length === 0) {
+      return '<p class="commander-flag-picker__empty">No world flags match that search.</p>';
+    }
+    return countries.map((country) => {
+      const selected = country.id === currentCountryId;
+      return `<button type="button" class="commander-flag-option ${selected ? 'is-selected' : ''}" data-action="select-empire-flag" data-country="${country.id}" aria-pressed="${selected}" ${selected ? 'disabled' : ''}><i class="country-flag">${countryFlagHtml(country.id, country.sigil)}</i><span>${escapeHtml(country.shortName)}</span>${selected ? '<b>CURRENT</b>' : ''}</button>`;
+    }).join('');
+  }
+
+  private renderEmpireFlagResultsOnly(): void {
+    const results = this.host.querySelector<HTMLElement>('[data-empire-flag-results]');
+    if (!results) return;
+    this.captureScrollPositions();
+    results.innerHTML = this.renderEmpireFlagResults();
+    const count = this.host.querySelector<HTMLElement>('[data-empire-flag-count]');
+    if (count) count.textContent = `${this.filteredEmpireFlagCountries().length} FLAGS`;
+    this.restoreScrollPositions();
+  }
+
+  private renderEmpireFlagPicker(): string {
+    const country = this.empireFlagCountry();
+    const flag = country
+      ? countryFlagHtml(country.id, country.sigil, true)
+      : '<span class="commander-theater__fallback-mark">AX</span>';
+    return `<section class="commander-empire-flag" aria-label="Empire flag">
+      <button type="button" class="commander-empire-flag__current" data-action="toggle-empire-flag-picker" aria-expanded="${this.empireFlagPickerOpen}" aria-controls="commander-empire-flag-picker"><i class="country-flag">${flag}</i><span><small>EMPIRE FLAG</small><strong>${escapeHtml(country?.name ?? 'Choose a world flag')}</strong></span><b>${this.empireFlagPickerOpen ? 'CLOSE' : 'CHANGE'}</b></button>
+      ${this.empireFlagPickerOpen ? `<div class="commander-flag-picker" id="commander-empire-flag-picker"><label><span>FIND A FLAG</span><input id="commander-empire-flag-search" type="search" autocomplete="off" placeholder="Country or region" value="${escapeHtml(this.empireFlagSearch)}"><b data-empire-flag-count>${this.filteredEmpireFlagCountries().length} FLAGS</b></label><div class="commander-flag-picker__grid" data-empire-flag-results data-commander-scroll data-scroll-session="commander:empire-flags">${this.renderEmpireFlagResults()}</div></div>` : ''}
+    </section>`;
+  }
+
+  private renderCampaignProgressionTutorial(
+    apexTalentPoints: number,
+    hasActionableApexTalent: boolean,
+    nationMasteryPoints: number,
+    actionableNationCount: number,
+  ): string {
+    if (this.profile.campaignProgressionTutorialState !== 'ready') return '';
+    const talentAction = hasActionableApexTalent
+      ? `SPEND ${apexTalentPoints} APEX POINT${apexTalentPoints === 1 ? '' : 'S'}`
+      : 'OPEN APEX TALENTS';
+    const masteryAction = nationMasteryPoints > 0
+      ? `SPEND ${nationMasteryPoints} NATION POINT${nationMasteryPoints === 1 ? '' : 'S'}`
+      : 'OPEN NATION ARSENAL';
+    const masteryStatus = nationMasteryPoints > 0
+      ? `${nationMasteryPoints} UNSPENT · ${actionableNationCount} ${actionableNationCount === 1 ? 'NATION' : 'NATIONS'}`
+      : 'NATION-SPECIFIC PROGRESSION';
+    return `<div class="modal-backdrop commander-progression-tutorial-backdrop">
+      <section class="commander-progression-tutorial" role="dialog" aria-modal="true" aria-labelledby="commander-progression-tutorial-title">
+        <header><span>FIRST CAMPAIGN COMPLETE</span><h2 id="commander-progression-tutorial-title">Spend the power you earned</h2><p>Level gains unlock points, but unspent points give no bonus. Assign them before your next timeline.</p></header>
+        <div class="commander-progression-tutorial__choices">
+          <article class="${hasActionableApexTalent ? 'has-unspent' : ''}"><div><span>APEX TALENT POINTS</span><strong>${apexTalentPoints > 0 ? `${apexTalentPoints} UNSPENT` : 'BUILD READY'}</strong><p>Account-wide upgrades for APEX and its support of every national Army.</p></div><button data-action="tutorial-open-talents">${talentAction} →</button></article>
+          <article class="${nationMasteryPoints > 0 ? 'has-unspent' : ''}"><div><span>NATION MASTERY POINTS</span><strong>${masteryStatus}</strong><p>Nation-specific Army upgrades. Spend each point in the Nation Arsenal.</p></div><button data-action="tutorial-open-arsenal">${masteryAction} →</button></article>
+        </div>
+        <aside><b>KEEP THEM SEPARATE</b><span>Credits only pay for Survival entry. Nations unlock by defeating and integrating Campaign targets; neither uses upgrade points.</span></aside>
+        <footer><button class="ghost-button" data-action="dismiss-progression-tutorial">GOT IT · RETURN HOME</button></footer>
+      </section>
+    </div>`;
   }
 
   private renderHome(): string {
@@ -1165,12 +1392,25 @@ export class CommanderMenuV1 {
     const loadout = campaign?.loadout ?? (summaryCountry
       ? resolveCountryLoadoutV1(this.profile, summaryCountry.id) : undefined);
     const force = loadout ? resolveCommanderForceInitializationV1(loadout) : undefined;
-    const corpsPower = force ? 1_000 * force.manpower
-      * (0.55 * force.baseAttack + 0.45 * force.baseDefense) : 0;
+    const forceAttackBonus = force ? 100 * ((force.attackMultiplier ?? 1) - 1) : 0;
+    const forceDefenseBonus = force ? 100 * ((force.defenseMultiplier ?? 1) - 1) : 0;
+    const forceRechargeBonus = force
+      ? 100 * ((force.shield.rechargeMultiplier ?? 1) - 1) : 0;
+    const forcePulseAttack = force?.shield.pulseAttack ?? 0;
+    const forceShieldIntegrity = campaignIntel?.shieldIntegrity ?? force?.shield.integrity ?? 0;
+    const forceMaxShieldIntegrity = campaignIntel?.maxShieldIntegrity
+      || force?.shield.maxIntegrity || forceShieldIntegrity;
     const commanderProgress = commanderLevelProgressV1(this.profile);
+    const hasActionableTalentPoint = commanderProgress.availableTalentPoints > 0
+      && COMMANDER_TALENTS_V1.some((talent) => (
+        commanderTalentAllocationQuoteV1(this.profile, talent.id).available
+      ));
     const totalUnspentMasteryPoints = this.profile.unlockedCountryIds.reduce((total, countryId) => (
       total + resolveCountryLoadoutV1(this.profile, countryId).masteryPointsAvailable
     ), 0);
+    const actionableMasteryNationCount = this.profile.unlockedCountryIds.filter((countryId) => (
+      resolveCountryLoadoutV1(this.profile, countryId).masteryPointsAvailable > 0
+    )).length;
     const homeCountry = multiplayerCountry ?? activeCountry ?? flagship;
     const homeMode = campaign ? MODE_PRESENTATION[campaign.scenario.mode] : undefined;
     const multiplayerMode = multiplayerResume ? MODE_PRESENTATION[multiplayerResume.mode] : undefined;
@@ -1184,16 +1424,17 @@ export class CommanderMenuV1 {
       <span><small>ACTIVE ARMY</small><b>${peopleFromMillions(campaignIntel.deployedArmy)}</b></span>
       <span><small>TREASURY</small><b>${moneyFromBillions(campaignIntel.treasury)}</b></span>
       <span><small>ACTIVE WARS</small><b>${campaignIntel.activeWars}</b></span>
-      <span><small>SHIELD INTEGRITY</small><b>${campaignShieldPercent}%</b></span>
+      <span><small>ENERGY</small><b>${campaignShieldPercent}%</b></span>
       <span><small>${campaign.scenario.mode === 'survival' ? 'MACHINE OFFENSIVE' : 'SIGNAL PURGES'}</small><b>${campaign.scenario.mode === 'survival' ? `WAVE ${campaignIntel.globalWave} · CORE ${Math.round(campaignIntel.coreIntegrity)}%` : campaign.signalPurgedCountryIds.length}</b></span>
     </section>` : '';
     const theaterStatus = multiplayerResume
       ? '<span>MULTIPLAYER SEAT RESERVED</span><b>REJOIN AVAILABLE</b>'
       : campaign ? `<span>ACTIVE ${escapeHtml(homeMode!.label.toUpperCase())} OPERATION</span><b>${escapeHtml(homeMode!.badge)}</b>`
       : '<span>COMMAND NETWORK ONLINE</span><b>READY FOR DEPLOYMENT</b>';
-    const theaterFlag = homeCountry
-      ? `<i class="country-flag">${countryFlagHtml(homeCountry.id, homeCountry.sigil, true)}</i>`
-      : '<i class="commander-theater__fallback-mark">FC</i>';
+    const empireFlagCountry = this.empireFlagCountry();
+    const theaterFlag = empireFlagCountry
+      ? `<i class="country-flag">${countryFlagHtml(empireFlagCountry.id, empireFlagCountry.sigil, true)}</i>`
+      : '<i class="commander-theater__fallback-mark">AX</i>';
     const deploymentRouteHtml = !campaign && !multiplayerResume && flagship
       ? `<section class="commander-theater__deployment-route" aria-label="Deployment route">
           <article class="is-flagship"><small>${flagship.quote.starterEligible ? 'FREE STARTER NATION' : 'YOUR FLAGSHIP'}</small><span><i class="country-flag">${countryFlagHtml(flagship.id, flagship.sigil)}</i><strong>${escapeHtml(flagship.shortName)}</strong></span><b>${compact(flagshipPower)} <em>POWER</em></b></article>
@@ -1212,15 +1453,15 @@ export class CommanderMenuV1 {
     </div>` : lockedCountries.length > 0
       ? '<div class="commander-strategy-strip__progression"><div><small>NEXT PROGRESSION</small><strong>No direct target</strong><span>Expand the empire to open a land border or naval route.</span></div></div>'
       : '<div class="commander-strategy-strip__progression"><div><small>ROSTER STATUS</small><strong>World roster complete</strong><span>Every nation is under your command.</span></div></div>';
-    const apexMetaCard = force ? `<section class="commander-meta-card commander-meta-card--apex" data-loadout-country="${summaryCountry?.id ?? ''}" data-corps-attack="${force.baseAttack}" data-corps-defense="${force.baseDefense}">
-      <header><span>APEX ENERGY SHIELD</span><strong>ACCOUNT-WIDE</strong></header>
-      <div class="commander-meta-card__stats"><span class="is-power"><small>POWER</small><b>${compact(corpsPower)}</b></span><span><small>SHIELD INTEGRITY</small><b>100%</b></span><span><small>MAX INTEGRITY</small><b>×${(force.capacity / BASE_COMMANDER_FORCE_V1.capacity).toFixed(2)}</b></span><span><small>ATTACK</small><b>${force.baseAttack.toFixed(2)}</b></span><span><small>DEFENSE</small><b>${force.baseDefense.toFixed(2)}</b></span></div>
-      <button class="commander-meta-card__cta" data-action="open-talents">OPEN SHIELD TREE · ${commanderProgress.availableTalentPoints} FREE →</button>
+    const apexMetaCard = force ? `<section class="commander-meta-card commander-meta-card--apex ${hasActionableTalentPoint ? 'has-unspent' : ''}" data-loadout-country="${summaryCountry?.id ?? ''}" data-army-attack-bonus="${forceAttackBonus}" data-army-defense-bonus="${forceDefenseBonus}">
+      <header><span>APEX TALENTS</span><strong>EMPIRE SHIELD</strong>${hasActionableTalentPoint ? `<mark>${commanderProgress.availableTalentPoints} UNSPENT</mark>` : commanderProgress.availableTalentPoints > 0 ? `<small>${commanderProgress.availableTalentPoints} SAVED · LEVEL GATED</small>` : '<small>ALL POINTS SPENT</small>'}</header>
+      <div class="commander-meta-card__stats commander-meta-card__stats--apex"><span class="is-power"><small>ENERGY</small><b>${shieldHp(forceShieldIntegrity)} / ${shieldHp(forceMaxShieldIntegrity)}</b></span><span><small>PULSE ATTACK</small><b>${shieldHp(forcePulseAttack)}</b></span><span><small>ARMY BUFF</small><b>+${talentStatNumber(forceAttackBonus)}% ATK · +${talentStatNumber(forceDefenseBonus)}% DEF</b></span><span><small>ENERGY RECHARGE</small><b>+${talentStatNumber(forceRechargeBonus)}%</b></span></div>
+      <button class="commander-meta-card__cta ${hasActionableTalentPoint ? 'is-actionable' : ''}" data-action="open-talents">${hasActionableTalentPoint ? `SPEND ${commanderProgress.availableTalentPoints} APEX TALENT POINT${commanderProgress.availableTalentPoints === 1 ? '' : 'S'}` : 'VIEW APEX TALENTS'} →</button>
     </section>` : '';
-    const arsenalMetaCard = `<section class="commander-meta-card commander-meta-card--arsenal">
-      <header><span>NATION ARSENAL</span><strong>NATIONAL MASTERY</strong></header>
-      <div class="commander-meta-card__stats"><span class="is-power"><small>STRONGEST POWER</small><b>${compact(flagshipPower)}</b></span><span><small>OWNED</small><b>${this.profile.unlockedCountryIds.length}</b></span><span><small>FREE POINTS</small><b>${totalUnspentMasteryPoints}</b></span><span><small>MASTERY</small><b>LV ${flagship ? countryMasteryV1(this.profile, flagship.id).level : 0}</b></span><span><small>LOCKED</small><b>${lockedCountries.length}</b></span></div>
-      <button class="commander-meta-card__cta" data-action="open-arsenal">OPEN NATION ARSENAL →</button>
+    const arsenalMetaCard = `<section class="commander-meta-card commander-meta-card--arsenal ${totalUnspentMasteryPoints > 0 ? 'has-unspent' : ''}">
+      <header><span>NATION ARSENAL</span><strong>NATIONAL MASTERY</strong>${totalUnspentMasteryPoints > 0 ? `<mark>${totalUnspentMasteryPoints} UNSPENT</mark>` : '<small>ALL POINTS SPENT</small>'}</header>
+      <div class="commander-meta-card__stats"><span class="is-power"><small>STRONGEST POWER</small><b>${compact(flagshipPower)}</b></span><span><small>OWNED</small><b>${this.profile.unlockedCountryIds.length}</b></span><span><small>UNSPENT POINTS</small><b>${totalUnspentMasteryPoints}</b></span><span><small>MASTERY</small><b>LV ${flagship ? countryMasteryV1(this.profile, flagship.id).level : 0}</b></span><span><small>LOCKED</small><b>${lockedCountries.length}</b></span></div>
+      <button class="commander-meta-card__cta ${totalUnspentMasteryPoints > 0 ? 'is-actionable' : ''}" data-action="open-arsenal">${totalUnspentMasteryPoints > 0 ? `SPEND ${totalUnspentMasteryPoints} NATION MASTERY POINT${totalUnspentMasteryPoints === 1 ? '' : 'S'}` : 'VIEW NATION ARSENAL'} →</button>
     </section>`;
     return `<div class="commander-menu-shell commander-menu-shell--home" style="--home-country:${homeCountry?.cssColor ?? '#71e9ff'}">
       ${this.renderProfileStrip(false)}
@@ -1228,6 +1469,7 @@ export class CommanderMenuV1 {
         <section class="commander-command-stage">
           <article class="commander-theater ${campaign ? 'has-active-operation' : 'is-deployment-ready'}">
             <div class="commander-theater__flag-echo" aria-hidden="true">${theaterFlag}</div>
+            <div class="commander-theater__brand" aria-label="APEX: Reclamation"><span>APEX</span><strong>RECLAMATION</strong></div>
             <header class="commander-theater__status">${theaterStatus}</header>
             <div class="commander-theater__deployment-core ${deploymentRouteHtml ? 'has-deployment-route' : ''}">
               <div class="commander-theater__brief">
@@ -1250,12 +1492,19 @@ export class CommanderMenuV1 {
         <aside class="commander-command-dossier">
           ${apexMetaCard}
           ${arsenalMetaCard}
+          ${this.renderEmpireFlagPicker()}
           <details class="commander-account-settings"><summary>ACCOUNT IDENTITY &amp; RESET</summary><div><label class="commander-identity-field"><span>APEX NAME</span><div><input id="commander-name" maxlength="28" value="${escapeHtml(this.profile.displayName)}" aria-label="APEX name"><button data-action="rename-commander">SAVE</button></div></label><label class="commander-identity-field"><span>EMPIRE</span><div><input id="empire-account-name" maxlength="36" value="${escapeHtml(this.profile.empireName)}" aria-label="Empire name"><button data-action="rename-empire">SAVE</button></div></label><button class="ghost-button commander-reset-account" data-action="open-reset-account">RESET ACCOUNT &amp; SAVES</button></div></details>
         </aside>
         ${this.statusMessage ? `<div class="commander-status">${escapeHtml(this.statusMessage)}</div>` : ''}
       </main>
       ${this.deleteConfirmationOpen ? `<div class="modal-backdrop"><section class="modal-card commander-delete-modal"><div class="panel-kicker">DELETE ACTIVE SAVE</div><h2>Abandon this campaign?</h2><p>The in-progress campaign will be removed. Your nation unlocks, mastery and APEX progress remain safe.</p><div><button class="ghost-button" data-action="cancel-delete-campaign">CANCEL</button><button class="primary-button" data-action="confirm-delete-campaign">DELETE SAVE</button></div></section></div>` : ''}
       ${this.resetConfirmationOpen ? `<div class="modal-backdrop"><section class="modal-card commander-delete-modal commander-reset-modal"><div class="panel-kicker">RESET ALL LOCAL PROGRESSION</div><h2>Start over completely?</h2><p>This permanently removes the active timeline, nation unlocks, mastery XP, APEX levels and talents on this device. A new account keeps only ${escapeHtml(starterCountry?.name ?? 'its free starter nation')}.</p><div><button class="ghost-button" data-action="cancel-reset-account">KEEP MY SAVE</button><button class="primary-button" data-action="confirm-reset-account">RESET EVERYTHING</button></div></section></div>` : ''}
+      ${this.renderCampaignProgressionTutorial(
+        commanderProgress.availableTalentPoints,
+        hasActionableTalentPoint,
+        totalUnspentMasteryPoints,
+        actionableMasteryNationCount,
+      )}
     </div>`;
   }
 
@@ -1266,47 +1515,32 @@ export class CommanderMenuV1 {
     const loadout = frozenLoadout ?? resolveCountryLoadoutV1(this.profile, country.id);
     const force = resolveCommanderForceInitializationV1(loadout);
     const doctrine = COMMANDER_DOCTRINES_V1.find((entry) => entry.id === loadout.activeDoctrine);
-    const corpsPower = 1_000 * force.manpower
-      * (0.55 * force.baseAttack + 0.45 * force.baseDefense);
-    const nationCount = Math.max(1, this.options.countries.length);
-    const averageNationAttack = this.options.countries.reduce((total, candidate) => (
-      total + candidate.opening.attack
-    ), 0) / nationCount;
-    const averageNationDefense = this.options.countries.reduce((total, candidate) => (
-      total + candidate.opening.defense
-    ), 0) / nationCount;
+    const attackBonus = 100 * ((force.attackMultiplier ?? 1) - 1);
+    const defenseBonus = 100 * ((force.defenseMultiplier ?? 1) - 1);
+    const rechargeBonus = 100 * ((force.shield.rechargeMultiplier ?? 1) - 1);
+    const peaceRecoveryBonus = 100 * ((force.armyPeaceRecoveryMultiplier ?? 1) - 1);
     const capabilities = [
-      force.capabilities?.mobileHeadquarters ? 'DISTRIBUTED PROJECTION' : undefined,
+      force.capabilities?.assaultSpecialist ? 'OVERDRIVE' : undefined,
+      force.capabilities?.defenseSpecialist ? 'COUNTERMEASURE' : undefined,
       force.capabilities?.fieldHospital ? 'EMERGENCY REBOOT' : undefined,
-      force.capabilities?.rapidResponse ? 'TWIN PROJECTION' : undefined,
-      force.capabilities?.assaultSpecialist ? 'SINGULARITY PULSE' : undefined,
-      force.capabilities?.defenseSpecialist ? 'MIRROR MATRIX' : undefined,
-      (force.capabilities?.emergencyExtractionCharges ?? 0) > 0
-        ? `FAILSAFE SHIFT ×${force.capabilities!.emergencyExtractionCharges}` : undefined,
+      force.capabilities?.forceMultiplier ? 'THEATER MESH' : undefined,
     ].filter((entry): entry is string => Boolean(entry));
     const reserveMultiplier = 1 + loadout.upgrades.mobilization * 0.025;
-    const recruitmentSupport = Math.max(
-      0,
-      ((force.empireSupport?.recruitmentMultiplier ?? 1) - 1) * 100,
-    );
-    const reserveTrainingSupport = Math.max(
-      0,
-      ((force.empireSupport?.reserveTrainingMultiplier ?? 1) - 1) * 100,
-    );
-    return `<section class="commander-deployment-loadout" data-loadout-country="${country.id}" data-corps-manpower="${force.manpower}" data-corps-capacity="${force.capacity}" data-corps-attack="${force.baseAttack}" data-corps-defense="${force.baseDefense}">
+    return `<section class="commander-deployment-loadout" data-loadout-country="${country.id}" data-shield-integrity="100" data-army-attack-bonus="${attackBonus}" data-army-defense-bonus="${defenseBonus}">
       <header><div><span>${frozenLoadout ? 'ACTIVE SAVE · FROZEN LOADOUT' : 'DEPLOYMENT LOADOUT PREVIEW'}</span><strong>APEX DOME + ${escapeHtml(country.shortName)}</strong></div><b>APEX LV ${loadout.commanderLevel}</b></header>
       <div class="commander-deployment-loadout__corps">
-        <article class="is-power"><span>APEX POWER</span><strong>${compact(corpsPower)}</strong><small>Resolved combat index</small></article>
-        <article class="is-attack"><span>ATTACK</span><strong>${force.baseAttack.toFixed(2)}</strong><small>×${(force.baseAttack / Math.max(0.01, averageNationAttack)).toFixed(1)} vs nation avg</small></article>
-        <article class="is-defense"><span>DEFENSE</span><strong>${force.baseDefense.toFixed(2)}</strong><small>×${(force.baseDefense / Math.max(0.01, averageNationDefense)).toFixed(1)} vs nation avg</small></article>
+        <article class="is-power"><span>ENERGY</span><strong>${shieldHp(force.shield.integrity)} / ${shieldHp(force.shield.maxIntegrity)}</strong><small>Fully charged at deployment</small></article>
+        <article class="is-attack"><span>PULSE ATTACK</span><strong>${shieldHp(force.shield.pulseAttack)}</strong><small>Extra hit · shares the 10% Empire cap</small></article>
+        <article class="is-attack"><span>ARMY ATTACK</span><strong>+${talentStatNumber(attackBonus)}%</strong><small>Only while shield online</small></article>
+        <article class="is-defense"><span>ARMY DEFENSE</span><strong>+${talentStatNumber(defenseBonus)}%</strong><small>Only while shield online</small></article>
         <article><span>CAPSTONE PROTOCOL</span><strong>${escapeHtml(doctrine?.label ?? 'NO PROTOCOL')}</strong><small>${escapeHtml(doctrine?.role ?? 'UNASSIGNED')}</small></article>
-        <article><span>SHIELD INTEGRITY</span><strong>100%</strong><small>Max Integrity ×${(force.capacity / BASE_COMMANDER_FORCE_V1.capacity).toFixed(2)} · Recharge Buffer ${talentStatNumber(100 * (force.trainedReserves ?? 0) / Math.max(0.000_001, force.capacity))}%</small></article>
+        <article><span>ENERGY CORE</span><strong>×${(force.shield.maxIntegrity / BASE_COMMANDER_FORCE_V1.maxIntegrity).toFixed(2)} MAX</strong><small>+${talentStatNumber(rechargeBonus)}% recharge</small></article>
       </div>
       <div class="commander-deployment-loadout__nation">
         <span><small>NATION ARMY</small><b>×${loadout.openingArmyMultiplier.toFixed(4)}</b></span>
         <span><small>NATION ECONOMY</small><b>×${loadout.openingEconomyMultiplier.toFixed(4)}</b></span>
         <span><small>TRAINED RESERVE</small><b>×${reserveMultiplier.toFixed(3)}</b></span>
-        <span><small>LOGISTICS READINESS</small><b>+${talentStatNumber(recruitmentSupport)}% RECRUIT · +${talentStatNumber(reserveTrainingSupport)}% RESERVE</b></span>
+        <span><small>EMPIRE WARFARE</small><b>+${talentStatNumber(peaceRecoveryBonus)}% PEACE RECOVERY</b></span>
         <span><small>MASTERY POINTS</small><b>${loadout.masteryPointsSpent} / ${loadout.masteryPointsEarned}</b></span>
         <span><small>MASTERY</small><b>LV ${loadout.masteryLevel}</b></span>
       </div>
@@ -1399,14 +1633,21 @@ export class CommanderMenuV1 {
       this.view = 'country';
       return this.renderCountrySelection();
     }
+    const survivalQuote = quoteSurvivalDeploymentCreditsV1(this.profile);
     const modeCards = (['standard-2026', 'survival'] as const).map((mode) => {
       const item = MODE_PRESENTATION[mode];
       const modeNote = mode === 'survival'
-        ? `${this.profile.unlockedCountryIds.length} owned nation${this.profile.unlockedCountryIds.length === 1 ? '' : 's'} form${this.profile.unlockedCountryIds.length === 1 ? 's' : ''} your empire; ${country.shortName} remains the flagship.`
-        : 'Defeat a nation in war to unlock it permanently for every mode.';
+        ? survivalQuote.affordable
+          ? `${this.profile.unlockedCountryIds.length} owned nation${this.profile.unlockedCountryIds.length === 1 ? '' : 's'} form${this.profile.unlockedCountryIds.length === 1 ? 's' : ''} your empire. ${this.multiplayerDeployment ? `${survivalQuote.cost} Credits per commander seat. ` : ''}XP and Mastery still progress; Survival awards no Credits.`
+          : `You need ${survivalQuote.cost} Credits. Earn them through meaningful Campaign activity.`
+        : 'Defeat nations to unlock them permanently. Meaningful Campaign activity earns Credits.';
       const action = this.multiplayerDeployment ? 'OPEN LOBBY'
         : mode === 'survival' ? 'DEPLOY YOUR EMPIRE' : 'BEGIN CAMPAIGN';
-      return `<button type="button" class="commander-mode-card commander-mode-card--${mode}" data-action="start-mode" data-mode="${mode}" data-country="${country.id}" aria-label="${action.toLocaleLowerCase('en')} with ${escapeHtml(country.name)}"><span>${item.kicker}</span><strong>${item.label}</strong><p>${item.description}</p><small>${escapeHtml(modeNote)}</small><span class="commander-mode-card__footer"><b>${item.badge}</b><em>${action} →</em></span></button>`;
+      const unavailable = mode === 'survival' && !survivalQuote.affordable;
+      const badge = mode === 'survival'
+        ? `${item.badge} · ${SURVIVAL_DEPLOYMENT_CREDIT_COST_V1} CREDITS · BALANCE ${survivalQuote.balance}`
+        : 'EARNS CREDITS';
+      return `<button type="button" class="commander-mode-card commander-mode-card--${mode} ${unavailable ? 'is-unavailable' : ''}" data-action="start-mode" data-mode="${mode}" data-country="${country.id}" aria-label="${action.toLocaleLowerCase('en')} with ${escapeHtml(country.name)}${unavailable ? `; insufficient Credits, ${survivalQuote.balance} of ${survivalQuote.cost}` : ''}" ${unavailable ? 'aria-disabled="true"' : ''}><span>${item.kicker}</span><strong>${item.label}</strong><p>${item.description}</p><small>${escapeHtml(modeNote)}</small><span class="commander-mode-card__footer"><b>${badge}</b><em>${unavailable ? 'INSUFFICIENT CREDITS' : `${action} →`}</em></span></button>`;
     }).join('');
     const alternative = MODE_PRESENTATION['random-world'];
     const multiplayerControl = this.options.onMultiplayerRequested
@@ -1418,6 +1659,7 @@ export class CommanderMenuV1 {
       ${this.renderProfileStrip()}
       <main class="commander-deployment commander-deployment--mode">
         <header class="commander-deployment__heading"><button class="ghost-button" data-action="back-to-country">← CHANGE NATION</button><div><span>${escapeHtml(country.shortName.toUpperCase())} CONFIRMED</span><h1>Choose your mission</h1></div><ol aria-label="Deployment progress"><li class="is-complete"><b>✓</b><span>NATION</span></li><li class="is-active" aria-current="step"><b>2</b><span>MISSION</span></li><li><b>3</b><span>DEPLOY</span></li></ol></header>
+        ${this.statusMessage ? `<div class="commander-status" role="status" aria-live="polite">${escapeHtml(this.statusMessage)}</div>` : ''}
         <section class="commander-selected-flagship" style="--country:${country.cssColor}"><i class="country-flag country-flag--large">${countryFlagHtml(country.id, country.sigil, true)}</i><div><span>SELECTED FLAGSHIP</span><strong>${escapeHtml(country.name)}</strong><small><b>${compact(displayedPower)} POWER</b><em>Base ${compact(country.militaryPower)} · Mastery level ${countryMasteryV1(this.profile, country.id).level}</em></small></div><button class="secondary-button" data-action="back-to-country">CHANGE</button></section>
         ${multiplayerControl}
         <section class="commander-mode-grid">${modeCards}</section>
@@ -1438,10 +1680,10 @@ export class CommanderMenuV1 {
     return `<div class="commander-menu-shell commander-menu-shell--talents">
       ${this.renderProfileStrip()}
       <main class="commander-talents">
-        <header class="commander-talents__heading"><button class="ghost-button" data-action="home">← MAIN MENU</button><div><span>ACCOUNT-WIDE NEURAL MATRIX</span><h1>APEX Shield Specialization</h1><p>Shape one energy dome through Lancer, Aegis and Nexus. Every level grants one shield point.</p></div><aside><small>ONE SHIELD POINT PER LEVEL</small><strong>${progress.availableTalentPoints}</strong><span>POINT${progress.availableTalentPoints === 1 ? '' : 'S'} AVAILABLE</span></aside></header>
+        <header class="commander-talents__heading"><button class="ghost-button" data-action="home">← MAIN MENU</button><div><span>APEX EVOLUTION MATRIX</span><h1>APEX Specialization</h1><p>Three paths evolve APEX itself. Empire Warfare is the single path that improves your national Army. Every APEX level grants one point.</p></div><aside><small>ONE POINT PER LEVEL</small><strong>${progress.availableTalentPoints}</strong><span>POINT${progress.availableTalentPoints === 1 ? '' : 'S'} AVAILABLE</span></aside></header>
         <div class="commander-talents__scroll" tabindex="0" role="region" aria-label="APEX talent progression" data-commander-scroll data-scroll-session="commander:talents">
         ${this.statusMessage ? `<div class="commander-status">${escapeHtml(this.statusMessage)}</div>` : ''}
-        <section class="commander-talent-toolbar"><div><span>ACTIVE CAPSTONE PROTOCOL</span><strong>${escapeHtml(activeDoctrine?.label ?? 'NO PROTOCOL ACTIVE')}</strong><small>Only one branch protocol can be active. Shield effects freeze into each new campaign.</small></div><b>${spentPoints} INVESTED · ENDLESS AFTER RANK 15</b><button class="ghost-button" data-action="respec-commander-talents" ${spentPoints === 0 ? 'disabled' : ''}>FREE FULL RESPEC</button></section>
+        <section class="commander-talent-toolbar"><div><span>ACTIVE CAPSTONE</span><strong>${escapeHtml(activeDoctrine?.label ?? 'NO CAPSTONE ACTIVE')}</strong><small>Only one capstone can be active. All values freeze into a new campaign.</small></div><b>${spentPoints} INVESTED · ENDLESS AFTER RANK 15</b><button class="ghost-button" data-action="respec-commander-talents" ${spentPoints === 0 ? 'disabled' : ''}>FREE FULL RESPEC</button></section>
         ${renderCommanderTalentBranchesV1(this.profile, this.selectedTalentId)}
         </div>
       </main>

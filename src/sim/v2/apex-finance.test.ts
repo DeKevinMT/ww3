@@ -163,7 +163,7 @@ describe('lean shared APEX and empire finance', () => {
     expect(force.economy.treasury).toBe(0);
   });
 
-  it('keeps Targeting Lattice military-only while base APEX income joins the shared target', () => {
+  it('keeps Front Projection Pulse-only while base APEX income joins the shared target', () => {
     const state = createWorldStateV2(73_033, WORLD_CONTENT_V2);
     const greenland = nationIdV2('grl');
     makeHuman(state, [greenland]);
@@ -181,8 +181,11 @@ describe('lean shared APEX and empire finance', () => {
     const initialization = resolveCommanderForceInitializationV1(loadout);
     expect(initialization.annualOutput).toBe(baseline.annualOutput);
     expect(initialization.treasury).toBe(baseline.treasury);
-    expect(initialization.baseAttack).toBeGreaterThan(baseline.baseAttack);
-    expect(initialization.baseDefense).toBe(baseline.baseDefense);
+    expect(initialization.shield.pulseProjectionRetention)
+      .toBeGreaterThan(baseline.shield.pulseProjectionRetention!);
+    expect(initialization.shield.pulseAttack).toBe(baseline.shield.pulseAttack);
+    expect(initialization.attackMultiplier).toBe(baseline.attackMultiplier);
+    expect(initialization.defenseMultiplier).toBe(baseline.defenseMultiplier);
     expect(initialization.supplyStock).toBe(baseline.supplyStock);
     expect(initializeCommanderForceV2(
       state,
@@ -279,6 +282,10 @@ describe('lean shared APEX and empire finance', () => {
 
     const legacy = structuredClone(createSaveV2(state, WORLD_CONTENT_V2)) as Record<string, any>;
     legacy.rulesVersion = LEGACY_APEX_FINANCE_RULES;
+    // Current serialization correctly strips private APEX cash. Reconstruct the
+    // authenticated legacy payload whose bounded one-time merge is under test.
+    legacy.commanderForces[belgium].economy.treasury = 0.008;
+    legacy.commanderForces[netherlands].economy.treasury = 1_000;
     legacy.canonicalStateHash = canonicalStateHashV2(legacy);
     const loaded = loadSaveV2(legacy as never, WORLD_CONTENT_V2);
 

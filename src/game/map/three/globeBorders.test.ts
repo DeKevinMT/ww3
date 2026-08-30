@@ -308,14 +308,20 @@ describe('globe border geometry', () => {
     expect(positions.length).toBe(buffer.positions.length);
   });
 
-  it('keeps Antarctic political divisions visible beneath fog before and after contact', () => {
+  it('keeps dormant Antarctic topology GPU-stable but visually hidden until awakening', () => {
     const engine = engineWithOwner((id) => id);
+    const dormantSignature = globeBorderOwnershipSignature(engine);
     const dormant = buildGlobeBorderBuffer(engine, 5);
     revealAntarctica(engine);
     const revealed = buildGlobeBorderBuffer(engine, 5);
 
     expect(dormant.positions.length).toBe(revealed.positions.length);
     expect(revealed.colors.length).toBe(revealed.positions.length);
+    expect(globeBorderOwnershipSignature(engine)).not.toBe(dormantSignature);
+    const dormantColorEnergy = dormant.colors.reduce((sum, channel) => sum + channel, 0);
+    const revealedColorEnergy = revealed.colors.reduce((sum, channel) => sum + channel, 0);
+    expect(revealedColorEnergy).toBeGreaterThan(dormantColorEnergy);
+    expect([...dormant.colors]).toContain(GLOBE_BORDER_COLORS.hidden[0]);
 
     const sameOwnerLength = revealed.positions.length;
     engine.state.territories['drake-entry']!.ownerId = 'human';
@@ -344,7 +350,7 @@ describe('globe border geometry', () => {
     expect(minimumSurfaceClearance).toBeLessThanOrEqual(GLOBE_SURFACE_CLEARANCE + 1e-6);
   });
 
-  it('produces a stable ownership-only cache signature', () => {
+  it('produces a stable political presentation cache signature', () => {
     const first = engineWithOwner((id) => id);
     const second = engineWithOwner((id) => id);
     expect(globeBorderOwnershipSignature()).toBe('canonical');

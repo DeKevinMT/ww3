@@ -15,6 +15,7 @@ import {
   encodeProtocolMessage,
   encodeSignalCode,
   encodeWireFrames,
+  validateMultiplayerDeploymentSnapshotV1,
   validateProtocolMessage,
   type DirectInviteSignal,
   type DirectAnswerSignal,
@@ -83,7 +84,10 @@ describe('multiplayer protocol', () => {
       activeDoctrine: 'vanguard' as const,
       apex: {
         ...neutral.apex,
-        manpower: neutral.apex.capacity,
+        shield: {
+          ...neutral.apex.shield,
+          integrity: neutral.apex.shield.maxIntegrity,
+        },
         capabilities: {
           ...neutral.apex.capabilities,
           assaultSpecialist: true,
@@ -103,10 +107,16 @@ describe('multiplayer protocol', () => {
         ...action.action,
         deployment: {
           ...deployment,
-          apex: { ...deployment.apex, trainedReserves: deployment.apex.capacity + 1 },
+          apex: {
+            ...deployment.apex,
+            shield: {
+              ...deployment.apex.shield,
+              rechargeBuffer: deployment.apex.shield.maxIntegrity + 1,
+            },
+          },
         },
       },
-    })).toThrow(/integrity and recharge buffer must fit inside max integrity/i);
+    })).toThrow(/energy and reserve energy must fit inside max energy/i);
     expect(() => validateProtocolMessage({
       ...action,
       action: { ...action.action, deployment: { ...deployment, activeDoctrine: 'forged' } },
@@ -122,6 +132,19 @@ describe('multiplayer protocol', () => {
         deployment: { ...deployment, countryId: nationIdV2('nld') },
       },
     })).toThrow(/must match action.countryId/i);
+  });
+
+  it('migrates legacy reconnect deployments to their seat flag', () => {
+    const neutral = createNeutralMultiplayerDeploymentSnapshotV1('bel');
+    const { empireFlag: _legacyMissingFlag, ...legacy } = neutral;
+    expect(validateMultiplayerDeploymentSnapshotV1(legacy).empireFlag).toEqual({
+      kind: 'country',
+      countryId: 'bel',
+    });
+    expect(validateMultiplayerDeploymentSnapshotV1({
+      ...neutral,
+      empireFlag: { kind: 'country', countryId: 'jpn' },
+    }).empireFlag.countryId).toBe('jpn');
   });
 
   it('round-trips rejoin credentials only when session and token are paired', () => {
@@ -570,7 +593,7 @@ describe('multiplayer protocol', () => {
     expect(code).toMatch(/^FCMP1\.[A-Za-z0-9_-]+$/);
     expect(decodeSignalCode(`  ${code}  `)).toEqual(signal);
     expect(() => assertSignalCompatibility(signal, 'different-rules')).toThrow(/rules do not match/i);
-    expect(() => decodeSignalCode('not-a-direct-code')).toThrow(/not a Frontier Command/i);
+    expect(() => decodeSignalCode('not-a-direct-code')).toThrow(/not an APEX: Reclamation/i);
   });
 
   it('round-trips the matching complete answer and rejects cross-room use', () => {

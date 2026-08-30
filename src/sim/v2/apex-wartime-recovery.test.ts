@@ -7,6 +7,7 @@ import {
   applyCommanderCasualtiesV2,
   initializeCommanderForceV2,
   processCommanderForcesV2,
+  selectApexEmpireShieldNetworkV2,
   selectCommanderEconomyProjectionV2,
 } from './commanderForce';
 import { beginTerritoryIntegrationV2 } from './integration';
@@ -31,20 +32,23 @@ function installDamagedApex(state: WorldStateV2): void {
   state.humanPlayerId = belgium;
   state.humanPlayerIds = [belgium];
   expect(initializeCommanderForceV2(state, WORLD_CONTENT_V2, belgium, {
-    manpower: 0.001,
-    capacity: 0.001,
-    trainedReserves: 0,
-    baseAttack: 125,
-    baseDefense: 125,
+    shield: {
+      integrity: 0.001,
+      maxIntegrity: 0.001,
+      rechargeBuffer: 0,
+      pulseAttack: 0.001,
+      impactRecoveryShare: 0.10,
+    },
+    attackMultiplier: 1.25,
+    defenseMultiplier: 1.25,
     treasury: 0,
     annualOutput: 0,
-    // Keep logistics full so this suite isolates personnel recovery.
+    // Keep logistics full so this suite isolates shield-Energy recovery.
     supplyStock: 1,
-    capabilities: { fieldHospital: true },
   }).accepted).toBe(true);
   const force = state.commanderForces[belgium]!;
-  force.army.manpower = 0.0002;
-  force.army.trainedReserves = 0.0001;
+  force.shield.integrity = 0.0002;
+  force.shield.rechargeBuffer = 0.0001;
   force.locationId = belgiumTerritory;
   force.mission = 'hq-training';
   force.front = null;
@@ -67,9 +71,12 @@ function activeWar(
     battles: 0,
     attackerLosses: 0,
     defenderLosses: 0,
+    attackerCivilianLosses: 0,
+    defenderCivilianLosses: 0,
     lastPeaceOfferTick: -1_000_000,
     attackerOperations: [],
     defenderOperations: [],
+    revenge: null,
   };
 }
 
@@ -80,8 +87,8 @@ function advanceCommander(state: WorldStateV2, weeks: number): void {
   }
 }
 
-describe('APEX personnel recovery cadence', () => {
-  it('freezes low-HP active manpower and reserves across every simultaneous war', () => {
+describe('APEX shield-Energy recovery cadence', () => {
+  it('freezes low active Energy and Reserve Energy across every simultaneous war', () => {
     const state = createWorldStateV2(92_101, WORLD_CONTENT_V2);
     installDamagedApex(state);
     state.wars.push(
@@ -89,41 +96,38 @@ describe('APEX personnel recovery cadence', () => {
       activeWar(state, france, 'war-apex-two'),
     );
     const force = state.commanderForces[belgium]!;
-    const openingManpower = force.army.manpower;
-    const openingReserves = force.army.trainedReserves;
+    const openingEnergy = force.shield.integrity;
+    const openingReserveEnergy = force.shield.rechargeBuffer;
 
     expect(selectCommanderEconomyProjectionV2(state, belgium)?.trainedReserveGain)
       .toBe(0);
     advanceCommander(state, 24);
 
-    expect(force.army.manpower).toBe(openingManpower);
-    expect(force.army.trainedReserves).toBe(openingReserves);
+    expect(force.shield.integrity).toBe(openingEnergy);
+    expect(force.shield.rechargeBuffer).toBe(openingReserveEnergy);
     expect(force.mission).toBe('hq-training');
 
-    // Field Hospital preserves a bounded share as wounded reserves; it is not
-    // fresh recruitment and cannot return anyone to active duty during war.
-    const hospitalReserveGain = Math.min(
-      0.00005 * 0.10,
-      force.army.capacity * 0.025,
-    );
+    // Impact Recovery banks a bounded share as offline Reserve Energy. It does
+    // not reduce the live hit or restore the operational shield during war.
+    const impactRecoveryGain = 0.00005 * 0.10;
     expect(applyCommanderCasualtiesV2(state, belgium, 0.00005))
-      .toBeCloseTo(0.00005 - hospitalReserveGain, 9);
-    expect(force.army.manpower).toBeCloseTo(openingManpower - 0.00005, 9);
-    expect(force.army.trainedReserves)
-      .toBeCloseTo(openingReserves + hospitalReserveGain, 9);
+      .toBeCloseTo(0.00005, 9);
+    expect(force.shield.integrity).toBeCloseTo(openingEnergy - 0.00005, 9);
+    expect(force.shield.rechargeBuffer)
+      .toBeCloseTo(openingReserveEnergy + impactRecoveryGain, 9);
 
-    const damagedManpower = force.army.manpower;
-    const preservedPool = force.army.trainedReserves;
+    const damagedEnergy = force.shield.integrity;
+    const preservedPool = force.shield.rechargeBuffer;
     advanceCommander(state, 8);
-    expect(force.army.manpower).toBe(damagedManpower);
-    expect(force.army.trainedReserves).toBe(preservedPool);
+    expect(force.shield.integrity).toBe(damagedEnergy);
+    expect(force.shield.rechargeBuffer).toBe(preservedPool);
 
     state.wars = [];
     advanceCommander(state, 1);
-    expect(force.army.manpower).toBeGreaterThan(damagedManpower);
+    expect(force.shield.integrity).toBeGreaterThan(damagedEnergy);
   });
 
-  it('cannot bypass the lock by purging or rebuilding away from the capital', () => {
+  it('cannot bypass the wartime recovery lock through a distributed purge', () => {
     const state = createWorldStateV2(92_102, WORLD_CONTENT_V2);
     installDamagedApex(state);
     beginTerritoryIntegrationV2(
@@ -138,16 +142,16 @@ describe('APEX personnel recovery cadence', () => {
     force.mission = 'standby';
     force.manualHoldUntilTick = 0;
     state.wars.push(activeWar(state, france, 'war-during-purge'));
-    const opening = { ...force.army };
+    const opening = { ...force.shield };
 
     advanceCommander(state, 12);
 
-    expect(force.locationId).toBe(luxembourgTerritory);
-    expect(force.army.manpower).toBe(opening.manpower);
-    expect(force.army.trainedReserves).toBe(opening.trainedReserves);
+    expect(force.locationId).toBe(belgiumTerritory);
+    expect(force.shield.integrity).toBe(opening.integrity);
+    expect(force.shield.rechargeBuffer).toBe(opening.rechargeBuffer);
   });
 
-  it('visibly restores the active dome every peaceful week, including purge duty', () => {
+  it('visibly restores the distributed dome every peaceful week, including purge duty', () => {
     const state = createWorldStateV2(92_103, WORLD_CONTENT_V2);
     installDamagedApex(state);
     beginTerritoryIntegrationV2(
@@ -161,25 +165,25 @@ describe('APEX personnel recovery cadence', () => {
     force.locationId = luxembourgTerritory;
     force.mission = 'standby';
     force.manualHoldUntilTick = 0;
-    force.army.trainedReserves = 0;
-    const openingManpower = force.army.manpower;
-    const expectedWeeklyActiveGain = force.army.capacity
+    force.shield.rechargeBuffer = 0;
+    const openingEnergy = force.shield.integrity;
+    const expectedWeeklyActiveGain = force.shield.maxIntegrity
       * COMMANDER_PEACE_FIELD_TRANSFER_CAPACITY_SHARE_V2;
 
     for (let week = 1; week <= 8; week += 1) {
-      const before = force.army.manpower;
+      const before = force.shield.integrity;
       advanceCommander(state, 1);
-      expect(force.army.manpower - before)
+      expect(force.shield.integrity - before)
         .toBeCloseTo(expectedWeeklyActiveGain, 9);
-      expect(force.locationId).toBe(luxembourgTerritory);
+      expect(force.locationId).toBe(belgiumTerritory);
     }
 
-    expect(force.army.manpower - openingManpower)
-      .toBeCloseTo(force.army.capacity * 0.10, 9);
-    expect(force.army.trainedReserves).toBeGreaterThan(0);
+    expect(force.shield.integrity - openingEnergy)
+      .toBeCloseTo(force.shield.maxIntegrity * 0.10, 9);
+    expect(force.shield.rechargeBuffer).toBeGreaterThan(0);
   });
 
-  it('preserves the lock through a damaged remote save, then resumes on peace', () => {
+  it('normalizes a damaged legacy remote save and resumes recovery on peace', () => {
     const state = createWorldStateV2(92_104, WORLD_CONTENT_V2);
     installDamagedApex(state);
     beginTerritoryIntegrationV2(
@@ -198,25 +202,24 @@ describe('APEX personnel recovery cadence', () => {
     const loaded = loadSaveV2(createSaveV2(state, WORLD_CONTENT_V2), WORLD_CONTENT_V2);
     expect(() => assertInvariantsV2(loaded, WORLD_CONTENT_V2)).not.toThrow();
     const loadedForce = loaded.commanderForces[belgium]!;
-    const wartimeManpower = loadedForce.army.manpower;
-    const wartimeReserves = loadedForce.army.trainedReserves;
+    const wartimeEnergy = loadedForce.shield.integrity;
+    const wartimeReserveEnergy = loadedForce.shield.rechargeBuffer;
 
     advanceCommander(loaded, 10);
-    expect(loadedForce.locationId).toBe(luxembourgTerritory);
-    expect(loadedForce.army.manpower).toBe(wartimeManpower);
-    expect(loadedForce.army.trainedReserves).toBe(wartimeReserves);
+    expect(loadedForce.locationId).toBe(belgiumTerritory);
+    expect(loadedForce.shield.integrity).toBe(wartimeEnergy);
+    expect(loadedForce.shield.rechargeBuffer).toBe(wartimeReserveEnergy);
 
     loaded.wars = [];
     advanceCommander(loaded, 1);
-    expect(loadedForce.locationId).toBe(luxembourgTerritory);
-    expect(loadedForce.army.manpower).toBeGreaterThan(wartimeManpower);
+    expect(loadedForce.locationId).toBe(belgiumTerritory);
+    expect(loadedForce.shield.integrity).toBeGreaterThan(wartimeEnergy);
   });
 
   it('reaches exact zero, recovers only at its safe station during multiple wars, and releases at exactly full', () => {
     const state = createWorldStateV2(92_105, WORLD_CONTENT_V2);
     installDamagedApex(state);
     const force = state.commanderForces[belgium]!;
-    force.capabilities.emergencyExtractionCharges = 1;
     state.wars.push(
       activeWar(state, netherlands, 'war-zero-extraction-one'),
       activeWar(state, france, 'war-zero-extraction-two'),
@@ -232,25 +235,24 @@ describe('APEX personnel recovery cadence', () => {
       holdUntilTick: state.tick + 12,
       momentum: 0,
     }];
-    const reservesBefore = force.army.trainedReserves;
+    const reservesBefore = force.shield.rechargeBuffer;
 
     expect(applyCommanderCasualtiesV2(state, belgium, 1))
       .toBeCloseTo(0.0002, 9);
-    expect(force.army.manpower).toBe(0);
-    expect(force.army.trainedReserves).toBeGreaterThan(reservesBefore);
+    expect(force.shield.integrity).toBe(0);
+    expect(force.shield.rechargeBuffer).toBeGreaterThan(reservesBefore);
     expect(force).toMatchObject({
       mission: 'hq-training',
       front: null,
       transit: null,
-      capabilities: { emergencyExtractionCharges: 0 },
     });
     const recoveryStation = force.locationId;
 
-    const preservedPool = force.army.trainedReserves;
+    const preservedPool = force.shield.rechargeBuffer;
     advanceCommander(state, 1);
     expect(force.locationId).toBe(recoveryStation);
-    expect(force.army.manpower).toBeGreaterThan(0);
-    expect(force.army.trainedReserves).toBeLessThan(preservedPool);
+    expect(force.shield.integrity).toBeGreaterThan(0);
+    expect(force.shield.rechargeBuffer).toBeLessThan(preservedPool);
     expect(force.mission).toBe('hq-training');
 
     // The zero-recovery lifecycle and both active wars survive a reconnect.
@@ -262,20 +264,20 @@ describe('APEX personnel recovery cadence', () => {
 
     // Even 99.9% remains unavailable. The final safe-station recovery tick
     // fills active strength exactly to capacity and releases APEX once.
-    loadedForce.army.manpower = loadedForce.army.capacity * 0.999;
-    loadedForce.army.trainedReserves = Math.max(
-      loadedForce.army.trainedReserves,
-      loadedForce.army.capacity * 0.01,
+    loadedForce.shield.integrity = loadedForce.shield.maxIntegrity * 0.999;
+    loadedForce.shield.rechargeBuffer = Math.max(
+      loadedForce.shield.rechargeBuffer,
+      loadedForce.shield.maxIntegrity * 0.01,
     );
     expect(loadedForce.mission).toBe('hq-training');
-    expect(loadedForce.army.manpower / loadedForce.army.capacity)
+    expect(loadedForce.shield.integrity / loadedForce.shield.maxIntegrity)
       .toBeCloseTo(0.999, 9);
     advanceCommander(loaded, 1);
     expect(loadedForce.locationId).toBe(recoveryStation);
-    expect(loadedForce.army.manpower).toBe(loadedForce.army.capacity);
-    expect(loadedForce).toMatchObject({
-      mission: 'assault-support',
-      front: { warId: 'war-zero-extraction-one' },
-    });
+    expect(loadedForce.shield.integrity).toBe(loadedForce.shield.maxIntegrity);
+    expect(loadedForce).toMatchObject({ mission: 'standby', front: null });
+    expect(selectApexEmpireShieldNetworkV2(
+      loaded, WORLD_CONTENT_V2, belgium,
+    )).toMatchObject({ active: true, activeFrontCount: 1 });
   });
 });

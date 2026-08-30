@@ -10,9 +10,10 @@ const stylesSource = readFileSync(new URL('../../../styles.css', import.meta.url
 
 describe('globe render pipeline performance contract', () => {
   it('uses one political texture, one fog pair, one neural-field atlas and one globe mesh', () => {
-    // Political atlas, fog mask/noise/clear crossfade, sun and exactly one
-    // shared territory-wide APEX/PRIME coverage atlas.
-    expect(globeSceneSource.match(/new THREE\.CanvasTexture\(/g)).toHaveLength(6);
+    // Political atlas, fog mask/noise/clear crossfade and exactly one shared
+    // territory-wide APEX/PRIME coverage atlas. Deep space is one authored
+    // image texture, so it creates no runtime canvas.
+    expect(globeSceneSource.match(/new THREE\.CanvasTexture\(/g)).toHaveLength(5);
     expect(globeSceneSource.match(/sharedTerritoryNeuralFieldLayer/g)).toHaveLength(1);
     expect(globeSceneSource.match(/new THREE\.Mesh\(new THREE\.SphereGeometry\(/g))
       .toHaveLength(1);
@@ -64,7 +65,8 @@ describe('globe render pipeline performance contract', () => {
     expect(globeSceneSource).not.toContain('MAX_DEEP_LABELS');
     expect(globeSceneSource).toContain('const cameraChanged = this.camera.position.distanceToSquared(this.lastLabelCameraPosition) >= 1e-8;');
     expect(globeSceneSource).toContain('if (!this.labelsDirty && !cameraChanged)');
-    expect(globeSceneSource).toContain("label.kind === 'country' && !label.persistent && !selected");
+    expect(globeSceneSource).toContain('if (!label.persistent && !selected)');
+    expect(globeSceneSource).not.toContain("label.kind === 'sea'");
   });
 
   it('keeps Natural Earth as the only shaded surface beneath gameplay terrain and politics', () => {
@@ -171,7 +173,7 @@ describe('globe render pipeline performance contract', () => {
   });
 
   it('bakes only the fixed integration fill cue while geometry owns its physical perimeter', () => {
-    expect(globeTextureSource).toContain('nationIds.add(globeTerritoryFlagOwnerId(territory));');
+    expect(globeTextureSource).toContain('nationIds.add(globeTerritoryFlagCountryId(engine, territory));');
     expect(globeTextureSource).toContain('drawIntegrationOverlay(context, prepared.flagRings');
     expect(globeTextureSource).toContain('const fade = context.createLinearGradient(');
     expect(globeTextureSource).toContain("context.strokeStyle = 'rgba(255, 225, 150, 0.26)';");

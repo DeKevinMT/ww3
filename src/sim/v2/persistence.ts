@@ -156,6 +156,8 @@ const LEGACY_RULES_VERSION_V22_73 = 'frontier-command-v2.73-apex-finance';
 const LEGACY_RULES_VERSION_V22_74 = 'frontier-command-v2.74-shared-apex-economy';
 /** Last canonical release before civilian Food was retired in favour of Logistics Readiness. */
 const LEGACY_RULES_VERSION_V22_75 = 'frontier-command-v2.75-no-land-condition';
+/** Last authenticated release where APEX persisted a synthetic elite Army. */
+const LEGACY_RULES_VERSION_V22_76 = 'frontier-command-v2.76-logistics-readiness';
 const LEGACY_CONTENT_VERSION_V16 = 'natural-earth-countries-2026-v6-naval';
 const LEGACY_CONTENT_VERSION_V17 = 'natural-earth-countries-2026-v7-greenland';
 const LEGACY_BOT_MANPOWER_PER_UNIT = 0.10;
@@ -224,22 +226,44 @@ type LegacyPeaceOfferV20 = Omit<PeaceOfferV2, 'settlement'> & {
   territoryId?: TerritoryId;
 };
 type LegacyWarStateV21 = Omit<WarStateV2, 'revenge'>;
-type LegacyCommanderForceV268 = Omit<CommanderForceStateV2,
+interface LegacyCommanderArmyV276 {
+  manpower: number;
+  capacity: number;
+  trainedReserves: number;
+  baseAttack: number;
+  baseDefense: number;
+}
+type LegacyCommanderForceV276 = Omit<CommanderForceStateV2,
+  'shield' | 'capabilities' | 'empireSupport' | 'doctrineRuntime'> & {
+  army: LegacyCommanderArmyV276;
+  capabilities: Omit<CommanderForceStateV2['capabilities'], 'forceMultiplier'>;
+  empireSupport: Omit<CommanderForceStateV2['empireSupport'],
+    'armyCasualtyMultiplier' | 'armyPeaceRecoveryMultiplier'>;
+  doctrineRuntime?: Omit<NonNullable<CommanderForceStateV2['doctrineRuntime']>,
+    'emergencyRebootUsed'>;
+};
+type LegacyCommanderForceV268 = Omit<LegacyCommanderForceV276,
   'capabilities' | 'countryTraitScale' | 'orderSource' | 'manualHoldUntilTick'>;
-type LegacyCommanderForceV269 = Omit<CommanderForceStateV2, 'capabilities' | 'countryTraitScale'>;
-type LegacyCommanderForceV270 = Omit<CommanderForceStateV2, 'capabilities'>;
-type LegacySaveGameV22RunV271 = Omit<SaveGameV2, 'rulesVersion' | 'runProgression'> & {
+type LegacyCommanderForceV269 = Omit<LegacyCommanderForceV276, 'capabilities' | 'countryTraitScale'>;
+type LegacyCommanderForceV270 = Omit<LegacyCommanderForceV276, 'capabilities'>;
+type LegacySaveGameV22CommanderArmyV276 = Omit<SaveGameV2, 'commanderForces'> & {
+  commanderForces: Partial<Record<PlayerId, LegacyCommanderForceV276>>;
+};
+type LegacySaveGameV22RunV271 = Omit<LegacySaveGameV22CommanderArmyV276, 'rulesVersion' | 'runProgression'> & {
   rulesVersion: typeof LEGACY_RULES_VERSION_V22_71;
 };
-type LegacySaveGameV22FinanceV272 = Omit<SaveGameV2, 'rulesVersion'> & {
+type LegacySaveGameV22FinanceV272 = Omit<LegacySaveGameV22CommanderArmyV276, 'rulesVersion'> & {
   rulesVersion: typeof LEGACY_RULES_VERSION_V22_72 | typeof LEGACY_RULES_VERSION_V22_73;
 };
-type LegacySaveGameV22ConditionV274 = Omit<SaveGameV2, 'rulesVersion' | 'territories'> & {
+type LegacySaveGameV22ConditionV274 = Omit<LegacySaveGameV22CommanderArmyV276, 'rulesVersion' | 'territories'> & {
   rulesVersion: typeof LEGACY_RULES_VERSION_V22_74;
   territories: Record<TerritoryId, TerritoryStateV2 & { condition: number }>;
 };
-type LegacySaveGameV22FoodV275 = Omit<SaveGameV2, 'rulesVersion'> & {
+type LegacySaveGameV22FoodV275 = Omit<LegacySaveGameV22CommanderArmyV276, 'rulesVersion'> & {
   rulesVersion: typeof LEGACY_RULES_VERSION_V22_75;
+};
+type LegacySaveGameV22ApexArmyV276 = Omit<LegacySaveGameV22CommanderArmyV276, 'rulesVersion'> & {
+  rulesVersion: typeof LEGACY_RULES_VERSION_V22_76;
 };
 type LegacySaveGameV22CommanderV268 = Omit<SaveGameV2, 'rulesVersion' | 'commanderForces' | 'runProgression'> & {
   rulesVersion: typeof LEGACY_RULES_VERSION_V22_68;
@@ -1205,7 +1229,7 @@ function migrateLegacyStateV17(
 }
 
 function currentStateFromSave(
-  save: SaveGameV2 | LegacySaveGameV22ConditionV274 | LegacySaveGameV22FinanceV272 | LegacySaveGameV22RunV271 | LegacySaveGameV22CommanderV268 | LegacySaveGameV22CommanderV269 | LegacySaveGameV22CommanderV270 | LegacySaveGameV22PreCommander | LegacySaveGameV22PrePolar | LegacySaveGameV21 | LegacySaveGameV20 | LegacySaveGameV19 | LegacySaveGameV18,
+  save: SaveGameV2 | LegacySaveGameV22ApexArmyV276 | LegacySaveGameV22FoodV275 | LegacySaveGameV22ConditionV274 | LegacySaveGameV22FinanceV272 | LegacySaveGameV22RunV271 | LegacySaveGameV22CommanderV268 | LegacySaveGameV22CommanderV269 | LegacySaveGameV22CommanderV270 | LegacySaveGameV22PreCommander | LegacySaveGameV22PrePolar | LegacySaveGameV21 | LegacySaveGameV20 | LegacySaveGameV19 | LegacySaveGameV18,
   content: WorldContentV2,
   retireLegacyCombatExperience = false,
 ): WorldStateV2 {
@@ -1306,9 +1330,34 @@ function currentStateFromSave(
   const serializedOpeningConflictsStarted = (
     save.aiEscalation as { openingConflictsStarted?: unknown }
   ).openingConflictsStarted;
-  const commanderForces = 'commanderForces' in save
-    ? cloneCommanderForcesV2(save.commanderForces as WorldStateV2['commanderForces'])
+  const serializedCommanderForces = 'commanderForces' in save
+    ? save.commanderForces : {};
+  const commanderForces: WorldStateV2['commanderForces'] = 'commanderForces' in save
+    ? save.rulesVersion === V2_RULES_VERSION
+      // Current authenticated saves must survive this boundary exactly so
+      // invariant validation rejects missing or malformed canonical fields.
+      ? structuredClone(save.commanderForces as WorldStateV2['commanderForces'])
+      // Only older rulesets are entitled to Army-to-shield normalization.
+      : cloneCommanderForcesV2(save.commanderForces as Readonly<Record<string, unknown>>)
     : {};
+  // The runtime normalizer correctly erases private APEX cash for current
+  // saves. Authenticated v2.72/v2.73 payloads need that raw value exactly once,
+  // however, so the bounded legacy migration below can merge it into the
+  // Empire treasury before the current canonical state is validated.
+  if (save.rulesVersion === LEGACY_RULES_VERSION_V22_72
+    || save.rulesVersion === LEGACY_RULES_VERSION_V22_73) {
+    const rawForces = serializedCommanderForces as Readonly<Record<string, unknown>>;
+    for (const [rawPlayerId, rawForce] of Object.entries(rawForces)) {
+      if (!rawForce || typeof rawForce !== 'object') continue;
+      const rawEconomy = (rawForce as { economy?: unknown }).economy;
+      if (!rawEconomy || typeof rawEconomy !== 'object') continue;
+      const rawTreasury = (rawEconomy as { treasury?: unknown }).treasury;
+      const force = commanderForces[rawPlayerId as PlayerId];
+      if (force && typeof rawTreasury === 'number' && Number.isFinite(rawTreasury)) {
+        force.economy.treasury = Math.max(0, rawTreasury);
+      }
+    }
+  }
   if (save.rulesVersion === LEGACY_RULES_VERSION_V22_68
     || save.rulesVersion === LEGACY_RULES_VERSION_V22_69) {
     for (const force of Object.values(commanderForces)) {
@@ -1325,6 +1374,7 @@ function currentStateFromSave(
         mobileHeadquarters: false,
         fieldHospital: false,
         rapidResponse: false,
+        forceMultiplier: false,
         assaultSpecialist: false,
         defenseSpecialist: false,
         emergencyExtractionCharges: 0,
@@ -1346,8 +1396,10 @@ function currentStateFromSave(
   // Authenticated releases before exclusive protocol selection could freeze
   // several capstones into one solo APEX. Preserve the most clearly active
   // protocol and clear incompatible runtime state before canonical validation.
-  for (const force of Object.values(commanderForces)) {
-    if (force) normalizeApexCapstoneProtocolV2(force);
+  if (save.rulesVersion !== V2_RULES_VERSION) {
+    for (const force of Object.values(commanderForces)) {
+      if (force) normalizeApexCapstoneProtocolV2(force);
+    }
   }
   const authenticatedPayload = payloadWithoutHash(save) as Record<string, unknown>;
   for (const key of RETIRED_CAMPAIGN_PRESSURE_SAVE_KEYS) delete authenticatedPayload[key];
@@ -1701,7 +1753,7 @@ function legacyV7ContentMatchesResolvedScenarioV2(
 }
 
 export function loadSaveV2(
-  input: string | SaveGameV2 | LegacySaveGameV22FoodV275 | LegacySaveGameV22ConditionV274 | LegacySaveGameV22FinanceV272 | LegacySaveGameV22RunV271 | LegacySaveGameV22CommanderV268 | LegacySaveGameV22CommanderV269 | LegacySaveGameV22CommanderV270 | LegacySaveGameV22PreCommander | LegacySaveGameV22PrePolar | LegacySaveGameV21 | LegacySaveGameV20 | LegacySaveGameV19 | LegacySaveGameV18 | LegacySaveGameV17 | LegacySaveGameV16 | LegacySaveGameV15 | LegacySaveGameV14 | LegacySaveGameV13,
+  input: string | SaveGameV2 | LegacySaveGameV22ApexArmyV276 | LegacySaveGameV22FoodV275 | LegacySaveGameV22ConditionV274 | LegacySaveGameV22FinanceV272 | LegacySaveGameV22RunV271 | LegacySaveGameV22CommanderV268 | LegacySaveGameV22CommanderV269 | LegacySaveGameV22CommanderV270 | LegacySaveGameV22PreCommander | LegacySaveGameV22PrePolar | LegacySaveGameV21 | LegacySaveGameV20 | LegacySaveGameV19 | LegacySaveGameV18 | LegacySaveGameV17 | LegacySaveGameV16 | LegacySaveGameV15 | LegacySaveGameV14 | LegacySaveGameV13,
   content: WorldContentV2,
 ): WorldStateV2 {
   registerTraitContentV2(content);
@@ -1723,6 +1775,7 @@ export function loadSaveV2(
                 : LEGACY_RULES_VERSION_V13;
   const supportedRules = schemaVersion === 22
     ? parsed.rulesVersion === V2_RULES_VERSION
+      || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_76
       || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_75
       || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_74
       || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_73
@@ -1754,6 +1807,7 @@ export function loadSaveV2(
     : keys;
   const expectedSaveKeys = schemaVersion === 22
     ? parsed.rulesVersion === V2_RULES_VERSION
+      || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_76
       || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_75
       || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_74
       || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_73
@@ -1790,6 +1844,7 @@ export function loadSaveV2(
   if (schemaVersion === 22 && parsed.contentVersion !== V2_CONTENT_VERSION
     && !legacyV7Content
     && parsed.rulesVersion !== V2_RULES_VERSION
+    && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_76
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_75
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_74
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_73
@@ -1820,7 +1875,7 @@ export function loadSaveV2(
   }
 
   const state = schemaVersion === 22
-    ? currentStateFromSave(parsed as unknown as SaveGameV2 | LegacySaveGameV22FoodV275 | LegacySaveGameV22ConditionV274 | LegacySaveGameV22FinanceV272 | LegacySaveGameV22RunV271 | LegacySaveGameV22CommanderV268 | LegacySaveGameV22CommanderV269 | LegacySaveGameV22CommanderV270 | LegacySaveGameV22PreCommander | LegacySaveGameV22PrePolar, content)
+    ? currentStateFromSave(parsed as unknown as SaveGameV2 | LegacySaveGameV22ApexArmyV276 | LegacySaveGameV22FoodV275 | LegacySaveGameV22ConditionV274 | LegacySaveGameV22FinanceV272 | LegacySaveGameV22RunV271 | LegacySaveGameV22CommanderV268 | LegacySaveGameV22CommanderV269 | LegacySaveGameV22CommanderV270 | LegacySaveGameV22PreCommander | LegacySaveGameV22PrePolar, content)
     : schemaVersion === 21
       ? currentStateFromSave(parsed as unknown as LegacySaveGameV21, content)
       : schemaVersion === 20
@@ -1843,6 +1898,7 @@ export function loadSaveV2(
               )), content), content);
   if (schemaVersion === 22
     && parsed.rulesVersion !== V2_RULES_VERSION
+    && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_76
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_75
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_74) {
     retireLegacyPolarResearchRewardsV2(state);
@@ -1852,6 +1908,7 @@ export function loadSaveV2(
   // those would resurrect defeated nations and break its canonical hash.
   if (legacyV7Content) hydrateNewContentAfterAuthenticationV2(state, content);
   if (parsed.rulesVersion !== V2_RULES_VERSION
+    && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_76
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_75
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_74) {
     migrateRetiredSystemsV2(state);

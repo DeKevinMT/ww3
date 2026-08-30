@@ -128,7 +128,7 @@
 
 .campaign-report__reward-row {
   display: grid;
-  grid-template-columns: repeat(2, minmax(280px, 1fr));
+  grid-template-columns: repeat(2, minmax(260px, 1fr)) minmax(190px, .62fr);
   gap: 12px;
 }
 
@@ -154,6 +154,10 @@
 .campaign-report__mastery-track.is-unresolved i { width: 0; }
 .campaign-report__commander-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .campaign-report__commander-foot em { color: #c0adff; font-size: 11px; font-style: normal; font-weight: 900; line-height: 1.35; letter-spacing: .8px; white-space: nowrap; }
+.campaign-report__credits { display:grid; align-content:center; gap:7px; border-color:rgba(242,197,104,.22)!important; background:linear-gradient(145deg,rgba(242,197,104,.07),rgba(255,255,255,.018))!important; }
+.campaign-report__credits>span { color:#d7b66e; font-size:11px; font-weight:900; letter-spacing:1.2px; }
+.campaign-report__credits>strong { color:#ffe29a; font-size:32px; line-height:1; }
+.campaign-report__credits>small { color:#9f9478; font-size:11px; line-height:1.4; }
 
 .campaign-report__eligibility {
   margin: -4px 0 0;

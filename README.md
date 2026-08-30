@@ -1,6 +1,6 @@
-# Frontier Command
+# APEX: RECLAMATION
 
-Frontier Command is a deterministic real-time strategy game played on a true political world map. You build an account-wide roster of nations, develop APEX across campaigns and fight a Rogue intelligence that has destabilised the world.
+APEX: RECLAMATION is a deterministic real-time strategy game played on a true political world map. You build an account-wide roster of nations, develop APEX across campaigns and fight a Rogue intelligence that has destabilised the world.
 
 The game is desktop-first. Its 166 playable countries use one shared simulation for finance, research, recruitment, reserves, logistics, recovery and war. Combat Power is the primary military stat; manpower, ATK, DEF, terrain and supply explain where that Power comes from. The world advances at one simulated week per real second at normal speed.
 
@@ -16,7 +16,7 @@ Solo and multiplayer use the same modes. Multiplayer is one toggle in deployment
 
 APEX is the account-wide allied intelligence and projects one non-territorial neural dome. A fresh timeline begins at **100% Shield Integrity** with **125 DOME ATK / 125 DOME DEF**, about **100 DOME POWER** while operational and a separate energy reserve for strikes, interception and projection. Integrity is APEX's HP: the dome collapses at 0%, recharges at a safe Empire node and returns only when fully restored. It never supplies soldiers, national manpower, territory or an extra army. APEX shares the selected empire's logistics, adds a small income contribution and has no private upkeep economy. It autonomously prioritises the highest-impact legal front; the player chooses wars and has no manual movement controls.
 
-On the map, APEX is represented as a territory-wide digital neural shield rather than a robot or separate country marker. Its protection, travel and front support remain visible without adding a large unit nameplate.
+On the map, APEX is represented as one Empire-wide digital neural shield rather than a robot, moving unit or separate country marker. The shared network concentrates visibly over active fronts without requiring manual movement.
 
 Campaign opens with six quiet weeks before APEX introduces the mandatory first objective. Accepting it opens Research and atomically starts **Signal Triangulation** for **$10M** over **13 weeks**. Stage I confirms a hostile coordination signal and unlocks war. One measured proof conflict follows 6–8 weeks later, APEX observes it for two weeks, and transmissions remain at least two weeks apart. The guided first war then uses four weeks of mobilisation and weekly battle pulses; later wars return to the ordinary eight-week mobilisation and two-week pulse cadence.
 
@@ -27,7 +27,7 @@ The ordinary map stays visible after the signal. Remote ordinary land keeps its 
 Progression is stored in a shared local account and applies across eligible modes:
 
 - Greenland is the starter nation. Every other ordinary nation unlocks permanently when it is defeated in a standard Campaign war; no price, purchase or completed Signal Purge is required. Survival and Alternative Universe never unlock nations.
-- APEX progression has no authored level endpoint and grants one free talent point every level. Its branching neural-grid paths specialise integrity, attack, interception, recharge and projection; concentration gates make deep capstones a deliberate build choice. **Singularity Pulse** overdrives DOME ATK by 60% on every third supported offensive battle, **Mirror Matrix** returns 20% of damage actually intercepted by the shield as a bounded counterpulse, and **Twin Projection** maintains two legal 60% fronts that drain one shared Integrity and energy pool. Every talent remains repeatable beyond its authored milestones on an endless diminishing tail, while one named specialization applies account-wide.
+- APEX progression has no authored level endpoint and grants one free talent point every level. Its branching neural-grid paths specialise integrity, attack, interception, recharge and projection; concentration gates make deep capstones a deliberate build choice. **Singularity Pulse** overdrives DOME ATK by 60% on every third supported offensive battle, **Mirror Matrix** returns 20% of damage actually intercepted by the shield as a bounded counterpulse, and **Omnipresence Grid** starts with 100% projection at one front, adds 25% shared budget per additional front up to 150%, then divides that one budget evenly across every active front. All fronts drain one shared Shield Integrity and energy pool. Every talent remains repeatable beyond its authored milestones on an endless diminishing tail, while one named specialization applies account-wide.
 - Each unlocked country earns its own strength-scaled mastery XP and one free point per mastery level. Eight military tracks cover Force, Firepower, Defense, Mobilization, Land Logistics, Expeditionary, Military Industry and Field Medicine. Force adds exactly `+1%` live Army Capacity per point; the remaining tracks cover ATK, DEF, recruitment and reserves, land and naval logistics, military cost and casualties. Respec is free, and every current/next effect is shown exactly.
 - Country traits and paid nation upgrades are retired. Campaign uses the selected country's mastery; Survival also applies each roster member's own mastery to its original territory contribution.
 - Surrender is a normal end-of-run settlement and grants the same earned reward calculation as ending the run through play.
@@ -43,7 +43,7 @@ The player-facing military model is compact:
 
 - **Local Threat** identifies the strongest plausible nearby hostile country from legal access, distance, relative Power, nearby expansion and current war state. Before Campaign Signal Triangulation completes, hostile threat against the player is zero and new wars are locked.
 - **Army Readiness** reflects the real deployed force and trained reserves. Battle losses must be replaced through the ordinary funded recovery systems.
-- **Logistics Readiness** is the live `supplyFactorV2` of every active front. The Empire value is weighted by the manpower in each source army; no active fronts means 100% **NETWORK READY**. Status is **READY** at 72% or higher, **STRAINED** from 50% through 71%, and **CRITICAL** below 50%. During war the header also shows the front count and weakest route, while War explains each land or naval route, distance, battle ETA and current bottleneck.
+- **War Supply** is the share of active front demand that the Empire actually delivers. It reads 0% outside war and 100% only when every active front is fully supplied. Land movement uses a fixed share of Army Capacity; naval movement receives exactly half that throughput. Active wars are supplied first and peaceful borders divide remaining protection evenly.
 - **Rogue Attention** appears only after APEX has revealed that threat through the story.
 
 Political suspicion, propaganda, containment coalitions, defensive federations and revolt are not active gameplay systems. Signal Purge is stable in-run integration progress: it has no hidden uprising chance, rebel force or rollback, and it does not gate account unlocks. Each endpoint has one immutable 1–6 year duration. APEX presence delivers `3×` purge work, every supplied active front processes its own territory in parallel at `1×`, and an ordinary rear or remote focus advances at a deterministic 50% rate. A front never has to clear before progress can begin.
@@ -76,7 +76,7 @@ Browser connections use WebRTC data channels with STUN and no TURN relay, so res
 - Use War for active fronts, best targets, Power forecasts, supply, APEX contribution and deterministic war outcomes.
 - Use Nation, Research and Economy for the corresponding compact national views.
 - The permanent Combined Power tile splits Empire and APEX contribution and pairs the total with a visible **`x% ARMY READY`** value plus trained reserves.
-- The permanent Logistics Readiness tile shows the manpower-weighted supply of active fronts; click it to inspect the routes in War.
+- The permanent War Supply tile shows how completely active wars are being fed; click it to inspect the individual fronts.
 - Scroll to zoom, drag to rotate or pan, and press `Esc` to close the active panel.
 - Active land wars use warm contact lines; naval wars use cool dashed routes. Neutral internal borders stay subtly visible, while dangerous frontiers and Rogue territory receive distinct warnings.
 
@@ -98,7 +98,7 @@ Open the local address printed by Vite. The configured preview currently uses `h
 
 The starting Power index is a gameplay score based on these datasets, not a political or moral judgement. Live population, economy, borders and military strength then evolve through the simulation.
 
-The browser client uses [Phaser](https://github.com/phaserjs/phaser) and [flag-icons](https://github.com/lipis/flag-icons). Their own licenses remain applicable. No license is granted for Frontier Command itself unless a repository license is added explicitly.
+The browser client uses [Phaser](https://github.com/phaserjs/phaser) and [flag-icons](https://github.com/lipis/flag-icons). Their own licenses remain applicable. No license is granted for APEX: RECLAMATION itself unless a repository license is added explicitly.
 
 ## Architecture and verification
 

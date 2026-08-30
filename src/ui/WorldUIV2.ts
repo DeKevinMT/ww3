@@ -18,7 +18,6 @@ import {
   type WorldMapEngineContract,
 } from '../game/map/bridge';
 import { MapStatsRefreshCadence } from '../game/map/mapStatsCadence';
-import { commanderForceMapCombatPower } from '../game/map/forcePresentation';
 import { terrainPresentation } from '../game/terrainPresentation';
 import {
   CONQUEST_CAPTURE_GUARD_TICKS,
@@ -50,9 +49,8 @@ import {
   type WorldContentV2,
 } from '../sim/v2/content';
 import {
-  commanderEliteComparisonForRatingsV2,
+  selectApexEmpireShieldNetworkV2,
   selectApexLancerPulseStatusV2,
-  selectApexTwinProjectionStatusV2,
   selectCommanderAutonomyStatusV2,
   selectCommanderFrontPrioritiesV2,
 } from '../sim/v2/commanderForce';
@@ -75,6 +73,7 @@ import {
   selectEmpireLogisticsReadinessV2,
   type EmpireLogisticsReadinessV2,
 } from '../sim/v2/logisticsReadiness';
+import { armyCapacitySupplyLabelV2 } from '../sim/v2/logistics';
 import { OPENING_ARMY_BONUS_DURATION_TICKS_V2 } from '../sim/v2/openingArmyBonus';
 import { initialTrainedReserveManpowerV2 } from '../sim/v2/reserveForces';
 import {
@@ -84,7 +83,6 @@ import {
   ROGUE_ATTENTION_MIN_CAMPAIGN_TICK_V2,
 } from '../sim/v2/polarEndgame';
 import {
-  CAMPAIGN_HUMAN_WAR_STORY_LOCK_REASON_V2,
   CAMPAIGN_WAR_LOCK_REASON_V2,
   campaignHumanWarsUnlockedV2,
   campaignProspectiveWarMobilizationTicksV2,
@@ -135,7 +133,6 @@ import {
 } from './scrollSessions';
 import {
   rankWarTargetRecommendationsV2,
-  warTargetFusionValueBonusV2,
   warTargetRouteLabelV2,
   type AvailableWarTargetAccessV2,
 } from './warTargetRecommendations';
@@ -312,6 +309,8 @@ export interface WorldUIV2Options {
   initialPreviewCountryId?: PlayerId;
   multiplayer?: boolean;
   controllerNames?: ReadonlyMap<PlayerId, string>;
+  /** Account identity flag for each human seat, independent of its starting nation. */
+  empireFlagCountryIds?: ReadonlyMap<PlayerId, string>;
   onMultiplayerRequested?: (preferredCountryId: PlayerId) => void;
   scenarioConfig?: ScenarioConfigV2;
   onScenarioModeRequested?: (mode: GameModeV2) => void;
@@ -610,19 +609,25 @@ export function armyReadinessTopbarPresentationV2(
 }
 
 export interface ApexShieldTopbarPresentationV2 {
-  readonly operationalPower: number;
+  readonly supportBonusPercent: number;
+  readonly armyPowerMultiplier: number;
   readonly integrityPercent: number;
+  readonly pulseAttack: number;
   readonly recovering: boolean;
 }
 
 /** Shield integrity is visible as energy, never mislabelled as deployed troops. */
 export function apexShieldTopbarPresentationV2(
-  power: number,
+  supportBonusPercent: number,
   integrity: number,
   maxIntegrity: number,
   mission: string,
+  pulseAttack = 0,
 ): ApexShieldTopbarPresentationV2 {
-  const safePower = Math.max(0, Number.isFinite(power) ? power : 0);
+  const safeSupportBonus = Math.max(
+    0,
+    Number.isFinite(supportBonusPercent) ? supportBonusPercent : 0,
+  );
   const safeIntegrity = Math.max(0, Number.isFinite(integrity) ? integrity : 0);
   const safeMaxIntegrity = Math.max(0, Number.isFinite(maxIntegrity) ? maxIntegrity : 0);
   const recovering = mission === 'evacuate' || mission === 'hq-training';
@@ -632,8 +637,13 @@ export function apexShieldTopbarPresentationV2(
     1,
   ) * 100);
   return Object.freeze({
-    operationalPower: recovering ? 0 : safePower,
+    supportBonusPercent: recovering ? 0 : safeSupportBonus,
+    armyPowerMultiplier: recovering ? 1 : 1 + safeSupportBonus / 100,
     integrityPercent,
+    pulseAttack: recovering ? 0 : Math.max(
+      0,
+      Number.isFinite(pulseAttack) ? pulseAttack : 0,
+    ),
     recovering,
   });
 }
@@ -1556,7 +1566,7 @@ type CommanderForceMapSourceV2 = {
   readonly locationId?: unknown;
   readonly mission?: unknown;
   readonly front?: unknown;
-  readonly army?: Partial<MapCommanderForceState['army']>;
+  readonly shield?: Partial<MapCommanderForceState['shield']>;
   readonly economy?: Partial<MapCommanderForceState['economy']> & {
     readonly priorities?: unknown;
   };
@@ -1588,6 +1598,7 @@ function mapCommanderForceSnapshotV2(
   force: CommanderForceMapSourceV2,
   headquartersId: string,
   role: 'apex' | 'rogue-prime',
+  empireShield?: ReturnType<typeof selectApexEmpireShieldNetworkV2>,
 ): MapCommanderForceState | undefined {
   const locationId = typeof force?.locationId === 'string' ? force.locationId : '';
   if (!locationId) return undefined;
@@ -1599,7 +1610,7 @@ function mapCommanderForceSnapshotV2(
     departTick: finiteCommanderMapNumber(force.transit.departTick),
     arriveTick: finiteCommanderMapNumber(force.transit.arriveTick),
   } : null;
-  const army = force.army ?? {};
+  const shield = force.shield ?? {};
   const economy = force.economy ?? {};
   const doctrineRuntime = force.doctrineRuntime;
   const secondarySource = doctrineRuntime?.secondaryProjection;
@@ -1634,18 +1645,36 @@ function mapCommanderForceSnapshotV2(
       : force.front && typeof force.front === 'object'
         && 'targetId' in force.front && typeof force.front.targetId === 'string'
         ? force.front.targetId : null,
-    army: {
-      manpower: finiteCommanderMapNumber(army.manpower),
-      capacity: finiteCommanderMapNumber(army.capacity),
-      trainedReserves: finiteCommanderMapNumber(army.trainedReserves),
-      baseAttack: finiteCommanderMapNumber(army.baseAttack),
-      baseDefense: finiteCommanderMapNumber(army.baseDefense),
+    shield: {
+      integrity: finiteCommanderMapNumber(shield.integrity),
+      maxIntegrity: finiteCommanderMapNumber(shield.maxIntegrity),
+      rechargeBuffer: finiteCommanderMapNumber(shield.rechargeBuffer),
+      rechargeMultiplier: finiteCommanderMapNumber(shield.rechargeMultiplier) || 1,
+      attackMultiplier: finiteCommanderMapNumber(shield.attackMultiplier) || 1,
+      defenseMultiplier: finiteCommanderMapNumber(shield.defenseMultiplier) || 1,
+      pulseAttack: finiteCommanderMapNumber(shield.pulseAttack),
     },
     economy: {
       treasury: finiteCommanderMapNumber(economy.treasury),
       annualOutput: finiteCommanderMapNumber(economy.annualOutput),
       supplyStock: finiteCommanderMapNumber(economy.supplyStock),
     },
+    ...(empireShield ? {
+      empireShield: {
+        active: empireShield.active,
+        operationalState: empireShield.operationalState,
+        integrityCurrent: empireShield.integrityCurrent,
+        integrityMax: empireShield.integrityMax,
+        integrityPercent: empireShield.integrityPercent,
+        attackMultiplier: empireShield.attackMultiplier,
+        defenseMultiplier: empireShield.defenseMultiplier,
+        pulseAttack: empireShield.pulseAttack,
+        supportBonusPercent: empireShield.supportBonusPercent,
+        coverageTerritoryIds: [...empireShield.coverageTerritoryIds],
+        activeFrontTerritoryIds: [...empireShield.activeFrontTerritoryIds],
+        fronts: empireShield.fronts.map((front) => ({ ...front })),
+      },
+    } : {}),
     ...(doctrineRuntime ? {
       doctrineRuntime: {
         lancerSupportedAssaultCount: clamp(
@@ -1678,6 +1707,11 @@ function mapCommanderForcesSnapshotV2(
       content.nations[playerId as PlayerId]?.initialCapitalId
         ?? (typeof force?.locationId === 'string' ? force.locationId : ''),
       'apex',
+      selectApexEmpireShieldNetworkV2(
+        state,
+        content,
+        playerId as PlayerId,
+      ),
     );
     return projected ? [[playerId, projected] as const] : [];
   }));
@@ -1756,6 +1790,7 @@ export function createMapEngineAdapter(
   ranking: () => RankingEntryV2[],
   controllerNames: ReadonlyMap<PlayerId, string> = new Map(),
   viewerKnowledgeSource: MapViewerKnowledgeSourceV2 = {},
+  empireFlagCountryIds: ReadonlyMap<PlayerId, string> = new Map(),
 ): WorldMapEngineContract {
   const mapContent = mapWorldContentProjectionV2(engine.content);
   const blackoutAcknowledged = (playerId: PlayerId): boolean => {
@@ -1916,6 +1951,9 @@ export function createMapEngineAdapter(
         ...player,
         isHuman: player.isHuman,
         controllerName: player.isHuman ? controllerNames.get(player.id) : undefined,
+        flagCountryId: player.isHuman
+          ? empireFlagCountryIds.get(player.id) ?? player.id
+          : player.id,
       } : undefined;
     },
     territoriesOf: (playerId) => {
@@ -2037,6 +2075,7 @@ interface TerritoryTooltipContentV2 {
 }
 
 export class WorldUIV2 {
+  private static readonly EMPIRE_DEFENCE_GLOW_DURATION_MS = 4_800;
   private readonly hud: HTMLElement;
   private readonly tooltip: HTMLElement;
   private readonly toastLayer: HTMLElement;
@@ -2077,6 +2116,7 @@ export class WorldUIV2 {
   private unsubscribe?: () => void;
   private renderTimer?: number;
   private renderFrame?: number;
+  private empireDefenceGlowAnimation?: Animation;
   private pendingMapSync = false;
   private initialMapLoaderPaintPending = false;
   private awaitingInitialMapSynchronization = false;
@@ -2133,7 +2173,7 @@ export class WorldUIV2 {
         .world-ui-v2 .v2-topbar { grid-template-columns: minmax(125px,1fr) auto auto !important; }
         .world-ui-v2 .command-topbar .command-identity { display: flex !important; }
         .world-ui-v2 .command-topbar .top-actions { display: flex !important; }
-        .world-ui-v2 .command-topbar .v2-metrics { position: absolute; top: 68px; right: 0; left: 0; height: 48px; padding: 4px; display: grid !important; grid-template-columns: repeat(5,minmax(136px,1fr)) !important; overflow-x: auto !important; overflow-y: hidden; border: 1px solid rgba(107,221,242,.12); border-radius: 9px; background: rgba(7,20,34,.94); }
+        .world-ui-v2 .command-topbar .v2-metrics { position: absolute; top: 68px; right: 0; left: 0; height: 48px; padding: 4px; display: grid !important; grid-template-columns: 136px 136px 236px repeat(2,136px) !important; overflow-x: auto !important; overflow-y: hidden; border: 1px solid rgba(107,221,242,.12); border-radius: 9px; background: rgba(7,20,34,.94); }
         .world-ui-v2 .v2-metrics > * { min-height: 38px !important; }
         .world-ui-v2 .world-panel.command-drawer { top: 132px; }
         .world-ui-v2 .war-tracker { top: 132px; }
@@ -2156,6 +2196,7 @@ export class WorldUIV2 {
       () => this.ranking(),
       options.controllerNames,
       { chartedTerritoryIds: () => this.options.availableCountryIds ?? [] },
+      options.empireFlagCountryIds,
     );
     mapBridge.sync();
     mapBridge.onTerritoryClick = (territoryId) => {
@@ -2187,6 +2228,14 @@ export class WorldUIV2 {
     return this.engine.viewerPlayerId ?? this.engine.state.humanPlayerId;
   }
 
+  private playerFlagHtml(
+    player: Pick<NationViewV2, 'id' | 'sigil'>,
+    eager = false,
+  ): string {
+    const countryId = this.options.empireFlagCountryIds?.get(player.id) ?? player.id;
+    return countryFlagHtml(countryId, player.sigil, eager);
+  }
+
   private eventIsUnread(event: WorldEventV2): boolean {
     return this.options.multiplayer
       ? event.unread && !this.locallyReadEventIds.has(event.id)
@@ -2195,6 +2244,8 @@ export class WorldUIV2 {
 
   destroy(): void {
     this.unsubscribe?.();
+    this.empireDefenceGlowAnimation?.cancel();
+    this.empireDefenceGlowAnimation = undefined;
     if (this.renderTimer !== undefined) window.clearTimeout(this.renderTimer);
     if (this.renderFrame !== undefined) window.cancelAnimationFrame(this.renderFrame);
     if (this.introSearchTimer !== undefined) window.clearTimeout(this.introSearchTimer);
@@ -2609,7 +2660,7 @@ export class WorldUIV2 {
     return {
       html: `
       <div class="tooltip__eyebrow"><span>${escapeHtml(REGION_BY_ID[definition.regionId]?.name ?? definition.regionId)}</span>${terrainProfileBadges(terrainProfile)}</div>
-      <div class="tooltip__identity" style="--owner:${owner.cssColor}"><i class="country-flag">${countryFlagHtml(owner.id, owner.sigil)}</i><div><strong>${escapeHtml(definition.name)}</strong><span>${escapeHtml(owner.name)}</span></div>${controller}</div>
+      <div class="tooltip__identity" style="--owner:${owner.cssColor}"><i class="country-flag">${this.playerFlagHtml(owner)}</i><div><strong>${escapeHtml(definition.name)}</strong><span>${escapeHtml(owner.name)}</span></div>${controller}</div>
       <div class="tooltip__terrain" style="--terrain:${terrainStyle.cssColor}">${terrainEffectMetrics(terrainEffects)}</div>
       ${openingMobilisationHtml}
       <div class="tooltip__grid"><article><span>LOCAL POWER</span><strong>${compactNumber(localPower)}</strong><small>${armyReadinessLabel(territory.army)}</small></article><article><span>ACTIVE ARMY</span><strong>${people(territory.army.manpower)}</strong><small>${people(localArmyCapacity)} local cap</small></article><article><span>COMBAT</span><strong>ATK ${format(attack, 1)} · DEF ${format(defense, 1)}</strong><small>${people(deploymentCeiling)} deployment max</small></article></div>
@@ -2653,6 +2704,46 @@ export class WorldUIV2 {
         ?.dataset.scrollSession ?? 'hud';
       details.dataset.disclosureSession = `${surface}:${slug}`;
     }
+  }
+
+  /**
+   * The HUD markup is intentionally refreshed from authoritative weekly state,
+   * but the shield scan is presentation-only and must never restart with it.
+   * Web Animations lets every replacement node join one wall-clock phase before
+   * the browser paints, without adding a permanent requestAnimationFrame loop.
+   */
+  private syncEmpireDefenceGlow(): void {
+    this.empireDefenceGlowAnimation?.cancel();
+    this.empireDefenceGlowAnimation = undefined;
+    const glow = this.hud.querySelector<HTMLElement>('[data-empire-defence-glow]');
+    if (!glow) return;
+
+    const reducedMotion = typeof window.matchMedia === 'function'
+      && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (reducedMotion) {
+      glow.style.transform = 'translateX(290%) skewX(-16deg)';
+      return;
+    }
+
+    const duration = WorldUIV2.EMPIRE_DEFENCE_GLOW_DURATION_MS;
+    const phase = performance.now() % duration;
+    if (typeof glow.animate !== 'function') {
+      // Older WebViews keep the same absolute phase through a negative delay.
+      glow.style.animation = `topbar-shield-scan ${duration}ms linear infinite`;
+      glow.style.animationDelay = `${-phase}ms`;
+      return;
+    }
+
+    const animation = glow.animate([
+      { transform: 'translateX(0%) skewX(-16deg)' },
+      { transform: 'translateX(720%) skewX(-16deg)' },
+    ], {
+      duration,
+      easing: 'linear',
+      iterations: Infinity,
+    });
+    animation.currentTime = phase;
+    this.empireDefenceGlowAnimation = animation;
   }
 
   private render(): void {
@@ -2732,50 +2823,39 @@ export class WorldUIV2 {
       [war.id, this.engine.liveWarEstimate(war.id, human.id)]
     )));
     const apexForce = state.commanderForces?.[human.id];
-    const apexRawPower = apexForce ? commanderForceMapCombatPower(apexForce.army) : 0;
-    const apexPowerState = apexForce
-      ? apexShieldTopbarPresentationV2(
-          apexRawPower,
-          apexForce.army.manpower,
-          apexForce.army.capacity,
-          apexForce.mission,
-        )
-      : { operationalPower: 0, integrityPercent: 0, recovering: false };
-    const apexPower = apexPowerState.operationalPower;
-    const combinedPower = combatPower + apexPower;
-    const empirePowerShare = combinedPower > 0 ? combatPower / combinedPower : 1;
-    const apexPowerShare = combinedPower > 0 ? apexPower / combinedPower : 0;
-    const apexLancer = selectApexLancerPulseStatusV2(state, human.id);
-    const apexTwin = selectApexTwinProjectionStatusV2(
-      state, human.id, this.engine.content,
-    );
-    const apexCapstoneSummary = apexForce?.capabilities.assaultSpecialist
-      ? ` · PULSE ${apexLancer.supportedAssaultCount}/3`
-      : apexTwin.active
-        ? ' · TWIN 60/60'
-        : apexForce?.capabilities.defenseSpecialist ? ' · MIRROR' : '';
-    const apexPowerSummary = (apexPowerState.recovering
-      ? `SHIELD RECHARGING ${apexPowerState.integrityPercent}%`
-      : `SHIELD ${apexPowerState.integrityPercent}%`) + apexCapstoneSummary;
-    const apexStatus = selectCommanderAutonomyStatusV2(
+    const apexNetwork = selectApexEmpireShieldNetworkV2(
       state, this.engine.content, human.id,
     );
-    const apexDockStatus = apexStatus.state === 'absent'
+    const apexPowerState = apexForce
+      ? apexShieldTopbarPresentationV2(
+          apexNetwork?.supportBonusPercent ?? 0,
+          apexForce.shield.integrity,
+          apexForce.shield.maxIntegrity,
+          apexForce.mission,
+          apexForce.shield.pulseAttack,
+        )
+      : {
+          supportBonusPercent: 0,
+          armyPowerMultiplier: 1,
+          integrityPercent: 0,
+          pulseAttack: 0,
+          recovering: false,
+        };
+    const combinedPower = combatPower * apexPowerState.armyPowerMultiplier;
+    const apexDockStatus = !apexForce
       ? 'UNAVAILABLE'
-      : apexStatus.state === 'moving'
-        ? apexStatus.headline.replace(/^APEX\s+/, '')
-        : apexStatus.state === 'rebuilding'
-          ? 'RECOVERING'
-          : apexStatus.state === 'supporting'
-            ? 'SUPPORTING'
-            : 'MONITORING';
+      : apexPowerState.recovering
+        ? 'RECOVERING'
+        : (apexNetwork?.activeFrontCount ?? 0) > 0
+          ? `SHIELDING ${apexNetwork!.activeFrontCount}`
+          : 'MONITORING';
     const logisticsReadiness = selectEmpireLogisticsReadinessV2(
       state,
       this.engine.content,
       human.id,
     );
     const logisticsDetail = logisticsReadiness.frontCount === 0
-      ? 'IDLE'
+      ? 'NO ACTIVE FRONTS'
       : `WEAK ${logisticsReadiness.weakest?.percent ?? logisticsReadiness.percent}% · ${logisticsReadiness.frontCount} ${logisticsReadiness.frontCount === 1 ? 'FRONT' : 'FRONTS'}`;
     const researchPortfolio = this.engine.researchPortfolio(human.id, finance);
     const nextTopbarResearch = nextResearchMilestone(researchPortfolio);
@@ -2805,13 +2885,13 @@ export class WorldUIV2 {
     this.hud.innerHTML = `
       <header class="situation-topbar command-topbar glass-panel v2-topbar v2-interactive simple-topbar unified-topbar">
         <div class="coalition-chip command-identity" style="--coalition:${human.cssColor}">
-          <span class="country-flag" aria-hidden="true">${countryFlagHtml(human.id, human.sigil, true)}</span><div class="coalition-chip__body"><small><time>${worldDateLabel(state.tick, this.engine.content.metadata?.startYear ?? 2026)}</time>${wars.length ? `<b class="topbar-war-alert">${wars.length === 1 ? 'WAR ACTIVE' : `${wars.length} WARS ACTIVE`}</b>` : ''}</small><div class="command-identity__line"><strong title="${escapeHtml(human.name)}">${escapeHtml(human.shortName)}</strong><button class="v2-rank-badge" data-action="ranking" aria-label="Open global military ranking; ${escapeHtml(human.name)} is military rank ${humanRank} of ${ranking.length} active countries">#${humanRank}/${ranking.length}</button></div></div>
+          <span class="country-flag" aria-hidden="true">${this.playerFlagHtml(human, true)}</span><div class="coalition-chip__body"><small><time>${worldDateLabel(state.tick, this.engine.content.metadata?.startYear ?? 2026)}</time>${wars.length ? `<b class="topbar-war-alert">${wars.length === 1 ? 'WAR ACTIVE' : `${wars.length} WARS ACTIVE`}</b>` : ''}</small><div class="command-identity__line"><strong title="${escapeHtml(human.name)}">${escapeHtml(human.shortName)}</strong><button class="v2-rank-badge" data-action="ranking" aria-label="Open global military ranking; ${escapeHtml(human.name)} is military rank ${humanRank} of ${ranking.length} active countries">#${humanRank}/${ranking.length}</button></div></div>
         </div>
         <nav class="strategic-metrics v2-metrics simple-metrics topbar-status" aria-label="Command status">
           <button type="button" class="top-metric top-metric--economy" data-action="panel" data-panel="economy" title="Empire output, shared cash and annual growth; APEX income is included" aria-label="Open Economy. Empire output ${cash(economy.controlledOutput)}; shared treasury ${cash(human.treasury)}; projected net cashflow ${signedCash(annual(displayedNet))} per year including APEX income; annual growth ${signed(finance.annualEconomyGrowthRate * 100, 2)} percent"><span>ECONOMY</span><strong>${cash(economy.controlledOutput)}<i class="${finance.annualEconomyGrowthRate >= 0 ? 'is-positive' : 'is-negative'}">${signed(finance.annualEconomyGrowthRate * 100, 2)}%</i></strong><small><span>CASH ${cash(human.treasury)}</span><b class="${displayedNet >= 0 ? 'is-positive' : 'is-negative'}">${signedCash(annual(displayedNet))}/YR</b></small></button>
-          <button type="button" class="top-metric top-metric--combined-power ${wars.length ? 'has-war' : ''}" data-action="panel" data-panel="war" title="Combined national power and the active APEX neural shield" aria-label="Open War. Available Combined Power ${compactNumber(combinedPower)}; Empire ${compactNumber(combatPower)}, ${Math.round(empirePowerShare * 100)} percent; ${apexPowerState.recovering ? `APEX shield recharging at ${apexPowerState.integrityPercent} percent and unavailable` : `APEX shield integrity ${apexPowerState.integrityPercent} percent, contributing ${compactNumber(apexPower)} power`}; army ready ${armyReadiness.percent} percent, ${armyReadiness.status.toLowerCase()}; trained reserves ${people(human.trainedReserves)}"><span>COMBINED POWER</span><strong>${compactNumber(combinedPower)}<i class="topbar-army-ready ${armyReadiness.className}">${armyReadiness.value} READY</i></strong><i class="topbar-power-share" role="img" aria-label="Empire ${Math.round(empirePowerShare * 100)} percent; ${apexPowerState.recovering ? `APEX shield recharging ${apexPowerState.integrityPercent} percent` : `APEX shield ${Math.round(apexPowerShare * 100)} percent of available power`}"><b style="width:${format(empirePowerShare * 100, 2)}%"></b><em style="width:${format(apexPowerShare * 100, 2)}%"></em></i><small>EMPIRE ${compactNumber(combatPower)} · ${apexPowerSummary} · ${people(human.trainedReserves)} RESERVE</small></button>
           <button type="button" class="top-metric top-metric--population" data-action="panel" data-panel="nation" title="Integrated population and annual change" aria-label="Open Nation. Integrated population ${format(integratedPopulation, 2)} million; annual change ${signed(populationDynamics.annualNetRate * 100, 2)} percent"><span>POPULATION</span><strong>${population(integratedPopulation)}<i class="${populationDynamics.annualNetRate >= 0 ? 'is-positive' : 'is-negative'}">${signed(populationDynamics.annualNetRate * 100, 2)}%</i></strong></button>
-          <button type="button" class="top-metric top-metric--logistics is-${logisticsReadiness.status}" data-action="panel" data-panel="war" title="Military route readiness across active fronts" aria-label="Open War. Logistics Readiness ${logisticsReadiness.percent} percent, ${logisticsReadiness.statusLabel.toLowerCase()}. ${escapeHtml(logisticsDetail)}"><span>LOGISTICS</span><strong>${logisticsReadiness.percent}%<i>${logisticsReadiness.statusLabel}</i></strong><i class="topbar-progress-bar" role="progressbar" aria-label="Logistics readiness" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${logisticsReadiness.percent}"><b style="width:${logisticsReadiness.percent}%"></b></i></button>
+          <button type="button" class="top-metric top-metric--combined-power top-metric--defence-stack ${wars.length ? 'has-war' : ''}" data-action="panel" data-panel="war" title="Empire Army with APEX Energy projected over it" aria-label="Open War. Shield-supported army power ${compactNumber(combinedPower)}. Base Empire Army power ${compactNumber(combatPower)}, ${armyReadiness.percent} percent ready, ${armyReadiness.status.toLowerCase()}, with ${people(human.trainedReserves)} trained reserves. ${apexPowerState.recovering ? `APEX Energy recharging at ${apexPowerState.integrityPercent} percent and currently unavailable` : `APEX Energy ${apexPowerState.integrityPercent} percent; Pulse Attack ${people(apexPowerState.pulseAttack)} inside the shared Empire hit cap`}"><span>EMPIRE DEFENCE</span><strong>${compactNumber(combinedPower)}<i class="topbar-army-ready ${armyReadiness.className}">${armyReadiness.value} ARMY</i></strong><i class="topbar-defence-stack" role="img" aria-label="Army readiness ${armyReadiness.percent} percent with APEX Energy ${apexPowerState.integrityPercent} percent overlaid"><b style="--army-ready:${armyReadiness.percent}%"></b><em class="${apexPowerState.recovering ? 'is-recharging' : 'is-active'}" style="--shield-integrity:${apexPowerState.integrityPercent}%"><i data-empire-defence-glow></i></em></i><small><span>ARMY ${compactNumber(combatPower)} · ${people(human.trainedReserves)} RES</span><b class="${apexPowerState.recovering ? 'is-warn' : 'is-positive'}">ENERGY ${apexPowerState.integrityPercent}% · PULSE ${people(apexPowerState.pulseAttack)}</b></small></button>
+          <button type="button" class="top-metric top-metric--logistics is-${logisticsReadiness.status}" data-action="panel" data-panel="war" title="Actual supply delivered to active war fronts" aria-label="Open War. War Supply ${logisticsReadiness.percent} percent. ${escapeHtml(logisticsDetail)}"><span>WAR SUPPLY</span><strong>${logisticsReadiness.percent}%<i>${logisticsReadiness.frontCount === 0 ? 'NO WAR' : logisticsReadiness.statusLabel}</i></strong><i class="topbar-progress-bar" role="progressbar" aria-label="War supply delivered" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${logisticsReadiness.percent}"><b style="width:${logisticsReadiness.percent}%"></b></i></button>
           <button type="button" class="top-metric top-metric--research" data-action="panel" data-panel="research" title="Active research and progress" aria-label="Open Research. ${escapeHtml(topbarResearchLabel)}, ${topbarResearchProgress} percent complete"><span>RESEARCH</span><strong>${topbarResearchProgress}%</strong><i class="topbar-progress-bar" role="progressbar" aria-label="Research progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${topbarResearchProgress}"><b style="width:${topbarResearchProgress}%"></b></i><small>${escapeHtml(topbarResearchLabel)}</small></button>
         </nav>
         <div class="top-actions">
@@ -2866,6 +2946,7 @@ export class WorldUIV2 {
       nextIntroSearch?.focus();
       nextIntroSearch?.setSelectionRange(introSearchSelectionStart, introSearchSelectionEnd);
     }
+    this.syncEmpireDefenceGlow();
     if (!this.confirmWarTargetId) this.updateMapSelection();
     this.syncMapInputBlock();
   }
@@ -2902,77 +2983,53 @@ export class WorldUIV2 {
       return `<aside class="world-panel command-drawer glass-panel commander-control is-unavailable"><button class="panel-close" data-action="close-panel" aria-label="Close APEX status">×</button><div class="drawer-heading"><div><span class="panel-kicker">LOYAL STRATEGIC INTELLIGENCE</span><h2>APEX</h2></div><strong>OFFLINE</strong></div><section class="commander-control__empty"><b>This legacy timeline has no APEX shield.</b><p>Start a new Campaign or Survival run to initialise its autonomous neural defence network.</p></section></aside>`;
     }
 
-    const territoryName = (territoryId: TerritoryId): string => (
-      this.engine.content.territories[territoryId]?.name ?? String(territoryId)
-    );
-    const missionLabels: Record<CommanderMissionV2, string> = {
-      standby: 'Standing by',
-      'assault-support': 'Assault support',
-      defense: 'Front defence',
-      'logistics-relief': 'Logistics relief',
-      evacuate: 'Emergency evacuation',
-      'hq-training': 'Shield recharging',
-    };
-    const transit = force.transit;
     const autonomy = selectCommanderAutonomyStatusV2(
       state, this.engine.content, human.id,
     );
-    const destinationId = transit?.path[transit.path.length - 1] ?? force.locationId;
-    const travelRemaining = transit ? Math.max(0, transit.arriveTick - state.tick) : 0;
-    const activeFill = force.army.capacity > 0
-      ? force.army.manpower / force.army.capacity * 100 : 0;
-    const domePower = commanderForceMapCombatPower(force.army);
-    const supplyReadiness = force.army.manpower > 0
-      ? clamp(force.economy.supplyStock / Math.max(0.001, force.army.manpower * 4), 0, 1) * 100
-      : 100;
-    const shieldComparison = commanderEliteComparisonForRatingsV2(
-      this.engine.content, force.army.baseAttack, force.army.baseDefense,
-    );
+    const activeFill = force.shield.maxIntegrity > 0
+      ? force.shield.integrity / force.shield.maxIntegrity * 100 : 0;
     const finance = this.engine.weeklyFinanceBreakdown(human.id);
-
-    const primaryFrontName = force.front
-      ? `${territoryName(force.front.sourceId)} → ${territoryName(force.front.targetId)}`
-      : 'No active support front';
-    const lancer = selectApexLancerPulseStatusV2(state, human.id);
-    const twin = selectApexTwinProjectionStatusV2(
-      state, human.id, this.engine.content,
+    const network = selectApexEmpireShieldNetworkV2(
+      state, this.engine.content, human.id,
     );
-    const twinFrontName = twin.secondaryProjection
-      ? `${territoryName(twin.secondaryProjection.front.sourceId)} → ${territoryName(twin.secondaryProjection.front.targetId)}`
-      : null;
-    const frontName = twin.active && twinFrontName
-      ? `${primaryFrontName} · TWIN ${twinFrontName}`
-      : primaryFrontName;
+    const activeFrontCount = network?.activeFrontCount ?? 0;
+    const protectedTerritoryCount = network?.coverageTerritoryIds.length ?? 0;
+    const frontAllocationPercent = Math.round(
+      (network?.fronts[0]?.allocationShare ?? 1) * 100,
+    );
+    const totalProjectionBudgetPercent = activeFrontCount > 0
+      ? Math.round(frontAllocationPercent * activeFrontCount)
+      : 100;
+    const lancer = selectApexLancerPulseStatusV2(state, human.id);
     const capstoneLabels: string[] = [];
     if (force.capabilities.assaultSpecialist) {
-      capstoneLabels.push(`SINGULARITY ${lancer.supportedAssaultCount}/3${lancer.nextPulseCharged ? ' · NEXT PULSE CHARGED' : ''}`);
+      capstoneLabels.push(`OVERDRIVE ${lancer.supportedAssaultCount}/3${lancer.nextPulseCharged ? ' · NEXT BATTLE CHARGED' : ''}`);
     }
     if (force.capabilities.defenseSpecialist) {
-      capstoneLabels.push('MIRROR MATRIX · 20% INTERCEPT RETURN');
+      capstoneLabels.push('COUNTERMEASURE · 15% INTERCEPT RETURN');
     }
-    if (force.capabilities.rapidResponse) {
-      capstoneLabels.push(twin.active
-        ? 'TWIN SPLIT · 60% + 60% · ONE SHARED SHIELD'
-        : 'TWIN PROJECTION READY');
+    if (force.capabilities.fieldHospital) {
+      capstoneLabels.push('EMERGENCY REBOOT · 20% ONE-TIME RESTORE');
+    }
+    if (force.capabilities.forceMultiplier) {
+      capstoneLabels.push(activeFrontCount > 1
+        ? `THEATER MESH · ${frontAllocationPercent}% × ${activeFrontCount} FRONTS`
+        : 'THEATER MESH READY');
     }
     const capstoneSummary = capstoneLabels.join(' · ');
-    const maxIntegrityRating = force.army.capacity > 0
-      ? force.army.capacity / 0.0008 * 100 : 0;
-    const recovering = autonomy.state === 'rebuilding'
-      || force.mission === 'hq-training'
-      || force.mission === 'evacuate';
-    const location = transit
-      ? `${territoryName(force.locationId)} → ${territoryName(destinationId)}`
-      : territoryName(force.locationId);
+    const recovering = network?.operationalState !== 'operational';
     const networkStatus = recovering ? 'RECOVERING'
-      : transit ? 'IN TRANSIT'
-        : twin.active ? 'TWIN SPLIT'
-          : force.front ? 'SUPPORTING' : 'MONITORING';
+      : activeFrontCount > 0 ? `SUPPORTING ${activeFrontCount}` : 'MONITORING';
+    const networkDetail = recovering
+      ? 'Offline until Energy reaches 100%'
+      : activeFrontCount > 0
+        ? `${frontAllocationPercent}% power per front · ${totalProjectionBudgetPercent}% total grid budget`
+        : `${protectedTerritoryCount} protected ${protectedTerritoryCount === 1 ? 'territory' : 'territories'}`;
     return `<aside class="world-panel command-drawer glass-panel command-drawer--clean command-drawer--unified command-drawer--decision commander-control" data-scroll-session="${drawerScrollSessionId('commander')}">
       <button class="panel-close" data-action="close-panel" aria-label="Close APEX status">×</button>
       <div class="drawer-heading drawer-heading--single"><div><h2>APEX</h2></div><strong class="${recovering ? 'is-warning' : 'is-positive'}">AUTO · ${escapeHtml(networkStatus)}</strong></div>
-      <section class="commander-control__hero ${recovering ? 'is-recovering' : ''}"><div class="commander-control__crest" aria-hidden="true">⌁<i></i></div><div><span>${escapeHtml(location.toUpperCase())}</span><strong>${compactNumber(domePower)} DOME POWER</strong><small>${transit ? `${compactWarTime(travelRemaining)} · ` : ''}${escapeHtml(autonomy.headline.replace(/^APEX\s+/, '') || missionLabels[force.mission])}${capstoneSummary ? ` · ${escapeHtml(capstoneSummary)}` : ''}</small></div></section>
-      <section class="commander-control__metrics commander-control__metrics--decision" aria-label="APEX neural shield status"><article><span>SHIELD INTEGRITY</span><b>${format(activeFill, 0)}%</b><small>MAX INTEGRITY ${format(maxIntegrityRating, 0)}% · ${recovering ? 'Offline until fully charged' : 'Active neural dome'}</small></article><article class="is-elite"><span>DOME ATK / DEF</span><b>${format(shieldComparison.attack, 2)} / ${format(shieldComparison.defense, 2)}</b><small>${format(shieldComparison.attackRatio, 1)}× / ${format(shieldComparison.defenseRatio, 1)}× nation avg</small></article><article><span>ENERGY</span><b>${supplyReadiness >= 99.5 ? 'CHARGED' : `${format(supplyReadiness, 0)}%`}</b><small>Strike and interception reserve</small></article><article class="is-good"><span>EMPIRE CONTRIBUTION</span><b>+${cash(annual(finance.apexContribution))}/YR</b><small>Autonomous network output</small></article><article class="${force.front && !recovering ? 'is-power' : ''}"><span>NETWORK SUPPORT</span><b>${escapeHtml(networkStatus)}</b><small>${escapeHtml(recovering ? autonomy.reason : frontName)}</small></article></section>
+      <section class="commander-control__hero ${recovering ? 'is-recovering' : ''}"><div class="commander-control__crest" aria-hidden="true">⌁<i></i></div><div><span>EMPIRE-WIDE SHIELD NETWORK</span><strong>${format(activeFill, 0)}% ENERGY</strong><small>${protectedTerritoryCount} PROTECTED · ${escapeHtml(autonomy.headline.replace(/^APEX\s+/, ''))}${capstoneSummary ? ` · ${escapeHtml(capstoneSummary)}` : ''}</small></div></section>
+      <section class="commander-control__metrics commander-control__metrics--decision" aria-label="APEX neural shield status"><article><span>ENERGY</span><b>${format(activeFill, 0)}%</b><small>${compactNumber(force.shield.integrity)} / ${compactNumber(force.shield.maxIntegrity)} MAX · ${recovering ? 'Offline until fully charged' : 'Active neural dome'}</small></article><article class="is-elite"><span>ARMY MULTIPLIER</span><b>+${format(((network?.attackMultiplier ?? 1) - 1) * 100, 1)}% ATK</b><small>+${format(((network?.defenseMultiplier ?? 1) - 1) * 100, 1)}% DEF · PULSE ${people(network?.pulseAttack ?? 0)}</small></article><article><span>RESERVE ENERGY</span><b>${compactNumber(force.shield.rechargeBuffer)}</b><small>Stored for safe recharge</small></article><article class="is-good"><span>EMPIRE CONTRIBUTION</span><b>+${cash(annual(finance.apexContribution))}/YR</b><small>Autonomous network output</small></article><article class="${activeFrontCount > 0 && !recovering ? 'is-power' : ''}"><span>NETWORK SUPPORT</span><b>${escapeHtml(networkStatus)}</b><small>${escapeHtml(networkDetail)}</small></article></section>
     </aside>`;
   }
 
@@ -3686,30 +3743,32 @@ export class WorldUIV2 {
     const apexOpeningBriefingKnown = this.engine.content.metadata?.scenarioId !== 'standard-2026'
       || this.engine.state.polarEndgame.apexNarrative.players[human.id]?.transmissions.some((item) => (
         item.id === 'campaign-signal-anomaly'
-      )) === true;
+    )) === true;
     const currentPower = this.engine.currentPower(human.id);
-    const apexStatus = selectCommanderAutonomyStatusV2(
-      this.engine.state, this.engine.content, human.id,
-    );
     const apexForce = this.engine.state.commanderForces?.[human.id];
-    const apexRawPower = apexForce ? commanderForceMapCombatPower(apexForce.army) : 0;
+    const apexNetwork = selectApexEmpireShieldNetworkV2(
+      this.engine.state,
+      this.engine.content,
+      human.id,
+    );
     const apexShield = apexForce
       ? apexShieldTopbarPresentationV2(
-          apexRawPower,
-          apexForce.army.manpower,
-          apexForce.army.capacity,
+          apexNetwork?.supportBonusPercent ?? 0,
+          apexForce.shield.integrity,
+          apexForce.shield.maxIntegrity,
           apexForce.mission,
+          apexForce.shield.pulseAttack,
         )
-      : { operationalPower: 0, integrityPercent: 0, recovering: false };
-    const apexPower = apexShield.operationalPower;
-    const combinedPower = currentPower + apexPower;
-    const apexTwin = selectApexTwinProjectionStatusV2(
-      this.engine.state,
-      human.id,
-      this.engine.content,
-    );
+      : {
+          supportBonusPercent: 0,
+          armyPowerMultiplier: 1,
+          integrityPercent: 0,
+          pulseAttack: 0,
+          recovering: false,
+        };
+    const combinedPower = currentPower * apexShield.armyPowerMultiplier;
     const logisticsSummary = logisticsReadiness.frontCount === 0
-      ? 'Network ready'
+      ? 'No active wars'
       : `${logisticsReadiness.frontCount} ${logisticsReadiness.frontCount === 1 ? 'front' : 'fronts'} · weakest ${logisticsReadiness.weakest?.percent ?? logisticsReadiness.percent}%`;
     const primaryFrontRows = selectCommanderFrontPrioritiesV2(
       this.engine.state, this.engine.content, human.id,
@@ -3725,25 +3784,20 @@ export class WorldUIV2 {
           ?? candidate.front.targetId;
         const ownLocalPower = this.engine.territoryPower(candidate.destinationId);
         const enemyLocalPower = this.engine.territoryPower(candidate.hostileTerritoryId);
-        const twinSecondary = apexTwin.secondaryProjection?.front;
-        const twinSecondaryAssigned = Boolean(apexTwin.active
-          && twinSecondary
-          && twinSecondary.warId === candidate.front.warId
-          && twinSecondary.sourceId === candidate.front.sourceId
-          && twinSecondary.targetId === candidate.front.targetId);
-        const apexAssigned = candidate.assigned || twinSecondaryAssigned;
-        const twinProjection = apexTwin.active && apexAssigned;
-        const assignedApexPower = twinProjection
-          ? apexPower * apexTwin.combatShare : apexPower;
+        const networkFront = apexNetwork?.fronts.find((front) => (
+          front.warId === candidate.front.warId
+            && front.sourceId === candidate.front.sourceId
+            && front.targetId === candidate.front.targetId
+        ));
+        const apexAssigned = Boolean(apexNetwork?.active && networkFront);
+        const allocationPercent = Math.round((networkFront?.allocationShare ?? 0) * 100);
+        const assignedSupportPercent = apexAssigned
+          ? apexShield.supportBonusPercent * networkFront!.allocationShare : 0;
         const apexDetail = apexAssigned
-          ? apexStatus.state === 'moving'
-            ? `SHIELD EN ROUTE · ETA ${compactWarTime(apexStatus.etaWeeks ?? candidate.travelTicks)} · ${apexShield.integrityPercent}% INTEGRITY`
-            : twinProjection
-              ? `TWIN ${candidate.assigned ? 'PRIMARY' : 'SECONDARY'} 60% · +${compactNumber(assignedApexPower)} POWER · SHARED SHIELD ${apexShield.integrityPercent}%`
-              : `APEX SHIELD ${apexShield.integrityPercent}% · +${compactNumber(assignedApexPower)} POWER`
+          ? `APEX GRID ${allocationPercent}% · +${format(assignedSupportPercent, 1)}% ARMY · ENERGY ${apexShield.integrityPercent}%`
           : candidate.criticalDefense ? 'APEX PRIORITY · COLLAPSE RISK'
           : `AUTO PRIORITY ${index + 1} · +${format(candidate.marginalWinImpact, 1)}PP IMPACT`;
-        return `<article class="war-primary-front${apexAssigned ? ' is-assigned' : ''}" style="--enemy:${enemy?.cssColor ?? '#ff8179'}"><div><span>${candidate.mission === 'assault-support' ? 'ATTACK' : 'DEFEND'} · ${escapeHtml(warAccessLabel(candidate.access))}</span><strong>${escapeHtml(sourceName)} → ${escapeHtml(targetName)}</strong><small>POWER ${compactNumber(ownLocalPower)} / ${compactNumber(enemyLocalPower)} · ${escapeHtml(apexDetail)}</small></div><button class="primary-button" data-action="focus-war" data-territory="${escapeHtml(candidate.hostileTerritoryId)}">FOCUS FRONT</button></article>`;
+        return `<article class="war-primary-front${apexAssigned ? ' is-assigned' : ''}" style="--enemy:${enemy?.cssColor ?? '#ff8179'}"><div><span>${candidate.mission === 'assault-support' ? 'ATTACK' : 'DEFEND'} · ${escapeHtml(warAccessLabel(candidate.access))}</span><strong>${escapeHtml(sourceName)} → ${escapeHtml(targetName)}</strong><small>POWER ${compactNumber(ownLocalPower)} / ${compactNumber(enemyLocalPower)} · ${escapeHtml(apexDetail)}</small></div></article>`;
       }).join('');
     const targetIntel = humanWarsUnlocked
       ? `<section class="war-primary-targets"><header><strong>${primaryFrontRows ? 'New campaigns' : 'Best targets'}</strong><small>Power · chance · route · recurring cost</small></header><div class="war-intel-list war-intel-list--compact">${recommendations.length ? recommendations.map((candidate, index) => this.renderTargetRecommendation(
@@ -3753,7 +3807,7 @@ export class WorldUIV2 {
           ? this.cachedWarLogisticsPreview(human.id, candidate.targetId) : undefined,
       )).join('') : '<div class="empty-state">No legal target is currently in land or naval range.</div>'}</div></section>`
       : warsUnlocked
-        ? `<section class="war-command-lock" aria-label="APEX first-strike briefing pending"><span>INTELLIGENCE PENDING</span><strong>FIRST-STRIKE BRIEFING PENDING</strong><small>${escapeHtml(CAMPAIGN_HUMAN_WAR_STORY_LOCK_REASON_V2)}</small></section>`
+        ? '<section class="war-command-lock war-command-lock--compact" aria-label="APEX is preparing your first target"><strong>APEX IS PREPARING YOUR FIRST TARGET</strong></section>'
         : apexOpeningBriefingKnown
         ? `<section class="war-command-lock" aria-label="Military intelligence locked"><span>INTELLIGENCE LOCKED</span><strong>SIGNAL TRIANGULATION REQUIRED</strong><small>${escapeHtml(CAMPAIGN_WAR_LOCK_REASON_V2)}</small><button class="secondary-button" data-action="panel" data-panel="research">OPEN RESEARCH</button></section>`
         : `<section class="war-command-lock war-command-lock--opening" aria-label="APEX initial scan in progress"><span>CALM</span><strong>INITIAL SCAN IN PROGRESS</strong><small>Review your readiness. APEX will contact you when verified intelligence is available.</small></section>`;
@@ -3761,8 +3815,8 @@ export class WorldUIV2 {
       <aside class="world-panel command-drawer glass-panel war-command command-drawer--clean command-drawer--unified command-drawer--decision" data-scroll-session="${drawerScrollSessionId('war')}">
         <button class="panel-close" data-action="close-panel" aria-label="Close war command">×</button>
         <div class="drawer-heading drawer-heading--compact drawer-heading--single"><div><h2>War</h2></div><strong class="${wars.length ? 'is-negative' : army.fillRatio >= 0.55 ? 'is-positive' : 'is-warn'}">${wars.length ? 'AT WAR' : army.fillRatio >= 0.55 ? 'READY' : 'REBUILDING'}</strong></div>
-        <section class="decision-stat-grid decision-stat-grid--war" aria-label="Military status"><article class="is-primary"><span>TOTAL POWER</span><strong>${compactNumber(combinedPower)}</strong><small>${apexPower > 0 ? `Empire ${compactNumber(currentPower)} · APEX ${compactNumber(apexPower)}` : 'Empire combat power'}</small></article><article class="${army.fillRatio >= 0.55 ? 'is-good' : 'is-warn'}"><span>ARMY READY</span><strong>${format(army.fillRatio * 100, 0)}%</strong><small>${people(army.deployed)} active</small></article><article class="logistics-${logisticsReadiness.status}${logisticsReadiness.status === 'critical' ? ' is-danger' : logisticsReadiness.status === 'strained' ? ' is-warn' : ' is-good'}"><span>LOGISTICS</span><strong>${logisticsReadiness.percent}% ${logisticsReadiness.statusLabel}</strong><small>${escapeHtml(logisticsSummary)}</small></article><article class="${finance.warOperations > 0 ? 'is-warn' : ''}"><span>WAR COST</span><strong>${cash(annual(finance.warOperations))}</strong><small>/ year</small></article></section>
-        ${primaryFrontRows ? `<section class="war-primary-fronts" aria-label="Priority active fronts"><header><strong>Priority fronts</strong><small>APEX deploys autonomously · click to focus</small></header>${primaryFrontRows}</section>` : ''}
+        <section class="decision-stat-grid decision-stat-grid--war" aria-label="Military status"><article class="is-primary"><span>TOTAL POWER</span><strong>${compactNumber(combinedPower)}</strong><small>${apexShield.supportBonusPercent > 0 ? `Army ${compactNumber(currentPower)} · Pulse ${people(apexShield.pulseAttack)}` : 'Empire combat power'}</small></article><article class="${army.fillRatio >= 0.55 ? 'is-good' : 'is-warn'}"><span>ARMY READY</span><strong>${format(army.fillRatio * 100, 0)}%</strong><small>${people(army.deployed)} active</small></article><article class="logistics-${logisticsReadiness.status}${logisticsReadiness.status === 'critical' ? ' is-danger' : logisticsReadiness.status === 'strained' ? ' is-warn' : logisticsReadiness.status === 'ready' ? ' is-good' : ''}"><span>WAR SUPPLY</span><strong>${logisticsReadiness.percent}% ${logisticsReadiness.frontCount === 0 ? 'NO WAR' : logisticsReadiness.statusLabel}</strong><small>${escapeHtml(logisticsSummary)}</small></article><article class="${finance.warOperations > 0 ? 'is-warn' : ''}"><span>WAR COST</span><strong>${cash(annual(finance.warOperations))}</strong><small>/ year</small></article></section>
+        ${primaryFrontRows ? `<section class="war-primary-fronts" aria-label="Priority active fronts"><header><strong>Priority fronts</strong><small>APEX allocates the shared shield automatically</small></header>${primaryFrontRows}</section>` : ''}
         ${targetIntel}
         <details class="decision-details" data-disclosure-session="drawer:war:army"><summary>Army, ATK, DEF &amp; reserves</summary><div class="decision-details__body">${this.renderMilitaryCommandOverview(human, economy, finance)}</div></details>
         ${wars.length ? `<details class="decision-details" data-disclosure-session="drawer:war:campaigns"><summary>Active campaigns <b>${wars.length}</b></summary><div class="decision-details__body"><div class="war-cards">${wars.map((war) => this.renderWarCard(war, human.id, finance, logisticsReadiness, warEstimates.get(war.id), wars.length)).join('')}</div></div></details>` : ''}
@@ -3830,7 +3884,7 @@ export class WorldUIV2 {
         frontSupply: forecast.attackerSupply,
         transferThroughput: declaration.access === 'land'
           ? clamp(forecast.attackerSupply, 0, 1)
-          : clamp(forecast.attackerSupply * 0.75, 0, 0.85),
+          : clamp(forecast.attackerSupply * 0.5, 0, 0.5),
         stagingReadiness,
         preparationWeeks,
         etaWeeks: mobilizationWeeks < WAR_MOBILIZATION_TICKS
@@ -3875,7 +3929,6 @@ export class WorldUIV2 {
     logistics: WarLogisticsPreviewV2 | undefined,
   ): string {
     const battleForecast = candidate.forecast;
-    const targetArmy = this.engine.armyStrength(candidate.targetId);
     const targetPower = this.engine.currentPower(candidate.targetId);
     const mapTarget = battleForecast.targetId ?? candidate.target.capitalId;
     const chanceTone = candidate.chance >= 65 ? 'is-positive' : candidate.chance >= 45 ? 'is-warn' : 'is-negative';
@@ -3886,15 +3939,10 @@ export class WorldUIV2 {
       candidate.distanceKm ?? 0,
       candidate.stagingReadiness > 0.000001,
     );
-    const fusionBonus = warTargetFusionValueBonusV2(candidate);
-    const apex = candidate.apexContribution;
-    const recurringCost = logistics?.additionalWeeklyWarOperations ?? 0;
-    const apexLabel = apex.chanceDelta > 0
-      ? `<small class="war-intel-card__apex"><b>WITH APEX ${format(candidate.chance, 1)}%</b> · +${format(apex.chanceDelta, 1)}pp · ETA ${apex.etaWeeks ?? 0}W</small>`
-      : apex.status === 'committed' || apex.status === 'unreachable'
-        ? `<small class="war-intel-card__apex is-muted">APEX ${apex.status.toUpperCase()} · ${escapeHtml(apex.reason)}</small>`
-        : '';
-    return `<article class="war-intel-card war-intel-card--compact logistics-${readiness.status}" style="--enemy:${candidate.target.cssColor}"><i class="country-flag">${countryFlagHtml(candidate.target.id, candidate.target.sigil)}</i><div><span>${index === 0 ? 'BEST TARGET' : `OPTION ${index + 1}`} · ${routeLabel}</span><strong>${escapeHtml(candidate.target.name)}</strong><small><b class="${chanceTone}">${format(candidate.chance, 1)}% WIN</b> · POWER ${compactNumber(targetPower)} · ${cash(annual(recurringCost))}/YR</small><small class="war-intel-card__logistics"><b>LOGISTICS ${readiness.percent}% ${readiness.statusLabel}</b> · ${escapeHtml(readiness.limitingReason)}</small>${apexLabel}<small class="war-intel-card__fusion">${people(targetArmy.deployed)} army · ${people(candidate.target.trainedReserves)} reserve · IQ gain ${signed(fusionBonus, 1)}</small></div><button data-action="quick-war" data-player="${candidate.targetId}" data-map-target="${mapTarget}" title="Review attack on ${escapeHtml(candidate.target.shortName)}"><span>REVIEW</span></button></article>`;
+    const supplyRule = armyCapacitySupplyLabelV2(
+      candidate.access === 'naval' ? 'naval' : 'land',
+    );
+    return `<article class="war-intel-card war-intel-card--compact logistics-${readiness.status}" style="--enemy:${candidate.target.cssColor}"><i class="country-flag">${this.playerFlagHtml(candidate.target)}</i><div><span>${index === 0 ? 'BEST TARGET' : `OPTION ${index + 1}`} · ${routeLabel}</span><strong>${escapeHtml(candidate.target.name)}</strong><small class="war-intel-card__decision"><b class="${chanceTone}">${format(candidate.chance, 1)}% WIN</b><span>ENEMY POWER ${compactNumber(targetPower)}</span></small><small class="war-intel-card__logistics" title="${escapeHtml(readiness.limitingReason)}"><b>${readiness.percent}% SUPPLIED</b><span>${supplyRule}</span></small></div><button data-action="quick-war" data-player="${candidate.targetId}" data-map-target="${mapTarget}" title="Review attack on ${escapeHtml(candidate.target.shortName)}"><span>REVIEW</span></button></article>`;
   }
 
   private renderWarCard(
@@ -3931,13 +3979,11 @@ export class WorldUIV2 {
     const frontLogistics = empireLogistics.fronts.find((front) => front.warId === war.id);
     const weakestLogistics = frontLogistics !== undefined
       && empireLogistics.weakest?.warId === war.id;
-    const logisticsRoute = frontLogistics
-      ? `${frontLogistics.routeLabel}${frontLogistics.distanceKm > 0 ? ` · ${format(frontLogistics.distanceKm, 0)} KM` : ''}`
-      : 'ROUTE FORMING';
+    const logisticsRoute = frontLogistics?.ruleLabel ?? 'ROUTE FORMING';
     const logisticsDetail = frontLogistics
-      ? `${frontLogistics.percent}% ${frontLogistics.statusLabel} · ${frontLogistics.limitingReason}`
+      ? `${frontLogistics.percent}% SUPPLIED`
       : 'MOBILISING';
-    return `<article class="war-card-compact ${weakestLogistics ? 'is-logistics-weakest' : ''}" style="--enemy:${enemy.cssColor}"><div class="war-card-compact__head"><i class="country-flag">${countryFlagHtml(enemy.id, enemy.sigil)}</i><div><strong>${escapeHtml(enemy.name)}</strong><small>Week ${warAge} · ${war.battles} battles · ${accessLabel}</small></div><b class="${score < 0 ? 'danger-text' : 'is-positive'}">${signed(score)}</b></div><div class="war-card-compact__state"><span>${escapeHtml(status)}</span><small>${cash(perWarCost)}/year</small></div><div class="war-card-compact__metrics"><span><small>ARMIES</small><b>${people(ownArmy.deployed)} / ${people(enemyArmy.deployed)}</b><small>RESERVE ${people(ownReserve)} / ${people(enemy.trainedReserves)}</small></span><span class="logistics-${frontLogistics?.status ?? 'ready'}"><small>${weakestLogistics ? 'WEAKEST LOGISTICS' : 'LOGISTICS'}</small><b>${escapeHtml(logisticsDetail)}</b><small>${escapeHtml(logisticsRoute)}${frontLogistics ? ` · NEXT BATTLE ${frontLogistics.nextBattleWeeks}W` : ''}</small></span><span><small>MILITARY LOST</small><b>−${people(estimate?.totalOwnLosses ?? 0)} / −${people(estimate?.totalEnemyLosses ?? 0)}</b></span><span><small>EST. END</small><b>${escapeHtml(eta)}</b></span></div></article>`;
+    return `<article class="war-card-compact ${weakestLogistics ? 'is-logistics-weakest' : ''}" style="--enemy:${enemy.cssColor}"><div class="war-card-compact__head"><i class="country-flag">${this.playerFlagHtml(enemy)}</i><div><strong>${escapeHtml(enemy.name)}</strong><small>Week ${warAge} · ${war.battles} battles · ${accessLabel}</small></div><b class="${score < 0 ? 'danger-text' : 'is-positive'}">${signed(score)}</b></div><div class="war-card-compact__state"><span>${escapeHtml(status)}</span><small>${cash(perWarCost)}/year</small></div><div class="war-card-compact__metrics"><span><small>ARMIES</small><b>${people(ownArmy.deployed)} / ${people(enemyArmy.deployed)}</b><small>RESERVE ${people(ownReserve)} / ${people(enemy.trainedReserves)}</small></span><span class="logistics-${frontLogistics?.status ?? 'ready'}"><small>WAR SUPPLY</small><b>${escapeHtml(logisticsDetail)}</b><small>${escapeHtml(logisticsRoute)}${frontLogistics ? ` · NEXT BATTLE ${frontLogistics.nextBattleWeeks}W` : ''}</small></span><span><small>MILITARY LOST</small><b>−${people(estimate?.totalOwnLosses ?? 0)} / −${people(estimate?.totalEnemyLosses ?? 0)}</b></span><span><small>EST. END</small><b>${escapeHtml(eta)}</b></span></div></article>`;
   }
 
   private renderTerritoryPanel(
@@ -4024,39 +4070,7 @@ export class WorldUIV2 {
       return sourceOwner === humanId && operation.targetId === territoryId
         || targetOwner === humanId && operation.sourceId === territoryId;
     }) : undefined;
-    const territoryFrontAssignment: CommanderFrontAssignmentV2 | undefined = activeWar && territoryFront
-      ? { warId: activeWar.id, sourceId: territoryFront.sourceId, targetId: territoryFront.targetId }
-      : undefined;
-    const territoryFrontMission: CommanderMissionV2 | undefined = territoryFront
-      ? this.engine.state.territories[territoryFront.sourceId]?.owner === humanId
-        ? 'assault-support' : 'defense'
-      : undefined;
-    const commanderForce = this.engine.state.commanderForces?.[humanId];
-    const apexTwin = selectApexTwinProjectionStatusV2(
-      this.engine.state,
-      humanId,
-      this.engine.content,
-    );
-    const commanderPrimaryAssignedHere = Boolean(territoryFrontAssignment && territoryFrontMission
-      && commanderForce?.front?.warId === territoryFrontAssignment.warId
-      && commanderForce.front.sourceId === territoryFrontAssignment.sourceId
-      && commanderForce.front.targetId === territoryFrontAssignment.targetId
-      && commanderForce.mission === territoryFrontMission);
-    const twinSecondary = apexTwin.secondaryProjection;
-    const commanderTwinAssignedHere = Boolean(apexTwin.active
-      && territoryFrontAssignment
-      && territoryFrontMission
-      && twinSecondary?.front.warId === territoryFrontAssignment.warId
-      && twinSecondary.front.sourceId === territoryFrontAssignment.sourceId
-      && twinSecondary.front.targetId === territoryFrontAssignment.targetId
-      && twinSecondary.mission === territoryFrontMission);
-    const commanderAssignedHere = commanderPrimaryAssignedHere
-      || commanderTwinAssignedHere;
-    const activeWarButton = !activeWar ? '' : territoryFrontAssignment
-      && territoryFrontMission
-      ? `<button class="commander-front-quick${commanderAssignedHere ? ' is-assigned' : ''}" data-action="focus-war" data-territory="${escapeHtml(territoryId)}" title="APEX chooses the highest-impact reachable front automatically.">${commanderTwinAssignedHere ? 'TWIN 60% · SHARED SHIELD' : commanderAssignedHere ? 'APEX SUPPORTING' : 'FOCUS FRONT'}</button>`
-      : '<button class="commander-front-quick" disabled>NO ACTIVE FRONT HERE</button>';
-    const primaryWarAction = owner.id === humanId ? '' : `<section class="territory-target-command ${activeWar ? territoryFront ? 'is-active-front' : 'is-blocked' : !declaration?.allowed ? 'is-blocked' : ''}"><div class="territory-target-power"><span>COMBAT POWER</span><strong>${compactNumber(power)}</strong><small>#${ownerRank} GLOBAL MILITARY</small></div><div class="territory-target-systems"><span><small>ATTACK</small><b>${format(attack, 2)}</b></span><span><small>DEFENCE</small><b>${format(defense, 2)}</b></span><span><small>READY</small><b>${format(manpowerRatio * 100)}%</b></span></div><div class="territory-target-decision"><span>${activeWar ? territoryFront ? 'ACTIVE FRONT' : 'WAR ACTIVE · NO FRONT HERE' : declaration?.allowed ? `${warAccessLabel(access)} ATTACK ROUTE` : 'ATTACK UNAVAILABLE'}</span>${activeWar ? activeWarButton : `<button class="danger-button" data-action="quick-war" data-player="${owner.id}" ${declaration?.allowed ? '' : 'disabled'}>${declaration?.allowed ? 'REVIEW ATTACK' : 'WAR UNAVAILABLE'}</button>`}</div></section>${declaration?.warning ? `<div class="war-rule-note is-warning"><b>WEAK-ARMY WARNING</b><span>${escapeHtml(declaration.warning)}</span></div>` : ''}${blockedWarNote}`;
+    const primaryWarAction = owner.id === humanId ? '' : `<section class="territory-target-command ${activeWar ? territoryFront ? 'is-active-front' : 'is-blocked' : !declaration?.allowed ? 'is-blocked' : ''}"><div class="territory-target-power"><span>COMBAT POWER</span><strong>${compactNumber(power)}</strong><small>#${ownerRank} GLOBAL MILITARY</small></div><div class="territory-target-systems"><span><small>ATTACK</small><b>${format(attack, 2)}</b></span><span><small>DEFENCE</small><b>${format(defense, 2)}</b></span><span><small>READY</small><b>${format(manpowerRatio * 100)}%</b></span></div><div class="territory-target-decision"><span>${activeWar ? territoryFront ? 'ACTIVE FRONT · APEX AUTO-SHIELD' : 'WAR ACTIVE · NO FRONT HERE' : declaration?.allowed ? `${warAccessLabel(access)} ATTACK ROUTE` : 'ATTACK UNAVAILABLE'}</span>${activeWar ? '' : `<button class="danger-button" data-action="quick-war" data-player="${owner.id}" ${declaration?.allowed ? '' : 'disabled'}>${declaration?.allowed ? 'REVIEW ATTACK' : 'WAR UNAVAILABLE'}</button>`}</div></section>${declaration?.warning ? `<div class="war-rule-note is-warning"><b>WEAK-ARMY WARNING</b><span>${escapeHtml(declaration.warning)}</span></div>` : ''}${blockedWarNote}`;
     const otherHumanPlayer = owner.id !== humanId && ownerHumanControlled;
     const allied = otherHumanPlayer && this.engine.areAllied(humanId, owner.id);
     const allianceOffer = otherHumanPlayer ? this.engine.state.allianceOffers.find((offer) => (
@@ -4087,7 +4101,7 @@ export class WorldUIV2 {
       <aside class="world-panel command-drawer glass-panel territory-inspector command-drawer--clean command-drawer--unified" data-scroll-session="${escapeHtml(drawerScrollSessionId(this.panelMode, territoryId))}">
         <button class="panel-close" data-action="clear-territory" aria-label="Close ${escapeHtml(definition.name)} details">×</button>
         <div class="panel-kicker territory-status-kicker">TERRITORY · ${escapeHtml(panelStatus)}</div>
-        <div class="drawer-heading drawer-heading--compact territory-heading territory-heading--unified"><div><h2>${escapeHtml(definition.name)}</h2><span style="color:${owner.cssColor}">${escapeHtml(owner.name)} · ${empireTerritories.length} TERRITOR${empireTerritories.length === 1 ? 'Y' : 'IES'}</span></div><i class="country-flag" style="--owner:${owner.cssColor}">${countryFlagHtml(owner.id, owner.sigil)}</i></div>
+        <div class="drawer-heading drawer-heading--compact territory-heading territory-heading--unified"><div><h2>${escapeHtml(definition.name)}</h2><span style="color:${owner.cssColor}">${escapeHtml(owner.name)} · ${empireTerritories.length} TERRITOR${empireTerritories.length === 1 ? 'Y' : 'IES'}</span></div><i class="country-flag" style="--owner:${owner.cssColor}">${this.playerFlagHtml(owner)}</i></div>
         ${primaryWarAction}
 
         ${terrainProfilePanel(terrainProfile, terrainEffects)}
@@ -4114,16 +4128,10 @@ export class WorldUIV2 {
   ): string {
     const humanId = this.viewerPlayerId();
     const own = this.totalCombatStrength(humanId);
-    const commanderForce = this.engine.state.commanderForces?.[humanId];
-    const commanderPower = commanderForce
-      ? commanderForceMapCombatPower(commanderForce.army) : 0;
-    const apexStatus = selectCommanderAutonomyStatusV2(
-      this.engine.state, this.engine.content, humanId,
-    );
-    const apexTwin = selectApexTwinProjectionStatusV2(
+    const apexNetwork = selectApexEmpireShieldNetworkV2(
       this.engine.state,
-      humanId,
       this.engine.content,
+      humanId,
     );
     const status = [
       `${wars.length} ${wars.length === 1 ? 'WAR' : 'WARS'}`,
@@ -4166,29 +4174,25 @@ export class WorldUIV2 {
       const enemyLosses = estimate?.totalEnemyLosses
         ?? (war.attackerId === humanId ? war.defenderLosses : war.attackerLosses);
       const hasLosses = ownLosses > 0 || enemyLosses > 0;
-      const apexAssigned = commanderForce?.front?.warId === war.id
-        || (apexTwin.active
-          && apexTwin.secondaryProjection?.front.warId === war.id);
-      const assignedCommanderPower = apexTwin.active && apexAssigned
-        ? commanderPower * apexTwin.combatShare : commanderPower;
-      const apexContributing = apexAssigned
-        && apexStatus.state !== 'moving'
-        && apexStatus.state !== 'rebuilding'
-        && apexStatus.state !== 'absent';
-      const combinedOwnPower = own.power + (apexContributing ? assignedCommanderPower : 0);
+      const networkFront = operation ? apexNetwork?.fronts.find((front) => (
+        front.warId === war.id
+          && front.sourceId === operation.sourceId
+          && front.targetId === operation.targetId
+      )) : undefined;
+      const apexAssigned = Boolean(networkFront);
+      const apexContributing = Boolean(apexNetwork?.active && networkFront);
+      const assignedSupportPercent = apexContributing
+        ? apexNetwork!.supportBonusPercent * networkFront!.allocationShare : 0;
+      const combinedOwnPower = own.power * (1 + assignedSupportPercent / 100);
       const balance = clamp(
         combinedOwnPower / Math.max(0.000001, combinedOwnPower + hostile.power) * 100,
         0,
         100,
       );
       const apexReadout = !apexAssigned ? ''
-        : apexStatus.state === 'moving'
-          ? `APEX ETA ${Math.max(0, apexStatus.etaWeeks ?? 0)}W`
-          : apexStatus.state === 'rebuilding'
-            ? 'APEX RECOVERING'
-            : apexTwin.active
-              ? `APEX TWIN 60% · +${compactNumber(assignedCommanderPower)} · SHARED SHIELD`
-              : `APEX +${compactNumber(assignedCommanderPower)}`;
+        : !apexNetwork?.active
+          ? 'APEX SHIELD RECOVERING'
+          : `APEX GRID ${Math.round(networkFront!.allocationShare * 100)}% · +${format(assignedSupportPercent, 1)}% ARMY`;
       const allySupport = selectCoopAllySupportPreviewV2(
         this.engine.state,
         this.engine.content,
@@ -4199,8 +4203,8 @@ export class WorldUIV2 {
         ? `ALLY SUPPORT +${compactNumber(allySupport.power)}` : '';
       const outlookTone = estimate?.outlook === 'our-collapse' ? 'is-danger'
         : estimate?.outlook === 'enemy-collapse' ? 'is-positive' : 'is-neutral';
-      return `<article class="war-command-conflict" style="--enemy:${escapeHtml(enemy.cssColor)}"><button type="button" data-action="focus-war" data-territory="${escapeHtml(hostileTerritoryId ?? '')}" aria-label="Focus war with ${escapeHtml(enemy.name)}. Your combined Power ${compactNumber(combinedOwnPower)}, enemy Power ${compactNumber(hostile.power)}">
-        <header><i class="country-flag" aria-hidden="true">${countryFlagHtml(enemy.id, enemy.sigil)}</i><div><span>${escapeHtml(route)} · WEEK ${warAge}</span><strong>${escapeHtml(enemy.shortName)}</strong><small>${escapeHtml(frontName)}</small></div><b class="${outlookTone}">${escapeHtml(outlook)}</b></header>
+      return `<article class="war-command-conflict" style="--enemy:${escapeHtml(enemy.cssColor)}"><button type="button" data-action="focus-war" data-territory="${escapeHtml(hostileTerritoryId ?? '')}" aria-label="Open war with ${escapeHtml(enemy.name)}. Your combined Power ${compactNumber(combinedOwnPower)}, enemy Power ${compactNumber(hostile.power)}">
+        <header><i class="country-flag" aria-hidden="true">${this.playerFlagHtml(enemy)}</i><div><span>${escapeHtml(route)} · WEEK ${warAge}</span><strong>${escapeHtml(enemy.shortName)}</strong><small>${escapeHtml(frontName)}</small></div><b class="${outlookTone}">${escapeHtml(outlook)}</b></header>
         <section class="war-command-conflict__power" aria-label="Combined Power balance"><span><small>YOU</small><strong>${compactNumber(combinedOwnPower)}</strong></span><i role="progressbar" aria-label="Your share of combined Power" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${format(balance, 1)}"><b style="width:${balance}%"></b></i><span><small>ENEMY</small><strong>${compactNumber(hostile.power)}</strong></span></section>
         <footer><span>SCORE <b class="${score < 0 ? 'danger-text' : 'is-positive'}">${signed(score)}</b></span>${hasLosses ? `<span>LOSSES <b>−${people(ownLosses)} / −${people(enemyLosses)}</b></span>` : ''}${eta ? `<span>ETA <b>${escapeHtml(eta)}</b></span>` : ''}${allyReadout ? `<span class="is-positive">${escapeHtml(allyReadout)}</span>` : ''}${apexReadout ? `<span class="is-apex">${escapeHtml(apexReadout)}</span>` : ''}</footer>
       </button>
@@ -4217,7 +4221,7 @@ export class WorldUIV2 {
       const metric = compactNumber(entry.score);
       const detail = globalRankingDetail(entry.combatPower, entry.economicOutput);
       const focusTerritoryId = this.rankingFocusTerritory(entry.player.id, entry.player.capitalId);
-      return `<button type="button" class="power-ranking__row ${entry.player.id === humanId ? 'is-human' : ''} ${index === 0 ? 'is-leader' : ''}" data-action="focus-ranking-country" data-territory="${escapeHtml(focusTerritoryId ?? '')}" aria-label="Select ${escapeHtml(entry.player.name)} on the map, military rank ${index + 1}, Military Power ${metric}" style="--power:${entry.player.cssColor}"><span>#${index + 1}</span><i class="country-flag">${countryFlagHtml(entry.player.id, entry.player.sigil)}</i><div><strong>${escapeHtml(entry.player.name)}</strong><small>${detail}</small></div><b title="Military Power">${metric}</b></button>`;
+      return `<button type="button" class="power-ranking__row ${entry.player.id === humanId ? 'is-human' : ''} ${index === 0 ? 'is-leader' : ''}" data-action="focus-ranking-country" data-territory="${escapeHtml(focusTerritoryId ?? '')}" aria-label="Select ${escapeHtml(entry.player.name)} on the map, military rank ${index + 1}, Military Power ${metric}" style="--power:${entry.player.cssColor}"><span>#${index + 1}</span><i class="country-flag">${this.playerFlagHtml(entry.player)}</i><div><strong>${escapeHtml(entry.player.name)}</strong><small>${detail}</small></div><b title="Military Power">${metric}</b></button>`;
     }).join('')}</div></aside>`;
   }
 
@@ -4230,7 +4234,7 @@ export class WorldUIV2 {
   private renderAllianceOfferBanner(offer: AllianceOfferV2): string {
     const from = this.engine.player(offer.fromId)!;
     const responseWeeks = Math.max(0, offer.expiresTick - this.engine.state.tick);
-    return `<div class="decision-banner decision-banner--alliance glass-panel" style="--sender:${from.cssColor}" title="A player alliance is a mutual non-aggression pact; neither country can declare war on the other."><i class="country-flag">${countryFlagHtml(from.id, from.sigil)}</i><div><span>PLAYER ALLIANCE · ${responseWeeks}W LEFT</span><strong>${escapeHtml(from.shortName)} offers mutual non-aggression</strong></div><button class="ghost-button" data-action="respond-alliance" data-from="${from.id}" data-to="${offer.toId}" data-accept="false">DECLINE</button><button class="primary-button" data-action="respond-alliance" data-from="${from.id}" data-to="${offer.toId}" data-accept="true">ALLY</button></div>`;
+    return `<div class="decision-banner decision-banner--alliance glass-panel" style="--sender:${from.cssColor}" title="A player alliance is a mutual non-aggression pact; neither country can declare war on the other."><i class="country-flag">${this.playerFlagHtml(from)}</i><div><span>PLAYER ALLIANCE · ${responseWeeks}W LEFT</span><strong>${escapeHtml(from.shortName)} offers mutual non-aggression</strong></div><button class="ghost-button" data-action="respond-alliance" data-from="${from.id}" data-to="${offer.toId}" data-accept="false">DECLINE</button><button class="primary-button" data-action="respond-alliance" data-from="${from.id}" data-to="${offer.toId}" data-accept="true">ALLY</button></div>`;
   }
 
   private renderIntro(opening: IntroOpeningMetricsSnapshotV2): string {
@@ -4261,9 +4265,9 @@ export class WorldUIV2 {
       <article><i aria-hidden="true">◎</i><div><h3>Win and survive</h3><p>Become the final sovereign power, or unite Earth and destroy Antarctica's Zero-Point Core.</p></div></article>
       <article><i aria-hidden="true">HUD</i><div><h3>Core loop and HUD</h3><p>Read five top metrics, choose a target and let time, logistics and APEX execute.</p></div></article>
       <article><i aria-hidden="true">$</i><div><h3>Economy and treasury</h3><p>Output creates tax income; the shared treasury pays weekly commitments and APEX adds its own contribution.</p></div></article>
-      <article><i aria-hidden="true">MIL</i><div><h3>Military, reserves and APEX</h3><p>APEX projects its dome to the reachable front where interception or offensive pulses have the greatest impact.</p></div></article>
-      <article><i aria-hidden="true">⚔</i><div><h3>War and logistics</h3><p>Logistics Readiness is the exact supply reaching each front. Distance, route throughput and naval crossings lower it; long sea routes remain possible but difficult.</p></div></article>
-      <article><i aria-hidden="true">AI</i><div><h3>APEX autonomy</h3><p>Shield Integrity is its HP. At 0% the dome collapses, recharges at a safe node and returns only at 100%.</p></div></article>
+      <article><i aria-hidden="true">MIL</i><div><h3>Military, reserves and APEX</h3><p>APEX projects one autonomous shield across the Empire and concentrates it where the fighting matters most.</p></div></article>
+      <article><i aria-hidden="true">⚔</i><div><h3>War Supply</h3><p>100% means every active front receives its full Army Capacity allocation. Naval routes deliver half the land amount.</p></div></article>
+      <article><i aria-hidden="true">AI</i><div><h3>APEX autonomy</h3><p>Energy powers the dome. At 0% it collapses, recharges safely and returns only at 100%.</p></div></article>
       <article><i aria-hidden="true">R&amp;D</i><div><h3>Research</h3><p>Ten programmes advance automatically, while Active Effects shows the real totals applied to your empire.</p></div></article>
       <article><i aria-hidden="true">◇</i><div><h3>Liberation and signal purge</h3><p>${campaignEveryNationForItself ? 'The machine signal shattered every alliance; each nation now fights for itself. ' : ''}Captured land starts partly usable while APEX purges the Rogue signal. A short post-war recovery window prevents immediate redeclaration.</p></div></article>
       <article><i aria-hidden="true">POL</i><div><h3>North Pole and Rogue Attention</h3><p>The staged North Pole investigation gradually improves APEX intel and preparation; it never awakens the Rogue. Time and world liberation determine when Antarctica begins to react.</p></div></article>
@@ -4326,13 +4330,13 @@ export class WorldUIV2 {
       : 'No supporting army';
     const chanceTone = chance >= 65 ? 'is-good' : chance >= 45 ? 'is-warn' : 'is-danger';
     const apexForecast = forecast.apexContribution;
-    const apexIncluded = apexForecast.effectivePower > 0
+    const apexIncluded = apexForecast.supportBonusPercent > 0
       && (apexForecast.status === 'ready' || apexForecast.status === 'delayed');
-    const apexPower = apexIncluded ? apexForecast.effectivePower : 0;
-    const ownTotalPower = ownPower + apexPower;
+    const apexSupportBonus = apexIncluded ? apexForecast.supportBonusPercent : 0;
+    const ownTotalPower = ownPower * (1 + apexSupportBonus / 100);
     const powerRatio = targetPower > 0 ? ownTotalPower / targetPower : 99;
     const apexPowerLine = apexIncluded
-      ? `<small class="review-apex-contribution"><b>EMPIRE ${compactNumber(ownPower)}</b> · INCLUDES +${compactNumber(apexPower)} APEX${apexForecast.etaWeeks && apexForecast.etaWeeks > 0 ? ` · ARRIVES W${apexForecast.etaWeeks}` : ''}</small>`
+      ? `<small class="review-apex-contribution"><b>ARMY ${compactNumber(ownPower)}</b> · APEX +${format(apexSupportBonus, 1)}%${apexForecast.etaWeeks && apexForecast.etaWeeks > 0 ? ` · ARRIVES W${apexForecast.etaWeeks}` : ''}</small>`
       : `<small class="review-apex-contribution is-unavailable"><b>APEX UNAVAILABLE</b> · ${escapeHtml(apexForecast.reason)}</small>`;
     const terrainLabel = forecast.terrain
       ? terrainPresentation(forecast.terrain).label.toUpperCase()
@@ -4346,9 +4350,12 @@ export class WorldUIV2 {
     const routeDistance = navalLogistics
       ? logisticsPreview?.distanceKm === undefined ? 'DISTANCE UNKNOWN' : `${format(logisticsPreview.distanceKm)} KM`
       : forecast.access === 'land' ? 'DIRECT BORDER' : 'NO LEGAL ROUTE';
-    const routeDetail = navalLogistics && logisticsPreview
-      ? `+${format(Math.max(0, logisticsPreview.routeOperationMultiplier - 1) * 100, 0)}% sea distance cost`
-      : forecast.access === 'land' ? `${terrainLabel} terrain` : 'Operation blocked';
+    const supplyRule = armyCapacitySupplyLabelV2(
+      forecast.access === 'naval' ? 'naval' : 'land',
+    );
+    const routeDetail = forecast.access === 'none'
+      ? 'Operation blocked'
+      : supplyRule;
     const reviewLogistics = presentLogisticsReadinessV2(
       forecast.attackerSupply,
       forecast.access === 'naval' ? 'naval' : 'land',
@@ -4382,7 +4389,7 @@ export class WorldUIV2 {
     if (navalLogistics && logisticsPreview && logisticsPreview.routeOperationMultiplier >= 1.75) {
       criticalRisks.push({
         label: 'LONG SEA CROSSING',
-        detail: `${routeDistance} · slower reinforcement and higher recurring cost`,
+        detail: `${routeDistance} · naval attacks field 4% Army Capacity`,
       });
     }
     if (forecast.retaliationExpected) {
@@ -4396,7 +4403,7 @@ export class WorldUIV2 {
       : '';
     return `<div class="modal-backdrop"><section class="modal-card war-confirm review-attack-modal command-modal--unified" data-scroll-session="modal:war-confirm:${escapeHtml(targetId)}" style="--target:${target.cssColor}">
       <header class="review-attack-head">
-        <div class="country-flag review-attack-head__flag">${countryFlagHtml(target.id, target.sigil, true)}</div>
+        <div class="country-flag review-attack-head__flag">${this.playerFlagHtml(target, true)}</div>
         <div><span>OPERATION REVIEW</span><h2>${escapeHtml(target.name)}</h2><small>#${targetRank} GLOBAL POWER · ${warAccessLabel(forecast.access)} ROUTE · ${terrainLabel}</small></div>
       </header>
 
@@ -4408,7 +4415,7 @@ export class WorldUIV2 {
 
       <section class="review-operation-facts" aria-label="Operation route, supply, preparation and cost">
         <article class="${navalLogistics ? 'is-naval' : 'is-land'}"><span>${navalLogistics ? 'NAVAL ROUTE' : 'LAND ROUTE'}</span><strong>${routeDistance}</strong><small>${escapeHtml(routeDetail)}</small></article>
-        <article class="${reviewLogistics.status === 'ready' ? 'is-ready' : 'is-risk'}"><span>LOGISTICS READINESS</span><strong>${reviewLogistics.percent}% ${reviewLogistics.statusLabel}</strong><small>${escapeHtml(reviewLogistics.limitingReason)}${forecast.supportingForces > 0 ? ` · ${supportText}` : ''}</small></article>
+        <article class="${reviewLogistics.status === 'ready' ? 'is-ready' : 'is-risk'}"><span>WAR SUPPLY</span><strong>${reviewLogistics.percent}% SUPPLIED</strong><small>${supplyRule}${forecast.supportingForces > 0 ? ` · ${supportText}` : ''}</small></article>
         <article><span>PREPARATION</span><strong>${mobilizationWeeks} WEEKS</strong><small>${warTimeRange(forecast.estimatedWeeksMin, forecast.estimatedWeeksMax)} expected campaign</small></article>
         <article class="is-cost"><span>OPERATION COST</span><strong>${costDetail}</strong><small>${annualCostDetail}</small></article>
       </section>
@@ -4491,7 +4498,7 @@ export class WorldUIV2 {
       ? `${this.warOutcomeQueue.length - 1} report${this.warOutcomeQueue.length === 2 ? '' : 's'} waiting`
       : 'Timeline updated';
     const opponentFlag = opponent
-      ? `<i class="country-flag">${countryFlagHtml(opponent.id, opponent.sigil, true)}</i>` : '';
+      ? `<i class="country-flag">${this.playerFlagHtml(opponent, true)}</i>` : '';
     const netTerritories = outcome.territoriesGained.length - outcome.territoriesLost.length;
     const netPopulation = outcome.gainedPopulation - outcome.lostPopulation;
     const netEconomy = outcome.gainedEconomy - outcome.lostEconomy;
@@ -4510,18 +4517,18 @@ export class WorldUIV2 {
       ? Math.min(100, Math.max(0, outcome.apexLosses / outcome.apexMaxIntegrity! * 100))
       : 0;
     const apexIntegrityResult = apexIntegrityDamage >= 99.95
-      ? '<span>SHIELD DEPLETED</span>'
-      : `<span>SHIELD DAMAGE −${format(apexIntegrityDamage, 1)}%</span>`;
+      ? '<span>ENERGY DEPLETED</span>'
+      : `<span>ENERGY LOSS −${format(apexIntegrityDamage, 1)}%</span>`;
     const apexCapstoneDetail = [
       (outcome.apexSingularityPulses ?? 0) > 0
-        ? `<span>SINGULARITY PULSE ×${outcome.apexSingularityPulses}</span>` : '',
+        ? `<span>OVERDRIVE PULSE ×${outcome.apexSingularityPulses}</span>` : '',
       (outcome.apexMirrorCounterpulseDamage ?? 0) > 0
-        ? `<span>MIRROR COUNTERPULSE −${people(outcome.apexMirrorCounterpulseDamage ?? 0)} HOSTILE</span>` : '',
+        ? `<span>COUNTERMEASURE −${people(outcome.apexMirrorCounterpulseDamage ?? 0)} HOSTILE</span>` : '',
       (outcome.apexTwinProjectionBattles ?? 0) > 0
-        ? `<span>TWIN SPLIT ${outcome.apexTwinProjectionBattles} BATTLES · 60% + 60% SHARED SHIELD</span>` : '',
+        ? `<span>THEATER MESH · ${outcome.apexTwinProjectionBattles} MULTI-FRONT BATTLES</span>` : '',
     ].filter(Boolean).join('');
     const apexDetail = apexPresent
-      ? `<span>PEAK +${compactNumber(outcome.apexPeakPower)} DOME POWER</span>${apexIntegrityResult}${outcome.apexSupplySpent > 0 ? `<span>ENERGY ${format(apexSupplyCoverage, 0)}%</span>` : ''}${apexCapstoneDetail}`
+      ? `<span>PEAK +${compactNumber(outcome.apexPeakPower)} APEX SUPPORT</span>${apexIntegrityResult}${outcome.apexSupplySpent > 0 ? `<span>SUPPLY ${format(apexSupplyCoverage, 0)}%</span>` : ''}${apexCapstoneDetail}`
       : '<span>SHIELD NOT PRESENT ON THIS FRONT</span>';
     const allySupportedBattles = outcome.allySupportedBattles ?? 0;
     const allySupportDetail = allySupportedBattles > 0
@@ -4538,7 +4545,7 @@ export class WorldUIV2 {
       <div class="war-report__summary">
         <section class="war-report__card war-report__card--losses" aria-label="Military losses"><header><span>LOSSES</span><b>${people(outcome.survivingManpower)} ACTIVE</b></header><div><span><small>YOU</small><strong>−${people(outcome.ownLosses)}</strong></span><i aria-hidden="true"></i><span><small>ENEMY</small><strong>−${people(outcome.enemyLosses)}</strong></span></div>${allySupportDetail}</section>
         <section class="war-report__card war-report__card--territory" aria-label="Territory result"><header><span>TERRITORY</span><b class="${netTerritories > 0 ? 'is-positive' : netTerritories < 0 ? 'danger-text' : ''}">${territoryDelta} NET</b></header><div>${territoryDetail}</div></section>
-        <section class="war-report__card war-report__card--apex ${apexPresent ? 'is-active' : ''}" aria-label="APEX shield contribution"><header><span>APEX SHIELD</span><b>${apexPresent ? `${outcome.apexSupportedBattles}/${outcome.battles} BATTLES` : 'NO DOME SUPPORT'}</b></header><div>${apexDetail}</div></section>
+        <section class="war-report__card war-report__card--apex ${apexPresent ? 'is-active' : ''}" aria-label="APEX shield contribution"><header><span>APEX SHIELD</span><b>${apexPresent ? `${outcome.apexSupportedBattles}/${outcome.battles} BATTLES` : 'NO SHIELD SUPPORT'}</b></header><div>${apexDetail}</div></section>
       </div>
       <details class="war-report__details" data-disclosure-session="modal:war-outcome:${escapeHtml(outcome.warId)}:full-breakdown"><summary>FULL BREAKDOWN</summary><div>
         <article><span>ATTACK RATING</span><strong>${format(outcome.effectiveAttackBefore, 2)} → ${format(outcome.effectiveAttackAfter, 2)}</strong><small>Before / after</small></article>
@@ -4595,7 +4602,7 @@ export class WorldUIV2 {
       ? `${escapeHtml(formerName)} has been signal purged and liberated by ${escapeHtml(winnerName)}.`
       : `${escapeHtml(winnerName)} leads the final global military ranking.`;
     const winnerSigil = winner
-      ? countryFlagHtml(winner.id, winner.sigil, true)
+      ? this.playerFlagHtml(winner, true)
       : '<span aria-hidden="true">◎</span>';
     return `<div class="modal-backdrop"><section class="modal-card victory-card" style="--winner:${winnerColor}"><div class="victory-sigil country-flag">${winnerSigil}</div><div class="panel-kicker">${kicker}</div><h1>${escapeHtml(winnerName)}</h1><p>${outcome}</p><button class="primary-button" data-action="new-game">New campaign</button></section></div>`;
   }

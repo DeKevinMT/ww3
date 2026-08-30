@@ -1,5 +1,4 @@
 import {
-  AI_HEALTHY_ARMY_TARGET,
   AI_SEVERE_DEBT_REVENUE_WEEKS,
   AI_EXCESS_TREASURY_RESEARCH_SHARE_MAX,
   AI_EXCESS_TREASURY_RESEARCH_SHARE_MIN,
@@ -96,6 +95,7 @@ import {
   EXTREME_CRISIS_FOOD_RESERVE_WEEKS,
   EXTREME_CRISIS_HOME_GUARD_CAPACITY_SHARE,
   EXTREME_CRISIS_MAX_UPKEEP_FUNDING,
+  PEACE_ARMY_REFILL_CAPACITY_RATE_V2,
   PASSIVE_RECRUITMENT_CAPACITY_RATE,
   PASSIVE_RECRUITMENT_TRAINING_BONUS,
   PEACE_READINESS_RECOVERY_CURVE_EXPONENT,
@@ -105,11 +105,10 @@ import {
   RECRUITMENT_SIZE_SCALING_EXPONENT,
   RECRUITMENT_SIZE_SPEED_MAX,
   RECRUITMENT_SIZE_SPEED_MIN,
+  SURVIVAL_REAR_ARMY_REFILL_CAPACITY_RATE_V2,
   OPERATING_EFFICIENCY_RESEARCH_EFFECTIVE_CEILING,
   OPERATING_EFFICIENCY_RESEARCH_HALF_SATURATION,
   OPERATING_EFFICIENCY_RESEARCH_REDUCTION_PER_EFFECTIVE_LEVEL,
-  PEACE_RECRUITMENT_ACCELERATION_COST_MULTIPLIER,
-  PEACE_RECRUITMENT_ACCELERATION_MULTIPLIER,
   TRAINED_RESERVE_ACTIVE_READY_RATIO,
   TRAINED_RESERVE_CAPACITY_MULTIPLIER,
   TRAINED_RESERVE_DEPLOYMENT_THROUGHPUT_MULTIPLIER,
@@ -155,7 +154,6 @@ import {
   WAR_FATIGUE_OPERATION_COST_PER_POINT,
   WAR_OPERATION_COST_PER_MILLION,
   WAR_OPERATION_REVENUE_SHARE,
-  WAR_RECRUITMENT_THROUGHPUT_FACTOR,
   researchFundingShareV2,
   clamp,
   debtPressureV2,
@@ -179,7 +177,13 @@ import {
 import {
   selectApexEmpireReplenishmentModifiersV2,
   selectApexEmpireSupportV2,
+  selectApexOperationalArmyModifiersV2,
   selectCommanderWeeklyEmpireContributionV2,
+} from './commanderForce';
+export {
+  selectApexEmpireShieldNetworkV2,
+  type ApexEmpireShieldFrontV2,
+  type ApexEmpireShieldNetworkV2,
 } from './commanderForce';
 import { calculateBlendedFiscalCapacityV2 } from './fiscal';
 import { isWorldConnectionOpenV2 } from './antarcticGateways';
@@ -224,7 +228,12 @@ import {
 } from './traitContext';
 import { applyResearchProgressTraitV2 } from './traitResearch';
 import { selectRunModifiersV2 } from './runProgression';
-import { isNationOperationalV2, isSurvivalStateV2 } from './survival';
+import {
+  isNationOperationalV2,
+  isPermanentRogueWarV2,
+  isSurvivalStateV2,
+} from './survival';
+import { survivalOrdinaryAiReinforcementFactorV2 } from './survivalOrdinaryAi';
 import {
   countryTraitFactorV2,
   countryTraitModifiersV2,
@@ -293,8 +302,7 @@ export function isSurvivalRogueTransitTerritoryV2(
   territoryId: TerritoryId,
 ): boolean {
   return isSurvivalScorchedTransitTerritoryV2(state, territoryId)
-    && state.territories[territoryId]?.owner === ROGUE_AI_NATION_ID_V2
-    ;
+    && state.territories[territoryId]?.owner === ROGUE_AI_NATION_ID_V2;
 }
 
 /** Territories that may actually create Rogue income, population or troops. */
@@ -340,6 +348,8 @@ export interface NationalCombatQualityV2 {
 export interface MilitaryBaseSnapshotV2 {
   byNation: ReadonlyMap<PlayerId, MilitaryBaseRatingsV2>;
   nationalQualityByNation: ReadonlyMap<PlayerId, NationalCombatQualityV2>;
+  /** Full current Army cap, cached in the same one-pass weekly military snapshot. */
+  armyCapacityByNation: ReadonlyMap<PlayerId, number>;
 }
 
 export const sortedNationIdsV2 = (state: WorldStateV2): PlayerId[] => {
@@ -444,9 +454,16 @@ export function createMilitaryBaseSnapshotV2(
   interface Accumulator { attackMass: number; defenseMass: number; manpower: number }
   const accumulators = new Map<PlayerId, Accumulator>();
   const integratedEconomies = new Map<PlayerId, { output: number; population: number }>();
+  const armyCapacityByNation = new Map<PlayerId, number>();
   for (const territoryId of sortedTerritoryIdsV2(state)) {
     const territory = state.territories[territoryId];
     if (!territory) continue;
+    armyCapacityByNation.set(
+      territory.owner,
+      (armyCapacityByNation.get(territory.owner) ?? 0)
+        + (isSurvivalScorchedTransitTerritoryV2(state, territoryId)
+          ? territory.army.manpower : territory.army.capacity),
+    );
     if (!isSurvivalScorchedTransitTerritoryV2(state, territoryId)) {
       const integration = clamp(territory.integration, 0, 1);
       const economy = integratedEconomies.get(territory.owner) ?? { output: 0, population: 0 };
@@ -488,7 +505,7 @@ export function createMilitaryBaseSnapshotV2(
       state, content, playerId, wealthPerPerson,
     ));
   }
-  return { byNation, nationalQualityByNation };
+  return { byNation, nationalQualityByNation, armyCapacityByNation };
 }
 
 export function selectMilitaryBaseRatingsV2(
@@ -1697,14 +1714,17 @@ export function selectRecruitmentThroughputV2(
   playerId: PlayerId,
   _powerSnapshot?: PowerSnapshotV2,
 ): number {
-  const army = selectRecruitmentBaseManpowerV2(state, playerId);
-  // The free opening soldiers remain a finite, separately tracked pool, but
-  // their temporary live Army cap is genuine room for ordinary paid training.
-  // Free and paid soldiers both occupy that room, so only the physical gap can
-  // be recruited and the capacity disappears on its normal 20-year schedule.
-  const gap = Math.max(0, army.capacity - army.deployed);
+  const eligibleIds = new Set(selectArmyRefillTerritoryIdsV2(
+    state,
+    content,
+    playerId,
+  ));
+  const gap = selectProductionTerritoriesOfV2(state, playerId)
+    .filter((territory) => eligibleIds.has(territory.id))
+    .reduce((sum, territory) => (
+      sum + Math.max(0, territory.army.capacity - territory.army.manpower)
+    ), 0);
   const activeWars = selectWarsOfV2(state, playerId).length;
-  const wartimeTraining = activeWars > 0 ? WAR_RECRUITMENT_THROUGHPUT_FACTOR : 1;
   const passiveTraitFactor = activeWars === 0
     ? countryTraitFactorV2(
       playerId,
@@ -1714,32 +1734,115 @@ export function selectRecruitmentThroughputV2(
     : 1;
   return round(Math.min(gap, selectRecruitmentTrainingPipelineV2(
     state, content, playerId,
-  ) * wartimeTraining * passiveTraitFactor));
+  ) * passiveTraitFactor));
 }
 
 /**
- * Gross weekly training capacity before an active-army gap is applied. This
- * same deterministic pipeline fills the deployed army in peace, builds the
- * trained pool after readiness, and bounds reserve replacement in war.
+ * Territory scope for fresh field-army recruitment. Ordinary wars freeze the
+ * nation completely. A permanent Survival machine war is the sole exception:
+ * non-Rogue rear territory may refill, while every source/target on a live
+ * operation is a front and remains frozen. Rogue world corridors never enter
+ * this set; their real personnel must originate in Antarctica or wave staging.
+ */
+export function selectArmyRefillTerritoryIdsV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  playerId: PlayerId,
+): TerritoryId[] {
+  const productive = selectProductionTerritoriesOfV2(state, playerId)
+    .filter((territory) => !(
+      playerId === ROGUE_AI_NATION_ID_V2
+        && isSurvivalStateV2(state)
+        && (content.territories[territory.id]?.kind ?? 'sovereign') === 'sovereign'
+    ));
+  const wars = selectWarsOfV2(state, playerId);
+  if (wars.length === 0) return productive.map((territory) => territory.id);
+  if (playerId === ROGUE_AI_NATION_ID_V2
+    || !isSurvivalStateV2(state)
+    || wars.some((war) => !isPermanentRogueWarV2(state, war))) return [];
+  const frontTerritoryIds = new Set<TerritoryId>();
+  for (const war of wars) {
+    for (const operation of [...war.attackerOperations, ...war.defenderOperations]) {
+      frontTerritoryIds.add(operation.sourceId);
+      frontTerritoryIds.add(operation.targetId);
+    }
+  }
+  return productive
+    .map((territory) => territory.id)
+    .filter((territoryId) => !frontTerritoryIds.has(territoryId));
+}
+
+function applyRecruitmentPipelineModifiersV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  playerId: PlayerId,
+  base: number,
+  includeApexPeaceRecovery = false,
+): number {
+  const nation = state.players[playerId];
+  if (!nation) return 0;
+  const countryMasteryReplenishment = selectCountryMasteryReplenishmentRuntimeV2(
+    state,
+    content,
+    playerId,
+    selectProductionTerritoriesOfV2(state, playerId).map((territory) => territory.id),
+  );
+  const trainingLevel = diminishingResearchLevelV2(nation.research.effectLevels.training, 30, 20);
+  const trained = base
+    * (1 + PASSIVE_RECRUITMENT_TRAINING_BONUS * trainingLevel)
+    * selectRunModifiersV2(state, playerId).recruitmentMultiplier
+    * selectNorthPoleModifiersV2(state, playerId).recoveryMultiplier
+    * selectApexEmpireReplenishmentModifiersV2(state, playerId).recruitmentMultiplier
+    * (includeApexPeaceRecovery
+      ? selectApexOperationalArmyModifiersV2(state, playerId).armyPeaceRecoveryMultiplier
+      : 1)
+    * countryMasteryReplenishment.recruitmentMultiplier;
+  return round(trained * countryTraitFactorV2(
+    playerId,
+    'recruitment-throughput',
+    traitNationContextV2(state, playerId),
+  ));
+}
+
+/**
+ * Gross field-army refill before the local manpower gap is applied. Peace is
+ * exactly 1% of eligible effective capacity per week; safe rear territory in
+ * a permanent Survival Rogue war is 0.35%. There is no readiness or size curve.
  */
 export function selectRecruitmentTrainingPipelineV2(
   state: WorldStateV2,
   content: WorldContentV2,
   playerId: PlayerId,
 ): number {
-  const nation = state.players[playerId];
-  if (!nation) return 0;
+  const wars = selectWarsOfV2(state, playerId);
+  const eligibleIds = new Set(selectArmyRefillTerritoryIdsV2(
+    state,
+    content,
+    playerId,
+  ));
+  const eligibleCapacity = selectProductionTerritoriesOfV2(state, playerId)
+    .filter((territory) => eligibleIds.has(territory.id))
+    .reduce((sum, territory) => sum + Math.max(0, territory.army.capacity), 0);
+  const rate = wars.length === 0
+    ? PEACE_ARMY_REFILL_CAPACITY_RATE_V2
+    : SURVIVAL_REAR_ARMY_REFILL_CAPACITY_RATE_V2;
+  return applyRecruitmentPipelineModifiersV2(
+    state,
+    content,
+    playerId,
+    eligibleCapacity * rate,
+    wars.length === 0,
+  );
+}
+
+/** Existing slow reserve-training cadence, deliberately separate from field refill. */
+function selectReserveTrainingPipelineV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  playerId: PlayerId,
+): number {
   const army = selectRecruitmentBaseManpowerV2(state, playerId);
-  if (army.capacity <= 0) return 0;
-  // A war declaration shuts the whole fresh-personnel pipeline down for the
-  // nation, irrespective of front count, controller or game mode. Existing
-  // trained reservists and territorial forces remain real personnel and may
-  // still be transferred without increasing the combined headcount.
-  if (selectWarsOfV2(state, playerId).length > 0) return 0;
-  // Every nation shares the same baseline. Scaling is deliberately sublinear:
-  // a small maximum army reaches readiness sooner than a very large one, while
-  // the bounded factor prevents microstates or superpowers becoming outliers.
-  // IQ still affects actual funding through selectRecruitmentUnitCostV2.
+  if (army.capacity <= 0 || selectWarsOfV2(state, playerId).length > 0) return 0;
   const sizeSpeed = clamp(
     (RECRUITMENT_SIZE_REFERENCE_CAPACITY / army.capacity)
       ** RECRUITMENT_SIZE_SCALING_EXPONENT,
@@ -1749,34 +1852,12 @@ export function selectRecruitmentTrainingPipelineV2(
   const base = Math.max(
     0.000001,
     army.capacity * PASSIVE_RECRUITMENT_CAPACITY_RATE * sizeSpeed,
-  );
-  const readinessRecovery = peacetimeRecruitmentReadinessMultiplierV2(
+  ) * peacetimeRecruitmentReadinessMultiplierV2(
     army.deployed,
     army.capacity,
     false,
   );
-  const countryMasteryReplenishment = selectCountryMasteryReplenishmentRuntimeV2(
-    state,
-    content,
-    playerId,
-    selectProductionTerritoriesOfV2(state, playerId).map((territory) => territory.id),
-  );
-  const trainingLevel = diminishingResearchLevelV2(nation.research.effectLevels.training, 30, 20);
-  const trained = base
-    * readinessRecovery
-    * (1 + PASSIVE_RECRUITMENT_TRAINING_BONUS * trainingLevel)
-    * selectRunModifiersV2(state, playerId).recruitmentMultiplier
-    // North Pole recovery improves the one gross throughput source used by active
-    // recruitment, passive reserves and wartime replacement. It must never be
-    // repeated in any of those downstream allocation branches.
-    * selectNorthPoleModifiersV2(state, playerId).recoveryMultiplier
-    * selectApexEmpireReplenishmentModifiersV2(state, playerId).recruitmentMultiplier
-    * countryMasteryReplenishment.recruitmentMultiplier;
-  return round(trained * countryTraitFactorV2(
-    playerId,
-    'recruitment-throughput',
-    traitNationContextV2(state, playerId),
-  ));
+  return applyRecruitmentPipelineModifiersV2(state, content, playerId, base);
 }
 
 /** A lower live cap blocks further training but never deletes existing reserves. */
@@ -2996,12 +3077,26 @@ export function selectWeeklyFinanceBreakdownV2(
   let remainingMilitary = Math.max(0, military - baseMandatoryFunded);
   military += upkeepOverfunding;
   excessCashRemaining -= upkeepOverfunding;
-  const passiveRecruitmentRequest = selectRecruitmentThroughputV2(state, content, playerId, powerSnapshot);
+  const survivalReinforcementFactor = survivalOrdinaryAiReinforcementFactorV2(
+    state,
+    content,
+    playerId,
+  );
+  const passiveRecruitmentRequest = selectRecruitmentThroughputV2(
+    state,
+    content,
+    playerId,
+    powerSnapshot,
+  );
   const fundedPassiveCapacity = Math.min(
     recruitableArmyGap,
     passiveRecruitmentRequest * mandatoryFundingRatio,
   );
-  const trainingPipeline = selectRecruitmentTrainingPipelineV2(state, content, playerId);
+  const reserveTrainingPipeline = selectReserveTrainingPipelineV2(
+    state,
+    content,
+    playerId,
+  ) * survivalReinforcementFactor;
   const recruitmentUnitCost = selectRecruitmentUnitCostV2(state, playerId, content);
   const reserveTrainingLevel = diminishingResearchLevelV2(
     nation.research.effectLevels['reserve-training'],
@@ -3034,7 +3129,7 @@ export function selectWeeklyFinanceBreakdownV2(
   const anticipatedWartimeReserveRoom = 0;
   const protectedReserveTrainingRequest = Math.min(
     reserveRoomBeforeDeployment + anticipatedWartimeReserveRoom,
-    trainingPipeline * mandatoryFundingRatio
+    reserveTrainingPipeline * mandatoryFundingRatio
       * (atWar
         ? TRAINED_RESERVE_WARTIME_TRAINING_FACTOR
         : TRAINED_RESERVE_PEACETIME_BASE_TRICKLE_FACTOR)
@@ -3057,22 +3152,9 @@ export function selectWeeklyFinanceBreakdownV2(
     ? Math.min(remainingMilitary, protectedReserveTrainingCostRequest)
     : 0;
   remainingMilitary = Math.max(0, remainingMilitary - protectedReserveTrainingFunds);
-  const fillRatio = army.capacity > 0 ? army.deployed / army.capacity : 0;
-  const accelerationNeed = atWar
-    ? 0
-    : clamp((AI_HEALTHY_ARMY_TARGET - fillRatio) / 0.50, 0, 1);
-  const accelerationMultiplier = PEACE_RECRUITMENT_ACCELERATION_MULTIPLIER;
-  const accelerationCostMultiplier = PEACE_RECRUITMENT_ACCELERATION_COST_MULTIPLIER;
-  const acceleratedRecruitmentRequest = atWar ? 0 : Math.min(
-    Math.max(0, recruitableArmyGap - fundedPassiveCapacity),
-    trainingPipeline * accelerationMultiplier * accelerationNeed
-      * countryTraitFactorV2(
-        playerId,
-        'accelerated-recruitment',
-        nationTraitContext,
-      ),
-  );
-  const recruitmentRequest = acceleratedRecruitmentRequest * recruitmentUnitCost * accelerationCostMultiplier;
+  // Field refill is one fixed-rate path. The retired low-readiness fast-track
+  // must not add a second hidden curve or controller-specific cash advantage.
+  const recruitmentRequest = 0;
   const excessRecruitment = mandatoryFundingRatio >= 0.999999 ? Math.min(
     excessCashRemaining,
     Math.max(0, recruitmentRequest - remainingMilitary),
@@ -3082,8 +3164,7 @@ export function selectWeeklyFinanceBreakdownV2(
   excessCashRemaining -= excessRecruitment;
   const affordableRecruitmentCost = mandatoryFundingRatio >= 0.999999
     ? Math.min(remainingMilitary, recruitmentRequest) : 0;
-  const affordableAcceleratedRecruitment = recruitmentUnitCost > 0
-    ? affordableRecruitmentCost / (recruitmentUnitCost * accelerationCostMultiplier) : 0;
+  const affordableAcceleratedRecruitment = 0;
   // Peace creates new active soldiers first. War does not: the finite trained
   // pool may only be transferred into field formations. This mobilization is
   // bounded by funded upkeep, but carries no training or recruitment bill and
@@ -3101,8 +3182,8 @@ export function selectWeeklyFinanceBreakdownV2(
       'reserve-deployment-throughput',
       nationTraitContext,
     );
-  const passiveRecruitment = atWar ? 0 : fundedPassiveCapacity;
-  const acceleratedRecruitment = atWar ? 0 : affordableAcceleratedRecruitment;
+  const passiveRecruitment = fundedPassiveCapacity;
+  const acceleratedRecruitment = affordableAcceleratedRecruitment;
   const reserveMobilizationBase = army.capacity
     * PASSIVE_RECRUITMENT_CAPACITY_RATE
     * clamp(
@@ -3114,11 +3195,14 @@ export function selectWeeklyFinanceBreakdownV2(
   const reservePassiveDeployment = atWar ? Math.min(
     nation.trainedReserves,
     recruitableArmyGap,
-    reserveMobilizationBase * mandatoryFundingRatio * reserveDeploymentThroughput,
+    reserveMobilizationBase
+      * mandatoryFundingRatio
+      * reserveDeploymentThroughput
+      * survivalReinforcementFactor,
   ) : 0;
   const reserveAcceleratedDeployment = 0;
   const reserveDeployment = reservePassiveDeployment + reserveAcceleratedDeployment;
-  const recruitment = atWar ? 0 : affordableRecruitmentCost;
+  const recruitment = affordableRecruitmentCost;
   const reserveRoomAfterDeployment = Math.max(
     0,
     trainedReserveCapacity - (nation.trainedReserves - reserveDeployment),
@@ -3131,7 +3215,7 @@ export function selectWeeklyFinanceBreakdownV2(
   const peacetimeReservePipelineShare = peacetimeReserveTrainingPipelineShareV2(
     activeFillAfterRecruitment,
   );
-  const reserveTrainingRequest = trainingPipeline * mandatoryFundingRatio
+  const reserveTrainingRequest = reserveTrainingPipeline * mandatoryFundingRatio
     * (atWar ? TRAINED_RESERVE_WARTIME_TRAINING_FACTOR : peacetimeReservePipelineShare)
     * reserveTrainingMultiplier
     * reserveTrainingTraitFactor;
@@ -3160,9 +3244,22 @@ export function selectWeeklyFinanceBreakdownV2(
       reserveTrainingFunds / reserveTrainingCostPerUnit,
     ) : 0;
   const reserveTrainingCost = reserveTraining * reserveTrainingCostPerUnit;
+  // The finance object is canonicalized to six decimals before the commit
+  // phase consumes it. Derive its promised closing pool from those same
+  // canonical requests so the public preview and authoritative commit cannot
+  // disagree by one rounded person.
+  const canonicalTrainedReserveCapacity = round(trainedReserveCapacity);
+  const canonicalReserveDeployment = round(reserveDeployment);
+  const canonicalReserveTraining = round(reserveTraining);
   const trainedReservesAfter = Math.min(
-    Math.max(trainedReserveCapacity, nation.trainedReserves - reserveDeployment),
-    Math.max(0, nation.trainedReserves - reserveDeployment + reserveTraining),
+    Math.max(
+      canonicalTrainedReserveCapacity,
+      nation.trainedReserves - canonicalReserveDeployment,
+    ),
+    Math.max(
+      0,
+      nation.trainedReserves - canonicalReserveDeployment + canonicalReserveTraining,
+    ),
   );
   // Once genuine readiness needs are covered, all remaining surplus goes to
   // programmes that always create durable output.
@@ -3423,40 +3520,55 @@ export function projectFinanceManpowerPhaseV2(
     };
   });
   const deployedAfterDemobilization = projected.reduce((sum, army) => sum + army.manpower, 0);
-  const personnelGaps = projected.map((army) => ({
-    id: army.id,
-    gap: Math.max(0, army.capacity - army.manpower),
-  }));
-  const totalLocalRecruitmentRoom = personnelGaps.reduce((sum, item) => sum + item.gap, 0);
-  const totalPersonnelGap = Math.min(
-    totalLocalRecruitmentRoom,
-    Math.max(0, nationalCapacity - deployedAfterDemobilization),
-  );
-  const recruitedUnits = Math.min(
-    totalPersonnelGap,
-    finance.passiveRecruitment + finance.acceleratedRecruitment + finance.reserveDeployment,
-  );
-  const personnelGapById = new Map(personnelGaps.map((item) => [item.id, item.gap]));
-  for (const army of projected) {
-    const gap = personnelGapById.get(army.id) ?? 0;
-    const added = Math.min(
-      Math.max(0, army.capacity - army.manpower),
-      totalLocalRecruitmentRoom > 0 ? recruitedUnits * gap / totalLocalRecruitmentRoom : 0,
-    );
-    if (added > 0) {
+  const addPersonnel = (
+    requested: number,
+    allowedTerritoryIds?: ReadonlySet<TerritoryId>,
+  ): number => {
+    const candidates = projected.filter((army) => (
+      allowedTerritoryIds === undefined || allowedTerritoryIds.has(army.id)
+    ));
+    const gaps = candidates.map((army) => ({
+      army,
+      gap: Math.max(0, army.capacity - army.manpower),
+    }));
+    const totalRoom = gaps.reduce((sum, item) => sum + item.gap, 0);
+    const accepted = Math.min(Math.max(0, requested), totalRoom);
+    if (accepted <= 0 || totalRoom <= 0) return 0;
+    const before = candidates.reduce((sum, army) => sum + army.manpower, 0);
+    let remaining = round(accepted, 9);
+    for (const [{ army, gap }, index] of gaps.map((item, itemIndex) => [item, itemIndex] as const)) {
+      const proportional = index === gaps.length - 1
+        ? remaining
+        : round(accepted * gap / totalRoom, 9);
+      const added = Math.min(gap, remaining, proportional);
+      if (added <= 0) continue;
       mixArmyBaseQualityV2(army, added, localArmyBaseQualityV2(content, army.id));
-      // Rounding to the canonical six decimals must never lift newly trained
-      // personnel a fraction above local capacity. An unchanged, legitimately
-      // supported force above that local cap must remain untouched.
-      army.manpower = Math.min(army.capacity, round(army.manpower + added));
+      const manpowerBefore = army.manpower;
+      army.manpower = Math.min(army.capacity, round(army.manpower + added, 9));
+      remaining = round(Math.max(0, remaining - (army.manpower - manpowerBefore)), 9);
     }
-  }
+    return round(Math.max(
+      0,
+      candidates.reduce((sum, army) => sum + army.manpower, 0) - before,
+    ), 9);
+  };
+  // Fresh personnel may only enter peace territory or a safe Survival rear.
+  // Existing reserves retain their established wartime deployment behaviour
+  // and are applied separately after the fresh-personnel restriction.
+  const refillTerritoryIds = new Set(selectArmyRefillTerritoryIdsV2(
+    state,
+    content,
+    playerId,
+  ));
+  const freshRecruited = addPersonnel(
+    finance.passiveRecruitment + finance.acceleratedRecruitment,
+    refillTerritoryIds,
+  );
+  const reserveDeployed = addPersonnel(finance.reserveDeployment);
   const deployedAfterFinance = projected.reduce((sum, army) => sum + army.manpower, 0);
-  const recruited = Math.max(0, deployedAfterFinance - deployedAfterDemobilization);
-  const ordinaryRequested = finance.passiveRecruitment + finance.acceleratedRecruitment;
-  const reserveDeployed = Math.min(
-    finance.reserveDeployment,
-    Math.max(0, recruited - Math.min(recruited, ordinaryRequested)),
+  const recruited = Math.min(
+    Math.max(0, deployedAfterFinance - deployedAfterDemobilization),
+    freshRecruited + reserveDeployed,
   );
   const reserveTrained = Math.max(0, finance.reserveTraining);
   const trainedReservesAfter = Math.min(
@@ -3823,7 +3935,7 @@ export function finiteStateNumbersV2(state: WorldStateV2): boolean {
   }
   for (const force of Object.values(state.commanderForces ?? {})) {
     if (!force
-      || !finiteRecord(force.army)
+      || !finiteRecord(force.shield)
       || !Number.isFinite(force.economy.treasury)
       || !Number.isFinite(force.economy.annualOutput)
       || !Number.isFinite(force.economy.supplyStock)
