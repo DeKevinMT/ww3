@@ -11,6 +11,9 @@ export const AI_FIGHT_MIN_FOCUS = 0.82;
 export const PLAYER_WAR_ACTIVE_COMBAT_DELAY_MS = 0;
 export const PLAYER_LOSS_AUDIO_COOLDOWN_MS = 2_500;
 export const WAR_END_FIGHT_FADE_SECONDS = 1.35;
+/** The AI-country distress alarm is intentionally brief enough for repeated world losses. */
+export const AI_ELIMINATION_DISTRESS_DURATION_SHARE = 0.50;
+export const AI_ELIMINATION_DISTRESS_FADE_SECONDS = 0.72;
 export const AMBIENT_MUSIC_VOLUME = 0.2;
 export const GAME_AUDIO_SETTINGS_STORAGE_KEY = 'frontier-command-audio-v1';
 
@@ -636,7 +639,18 @@ export class GameAudioController {
     // The small pool allows natural overlap while dropping bursts beyond its
     // fixed capacity, so repeated events cannot layer without bound.
     const voice = this.radioVoices.find((candidate) => !candidate.active);
-    return voice ? this.playBuffer(voice, buffer, 1, 'radio') : false;
+    return voice ? this.playBuffer(
+      voice,
+      buffer,
+      1,
+      'radio',
+      undefined,
+      undefined,
+      cue === 'distress' ? {
+        durationSeconds: buffer.duration * AI_ELIMINATION_DISTRESS_DURATION_SHARE,
+        fadeSeconds: AI_ELIMINATION_DISTRESS_FADE_SECONDS,
+      } : undefined,
+    ) : false;
   }
 
   private playBuffer(
@@ -646,6 +660,7 @@ export class GameAudioController {
     kind: AudioVoice['kind'],
     onEnded?: () => void,
     warId?: string,
+    tail?: Readonly<{ durationSeconds: number; fadeSeconds: number }>,
   ): boolean {
     const context = this.context;
     if (!context) return false;
@@ -673,6 +688,16 @@ export class GameAudioController {
       onEnded?.();
     };
     source.start(0);
+    if (tail) {
+      const durationSeconds = Math.max(0.05, Math.min(buffer.duration, tail.durationSeconds));
+      const fadeSeconds = Math.max(0.02, Math.min(durationSeconds, tail.fadeSeconds));
+      const fadeStartsAt = context.currentTime + durationSeconds - fadeSeconds;
+      const fadeEndsAt = context.currentTime + durationSeconds;
+      voice.gain.gain.setValueAtTime(voiceGain, fadeStartsAt);
+      voice.gain.gain.linearRampToValueAtTime(0, fadeEndsAt);
+      voice.baseGain = 0;
+      try { source.stop(fadeEndsAt + 0.02); } catch { /* source already ended */ }
+    }
     return true;
   }
 

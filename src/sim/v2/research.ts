@@ -21,6 +21,7 @@ import {
 } from './selectors';
 import { applyResearchProgressTraitV2 } from './traitResearch';
 import { traitNationContextV2 } from './traitContext';
+import { isNationOperationalV2 } from './survival';
 import type { ResearchBranchV2, ResearchEffectV2, WorldStateV2 } from './types';
 
 export function branchIsMaxedV2(
@@ -50,7 +51,8 @@ export function processResearchV2(
 ): void {
   const playerIds = sortedNationIdsV2(state);
   for (const playerId of playerIds) {
-    if (selectIsEliminatedV2(state, playerId)) continue;
+    if (selectIsEliminatedV2(state, playerId)
+      || !isNationOperationalV2(state, content, playerId)) continue;
     const nation = state.players[playerId]!;
     const finance = financePlans?.get(playerId)
       ?? selectWeeklyFinanceBreakdownV2(state, content, playerId, powerSnapshot);

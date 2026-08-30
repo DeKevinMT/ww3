@@ -14,7 +14,7 @@ function rejected(reason: string): CommandResultV2 {
  * country it does not own even when the payload itself is otherwise valid.
  */
 export function authorizeMultiplayerCommandV2(
-  state: Pick<WorldStateV2, 'allianceOffers' | 'offers' | 'players'>,
+  state: Pick<WorldStateV2, 'allianceOffers' | 'humanPlayerIds' | 'offers' | 'players'>,
   seatCountryId: PlayerId,
   command: WorldCommandV2,
   isRoomHost: boolean,
@@ -24,9 +24,17 @@ export function authorizeMultiplayerCommandV2(
   switch (command.type) {
     case 'choose-country':
       return rejected('Country choices are locked when the multiplayer campaign starts.');
+    case 'form-survival-empire':
+      if (!isRoomHost) return rejected('Only the room host can form the shared Survival empire.');
+      return command.flagshipId === seatCountryId
+        ? allowed() : rejected('The Survival flagship must be your own country.');
+    case 'deploy-antarctic-expedition':
+      return rejected('Antarctic expeditions were retired; use normal wars and logistics.');
     case 'set-speed':
       return isRoomHost ? allowed() : rejected('Only the room host can change the shared game speed.');
     case 'set-research-allocations':
+    case 'set-commander-priorities':
+    case 'issue-commander-order':
     case 'adjust-budget':
     case 'set-budget-policy':
     case 'rapid-recruitment':
@@ -34,27 +42,22 @@ export function authorizeMultiplayerCommandV2(
     case 'launch-propaganda':
     case 'start-arctic-project':
     case 'acknowledge-polar-warning':
-    case 'deploy-antarctic-expedition':
+    case 'respond-apex-transmission':
     case 'set-empire-name':
       return command.playerId === seatCountryId
         ? allowed() : rejected('You can only manage your own country.');
+    case 'choose-run-upgrade':
+      return rejected('Timeline adaptation cards were retired; use APEX talents and nation mastery.');
     case 'declare-war':
       if (command.escalatedFromWarId !== undefined) {
         return rejected('Coalition escalation is reserved for the world AI.');
       }
+      if (state.humanPlayerIds.includes(command.attackerId)
+        && state.humanPlayerIds.includes(command.defenderId)) {
+        return rejected('Co-op teammates are permanently on the same side.');
+      }
       return command.attackerId === seatCountryId
         ? allowed() : rejected('You can only declare war as your own country.');
-    case 'request-ceasefire':
-      return command.requesterId === seatCountryId
-        ? allowed() : rejected('You can only request peace for your own country.');
-    case 'propose-peace':
-      return command.fromId === seatCountryId
-        ? allowed() : rejected('You can only send an offer from your own country.');
-    case 'respond-to-offer': {
-      const offer = state.offers.find((candidate) => candidate.id === command.offerId);
-      return offer?.toId === seatCountryId
-        ? allowed() : rejected('That peace offer is not addressed to your country.');
-    }
     case 'propose-alliance':
       return command.fromId === seatCountryId
         ? allowed() : rejected('You can only invite another player from your own country.');

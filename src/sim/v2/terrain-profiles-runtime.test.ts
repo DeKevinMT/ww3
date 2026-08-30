@@ -48,7 +48,7 @@ describe('multi-terrain runtime', () => {
       .toBeCloseTo(expected, 12);
   });
 
-  it('lets a country terrain trait match an important secondary terrain', () => {
+  it('keeps retired country terrain traits neutral on secondary terrain', () => {
     const state = createWorldStateV2(90_201);
     const chile = nationIdV2('chl');
     const territory = territoryIdV2('chl');
@@ -61,7 +61,7 @@ describe('multi-terrain runtime', () => {
 
     expect(context.terrain).toBe('mountain');
     expect(context.terrains).toContain('coastal');
-    expect(countryTraitFactorV2(chile, 'defense', context)).toBeGreaterThan(1);
+    expect(countryTraitFactorV2(chile, 'defense', context)).toBe(1);
   });
 
   it('keeps Kazakhstan landlocked and free of coastal terrain', () => {
@@ -78,7 +78,6 @@ describe('multi-terrain runtime', () => {
     const state = createWorldStateV2(90_202);
     const belgium = nationIdV2('bel');
     const territory = territoryIdV2('bel');
-    state.territories[territory]!.condition = 1;
     state.players[belgium]!.research.effectLevels.supply = 100;
 
     const landSupply = supplyFactorV2(

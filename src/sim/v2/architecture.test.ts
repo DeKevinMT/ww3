@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_BUDGET_V2, RESEARCH_BRANCH_EFFECTS } from './balance';
 import { createWorldStateV2 } from './bootstrap';
-import { WORLD_CONTENT_V2 } from './content';
+import { ANTARCTIC_TERRITORY_IDS_V2, ROGUE_AI_NATION_ID_V2, WORLD_CONTENT_V2 } from './content';
 import { COUNTRIES, TERRITORIES, isSeaConnection, validateMap } from '../../game/data/worldMap';
 import { assertInvariantsV2 } from './invariants';
 import { canonicalStateHashV2, createSaveV2, loadSaveV2, type SaveGameV2 } from './persistence';
@@ -10,8 +10,11 @@ import { nationIdV2, territoryIdV2 } from './types';
 describe('V2 canonical architecture', () => {
   it('boots every currently exported map nation through explicit initial ownership', () => {
     const state = createWorldStateV2(17);
-    expect(WORLD_CONTENT_V2.nationIds).toHaveLength(COUNTRIES.length);
-    expect(WORLD_CONTENT_V2.territoryIds).toHaveLength(TERRITORIES.length);
+    expect(WORLD_CONTENT_V2.nationIds).toHaveLength(COUNTRIES.length + 1);
+    expect(WORLD_CONTENT_V2.territoryIds).toHaveLength(
+      TERRITORIES.length + ANTARCTIC_TERRITORY_IDS_V2.length,
+    );
+    expect(WORLD_CONTENT_V2.nationIds).toContain(ROGUE_AI_NATION_ID_V2);
     for (const territoryId of WORLD_CONTENT_V2.territoryIds) {
       expect(state.territories[territoryId].owner).toBe(WORLD_CONTENT_V2.territories[territoryId].initialOwnerId);
     }
@@ -65,7 +68,7 @@ describe('V2 canonical architecture', () => {
     const territory = state.territories[territoryIdV2('bel')];
     expect(state.schemaVersion).toBe(22);
     expect(Object.keys(nation).sort()).toEqual(['budget', 'capitalId', 'ceasefiresRequested', 'domesticFoodCapacity', 'empireName', 'foodSecurity', 'foodStock', 'manualActionUses', 'openingArmyBonus', 'propagandaAvailableTick', 'propagandaProgram', 'rapidRecruitmentAvailableTick', 'research', 'researchSurgeAvailableTick', 'trainedReserves', 'treasury', 'warFatigue']);
-    expect(Object.keys(territory).sort()).toEqual(['army', 'condition', 'coreOwner', 'economy', 'integration', 'owner', 'population']);
+    expect(Object.keys(territory).sort()).toEqual(['army', 'coreOwner', 'economy', 'integration', 'owner', 'population']);
     expect(Object.keys(territory.army).sort()).toEqual([
       'baseAttack', 'baseDefense', 'capacity', 'manpower',
     ]);
@@ -81,7 +84,7 @@ describe('V2 canonical architecture', () => {
       'defensive-systems': ['defense', 'casualty-reduction'],
       'logistics-medicine': ['recovery', 'supply'],
       'economy-science': ['economy-growth', 'research-speed', 'research-efficiency'],
-      'food-systems': ['food-production', 'food-storage'],
+      'food-systems': ['supply', 'recovery'],
       'reserve-doctrine': ['reserve-training', 'reserve-mobilization'],
       'public-administration': ['tax-efficiency', 'operating-efficiency'],
       'education-intelligence': ['iq-increase'],

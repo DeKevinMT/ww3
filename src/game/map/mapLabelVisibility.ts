@@ -1,11 +1,13 @@
 export const DEEP_MAP_LABEL_MIN_ZOOM = 8;
 export const DEEP_MAP_LABEL_MIN_SCREEN_SPAN = 16;
 export const DEEP_MAP_LABEL_MAX_ORDINARY_VISIBLE = 8;
+/** Quiet namecards are reserved for the five strongest powers. */
+export const PASSIVE_POWER_LABEL_LIMIT = 5;
 
 export interface MapCountryLabelSignals {
   hovered: boolean;
   selected: boolean;
-  topTenRealm: boolean;
+  topPowerRealm: boolean;
   humanRealm: boolean;
   warRealm: boolean;
   frontTerritory: boolean;
@@ -15,7 +17,7 @@ export interface MapCountryLabelSignals {
   zoom: number;
 }
 
-export type MapCountryLabelTier = 'hover' | 'active' | 'top-ten' | 'deep' | 'hidden';
+export type MapCountryLabelTier = 'hover' | 'active' | 'top-power' | 'deep' | 'hidden';
 
 export interface MapCountryLabelDecision {
   tier: MapCountryLabelTier;
@@ -28,7 +30,7 @@ export interface MapCountryLabelDecision {
 
 /**
  * Country names are strategic map information, not a zoom-dependent data dump.
- * The global top ten and live gameplay state stay visible at every zoom. An
+ * The global top-power cohort and live gameplay state stay visible at every zoom. An
  * otherwise quiet country receives a label only while hovered or at genuinely
  * deep zoom, where a separate hard cap is enforced by the placement pass.
  */
@@ -45,7 +47,7 @@ export function mapCountryLabelDecision(
     && signals.projectedSpan >= DEEP_MAP_LABEL_MIN_SCREEN_SPAN;
   const tier: MapCountryLabelTier = signals.hovered ? 'hover'
     : active ? 'active'
-      : signals.topTenRealm ? 'top-ten'
+      : signals.topPowerRealm ? 'top-power'
         : deepEligible ? 'deep' : 'hidden';
   const visible = tier !== 'hidden';
   const ordinaryDeepLabel = tier === 'deep';

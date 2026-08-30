@@ -1,27 +1,34 @@
 import { normalizeSeed } from '../../game/random';
 import {
-  FOOD_OPENING_RESERVE_MIN_WEEKS,
   V2_MAP_ID,
   V2_RULES_VERSION,
-  clamp,
   round,
 } from './balance';
-import { WORLD_CONTENT_V2, type WorldContentV2 } from './content';
+import {
+  WORLD_CONTENT_V2,
+  isHumanSelectableNationV2,
+  type WorldContentV2,
+} from './content';
 import {
   initialArmyCapacityRatioV2,
   initialTerritoryArmyCapacityV2,
   synchronizeArmyCapacityV2,
 } from './capacity';
 import { createNationStateV2, synchronizeOpeningArmyHumanRosterV2 } from './nationState';
-import { createInitialPolarEndgameV2 } from './polarEndgame';
-import { contentVersionForWorldContentV2 } from './scenarios';
-import { countryTraitFactorV2, registerTraitContentV2 } from './traits';
 import {
-  invalidateTerritoryIndexV2,
-  selectFoodDemandV2,
-  selectFoodDomesticCapacityTargetV2,
-  selectFoodStorageCapacityV2,
-} from './selectors';
+  CAMPAIGN_AI_VS_AI_POST_BLACKOUT_GRACE_TICKS_V2,
+  campaignBlackoutBriefingAcknowledgedV2,
+  campaignWarsUnlockedV2,
+} from './campaignPrologue';
+import { campaignTutorialBypassedV2 } from './campaignTutorial';
+import { addWorldEventV2 } from './events';
+import { createInitialPolarEndgameV2 } from './polarEndgame';
+import { createInitialRunProgressionV2 } from './runProgression';
+import { contentVersionForWorldContentV2 } from './scenarios';
+import { initializeSurvivalScenarioV2 } from './survival';
+import { normalizeRetiredFoodCompatibilityV2 } from './retiredFood';
+import { countryTraitFactorV2, registerTraitContentV2 } from './traits';
+import { invalidateTerritoryIndexV2 } from './selectors';
 import type {
   PlayerId,
   TerritoryId,
@@ -29,15 +36,16 @@ import type {
   WorldStateV2,
 } from './types';
 
-/** Belgium begins with a modest ordinary-force head start, independent of human underdog scaling. */
-export const BELGIUM_OPENING_MANPOWER_MULTIPLIER_V2 = 1.20;
+/** Compatibility export: default campaigns now preserve the neutral 2026 opening force. */
+export const BELGIUM_OPENING_MANPOWER_MULTIPLIER_V2 = 1;
 
 function defaultHumanPlayerId(content: WorldContentV2): PlayerId {
-  const belgium = content.nationIds.find((id) => String(id) === 'bel');
+  const selectableIds = content.nationIds.filter((id) => isHumanSelectableNationV2(content, id));
+  const belgium = selectableIds.find((id) => String(id) === 'bel');
   if (belgium) return belgium;
-  const unitedStates = content.nationIds.find((id) => String(id) === 'usa');
+  const unitedStates = selectableIds.find((id) => String(id) === 'usa');
   if (unitedStates) return unitedStates;
-  const fallback = content.nationIds[0];
+  const fallback = selectableIds[0];
   if (!fallback) throw new Error('V2 content needs at least one nation.');
   return fallback;
 }
@@ -47,30 +55,21 @@ function createTerritoryState(id: TerritoryId, content: WorldContentV2): Territo
   if (!definition) throw new Error(`Missing V2 territory content for ${id}.`);
   const origin = content.nations[definition.initialOwnerId];
   if (!origin) throw new Error(`Missing V2 nation content for ${definition.initialOwnerId}.`);
-  const condition = clamp(
-    0.66 + Math.log10(definition.baseline.gdp + 1) * 0.055 + definition.baseline.powerIndex / 1_200,
-    0.62,
-    0.96,
-  );
   const unmodifiedCapacity = initialTerritoryArmyCapacityV2(content, id);
   const capacity = round(unmodifiedCapacity
     * countryTraitFactorV2(definition.initialOwnerId, 'army-capacity'));
   const openingFill = initialArmyCapacityRatioV2(content, definition.initialOwnerId);
-  const openingManpowerMultiplier = String(definition.initialOwnerId) === 'bel'
-    ? BELGIUM_OPENING_MANPOWER_MULTIPLIER_V2
-    : 1;
   return {
     owner: definition.initialOwnerId,
     coreOwner: definition.initialOwnerId,
     population: definition.baseline.population,
     economy: definition.baseline.gdp,
-    condition: round(condition, 6),
     integration: 1,
     army: {
       // Capacity traits create future room, not a free opening army.
       manpower: round(Math.min(
         capacity,
-        unmodifiedCapacity * openingFill * openingManpowerMultiplier,
+        unmodifiedCapacity * openingFill,
       )),
       capacity,
       baseAttack: origin.militaryAttackRating ?? origin.militaryQuality ?? 1,
@@ -82,21 +81,20 @@ function createTerritoryState(id: TerritoryId, content: WorldContentV2): Territo
 /** 2026 scenario pressure begins as damaged states; interstate wars unfold during year one. */
 function seedScenarioPressureV2(state: WorldStateV2, content: WorldContentV2): void {
   // Internal conflicts are national pressure, not fabricated interstate wars.
-  // They begin with damaged forces, output and condition and remain visible in
-  // the campaign report while the national AI works on recovery.
+  // They begin with damaged forces and output and remain visible in the
+  // campaign report while the national AI works on stabilisation.
   const crises = [
-    { nation: 'sdn', label: 'Sudan civil war', condition: 0.70, economy: 0.78, army: 0.72 },
-    { nation: 'mmr', label: 'Myanmar conflict', condition: 0.78, economy: 0.84, army: 0.82 },
-    { nation: 'yem', label: 'Yemen conflict', condition: 0.70, economy: 0.72, army: 0.78 },
-    { nation: 'som', label: 'Somalia conflict', condition: 0.76, economy: 0.80, army: 0.82 },
-    { nation: 'cod', label: 'Eastern DR Congo conflict', condition: 0.80, economy: 0.88, army: 0.85 },
+    { nation: 'sdn', label: 'Sudan civil war', economy: 0.78, army: 0.72 },
+    { nation: 'mmr', label: 'Myanmar conflict', economy: 0.84, army: 0.82 },
+    { nation: 'yem', label: 'Yemen conflict', economy: 0.72, army: 0.78 },
+    { nation: 'som', label: 'Somalia conflict', economy: 0.80, army: 0.82 },
+    { nation: 'cod', label: 'Eastern DR Congo conflict', economy: 0.88, army: 0.85 },
   ] as const;
   for (const crisis of crises) {
     const nationId = content.nationIds.find((id) => String(id) === crisis.nation);
     if (!nationId) continue;
     for (const [territoryId, territory] of Object.entries(state.territories) as Array<[TerritoryId, TerritoryStateV2]>) {
       if (territory.owner !== nationId) continue;
-      territory.condition = round(Math.max(0.15, territory.condition * crisis.condition));
       territory.economy = round(Math.max(0.10, territory.economy * crisis.economy));
       territory.army.manpower = round(Math.min(territory.army.capacity, territory.army.manpower * crisis.army));
       state.events.push({
@@ -104,7 +102,7 @@ function seedScenarioPressureV2(state: WorldStateV2, content: WorldContentV2): v
         tick: 0,
         kind: 'critical',
         severity: 'info',
-        message: `${crisis.label} is degrading national condition and output.`,
+        message: `${crisis.label} is disrupting national output and forces.`,
         territoryId,
         playerId: nationId,
         unread: true,
@@ -151,9 +149,13 @@ function initiallyConnectedV2(content: WorldContentV2, leftId: PlayerId, rightId
   });
 }
 
-/** Three seed-varied regional crises are staged across the first campaign year, never on week zero. */
+/**
+ * One seed-varied regional crisis proves the Rogue manipulation before APEX
+ * opens the player's first strike. Further AI wars use the paced national AI;
+ * the tutorial never floods the map with a scripted conflict sequence.
+ */
 export function openingConflictScheduleV2(seed: number, content: WorldContentV2): OpeningConflictV2[] {
-  if (content.metadata?.openingProfile !== 'standard-2026') return [];
+  if (content.metadata?.scenarioId !== 'standard-2026') return [];
   const candidates = OPENING_CONFLICT_POOL.flatMap(([attacker, defender, label], index) => {
     const attackerId = content.nationIds.find((id) => String(id) === attacker);
     const defenderId = content.nationIds.find((id) => String(id) === defender);
@@ -162,16 +164,14 @@ export function openingConflictScheduleV2(seed: number, content: WorldContentV2)
   }).sort((left, right) => left.score - right.score
     || left.attackerId.localeCompare(right.attackerId)
     || left.defenderId.localeCompare(right.defenderId));
-  const selected: typeof candidates = [];
-  const participants = new Set<PlayerId>();
-  for (const candidate of candidates) {
-    if (participants.has(candidate.attackerId) || participants.has(candidate.defenderId)) continue;
-    selected.push(candidate);
-    participants.add(candidate.attackerId);
-    participants.add(candidate.defenderId);
-    if (selected.length === 3) break;
-  }
-  const windows = [[6, 14], [20, 30], [38, 50]] as const;
+  const selected = candidates.slice(0, 1);
+  // Stage I already provides the calm opening. The proof conflict arrives in
+  // a narrow seed-varied window, never on the same week as the intelligence
+  // collapse and never after another long silent half-year.
+  const windows = [[
+    CAMPAIGN_AI_VS_AI_POST_BLACKOUT_GRACE_TICKS_V2,
+    CAMPAIGN_AI_VS_AI_POST_BLACKOUT_GRACE_TICKS_V2 + 2,
+  ]] as const;
   return selected.map((scenario, index) => {
     const [start, end] = windows[index]!;
     return {
@@ -183,24 +183,64 @@ export function openingConflictScheduleV2(seed: number, content: WorldContentV2)
   });
 }
 
-export function processOpeningConflictsV2(state: WorldStateV2, content: WorldContentV2): void {
-  if (content.metadata?.openingProfile !== 'standard-2026') return;
-  const scenario = openingConflictScheduleV2(state.seed, content).find((entry) => entry.tick === state.tick);
-  if (!scenario) return;
-  if (!state.players[scenario.attackerId] || !state.players[scenario.defenderId]) return;
-  // Seeded opening crises are AI-vs-AI scenario events and must never issue a
-  // declaration on behalf of, or directly against, a country controlled by a
-  // human. Autonomous AI declarations use the live Suspicion curve instead.
-  if (state.humanPlayerIds.includes(scenario.attackerId)
-    || state.humanPlayerIds.includes(scenario.defenderId)) return;
-  if (state.players[scenario.attackerId]!.treasury < 0) return;
-  const attackerAlive = Object.values(state.territories).some((territory) => territory.owner === scenario.attackerId);
-  const defenderAlive = Object.values(state.territories).some((territory) => territory.owner === scenario.defenderId);
-  if (!attackerAlive || !defenderAlive) return;
-  if (state.wars.some((war) => (
-    (war.attackerId === scenario.attackerId && war.defenderId === scenario.defenderId)
-    || (war.attackerId === scenario.defenderId && war.defenderId === scenario.attackerId)
-  ))) return;
+const OPENING_CONFLICT_EVENT_PREFIX_V2 = 'MANIPULATED CONFLICT ·';
+
+export function processOpeningConflictsV2(state: WorldStateV2, content: WorldContentV2): boolean {
+  if (content.metadata?.scenarioId !== 'standard-2026') return false;
+  if (state.humanPlayerIds.length > 0 && state.humanPlayerIds.every((playerId) => (
+    campaignTutorialBypassedV2(state, content, playerId)
+  ))) return false;
+  if (!campaignWarsUnlockedV2(state, content)) return false;
+  if (!campaignBlackoutBriefingAcknowledgedV2(state, content)) return false;
+  // Stage-I completion starts the world's seeded conflict cadence. Scheduling
+  // from that save-stable blackout tick prevents both missed early conflicts
+  // and an implausible pile-up on the exact week communications collapse.
+  // Authenticated legacy saves that already contain war history keep tick zero
+  // as their origin and therefore continue their established timeline.
+  const conflictOriginTick = state.polarEndgame.communicationsBlackoutTick ?? 0;
+  const schedule = openingConflictScheduleV2(state.seed, content);
+  const dueCount = schedule.filter((entry) => conflictOriginTick + entry.tick <= state.tick).length;
+  const startedCount = state.aiEscalation.openingConflictsStarted;
+  if (dueCount <= startedCount) return false;
+
+  const alive = new Set(Object.values(state.territories).map((territory) => territory.owner));
+  const validPair = (attackerId: PlayerId, defenderId: PlayerId): boolean => (
+    attackerId !== defenderId
+      && Boolean(state.players[attackerId] && state.players[defenderId])
+      && !state.humanPlayerIds.includes(attackerId)
+      && !state.humanPlayerIds.includes(defenderId)
+      && content.nations[attackerId]?.kind !== 'rogue-ai'
+      && content.nations[defenderId]?.kind !== 'rogue-ai'
+      && alive.has(attackerId) && alive.has(defenderId)
+      && state.players[attackerId]!.treasury >= 0
+      && initiallyConnectedV2(content, attackerId, defenderId)
+      && !state.wars.some((war) => (
+        war.attackerId === attackerId || war.defenderId === attackerId
+          || war.attackerId === defenderId || war.defenderId === defenderId
+      ))
+  );
+  const preferred = schedule[Math.min(startedCount, schedule.length - 1)];
+  const fallback = content.nationIds.flatMap((attackerId) => (
+    content.nationIds.map((defenderId) => ({
+      attackerId,
+      defenderId,
+      label: 'Regional command fracture',
+      score: scenarioHash(
+        state.seed,
+        1_000 + startedCount * 313
+          + content.nationIds.indexOf(attackerId) * content.nationIds.length
+          + content.nationIds.indexOf(defenderId),
+      ),
+    }))
+  )).filter((candidate) => validPair(candidate.attackerId, candidate.defenderId))
+    .sort((left, right) => left.score - right.score
+      || left.attackerId.localeCompare(right.attackerId)
+      || left.defenderId.localeCompare(right.defenderId))[0];
+  const scenario = preferred && validPair(preferred.attackerId, preferred.defenderId)
+    ? preferred : fallback;
+  // If an extreme world state has no valid pair, retry deterministically next
+  // week instead of permanently losing this narrative beat.
+  if (!scenario) return false;
   state.wars.push({
     id: `war-${state.nextWarId++}`,
     attackerId: scenario.attackerId,
@@ -220,6 +260,16 @@ export function processOpeningConflictsV2(state: WorldStateV2, content: WorldCon
   // This scenario opening also resets autonomous pacing, preventing ordinary
   // AI declarations from piling directly onto the staged first-year crisis.
   state.aiEscalation.lastWarStartTick = state.tick;
+  state.aiEscalation.openingConflictsStarted = startedCount + 1;
+  const attackerName = content.nations[scenario.attackerId]?.shortName ?? scenario.attackerId;
+  const defenderName = content.nations[scenario.defenderId]?.shortName ?? scenario.defenderId;
+  addWorldEventV2(
+    state,
+    'war',
+    'critical',
+    `${OPENING_CONFLICT_EVENT_PREFIX_V2} ${attackerName} attacked ${defenderName}. ${scenario.label}.`,
+  );
+  return true;
 }
 
 export function createWorldStateV2(
@@ -249,6 +299,7 @@ export function createWorldStateV2(
     humanPlayerId,
     humanPlayerIds: [humanPlayerId],
     firstIntegrationDiscountUsedBy: [],
+    commanderForces: {},
     players,
     territories,
     wars: [],
@@ -260,6 +311,7 @@ export function createWorldStateV2(
     events: [],
     aiEscalation: {
       lastWarStartTick: -1_000_000,
+      openingConflictsStarted: 0,
       lastFederationTick: -1_000_000,
       resistanceLevel: 0,
       globalThreat: 0,
@@ -268,10 +320,20 @@ export function createWorldStateV2(
       lastHumanPower: 0,
     },
     polarEndgame: createInitialPolarEndgameV2(),
+    runProgression: createInitialRunProgressionV2(content),
     nextEventId: 1,
     nextWarId: 1,
     nextOfferId: 1,
     gameOver: false,
+  };
+  initializeSurvivalScenarioV2(state, content);
+  state.runProgression.players[humanPlayerId] = {
+    activeOffer: null,
+    queuedMilestones: [],
+    triggeredMilestoneIds: [],
+    picks: [],
+    stacks: {},
+    recapturedScorchedTerritoryIds: [],
   };
   const name = content.nations[humanPlayerId]?.name ?? humanPlayerId;
   state.events.push({
@@ -279,28 +341,13 @@ export function createWorldStateV2(
     tick: 0,
     kind: 'system',
     severity: 'action',
-    message: `${content.nationIds.length} countries are ready. ${name} is selected by default.`,
+    message: `${content.nationIds.filter((id) => isHumanSelectableNationV2(content, id)).length} countries are ready. ${name} is selected by default.`,
     playerId: humanPlayerId,
     unread: true,
   });
   if (content.metadata?.openingProfile === 'standard-2026') seedScenarioPressureV2(state, content);
   synchronizeOpeningArmyHumanRosterV2(state, content, [], [humanPlayerId]);
-  // Opening buffers are population-based, but storage is derived from the
-  // live economy, infrastructure and land. Never begin with food that the
-  // current country could not physically store.
-  for (const playerId of content.nationIds) {
-    state.players[playerId]!.domesticFoodCapacity = round(
-      selectFoodDomesticCapacityTargetV2(state, content, playerId),
-      9,
-    );
-    const storageCapacity = selectFoodStorageCapacityV2(state, content, playerId);
-    const openingReserveFloor = selectFoodDemandV2(state, playerId)
-      * FOOD_OPENING_RESERVE_MIN_WEEKS;
-    state.players[playerId]!.foodStock = round(Math.min(
-      storageCapacity,
-      Math.max(state.players[playerId]!.foodStock, openingReserveFloor),
-    ));
-  }
+  normalizeRetiredFoodCompatibilityV2(state);
   // Territory shells are built before the human roster exists. Bring the
   // selected opening country's capacity trait onto the same live-context path
   // used after every later lobby roster change.

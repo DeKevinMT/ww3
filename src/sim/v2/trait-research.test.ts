@@ -21,8 +21,8 @@ const militaryIndustryOnly = Object.fromEntries(
   RESEARCH_BRANCHES.map((branch) => [branch, branch === 'military-industry' ? 100 : 0]),
 ) as ResearchAllocationsV2;
 
-describe('V2 research-progress country traits', () => {
-  it('applies the active country factor only to matching research branches', () => {
+describe('retired V2 research-progress country traits', () => {
+  it('keeps every research branch at its neutral progress', () => {
     expect(applyResearchProgressTraitV2(germany, 'military-industry', 2.5)).toBe(
       round(2.5 * countryTraitFactorV2(germany, 'research-progress', {
         researchBranch: 'military-industry',
@@ -40,14 +40,13 @@ describe('V2 research-progress country traits', () => {
     expect(applyResearchProgressTraitV2(germany, 'military-industry', 0)).toBe(0);
   });
 
-  it('uses only the live active country after a foreign core is absorbed into its empire', () => {
+  it('cannot inherit an archived research modifier from an absorbed foreign core', () => {
     const state = createWorldStateV2(82_101);
     const czechTerritory = territoryIdV2('cze');
     state.players[germany].research.allocations = { ...militaryIndustryOnly };
 
-    // The territory keeps Czechia as its immutable opening identity, but is a
-    // fully integrated German core. Czechia's +12% branch trait must not join
-    // Germany's own +4% branch trait.
+    // The territory keeps Czechia as its immutable opening identity for save
+    // compatibility, but neither archived country modifier can affect progress.
     state.territories[czechTerritory].owner = germany;
     state.territories[czechTerritory].coreOwner = germany;
     state.territories[czechTerritory].integration = 1;
@@ -70,12 +69,12 @@ describe('V2 research-progress country traits', () => {
     const expectedGermanProgress = round(applyResearchProgressTraitV2(
       germany, 'military-industry', baseProgress,
     ));
-    const incorrectlyStackedProgress = round(
-      applyResearchProgressTraitV2(germany, 'military-industry', baseProgress)
-        * countryTraitFactorV2(czechia, 'research-progress', {
-          researchBranch: 'military-industry',
-        }),
-    );
+    expect(countryTraitFactorV2(germany, 'research-progress', {
+      researchBranch: 'military-industry',
+    })).toBe(1);
+    expect(countryTraitFactorV2(czechia, 'research-progress', {
+      researchBranch: 'military-industry',
+    })).toBe(1);
 
     processResearchV2(
       state,
@@ -86,7 +85,5 @@ describe('V2 research-progress country traits', () => {
 
     expect(state.players[germany].research.progress['military-industry'])
       .toBe(expectedGermanProgress);
-    expect(state.players[germany].research.progress['military-industry'])
-      .not.toBe(incorrectlyStackedProgress);
   });
 });

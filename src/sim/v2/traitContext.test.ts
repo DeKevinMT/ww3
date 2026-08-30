@@ -83,7 +83,6 @@ describe('V2 trait hook context', () => {
     expect(traitTerritoryContextV2(state, WORLD_CONTENT_V2, nld, belTerritory))
       .toMatchObject({
         terrain: WORLD_CONTENT_V2.territories[belTerritory].terrain,
-        condition: state.territories[belTerritory].condition,
         homeland: false,
       });
 
@@ -223,8 +222,6 @@ describe('V2 trait hook context', () => {
   it('uses local operation role and the correct actor territory during counteroffensives', () => {
     const state = createWorldStateV2(81_004);
     state.wars = [];
-    state.territories[belTerritory].condition = 0.61;
-    state.territories[nldTerritory].condition = 0.42;
     const counteroffensive = operation(bel, belTerritory, nldTerritory, 'naval');
     const activeWar = war([], [counteroffensive]);
     state.wars = [activeWar];
@@ -237,7 +234,6 @@ describe('V2 trait hook context', () => {
       role: 'attacker',
       access: 'naval',
       terrain: WORLD_CONTENT_V2.territories[belTerritory].terrain,
-      condition: 0.61,
       homeland: true,
     });
 
@@ -249,7 +245,6 @@ describe('V2 trait hook context', () => {
       role: 'defender',
       access: 'naval',
       terrain: WORLD_CONTENT_V2.territories[nldTerritory].terrain,
-      condition: 0.42,
       homeland: true,
     });
   });

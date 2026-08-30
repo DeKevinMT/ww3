@@ -4,6 +4,7 @@ import {
   DIRECT_CONNECT_CHANNEL_LABEL,
   DirectConnectError,
   DirectConnectHost,
+  DirectReconnectSeatRegistry,
   waitForIceGatheringComplete,
 } from './directConnect';
 import {
@@ -52,6 +53,31 @@ class FakeInvitingPeerConnection extends FakePeerConnection {
 }
 
 describe('WebRTC Direct Connect primitives', () => {
+  it('reserves a stable seat, rejects duplicate tokens and expires the grace cleanly', () => {
+    let now = 10_000;
+    const seats = new DirectReconnectSeatRegistry({
+      sessionId: 'session_12345678',
+      graceMs: 5_000,
+      now: () => now,
+    });
+    const first = seats.accept('guest_12345678');
+    expect(first.rejoined).toBe(false);
+    expect(() => seats.accept('guest_12345678', first.credential)).toThrow(/already connected/i);
+
+    seats.disconnect('guest_12345678');
+    expect(() => seats.accept('guest_12345678', {
+      ...first.credential,
+      rejoinToken: 'rejoin_wrongtoken',
+    })).toThrow(/does not match/i);
+    expect(seats.accept('guest_12345678', first.credential)).toMatchObject({ rejoined: true });
+
+    seats.disconnect('guest_12345678');
+    now += 5_001;
+    expect(seats.releaseExpired()).toEqual(['guest_12345678']);
+    expect(seats.credential('guest_12345678')).toBeUndefined();
+    expect(() => seats.accept('guest_12345678', first.credential)).toThrow(/no longer reserved/i);
+  });
+
   it('uses public Cloudflare STUN without embedded credentials', () => {
     expect(DEFAULT_DIRECT_CONNECT_RTC_CONFIGURATION.iceServers).toEqual([
       { urls: 'stun:stun.cloudflare.com:3478' },

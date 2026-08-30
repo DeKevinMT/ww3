@@ -27,8 +27,8 @@ import {
 import { nationIdV2, territoryIdV2 } from './types';
 import { WorldEngineV2 } from './WorldEngineV2';
 
-describe('human country-trait runtime propagation', () => {
-  it('uses the human multiplier in both research forecasts and weekly progress', () => {
+describe('retired human country-trait runtime compatibility', () => {
+  it('keeps human and AI research forecasts identical while weekly progress stays canonical', () => {
     const state = createWorldStateV2(92_001);
     const czechia = nationIdV2('cze');
     state.humanPlayerId = czechia;
@@ -45,7 +45,7 @@ describe('human country-trait runtime propagation', () => {
       10,
       { humanControlled: true },
     );
-    expect(humanProjection).toBeGreaterThan(aiProjection);
+    expect(humanProjection).toBe(aiProjection);
     expect(humanProjection).toBeCloseTo(
       10 * countryTraitFactorV2(czechia, 'research-progress', {
         humanControlled: true,
@@ -89,7 +89,7 @@ describe('human country-trait runtime propagation', () => {
       .toBeCloseTo(progressBefore + militaryIndustry.weeklyProgress, 6);
   });
 
-  it('amplifies the active human leader in an immutable integration quote only once', () => {
+  it('keeps human and AI integration quotes identical', () => {
     const state = createWorldStateV2(92_002);
     const belize = nationIdV2('blz');
     const targetId = territoryIdV2('guy');
@@ -123,7 +123,6 @@ describe('human country-trait runtime propagation', () => {
         atWar: false,
         treasury: state.players[belize]!.treasury,
         foodSecurity: state.players[belize]!.foodSecurity,
-        condition: state.territories[targetId]!.condition,
       },
     );
 
@@ -136,18 +135,16 @@ describe('human country-trait runtime propagation', () => {
         atWar: false,
         treasury: state.players[belize]!.treasury,
         foodSecurity: state.players[belize]!.foodSecurity,
-        condition: state.territories[targetId]!.condition,
       }),
     ));
     expect(humanQuote.durationWeeks).toBe(Math.max(1, Math.round(rawDuration * expectedFactor)));
-    expect(humanQuote.durationWeeks).toBeLessThan(aiQuote.durationWeeks);
+    expect(humanQuote.durationWeeks).toBe(aiQuote.durationWeeks);
   });
 
-  it('amplifies Switzerland\'s live reserve training instead of a post-defeat payout', () => {
+  it('returns no archived Switzerland modifiers through the runtime API', () => {
     const switzerland = nationIdV2('che');
     expect(countryTraitModifiersV2(switzerland, 'treasury-seizure')).toEqual([]);
-    expect(countryTraitModifiersV2(switzerland, 'reserve-training')[0]?.percentage)
-      .toBeGreaterThan(0);
+    expect(countryTraitModifiersV2(switzerland, 'reserve-training')).toEqual([]);
   });
 
   it('requotes opening cash and synchronizes army capacity across choose and lobby changes', () => {
@@ -200,7 +197,7 @@ describe('human country-trait runtime propagation', () => {
     expect(engine.state.territories[greenlandTerritory]!.army.capacity)
       .toBeCloseTo(amplifiedGreenlandCapacity, 8);
     expect(countryTraitFactorV2(greenland, 'army-capacity', { humanControlled: true }))
-      .toBeCloseTo(1.27, 12);
+      .toBe(1);
 
     expect(engine.chooseCountry(belgium)).toEqual({ accepted: true });
     engine.stopClock();

@@ -6,49 +6,62 @@ import {
 import { WORLD_CONTENT_V2 } from './content';
 import {
   advanceTerritoryIntegrationV2,
-  INTEGRATION_DURATION_MULTIPLIER_V2,
   territoryIntegrationDurationWeeksV2,
   territoryIntegrationSizeV2,
 } from './integration';
 import { territoryIdV2, type TerritoryId } from './types';
 
-function previousCalendarDurationWeeks(territoryId: TerritoryId): number {
+function relativeIntegrationSize(territoryId: TerritoryId): number {
   const luxembourgSize = territoryIntegrationSizeV2(
     WORLD_CONTENT_V2,
     territoryIdV2('lux'),
   );
   const size = territoryIntegrationSizeV2(WORLD_CONTENT_V2, territoryId);
-  const relativeSize = Math.max(0, Math.min(1,
+  return Math.max(0, Math.min(1,
     (size - luxembourgSize) / Math.max(0.000001, 1 - luxembourgSize),
   ));
-  return Math.round((12.5
-    + 25 * relativeSize
-    + 50 * relativeSize ** 2
-    + 100 * relativeSize ** 4) * WEEKS_PER_YEAR);
 }
 
 describe('V2 country-size integration calendar', () => {
-  it('uses a 0.82x calendar for integrations that are about twenty percent faster', () => {
-    expect(INTEGRATION_DURATION_MULTIPLIER_V2).toBe(0.82);
+  it('quotes the exact one-to-six-year Signal Purge curve from immutable size', () => {
     for (const territoryId of WORLD_CONTENT_V2.territoryIds) {
+      const relativeSize = relativeIntegrationSize(territoryId);
       expect(territoryIntegrationDurationWeeksV2(WORLD_CONTENT_V2, territoryId)).toBe(
-        Math.round(previousCalendarDurationWeeks(territoryId) * 0.82),
+        Math.round((1
+          + 2 * relativeSize
+          + 1.5 * relativeSize ** 2
+          + 1.5 * relativeSize ** 4) * WEEKS_PER_YEAR),
       );
     }
   });
 
-  it('anchors Luxembourg near 10.3 years, Belgium near 21 and China near 139', () => {
-    const years = (id: string) => territoryIntegrationDurationWeeksV2(
-      WORLD_CONTENT_V2,
-      territoryIdV2(id),
-    ) / WEEKS_PER_YEAR;
+  it('keeps small targets quick, mid-sized targets meaningful and the largest projects long', () => {
+    const entries = WORLD_CONTENT_V2.territoryIds.map((territoryId) => ({
+      territoryId,
+      relativeSize: relativeIntegrationSize(territoryId),
+      years: territoryIntegrationDurationWeeksV2(WORLD_CONTENT_V2, territoryId)
+        / WEEKS_PER_YEAR,
+    }));
+    const smallest = entries.reduce((left, right) => left.years <= right.years ? left : right);
+    const middle = entries.reduce((closest, candidate) => (
+      Math.abs(candidate.relativeSize - 0.5) < Math.abs(closest.relativeSize - 0.5)
+        ? candidate : closest
+    ));
+    const largest = entries.reduce((left, right) => left.years >= right.years ? left : right);
 
-    expect(years('lux')).toBeGreaterThanOrEqual(10.2);
-    expect(years('lux')).toBeLessThanOrEqual(10.4);
-    expect(years('bel')).toBeGreaterThanOrEqual(20.5);
-    expect(years('bel')).toBeLessThanOrEqual(21.8);
-    expect(years('chn')).toBeGreaterThanOrEqual(135);
-    expect(years('chn')).toBeLessThanOrEqual(145);
+    expect(smallest.years).toBeGreaterThanOrEqual(1);
+    expect(smallest.years).toBeLessThanOrEqual(1.1);
+    expect(middle.relativeSize).toBeCloseTo(0.5, 1);
+    expect(middle.years).toBeGreaterThanOrEqual(2);
+    expect(middle.years).toBeLessThanOrEqual(4);
+    expect(largest.years).toBeGreaterThanOrEqual(5.5);
+    expect(largest.years).toBeLessThanOrEqual(6);
+
+    for (const starterTarget of ['lux', 'gnb', 'gmb']) {
+      const target = entries.find((entry) => entry.territoryId === territoryIdV2(starterTarget));
+      expect(target?.years).toBeGreaterThanOrEqual(1);
+      expect(target?.years).toBeLessThanOrEqual(1.8);
+    }
   });
 
   it('never gives a larger country-size score a shorter calendar', () => {

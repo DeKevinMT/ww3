@@ -272,7 +272,17 @@ export class HostGameSession {
     this.unsubscribeEngine = this.engine.subscribe((_state, change) => this.handleEngineChange(change));
     this.unsubscribeTransport = this.transport.subscribe({
       onMessage: (event) => this.handleTransportMessage(event.peerId, event.message),
-      onStateChange: () => this.emitStatus(),
+      onStateChange: (event) => {
+        const peerId = event.peer.peerId;
+        if (event.peer.state === 'connected'
+          && peerId
+          && peerId !== this.transport.hostPeerId
+          && this.seats.has(peerId)
+          && this.phase === 'running') {
+          this.queueOrSendSnapshot(peerId, 'reconnect', true);
+        }
+        this.emitStatus();
+      },
     });
   }
 
@@ -613,8 +623,12 @@ export class HostGameSession {
     this.queueOrSendSnapshot(peerId, 'resync');
   }
 
-  private queueOrSendSnapshot(peerId: string, reason: SnapshotMessage['reason']): void {
-    if (!this.canAttemptSnapshot(peerId)
+  private queueOrSendSnapshot(
+    peerId: string,
+    reason: SnapshotMessage['reason'],
+    bypassCooldown = false,
+  ): void {
+    if ((!bypassCooldown && !this.canAttemptSnapshot(peerId))
       || this.handlingTick
       || this.pendingActionCount() > 0) {
       this.deferredSnapshots.set(peerId, reason);
@@ -623,7 +637,7 @@ export class HostGameSession {
     }
     this.lastSnapshotAttemptTickByPeer.set(peerId, this.engine.state.tick);
     try {
-      const snapshot = this.createSnapshot(reason);
+      const snapshot = this.createSnapshot(reason, peerId);
       if (this.sendToPeer(peerId, snapshot, `A ${reason} snapshot could not be sent`)) {
         this.lastSnapshotTickByPeer.set(peerId, snapshot.tick);
         this.deferredSnapshots.delete(peerId);
@@ -654,6 +668,7 @@ export class HostGameSession {
         reason,
         tick: save.tick,
         hash: save.canonicalStateHash,
+        nextClientSequence: (this.lastClientSequenceByPeer.get(peerId) ?? 0) + 1,
         save,
       };
       if (this.sendToPeer(peerId, snapshot, `A deferred ${reason} snapshot could not be sent`)) {
@@ -663,13 +678,16 @@ export class HostGameSession {
     }
   }
 
-  private createSnapshot(reason: SnapshotMessage['reason']): SnapshotMessage {
+  private createSnapshot(reason: SnapshotMessage['reason'], peerId?: string): SnapshotMessage {
     const save = createSaveV2(this.engine.state, this.engine.content);
     return {
       type: 'snapshot',
       reason,
       tick: save.tick,
       hash: save.canonicalStateHash,
+      nextClientSequence: peerId === undefined
+        ? 1
+        : (this.lastClientSequenceByPeer.get(peerId) ?? 0) + 1,
       save,
     };
   }
@@ -696,7 +714,7 @@ export class HostGameSession {
 
 export class GuestGameSession {
   readonly role = 'guest' as const;
-  readonly transport: GuestSessionTransport;
+  private currentTransport: GuestSessionTransport;
   readonly countryId: PlayerId;
   readonly seatCount: number;
 
@@ -724,7 +742,7 @@ export class GuestGameSession {
       || options.seatCount > MAX_MULTIPLAYER_PLAYERS) {
       throw new GameSessionError(`Seat count must be ${MIN_MULTIPLAYER_PLAYERS}-${MAX_MULTIPLAYER_PLAYERS}.`);
     }
-    this.transport = options.transport;
+    this.currentTransport = options.transport;
     this.countryId = options.countryId;
     this.seatCount = options.seatCount;
     if (options.humanPlayerIds) {
@@ -745,10 +763,11 @@ export class GuestGameSession {
     if (options.onCommandResult) this.commandResultListeners.add(options.onCommandResult);
     if (options.onSnapshot) this.snapshotListeners.add(options.onSnapshot);
     if (options.engine) this.attachReplica(options.engine);
-    this.unsubscribeTransport = this.transport.subscribe({
-      onMessage: (message) => this.handleTransportMessage(message),
-      onStateChange: (event) => this.handleTransportState(event.peer.state, event.error?.message),
-    });
+    this.unsubscribeTransport = this.subscribeTransport(this.currentTransport);
+  }
+
+  get transport(): GuestSessionTransport {
+    return this.currentTransport;
   }
 
   get engine(): GameSessionEngineV2 | undefined {
@@ -800,6 +819,28 @@ export class GuestGameSession {
       : rejected(this.lastError ?? 'The authoritative snapshot could not be loaded.');
   }
 
+  /**
+   * Rebinds this stable campaign seat to a freshly authenticated WebRTC route.
+   * The replica stays mounted until the host's reconnect snapshot replaces it.
+   */
+  replaceTransport(transport: GuestSessionTransport): CommandResultV2 {
+    if (this.phase === 'closed') return rejected('This multiplayer session is closed.');
+    if (transport.hostPeerId !== this.currentTransport.hostPeerId) {
+      return rejected('The reconnect route belongs to a different host.');
+    }
+    this.unsubscribeTransport();
+    this.currentTransport = transport;
+    this.unsubscribeTransport = this.subscribeTransport(transport);
+    this.resyncPending = false;
+    this.lastError = undefined;
+    this.phase = transport.state === 'connected' ? 'resyncing' : 'disconnected';
+    this.emitStatus();
+    if (transport.state === 'connected') {
+      this.sendResyncRequest('Campaign seat reconnected.');
+    }
+    return { accepted: true };
+  }
+
   close(closeTransport = true): void {
     if (this.phase === 'closed') return;
     this.phase = 'closed';
@@ -811,7 +852,14 @@ export class GuestGameSession {
     this.statusListeners.clear();
     this.commandResultListeners.clear();
     this.snapshotListeners.clear();
-    if (closeTransport) this.transport.close();
+    if (closeTransport) this.currentTransport.close();
+  }
+
+  private subscribeTransport(transport: GuestSessionTransport): () => void {
+    return transport.subscribe({
+      onMessage: (message) => this.handleTransportMessage(message),
+      onStateChange: (event) => this.handleTransportState(event.peer.state, event.error?.message),
+    });
   }
 
   private attachReplica(engine: GameSessionEngineV2): void {
@@ -902,6 +950,7 @@ export class GuestGameSession {
     this.phase = 'running';
     this.lastError = undefined;
     this.lastHashTick = message.tick;
+    this.nextClientSequence = message.nextClientSequence;
     this.resyncPending = false;
     this.resyncRetry = undefined;
     if (this.pendingCommands.size > 0) {

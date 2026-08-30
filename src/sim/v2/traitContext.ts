@@ -105,10 +105,14 @@ export function traitNationContextV2(
     playerWarOperationsV2(war, activePlayerId)
   ));
   const humanControlled = isHumanPlayerV2(state, activePlayerId);
+  const commanderForce = state.commanderForces?.[activePlayerId];
+  const commanderBacked = Boolean(commanderForce);
   return Object.freeze({
     humanControlled,
     humanTraitMultiplier: humanControlled
-      ? humanCountryTraitMultiplierForContentVersionV2(activePlayerId, state.contentVersion)
+      ? commanderBacked
+        ? commanderForce!.countryTraitScale
+        : humanCountryTraitMultiplierForContentVersionV2(activePlayerId, state.contentVersion)
       : undefined,
     atWar: relevantWars.length > 0,
     treasury: player?.treasury,
@@ -122,7 +126,7 @@ export function traitNationContextV2(
  * never follows `owner`, `coreOwner`, integration progress or empire name.
  */
 export function traitTerritoryContextV2(
-  state: WorldStateV2,
+  _state: WorldStateV2,
   content: WorldContentV2,
   activePlayerId: PlayerId,
   territoryId: TerritoryId,
@@ -130,13 +134,12 @@ export function traitTerritoryContextV2(
   return Object.freeze({
     terrain: content.territories[territoryId]?.terrain,
     terrains: Object.freeze([...territoryTerrainTypesV2(content, territoryId)]),
-    condition: state.territories[territoryId]?.condition,
     homeland: isTraitHomelandV2(content, activePlayerId, territoryId),
   });
 }
 
 /**
- * Local front access for territory-wide effects such as condition recovery.
+ * Local front access for territory-scoped effects.
  * Only an operation commanded by the live owner on that owner's own war side
  * can qualify. This deliberately ignores an opponent targeting the territory
  * and stale operations left behind by an absorbed commander. When both access
@@ -194,8 +197,8 @@ export function traitWarContextV2(
 /**
  * Complete operation context for the supplied actor. The operation commander
  * is the local attacker even during a counteroffensive; the live target owner
- * is the local defender. Terrain, condition and homeland are taken from that
- * actor's source or target respectively.
+ * is the local defender. Terrain and homeland are taken from that actor's
+ * source or target respectively.
  */
 export function traitOperationContextV2(
   state: WorldStateV2,

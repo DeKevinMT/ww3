@@ -1,8 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { V2_RULES_VERSION, WAR_REVENGE_WINDOW_TICKS } from './balance';
+import {
+  V2_CONTENT_VERSION,
+  V2_RULES_VERSION,
+  WAR_CAMPAIGN_MAX_TICKS,
+  WAR_REVENGE_WINDOW_TICKS,
+} from './balance';
 import { createWorldStateV2 } from './bootstrap';
 import { stateTerritoryArmyCapacityTargetV2, synchronizeArmyCapacityV2 } from './capacity';
-import { WORLD_CONTENT_V2 } from './content';
+import {
+  ANTARCTIC_TERRITORY_IDS_V2,
+  ROGUE_AI_NATION_ID_V2,
+  WORLD_CONTENT_V2,
+} from './content';
 import {
   beginTerritoryIntegrationV2,
   INTEGRATION_DURATION_MULTIPLIER_V2,
@@ -16,17 +25,19 @@ import { OPENING_ARMY_BONUS_DURATION_TICKS_V2 } from './openingArmyBonus';
 import { createRandomWorldContentV2 } from './randomWorld';
 import {
   invalidateTerritoryIndexV2,
-  selectFoodDomesticCapacityTargetV2,
 } from './selectors';
+import { selectNorthPoleModifiersV2 } from './northPoleModifiers';
 import { nationIdV2, territoryIdV2 } from './types';
 
 const LEGACY_CONTENT_VERSION_V16 = 'natural-earth-countries-2026-v6-naval';
 
 function removeSchema22Fields(save: Record<string, any>): void {
+  delete save.commanderForces;
   delete save.alliances;
   delete save.allianceOffers;
   delete save.firstIntegrationDiscountUsedBy;
   delete save.polarEndgame;
+  delete save.runProgression;
   for (const nation of Object.values(save.players) as Array<Record<string, any>>) {
     delete nation.openingArmyBonus;
   }
@@ -50,6 +61,7 @@ function legacySaveV16(seed: number): Record<string, any> {
   for (const territory of Object.values(current.territories) as Array<Record<string, any>>) {
     delete territory.coreOwner;
     delete territory.integrationProgram;
+    territory.condition = 1;
     territory.army.veteranManpower = 0;
     territory.army.veteranExperience = 0;
   }
@@ -91,6 +103,7 @@ function legacySaveV17(seed: number): Record<string, any> {
   for (const territory of Object.values(current.territories) as Array<Record<string, any>>) {
     delete territory.coreOwner;
     delete territory.integrationProgram;
+    territory.condition = 1;
     territory.army.veteranManpower = 0;
     territory.army.veteranExperience = 0;
   }
@@ -109,6 +122,9 @@ function legacySaveV19(seed: number): Record<string, any> {
   for (const nation of Object.values(current.players) as Array<Record<string, any>>) {
     delete nation.trainedReserves;
     nation.combatExperience = 7.25;
+  }
+  for (const territory of Object.values(current.territories) as Array<Record<string, any>>) {
+    territory.condition = 1;
   }
   current.canonicalStateHash = canonicalStateHashV2(current);
   return current;
@@ -172,6 +188,164 @@ function legacySaveV14(): Record<string, any> {
 }
 
 describe('V2 legacy save migration', () => {
+  it('retires the exact four-project Polar payouts before applying the bounded fourteen-stage curve', () => {
+    const state = createWorldStateV2(8_674, WORLD_CONTENT_V2);
+    const playerId = state.humanPlayerId;
+    const legacy = structuredClone(createSaveV2(state, WORLD_CONTENT_V2)) as Record<string, any>;
+    legacy.rulesVersion = 'frontier-command-v2.73-apex-finance';
+    legacy.polarEndgame.arcticPrograms[playerId] = {
+      playerId,
+      activeProject: null,
+      completedProjects: [
+        'polar-demography',
+        'cryogenic-logistics',
+        'strategic-mobilisation',
+        'deep-ice-signals',
+      ],
+    };
+    const levels = legacy.players[playerId].research.effectLevels;
+    Object.assign(levels, {
+      'population-growth': 4,
+      recovery: 5,
+      'food-storage': 7,
+      supply: 5,
+      'casualty-reduction': 4,
+      'research-efficiency': 5,
+      'force-capacity': 6,
+      'reserve-training': 8,
+      'reserve-mobilization': 9,
+      attack: 4,
+      defense: 5,
+      'research-speed': 10,
+    });
+    legacy.canonicalStateHash = canonicalStateHashV2(legacy);
+
+    const loaded = loadSaveV2(legacy as never, WORLD_CONTENT_V2);
+    expect(loaded.players[playerId].research.effectLevels).toMatchObject({
+      'population-growth': 3,
+      recovery: 10,
+      'food-storage': 0,
+      supply: 3,
+      'casualty-reduction': 3,
+      'research-efficiency': 4,
+      'force-capacity': 4,
+      'reserve-training': 6,
+      'reserve-mobilization': 7,
+      attack: 3,
+      defense: 4,
+      'research-speed': 9,
+    });
+    expect(loaded.polarEndgame.arcticPrograms[playerId]?.completedProjects)
+      .toHaveLength(14);
+    expect(selectNorthPoleModifiersV2(loaded, playerId)).toMatchObject({
+      researchOutputMultiplier: 1.0025,
+      supplyThroughputMultiplier: 1.005,
+      signalPurgeDurationMultiplier: 0.92,
+      recoveryMultiplier: 1.02,
+      attackVsRogueMultiplier: 1.04,
+      defenseVsRogueMultiplier: 1.06,
+      antarcticSupplyMultiplier: 1.08,
+      antarcticOperationMultiplier: 1.05,
+    });
+
+    const loadedAgain = loadSaveV2(createSaveV2(loaded, WORLD_CONTENT_V2), WORLD_CONTENT_V2);
+    expect(loadedAgain.players[playerId].research.effectLevels)
+      .toEqual(loaded.players[playerId].research.effectLevels);
+  });
+
+  it('hydrates the v8 Rogue empire and extends only legacy three-year campaigns', () => {
+    const belgium = nationIdV2('bel');
+    const netherlands = nationIdV2('nld');
+    const state = createWorldStateV2(8_660);
+    state.tick = 40;
+    state.players[belgium].treasury = 432.125;
+    state.wars.push({
+      id: 'war-v266-window',
+      attackerId: belgium,
+      defenderId: netherlands,
+      startedTick: 12,
+      lastBattleTick: 38,
+      warScore: 0,
+      battles: 0,
+      attackerLosses: 0,
+      defenderLosses: 0,
+      attackerCivilianLosses: 0,
+      defenderCivilianLosses: 0,
+      lastPeaceOfferTick: -1_000_000,
+      attackerOperations: [],
+      defenderOperations: [],
+      revenge: null,
+      campaign: {
+        attackerObjective: 1,
+        defenderObjective: 1,
+        attackerCaptures: 0,
+        defenderCaptures: 0,
+        consolidationUntilTick: 12,
+        expiresTick: 12 + WAR_CAMPAIGN_MAX_TICKS,
+      },
+    });
+    synchronizeArmyCapacityV2(state, WORLD_CONTENT_V2);
+    const legacy = structuredClone(createSaveV2(state, WORLD_CONTENT_V2)) as Record<string, any>;
+    delete legacy.players[ROGUE_AI_NATION_ID_V2];
+    for (const territoryId of ANTARCTIC_TERRITORY_IDS_V2) delete legacy.territories[territoryId];
+    legacy.contentVersion = 'natural-earth-countries-2026-v7-greenland';
+    delete legacy.commanderForces;
+    delete legacy.runProgression;
+    legacy.rulesVersion = 'frontier-command-v2.66-strategic-rebalance';
+    legacy.wars[0].campaign.expiresTick = legacy.wars[0].startedTick + 156;
+    legacy.canonicalStateHash = canonicalStateHashV2(legacy);
+
+    const loaded = loadSaveV2(legacy as never, WORLD_CONTENT_V2);
+
+    expect(loaded.contentVersion).toBe(V2_CONTENT_VERSION);
+    expect(loaded.players[ROGUE_AI_NATION_ID_V2]).toBeDefined();
+    expect(ANTARCTIC_TERRITORY_IDS_V2.every((id) => Boolean(loaded.territories[id]))).toBe(true);
+    expect(loaded.players[belgium].treasury).toBe(432.125);
+    expect(loaded.wars[0]?.campaign?.expiresTick)
+      .toBe(loaded.wars[0]!.startedTick + WAR_CAMPAIGN_MAX_TICKS);
+    expect(loaded.polarEndgame.phase).toBe('dormant');
+    expect(() => createSaveV2(loaded, WORLD_CONTENT_V2)).not.toThrow();
+  });
+
+  it('leaves current campaign horizons untouched during v2.66 migration', () => {
+    const state = createWorldStateV2(8_661);
+    const legacy = structuredClone(createSaveV2(state, WORLD_CONTENT_V2)) as Record<string, any>;
+    const customStartedTick = 10;
+    const customExpiresTick = customStartedTick + WAR_CAMPAIGN_MAX_TICKS;
+    legacy.wars.push({
+      id: 'war-v266-current-window',
+      attackerId: 'bel',
+      defenderId: 'nld',
+      startedTick: customStartedTick,
+      lastBattleTick: customStartedTick,
+      warScore: 0,
+      battles: 0,
+      attackerLosses: 0,
+      defenderLosses: 0,
+      attackerCivilianLosses: 0,
+      defenderCivilianLosses: 0,
+      lastPeaceOfferTick: -1_000_000,
+      attackerOperations: [],
+      defenderOperations: [],
+      revenge: null,
+      campaign: {
+        attackerObjective: 1,
+        defenderObjective: 1,
+        attackerCaptures: 0,
+        defenderCaptures: 0,
+        consolidationUntilTick: customStartedTick,
+        expiresTick: customExpiresTick,
+      },
+    });
+    delete legacy.commanderForces;
+    delete legacy.runProgression;
+    legacy.rulesVersion = 'frontier-command-v2.66-strategic-rebalance';
+    legacy.canonicalStateHash = canonicalStateHashV2(legacy);
+
+    const loaded = loadSaveV2(legacy as never, WORLD_CONTENT_V2);
+    expect(loaded.wars[0]?.campaign?.expiresTick).toBe(customExpiresTick);
+  });
+
   it('authenticates complete V2.65 schema-22 saves for standard and alternative content', () => {
     const fixtures = [
       { seed: 8_650, content: WORLD_CONTENT_V2 },
@@ -186,6 +360,8 @@ describe('V2 legacy save migration', () => {
       const deployedBefore = Object.values(legacy.territories)
         .filter((territory: any) => territory.owner === humanPlayerId)
         .reduce((sum: number, territory: any) => sum + territory.army.manpower, 0);
+      delete legacy.commanderForces;
+      delete legacy.runProgression;
       legacy.rulesVersion = 'frontier-command-v2.65-polar-endgame';
       legacy.canonicalStateHash = canonicalStateHashV2(legacy);
 
@@ -220,6 +396,8 @@ describe('V2 legacy save migration', () => {
     const state = createWorldStateV2(8_640);
     const legacy = structuredClone(createSaveV2(state, WORLD_CONTENT_V2)) as Record<string, any>;
     delete legacy.polarEndgame;
+    delete legacy.commanderForces;
+    delete legacy.runProgression;
     legacy.rulesVersion = 'frontier-command-v2.64-war-strain-counterattacks';
     legacy.canonicalStateHash = canonicalStateHashV2(legacy);
 
@@ -254,6 +432,8 @@ describe('V2 legacy save migration', () => {
       .filter((territory: any) => territory.owner === greenland)
       .reduce((sum: number, territory: any) => sum + territory.army.manpower, 0);
     delete legacy.polarEndgame;
+    delete legacy.commanderForces;
+    delete legacy.runProgression;
     legacy.rulesVersion = 'frontier-command-v2.64-war-strain-counterattacks';
     legacy.canonicalStateHash = canonicalStateHashV2(legacy);
 
@@ -277,6 +457,8 @@ describe('V2 legacy save migration', () => {
     const legacy = structuredClone(createSaveV2(state, WORLD_CONTENT_V2)) as Record<string, any>;
     delete legacy.firstIntegrationDiscountUsedBy;
     delete legacy.polarEndgame;
+    delete legacy.commanderForces;
+    delete legacy.runProgression;
     legacy.rulesVersion = 'frontier-command-v2.59-country-traits';
     for (const nation of Object.values(legacy.players) as Array<Record<string, any>>) {
       delete nation.openingArmyBonus;
@@ -301,6 +483,8 @@ describe('V2 legacy save migration', () => {
     const legacy = structuredClone(createSaveV2(state, WORLD_CONTENT_V2)) as Record<string, any>;
     delete legacy.firstIntegrationDiscountUsedBy;
     delete legacy.polarEndgame;
+    delete legacy.commanderForces;
+    delete legacy.runProgression;
     legacy.rulesVersion = 'frontier-command-v2.59-country-traits';
     for (const nation of Object.values(legacy.players) as Array<Record<string, any>>) {
       delete nation.openingArmyBonus;
@@ -433,6 +617,54 @@ describe('V2 legacy save migration', () => {
       .toThrow(/non-canonical keys/i);
   });
 
+  it('authenticates v2.74 land condition before stripping it into the v2.75 schema', () => {
+    const state = createWorldStateV2(8_600_74);
+    const belgium = nationIdV2('bel');
+    const belgiumTerritory = territoryIdV2('bel');
+    state.players[belgium].treasury = 123.456789;
+    const legacy = structuredClone(createSaveV2(state, WORLD_CONTENT_V2)) as Record<string, any>;
+    legacy.rulesVersion = 'frontier-command-v2.74-shared-apex-economy';
+    for (const [id, territory] of Object.entries(legacy.territories) as Array<[string, Record<string, any>]>) {
+      territory.condition = id === belgiumTerritory ? 0.42 : 1;
+    }
+    legacy.canonicalStateHash = canonicalStateHashV2(legacy);
+
+    const loaded = loadSaveV2(legacy as never, WORLD_CONTENT_V2);
+    expect(loaded.rulesVersion).toBe(V2_RULES_VERSION);
+    expect(loaded.tick).toBe(state.tick);
+    expect(loaded.players[belgium].treasury).toBe(123.456789);
+    expect(Object.values(loaded.territories).every((territory) => (
+      !Object.prototype.hasOwnProperty.call(territory, 'condition')
+    ))).toBe(true);
+    const canonical = createSaveV2(loaded, WORLD_CONTENT_V2);
+    expect(Object.values(canonical.territories).every((territory) => (
+      !Object.prototype.hasOwnProperty.call(territory, 'condition')
+    ))).toBe(true);
+
+    const tamperedLegacy = structuredClone(legacy);
+    tamperedLegacy.territories[belgiumTerritory].condition = 0.41;
+    expect(() => loadSaveV2(tamperedLegacy as never, WORLD_CONTENT_V2))
+      .toThrow(/canonical hash mismatch/i);
+
+    const missingLegacyCondition = structuredClone(legacy);
+    delete missingLegacyCondition.territories[belgiumTerritory].condition;
+    missingLegacyCondition.canonicalStateHash = canonicalStateHashV2(missingLegacyCondition);
+    expect(() => loadSaveV2(missingLegacyCondition as never, WORLD_CONTENT_V2))
+      .toThrow(/invalid land condition/i);
+
+    const malformedLegacyCondition = structuredClone(legacy);
+    malformedLegacyCondition.territories[belgiumTerritory].condition = 'healthy';
+    malformedLegacyCondition.canonicalStateHash = canonicalStateHashV2(malformedLegacyCondition);
+    expect(() => loadSaveV2(malformedLegacyCondition as never, WORLD_CONTENT_V2))
+      .toThrow(/invalid land condition/i);
+
+    const malformedCurrent = structuredClone(canonical) as Record<string, any>;
+    malformedCurrent.territories[belgiumTerritory].condition = 0.42;
+    malformedCurrent.canonicalStateHash = canonicalStateHashV2(malformedCurrent);
+    expect(() => loadSaveV2(malformedCurrent as never, WORLD_CONTENT_V2))
+      .toThrow(/non-canonical keys/i);
+  });
+
   it('requires trained reserves in current saves and round-trips them through the canonical hash', () => {
     const state = createWorldStateV2(8_602);
     const belgium = nationIdV2('bel');
@@ -456,7 +688,7 @@ describe('V2 legacy save migration', () => {
       .toThrow(/non-canonical Combat Experience state/i);
   });
 
-  it('initializes missing same-schema domestic food capacity only after authentication', () => {
+  it('authenticates an old same-schema commodity field before retiring it to neutral', () => {
     const state = createWorldStateV2(87);
     const belgium = nationIdV2('bel');
     const oldCurrent = structuredClone(createSaveV2(state, WORLD_CONTENT_V2)) as Record<string, any>;
@@ -464,10 +696,9 @@ describe('V2 legacy save migration', () => {
     oldCurrent.canonicalStateHash = canonicalStateHashV2(oldCurrent);
 
     const loaded = loadSaveV2(oldCurrent as never, WORLD_CONTENT_V2);
-    expect(loaded.players[belgium].domesticFoodCapacity).toBeCloseTo(
-      selectFoodDomesticCapacityTargetV2(loaded, WORLD_CONTENT_V2, belgium),
-      8,
-    );
+    expect(loaded.players[belgium].domesticFoodCapacity).toBe(0);
+    expect(loaded.players[belgium].foodStock).toBe(0);
+    expect(loaded.players[belgium].foodSecurity).toBe(1);
     const reloaded = loadSaveV2(createSaveV2(loaded, WORLD_CONTENT_V2), WORLD_CONTENT_V2);
     expect(reloaded.players[belgium].domesticFoodCapacity)
       .toBe(loaded.players[belgium].domesticFoodCapacity);
@@ -819,5 +1050,103 @@ describe('V2 legacy save migration', () => {
     expect(loaded.players[nationIdV2('bel')].research.effectLevels['reinforcement-efficiency']).toBe(8);
     expect(loaded.offers).toEqual([]);
     expect(() => createSaveV2(loaded, WORLD_CONTENT_V2)).not.toThrow();
+  });
+
+  it('authenticates and discards retired campaign-strain fields without applying them', () => {
+    const legacy = structuredClone(createSaveV2(
+      createWorldStateV2(97), WORLD_CONTENT_V2,
+    )) as Record<string, any>;
+    legacy.warStrain = { score: 100, level: 'critical' };
+    legacy.warStrainScore = 100;
+    legacy.players.bel.warStrain = 100;
+    legacy.players.bel.warStrainLevel = 'critical';
+    legacy.canonicalStateHash = canonicalStateHashV2(legacy);
+
+    const loaded = loadSaveV2(legacy as never, WORLD_CONTENT_V2);
+    const loadedRecord = loaded as unknown as Record<string, unknown>;
+    const belgium = loaded.players[nationIdV2('bel')] as unknown as Record<string, unknown>;
+    const resaved = createSaveV2(loaded, WORLD_CONTENT_V2) as unknown as Record<string, unknown>;
+
+    expect('warStrain' in loadedRecord).toBe(false);
+    expect('warStrainScore' in loadedRecord).toBe(false);
+    expect('warStrain' in belgium).toBe(false);
+    expect('warStrainLevel' in belgium).toBe(false);
+    expect('warStrain' in resaved).toBe(false);
+  });
+
+  it('normalizes an authenticated mid-war save without the report ledgers', () => {
+    const state = createWorldStateV2(97_001, WORLD_CONTENT_V2);
+    const humanId = nationIdV2('bel');
+    const opponentId = nationIdV2('nld');
+    state.wars = [{
+      id: 'war-pre-apex-ledger',
+      attackerId: humanId,
+      defenderId: opponentId,
+      startedTick: 0,
+      lastBattleTick: 0,
+      warScore: 0,
+      battles: 1,
+      attackerLosses: 0.001,
+      defenderLosses: 0.002,
+      attackerCivilianLosses: 0,
+      defenderCivilianLosses: 0,
+      lastPeaceOfferTick: -1_000_000,
+      attackerOperations: [],
+      defenderOperations: [],
+      revenge: null,
+    }];
+    const legacy = structuredClone(createSaveV2(
+      state, WORLD_CONTENT_V2,
+    )) as Record<string, any>;
+    delete legacy.wars[0].apexTelemetryByPlayer;
+    delete legacy.wars[0].reportBaselineByPlayer;
+    legacy.canonicalStateHash = canonicalStateHashV2(legacy);
+
+    const loaded = loadSaveV2(legacy as never, WORLD_CONTENT_V2);
+
+    expect(loaded.wars[0]!.apexTelemetryByPlayer).toEqual({});
+    expect(loaded.wars[0]!.reportBaselineByPlayer).toEqual({});
+    expect(createSaveV2(loaded, WORLD_CONTENT_V2).wars[0]!.apexTelemetryByPlayer)
+      .toEqual({});
+    expect(createSaveV2(loaded, WORLD_CONTENT_V2).wars[0]!.reportBaselineByPlayer)
+      .toEqual({});
+  });
+
+  it('authenticates and retires old settlement offers, obligations and counters', () => {
+    const legacy = structuredClone(createSaveV2(
+      createWorldStateV2(98), WORLD_CONTENT_V2,
+    )) as Record<string, any>;
+    legacy.players.bel.ceasefiresRequested = 3;
+    legacy.offers = [{
+      id: 'offer-retired-settlement',
+      fromId: 'bel',
+      toId: 'nld',
+      warId: 'war-retired-settlement',
+      settlement: 'ceasefire',
+      createdTick: 0,
+      expiresTick: 26,
+      status: 'pending',
+      weeklyCost: 1,
+      paymentWeeks: 52,
+    }];
+    legacy.ceasefireObligations = [{
+      warId: 'war-retired-settlement',
+      payerId: 'bel',
+      payeeId: 'nld',
+      weeklyCost: 1,
+      startsTick: 0,
+      expiresTick: 52,
+    }];
+    legacy.canonicalStateHash = canonicalStateHashV2(legacy);
+
+    const loaded = loadSaveV2(legacy as never, WORLD_CONTENT_V2);
+    expect(loaded.offers).toEqual([]);
+    expect(loaded.ceasefireObligations).toEqual([]);
+    expect(loaded.players[nationIdV2('bel')].ceasefiresRequested).toBe(0);
+
+    const resaved = createSaveV2(loaded, WORLD_CONTENT_V2);
+    expect(resaved.offers).toEqual([]);
+    expect(resaved.ceasefireObligations).toEqual([]);
+    expect(resaved.players[nationIdV2('bel')].ceasefiresRequested).toBe(0);
   });
 });

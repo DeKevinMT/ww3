@@ -5,7 +5,6 @@ import {
   armyCapacityLabel,
   baseOperatingCostLabel,
   globalRankingDetail,
-  suspicionRiskPresentationV2,
   taxIncomeBasisLabel,
   toastVisibilityDuration,
   treasuryTopbarPresentationV2,
@@ -14,8 +13,8 @@ import {
 
 describe('nation army display', () => {
   it('combines deployed manpower and capacity into one x / x value', () => {
-    expect(armyCapacityLabel(1.25, 2.5)).toBe('1.25M / 2.50M');
-    expect(armyCapacityLabel(0.05, 0.125)).toBe('50.00K / 125.00K');
+    expect(armyCapacityLabel(1.25, 2.5)).toBe('1.25M / 2.5M');
+    expect(armyCapacityLabel(0.05, 0.125)).toBe('50K / 125K');
   });
 
   it('shows only military power in global ranking detail', () => {
@@ -24,37 +23,22 @@ describe('nation army display', () => {
 
   it('presents current treasury separately from its weekly forecast', () => {
     expect(treasuryTopbarPresentationV2(4.25, -0.125, 8.5)).toEqual({
-      className: 'top-metric--treasury is-positive',
+      className: 'top-metric--economy is-positive',
       value: '$4.25B',
       reserveFill: '50%',
       reserveFillClassName: 'is-warn',
-      trend: '−$125.00M/wk',
+      trend: '−$125M/wk',
       trendClassName: 'is-negative',
-      ariaLabel: 'Current empire treasury $4.25B; projected recurring net −$125.00M per week',
+      ariaLabel: 'Current empire treasury $4.25B; projected recurring net −$125M per week',
     });
     expect(treasuryTopbarPresentationV2(-0.5, 0.05, 2)).toMatchObject({
-      className: 'top-metric--treasury is-debt is-negative',
-      value: '−$500.00M',
+      className: 'top-metric--economy is-debt is-negative',
+      value: '−$500M',
       reserveFill: '0%',
       reserveFillClassName: 'is-negative',
-      trend: '+$50.00M/wk',
+      trend: '+$50M/wk',
       trendClassName: 'is-positive',
     });
-  });
-
-  it('turns political suspicion into an explicit progressive AI-war risk scale', () => {
-    expect(suspicionRiskPresentationV2(0)).toMatchObject({
-      score: 0,
-      level: 'clear',
-      label: 'NO THREAT',
-      guidance: expect.stringContaining('0% chance'),
-    });
-    expect(suspicionRiskPresentationV2(1)).toMatchObject({ level: 'minimal' });
-    expect(suspicionRiskPresentationV2(20)).toMatchObject({ level: 'watched' });
-    expect(suspicionRiskPresentationV2(40)).toMatchObject({ level: 'exposed' });
-    expect(suspicionRiskPresentationV2(60)).toMatchObject({ level: 'danger' });
-    expect(suspicionRiskPresentationV2(80)).toMatchObject({ level: 'critical' });
-    expect(suspicionRiskPresentationV2(500)).toMatchObject({ score: 100, level: 'critical' });
   });
 
   it('reports live world population and mapped land-area control', () => {
@@ -69,7 +53,7 @@ describe('nation army display', () => {
     expect(stats.controlledLandShare).toBeGreaterThan(0);
     expect(stats.controlledLandShare).toBeLessThan(1);
     expect(stats.controlledTerritories).toBeGreaterThan(0);
-    expect(stats.worldTerritories).toBe(166);
+    expect(stats.worldTerritories).toBe(Object.keys(state.territories).length);
   });
 
   it('keeps important bottom notifications readable for longer', () => {

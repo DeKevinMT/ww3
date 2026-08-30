@@ -1,7 +1,12 @@
 import type { GameSessionStatus, GuestCommandResultEvent } from '../multiplayer/gameSession';
+import type { MultiplayerReconnectStatus } from '../multiplayer/reconnect';
 
 export const GUEST_COMMAND_ACCEPT_NOTICE_MS = 1_400;
 export const GUEST_COMMAND_REJECT_NOTICE_MS = 4_200;
+
+export interface MultiplayerSessionStatusOptions {
+  onReconnect?: () => void;
+}
 
 function phaseLabel(status: GameSessionStatus): string {
   return ({
@@ -22,7 +27,7 @@ export class MultiplayerSessionStatus {
   private noticeActive = false;
   private destroyed = false;
 
-  constructor() {
+  constructor(private readonly options: MultiplayerSessionStatusOptions = {}) {
     this.root.className = 'multiplayer-session-status glass-panel';
     this.root.setAttribute('role', 'status');
     this.root.setAttribute('aria-live', 'polite');
@@ -31,13 +36,13 @@ export class MultiplayerSessionStatus {
       left: '12px',
       bottom: '12px',
       zIndex: '55',
-      pointerEvents: 'none',
+      pointerEvents: 'auto',
       display: 'flex',
       alignItems: 'center',
       gap: '7px',
       padding: '6px 10px',
       borderRadius: '999px',
-      fontSize: '10px',
+      fontSize: '11px',
       fontWeight: '800',
       letterSpacing: '.08em',
       color: '#c9f7ff',
@@ -45,8 +50,15 @@ export class MultiplayerSessionStatus {
       border: '1px solid rgba(107, 221, 242, .24)',
       backdropFilter: 'blur(10px)',
     });
+    this.root.addEventListener('click', this.onClick);
     document.body.append(this.root);
   }
+
+  private readonly onClick = (event: Event): void => {
+    const target = event.target as HTMLElement | null;
+    if (!target?.closest?.('[data-mp-reconnect]')) return;
+    this.options.onReconnect?.();
+  };
 
   update(status: GameSessionStatus): void {
     this.latestStatus = status;
@@ -82,18 +94,81 @@ export class MultiplayerSessionStatus {
     }, accepted ? GUEST_COMMAND_ACCEPT_NOTICE_MS : GUEST_COMMAND_REJECT_NOTICE_MS);
   }
 
+  showReconnectStatus(status: MultiplayerReconnectStatus): void {
+    if (this.destroyed) return;
+    this.noticeActive = false;
+    if (this.noticeTimer) clearTimeout(this.noticeTimer);
+    this.noticeTimer = undefined;
+    const retry = status.phase === 'error' || status.phase === 'expired';
+    const phase = status.phase === 'connected' ? 'RECONNECTED'
+      : retry ? 'RECONNECT PAUSED' : 'RECONNECTING';
+    this.root.textContent = `${phase} · ${status.message}`;
+    if (retry && this.options.onReconnect) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.dataset.mpReconnect = 'true';
+      button.textContent = 'RETRY';
+      button.setAttribute('aria-label', 'Retry multiplayer reconnect');
+      Object.assign(button.style, {
+        marginLeft: '4px',
+        border: '1px solid rgba(255, 211, 116, .55)',
+        borderRadius: '999px',
+        padding: '4px 9px',
+        color: '#fff2c8',
+        background: 'rgba(87, 54, 8, .78)',
+        font: 'inherit',
+        cursor: 'pointer',
+      });
+      this.root.append(button);
+    }
+    this.root.classList.toggle('is-offline', retry);
+    this.root.classList.toggle('has-error', status.phase === 'error');
+    this.root.classList.remove('has-command-error', 'has-command-success');
+    this.root.setAttribute('role', retry ? 'alert' : 'status');
+    this.root.setAttribute('aria-live', retry ? 'assertive' : 'polite');
+    this.root.title = status.message;
+    this.root.style.color = retry ? '#fff2c8' : '#c9f7ff';
+    this.root.style.background = retry ? 'rgba(49, 34, 9, .92)' : 'rgba(5, 24, 30, .86)';
+    this.root.style.borderColor = retry
+      ? 'rgba(255, 196, 96, .55)'
+      : 'rgba(107, 221, 242, .38)';
+  }
+
   private renderStatus(status: GameSessionStatus): void {
     const playerStatus = status.role === 'host'
       ? `${Math.min(status.seatCount, status.connectedPeers + 1)}/${status.seatCount} PLAYERS`
       : status.connectedPeers > 0 ? 'HOST ONLINE' : 'HOST OFFLINE';
     const speed = status.speed === 0 ? 'PAUSED' : `${status.speed}×`;
-    this.root.textContent = `${status.role.toUpperCase()} · ${phaseLabel(status)} · ${playerStatus} · WEEK ${status.tick} · ${speed}`;
+    const label = `${status.role.toUpperCase()} · ${phaseLabel(status)} · ${playerStatus} · WEEK ${status.tick} · ${speed}`;
+    this.root.textContent = label;
+    if (status.role === 'guest'
+      && (status.phase === 'disconnected' || status.phase === 'error')
+      && this.options.onReconnect) {
+      const help = document.createElement('span');
+      help.textContent = ' Your seat is reserved.';
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.dataset.mpReconnect = 'true';
+      button.textContent = 'RECONNECT';
+      button.setAttribute('aria-label', 'Reconnect to multiplayer campaign');
+      Object.assign(button.style, {
+        marginLeft: '4px',
+        border: '1px solid rgba(255, 211, 116, .55)',
+        borderRadius: '999px',
+        padding: '4px 9px',
+        color: '#fff2c8',
+        background: 'rgba(87, 54, 8, .78)',
+        font: 'inherit',
+        cursor: 'pointer',
+      });
+      this.root.append(help, button);
+    }
     this.root.classList.toggle('has-error', status.phase === 'error');
     this.root.classList.toggle('is-offline', status.phase === 'disconnected');
     this.root.classList.remove('has-command-error', 'has-command-success');
     this.root.setAttribute('role', 'status');
     this.root.setAttribute('aria-live', 'polite');
-    this.root.title = status.lastError ?? 'Host-authoritative Direct Connect session';
+    this.root.title = status.lastError ?? 'Host-authoritative multiplayer timeline';
     this.root.style.color = '#c9f7ff';
     this.root.style.background = 'rgba(5, 16, 25, .78)';
     this.root.style.borderColor = status.phase === 'error'
@@ -108,6 +183,7 @@ export class MultiplayerSessionStatus {
     if (this.noticeTimer) clearTimeout(this.noticeTimer);
     this.noticeTimer = undefined;
     this.noticeActive = false;
+    this.root.removeEventListener('click', this.onClick);
     this.root.remove();
   }
 }

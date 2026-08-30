@@ -1,10 +1,12 @@
-import {
-  COUNTRIES,
-  terrainProfileForTerritory,
-} from '../../data/worldMap';
+import { COUNTRIES } from '../../data/worldMap';
+import { ANTARCTICA_SECTOR_PRESENTATIONS } from '../mapGeographyPresentation';
 import type { WorldMapEngineContract } from '../bridge';
+import {
+  mapOwnerPairKey,
+  strategicBorderKind,
+  strategicBorderThreatSignature,
+} from '../borderThreatPresentation';
 import { lonLatToUnitXyz } from './globeMath';
-import { terrainTextureLayerPresentation } from './terrainTexturePresentation';
 import { globeOverlayRadius } from './globeSurfacePresentation';
 
 type Coordinate = readonly [number, number];
@@ -16,13 +18,14 @@ interface MutableBorderEdge {
   end: Coordinate;
   territoryIds: Set<string>;
   occurrenceCount: number;
+  antarctic: boolean;
 }
 
 interface PreparedBorderEdge {
   points: readonly UnitPosition[];
   territoryIds: readonly string[];
   internalCanonicalEdge: boolean;
-  color: UnitColor;
+  antarctic: boolean;
 }
 
 export interface GlobeBorderBuffer {
@@ -38,44 +41,24 @@ export interface GlobeBorderBuffer {
  * keeping the cached buffer compact enough for a single border draw call.
  */
 const MAX_BORDER_ARC_RADIANS = 0.22 * Math.PI / 180;
+export const GLOBE_BORDER_COLORS = Object.freeze({
+  neutral: Object.freeze([0.39, 0.55, 0.62] as const),
+  threatened: Object.freeze([0.94, 0.59, 0.18] as const),
+  acute: Object.freeze([1, 0.22, 0.13] as const),
+  rogue: Object.freeze([0.76, 0.16, 0.42] as const),
+  activeWar: Object.freeze([1, 0.25, 0.20] as const),
+});
 
 /**
- * LineBasicMaterial has one opacity for the complete draw call. Premultiply
- * each terrain hue by its percentage-derived border alpha instead, so the RGB
- * attribute carries both hue and intensity without another material or pass.
+ * Border hierarchy is encoded in the existing vertex-color buffer. This keeps
+ * the political surface and projected empire flag dominant without adding a
+ * material, geometry or draw call for internal realms.
  */
-const TERRAIN_BORDER_COLOR_BY_TERRITORY = new Map<string, UnitColor>(
-  COUNTRIES.map((country) => {
-    const presentation = terrainTextureLayerPresentation(
-      terrainProfileForTerritory(country.id),
-    );
-    const red = (presentation.borderColor >> 16) & 0xff;
-    const green = (presentation.borderColor >> 8) & 0xff;
-    const blue = presentation.borderColor & 0xff;
-    return [country.id, [
-      red / 255 * presentation.borderAlpha,
-      green / 255 * presentation.borderAlpha,
-      blue / 255 * presentation.borderAlpha,
-    ] as const];
-  }),
-);
-
-function terrainBorderColor(territoryIds: readonly string[]): UnitColor {
-  let red = 0;
-  let green = 0;
-  let blue = 0;
-  let count = 0;
-  for (const territoryId of territoryIds) {
-    const color = TERRAIN_BORDER_COLOR_BY_TERRITORY.get(territoryId);
-    if (!color) continue;
-    red += color[0];
-    green += color[1];
-    blue += color[2];
-    count += 1;
-  }
-  if (count === 0) return [0, 0, 0];
-  return [red / count, green / count, blue / count];
-}
+export const GLOBE_BORDER_VISUAL_INTENSITY = Object.freeze({
+  internal: 1,
+  integrating: 1,
+  international: 1,
+});
 
 function pointKey([longitude, latitude]: Coordinate): string {
   // +180 and -180 are the same point on the globe and must share one seam key.
@@ -129,8 +112,12 @@ function sphericalArcPoints(start: Coordinate, end: Coordinate): readonly UnitPo
 const PREPARED_BORDER_EDGES: readonly PreparedBorderEdge[] = (() => {
   const edgesByKey = new Map<string, MutableBorderEdge>();
 
-  for (const country of COUNTRIES) {
-    for (const ring of country.rings) {
+  const addRings = (
+    territoryId: string,
+    rings: readonly (readonly Coordinate[])[],
+    antarctic: boolean,
+  ): void => {
+    for (const ring of rings) {
       if (ring.length < 2) continue;
       for (let index = 0; index < ring.length; index += 1) {
         const start = ring[index];
@@ -140,18 +127,25 @@ const PREPARED_BORDER_EDGES: readonly PreparedBorderEdge[] = (() => {
         const key = edgeKey(start, end);
         const existing = edgesByKey.get(key);
         if (existing) {
-          existing.territoryIds.add(country.id);
+          existing.territoryIds.add(territoryId);
           existing.occurrenceCount += 1;
+          existing.antarctic ||= antarctic;
           continue;
         }
         edgesByKey.set(key, {
           start,
           end,
-          territoryIds: new Set([country.id]),
+          territoryIds: new Set([territoryId]),
           occurrenceCount: 1,
+          antarctic,
         });
       }
     }
+  };
+
+  for (const country of COUNTRIES) addRings(country.id, country.rings, false);
+  for (const sector of ANTARCTICA_SECTOR_PRESENTATIONS) {
+    addRings(sector.id, sector.rings, true);
   }
 
   return [...edgesByKey.values()].map((edge) => {
@@ -162,61 +156,69 @@ const PREPARED_BORDER_EDGES: readonly PreparedBorderEdge[] = (() => {
       // Absorbed source polygons such as Morocco / Western Sahara can retain
       // the same edge twice inside one canonical territory. It is not a coast.
       internalCanonicalEdge: edge.occurrenceCount > territoryIds.length,
-      color: terrainBorderColor(territoryIds),
+      antarctic: edge.antarctic,
     };
   });
 })();
 
-function isIntegratingTerritory(territoryId: string, engine: WorldMapEngineContract): boolean {
-  const territory = engine.state.territories[territoryId];
-  return Boolean(territory
-    && territory.coreOwnerId !== territory.ownerId
-    && territory.integration < 0.999999);
-}
-
-function edgeIsIntegrating(edge: PreparedBorderEdge, engine?: WorldMapEngineContract): boolean {
-  return Boolean(engine && edge.territoryIds.some((territoryId) => (
-    isIntegratingTerritory(territoryId, engine)
-  )));
-}
-
-function isHiddenInternalBorder(
+function visibleBorderColor(
   edge: PreparedBorderEdge,
   engine: WorldMapEngineContract | undefined,
-): boolean {
-  if (edge.internalCanonicalEdge) return true;
-  if (!engine || edge.territoryIds.length < 2) return false;
-  // An unfinished conquest keeps its complete perimeter readable, even where
-  // both sides are already controlled by the conqueror. Completion removes it.
-  if (edgeIsIntegrating(edge, engine)) return false;
-  const firstTerritoryId = edge.territoryIds[0];
-  if (!firstTerritoryId) return false;
-  const ownerId = engine.state.territories[firstTerritoryId]?.ownerId;
-  if (!ownerId) return false;
-
-  // A missing territory snapshot never hides a border. This keeps the renderer
-  // conservative during scenario transitions and for partial test adapters.
-  return edge.territoryIds.every((territoryId) => (
-    engine.state.territories[territoryId]?.ownerId === ownerId
-  ));
+  activeWarPairs: ReadonlySet<string>,
+): UnitColor | undefined {
+  if (edge.internalCanonicalEdge) return undefined;
+  if (!engine) return GLOBE_BORDER_COLORS.neutral;
+  const kind = strategicBorderKind(
+    edge.territoryIds,
+    engine.state.territories,
+    engine.state.humanPlayerId,
+    activeWarPairs,
+  );
+  return kind === 'active-war' ? GLOBE_BORDER_COLORS.activeWar
+    : kind === 'rogue' ? GLOBE_BORDER_COLORS.rogue
+      : kind === 'acute' ? GLOBE_BORDER_COLORS.acute
+        : kind === 'threatened' ? GLOBE_BORDER_COLORS.threatened
+          : GLOBE_BORDER_COLORS.neutral;
 }
 
 /** Stable key for caching border buffers between otherwise frequent map syncs. */
 export function globeBorderOwnershipSignature(engine?: WorldMapEngineContract): string {
   if (!engine) return 'canonical';
-  return COUNTRIES.map((country) => {
+  const ordinary = COUNTRIES.map((country) => {
     const territory = engine.state.territories[country.id];
     if (!territory) return '-';
-    return `${territory.ownerId}:${territory.coreOwnerId}:${isIntegratingTerritory(country.id, engine) ? 1 : 0}`;
+    return territory.ownerId;
   }).join('|');
+  const antarctic = ANTARCTICA_SECTOR_PRESENTATIONS.map((sector) => {
+    const territory = engine.state.territories[sector.id];
+    if (!territory) return '-';
+    return territory.ownerId;
+  }).join('|');
+  const viewerId = engine.state.humanPlayerId;
+  const viewerWars = engine.state.wars
+    .filter((war) => war.attackerId === viewerId || war.defenderId === viewerId);
+  const activeWarPairs = new Set(viewerWars.map((war) => (
+    mapOwnerPairKey(war.attackerId, war.defenderId)
+  )));
+  const warSignature = viewerWars
+    .map((war) => `${war.id}:${mapOwnerPairKey(war.attackerId, war.defenderId)}`)
+    .sort()
+    .join(',');
+  const threats = strategicBorderThreatSignature(
+    PREPARED_BORDER_EDGES,
+    engine.state.territories,
+    viewerId,
+    activeWarPairs,
+  );
+  return `${viewerId}|${ordinary}|antarctica:${antarctic}|wars:${warSignature}|threats:${threats}`;
 }
 
 /**
- * Build the two attributes for one merged LineSegments geometry. Shared borders
- * disappear only when every canonical territory touching that exact edge has
- * one owner; coastlines, incomplete snapshots and the canonical no-engine view
- * remain. Every segment endpoint receives the same statically prepared terrain
- * color, averaged across the territories on a shared edge.
+ * Build the two attributes for one merged LineSegments geometry. Fully absorbed
+ * realm borders stay present at low intensity, integrating borders remain a
+ * warmer intermediate layer, and international borders retain full contrast.
+ * Every segment endpoint receives one statically prepared color, so ownership
+ * changes still cost only a cached linear pass and one GPU draw call.
  */
 export function buildGlobeBorderBuffer(
   engine: WorldMapEngineContract | undefined,
@@ -226,20 +228,25 @@ export function buildGlobeBorderBuffer(
   const visibleEdges: Array<{
     edge: PreparedBorderEdge;
     points: readonly UnitPosition[];
+    color: UnitColor;
   }> = [];
+  const viewerId = engine?.state.humanPlayerId;
+  const activeWarPairs = new Set(engine?.state.wars
+    .filter((war) => war.attackerId === viewerId || war.defenderId === viewerId)
+    .map((war) => mapOwnerPairKey(war.attackerId, war.defenderId)) ?? []);
   let visibleSegmentCount = 0;
   for (const edge of PREPARED_BORDER_EDGES) {
-    if (isHiddenInternalBorder(edge, engine)) continue;
+    const color = visibleBorderColor(edge, engine, activeWarPairs);
+    if (!color) continue;
     const points = edge.points;
-    visibleEdges.push({ edge, points });
+    visibleEdges.push({ edge, points, color });
     visibleSegmentCount += points.length - 1;
   }
 
   const positions = new Float32Array(visibleSegmentCount * 6);
   const colors = new Float32Array(visibleSegmentCount * 6);
   let offset = 0;
-  for (const { edge, points } of visibleEdges) {
-    const edgeColor = edge.color;
+  for (const { points, color: edgeColor } of visibleEdges) {
     for (let index = 0; index < points.length - 1; index += 1) {
       const start = points[index]!;
       const end = points[index + 1]!;

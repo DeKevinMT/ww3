@@ -1,8 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import {
-  COUNTRIES,
-  terrainProfileForTerritory,
-} from '../../data/worldMap';
+import { COUNTRIES } from '../../data/worldMap';
+import { ANTARCTICA_SECTOR_PRESENTATIONS } from '../mapGeographyPresentation';
 import type {
   MapTerritoryState,
   WorldMapEngineContract,
@@ -10,6 +8,8 @@ import type {
 import {
   buildGlobeBorderBuffer,
   buildGlobeBorderPositions,
+  GLOBE_BORDER_COLORS,
+  GLOBE_BORDER_VISUAL_INTENSITY,
   globeBorderOwnershipSignature,
 } from './globeBorders';
 import { lonLatToUnitXyz } from './globeMath';
@@ -17,7 +17,6 @@ import {
   GLOBE_SURFACE_CLEARANCE,
   globeOverlayRadius,
 } from './globeSurfacePresentation';
-import { terrainTextureLayerPresentation } from './terrainTexturePresentation';
 
 type Coordinate = readonly [number, number];
 
@@ -78,13 +77,27 @@ function matchesPosition(
     && Math.abs(positions[offset + 2]! - expected[2]) < 1e-5;
 }
 
-function premultipliedTerrainBorderColor(territoryId: string): readonly [number, number, number] {
-  const presentation = terrainTextureLayerPresentation(terrainProfileForTerritory(territoryId));
-  return [
-    ((presentation.borderColor >> 16) & 0xff) / 255 * presentation.borderAlpha,
-    ((presentation.borderColor >> 8) & 0xff) / 255 * presentation.borderAlpha,
-    (presentation.borderColor & 0xff) / 255 * presentation.borderAlpha,
-  ];
+function sharedEdgeColor(
+  buffer: ReturnType<typeof buildGlobeBorderBuffer>,
+  leftId: string,
+  rightId: string,
+  radius = 5,
+): readonly [number, number, number] {
+  const [start, end] = sharedShortEdge(leftId, rightId);
+  const startPosition = scaledPosition(start, radius);
+  const endPosition = scaledPosition(end, radius);
+  for (let offset = 0; offset < buffer.positions.length; offset += 6) {
+    const forward = matchesPosition(buffer.positions, offset, startPosition)
+      && matchesPosition(buffer.positions, offset + 3, endPosition);
+    const reverse = matchesPosition(buffer.positions, offset, endPosition)
+      && matchesPosition(buffer.positions, offset + 3, startPosition);
+    if (forward || reverse) return [
+      buffer.colors[offset]!,
+      buffer.colors[offset + 1]!,
+      buffer.colors[offset + 2]!,
+    ];
+  }
+  throw new Error(`Expected ${leftId}:${rightId} in the prepared border buffer.`);
 }
 
 function engineWithOwner(ownerFor: (territoryId: string) => string): WorldMapEngineContract {
@@ -121,6 +134,33 @@ function engineWithOwner(ownerFor: (territoryId: string) => string): WorldMapEng
     territoriesOf: () => [],
     globalRanking: () => [],
     activeWarBetween: () => undefined,
+  };
+}
+
+function revealAntarctica(engine: WorldMapEngineContract, ownerId = 'rai'): void {
+  for (const sector of ANTARCTICA_SECTOR_PRESENTATIONS) {
+    engine.state.territories[sector.id] = {
+      id: sector.id,
+      ownerId,
+      coreOwnerId: ownerId,
+      integration: 1,
+      army: {
+        manpower: 1,
+        capacity: 1,
+        combatStrength: 1,
+        power: 1,
+        attack: 1,
+        defense: 1,
+      },
+    };
+  }
+  engine.state.polarEndgame = {
+    phase: 'contact',
+    visualRevision: 1,
+    sectors: Object.fromEntries(ANTARCTICA_SECTOR_PRESENTATIONS.map((sector) => [
+      sector.id,
+      { status: 'available', integrity: 100, wave: 1 },
+    ])),
   };
 }
 
@@ -169,33 +209,14 @@ describe('globe border geometry', () => {
     expect(maximumColor).toBeGreaterThan(minimumColor);
   });
 
-  it('bakes terrain percentage into per-vertex colors and averages a shared edge', () => {
-    const radius = 5;
-    const { positions, colors } = buildGlobeBorderBuffer(undefined, radius);
-    const [start, end] = sharedShortEdge('bel', 'nld');
-    const startPosition = scaledPosition(start, radius);
-    const endPosition = scaledPosition(end, radius);
-    let segmentOffset = -1;
-    for (let offset = 0; offset < positions.length; offset += 6) {
-      const forward = matchesPosition(positions, offset, startPosition)
-        && matchesPosition(positions, offset + 3, endPosition);
-      const reverse = matchesPosition(positions, offset, endPosition)
-        && matchesPosition(positions, offset + 3, startPosition);
-      if (forward || reverse) {
-        segmentOffset = offset;
-        break;
-      }
-    }
-    expect(segmentOffset).toBeGreaterThanOrEqual(0);
-
-    const belgium = premultipliedTerrainBorderColor('bel');
-    const netherlands = premultipliedTerrainBorderColor('nld');
-    const expected = belgium.map((channel, index) => (
-      (channel + netherlands[index]!) / 2
-    ));
+  it('uses one neutral blue-grey for ordinary borders regardless of ownership', () => {
+    const distinct = buildGlobeBorderBuffer(engineWithOwner((id) => id), 5);
+    const unified = buildGlobeBorderBuffer(engineWithOwner(() => 'unified'), 5);
+    const distinctColor = sharedEdgeColor(distinct, 'bel', 'nld');
+    const unifiedColor = sharedEdgeColor(unified, 'bel', 'nld');
+    expect(distinctColor).toEqual(unifiedColor);
     for (let channel = 0; channel < 3; channel += 1) {
-      expect(colors[segmentOffset + channel]).toBeCloseTo(expected[channel]!, 6);
-      expect(colors[segmentOffset + channel + 3]).toBeCloseTo(expected[channel]!, 6);
+      expect(distinctColor[channel]).toBeCloseTo(GLOBE_BORDER_COLORS.neutral[channel]!, 6);
     }
   });
 
@@ -208,13 +229,76 @@ describe('globe border geometry', () => {
     expect([...distinctOwners.colors.slice(0, 60)]).toEqual([...canonical.colors.slice(0, 60)]);
   });
 
-  it('removes only shared internal borders when territories have one owner', () => {
-    const canonical = buildGlobeBorderBuffer(undefined, 5);
+  it('retains same-owner borders with the same neutral political grammar', () => {
+    const international = buildGlobeBorderBuffer(engineWithOwner((id) => id), 5);
     const unifiedWorld = buildGlobeBorderBuffer(engineWithOwner(() => 'unified'), 5);
+    const internationalColor = sharedEdgeColor(international, 'bel', 'nld');
+    const internalColor = sharedEdgeColor(unifiedWorld, 'bel', 'nld');
 
-    expect(unifiedWorld.positions.length).toBeGreaterThan(0);
-    expect(unifiedWorld.positions.length).toBeLessThan(canonical.positions.length);
+    expect(unifiedWorld.positions.length).toBe(international.positions.length);
     expect(unifiedWorld.colors.length).toBe(unifiedWorld.positions.length);
+    for (let channel = 0; channel < 3; channel += 1) {
+      expect(internalColor[channel]).toBeCloseTo(internationalColor[channel]!, 6);
+    }
+    expect(GLOBE_BORDER_VISUAL_INTENSITY.internal).toBe(1);
+  });
+
+  it('does not turn transit or signal-purge lifecycle state into a colored border', () => {
+    const unifiedEngine = engineWithOwner(() => 'unified');
+    const internal = buildGlobeBorderBuffer(unifiedEngine, 5);
+    unifiedEngine.state.territories.bel!.coreOwnerId = 'bel';
+    unifiedEngine.state.territories.bel!.integration = 0.35;
+    const integrating = buildGlobeBorderBuffer(unifiedEngine, 5);
+    const internalColor = sharedEdgeColor(internal, 'bel', 'nld');
+    const integratingColor = sharedEdgeColor(integrating, 'bel', 'nld');
+    expect(integratingColor).toEqual(internalColor);
+    unifiedEngine.state.territories.bel!.transitOnly = true;
+    expect(sharedEdgeColor(buildGlobeBorderBuffer(unifiedEngine, 5), 'bel', 'nld'))
+      .toEqual(internalColor);
+  });
+
+  it('marks Rogue boundaries magenta and lets an active viewer war win in red', () => {
+    const engine = engineWithOwner((id) => id === 'bel' ? 'human' : id === 'nld' ? 'rai' : id);
+    engine.state.humanPlayerId = 'human';
+    const rogue = sharedEdgeColor(buildGlobeBorderBuffer(engine, 5), 'bel', 'nld');
+    rogue.forEach((channel, index) => {
+      expect(channel).toBeCloseTo(GLOBE_BORDER_COLORS.rogue[index]!, 6);
+    });
+    const beforeWarSignature = globeBorderOwnershipSignature(engine);
+    engine.state.wars = [{
+      id: 'war:human:rai', attackerId: 'human', defenderId: 'rai',
+      attackerOperations: [], defenderOperations: [],
+    }];
+    const active = sharedEdgeColor(buildGlobeBorderBuffer(engine, 5), 'bel', 'nld');
+    active.forEach((channel, index) => {
+      expect(channel).toBeCloseTo(GLOBE_BORDER_COLORS.activeWar[index]!, 6);
+    });
+    expect(globeBorderOwnershipSignature(engine)).not.toBe(beforeWarSignature);
+  });
+
+  it('warns only the viewer frontier and escalates from amber to acute red', () => {
+    const engine = engineWithOwner((id) => id === 'bel' ? 'human' : id === 'nld' ? 'enemy' : id);
+    engine.state.humanPlayerId = 'human';
+    engine.state.territories.bel!.army.power = 100;
+    engine.state.territories.nld!.army.power = 140;
+    const threatened = sharedEdgeColor(buildGlobeBorderBuffer(engine, 5), 'bel', 'nld');
+    threatened.forEach((channel, index) => {
+      expect(channel).toBeCloseTo(GLOBE_BORDER_COLORS.threatened[index]!, 6);
+    });
+
+    const threatenedSignature = globeBorderOwnershipSignature(engine);
+    engine.state.territories.nld!.army.power = 190;
+    const acute = sharedEdgeColor(buildGlobeBorderBuffer(engine, 5), 'bel', 'nld');
+    acute.forEach((channel, index) => {
+      expect(channel).toBeCloseTo(GLOBE_BORDER_COLORS.acute[index]!, 6);
+    });
+    expect(globeBorderOwnershipSignature(engine)).not.toBe(threatenedSignature);
+
+    engine.state.territories.deu!.army.power = 1_000;
+    const remote = sharedEdgeColor(buildGlobeBorderBuffer(engine, 5), 'deu', 'cze');
+    remote.forEach((channel, index) => {
+      expect(channel).toBeCloseTo(GLOBE_BORDER_COLORS.neutral[index]!, 6);
+    });
   });
 
   it('keeps the position-only compatibility helper byte-identical', () => {
@@ -222,6 +306,23 @@ describe('globe border geometry', () => {
     const buffer = buildGlobeBorderBuffer(undefined, 5);
     expect([...positions.slice(0, 120)]).toEqual([...buffer.positions.slice(0, 120)]);
     expect(positions.length).toBe(buffer.positions.length);
+  });
+
+  it('keeps Antarctic political divisions visible beneath fog before and after contact', () => {
+    const engine = engineWithOwner((id) => id);
+    const dormant = buildGlobeBorderBuffer(engine, 5);
+    revealAntarctica(engine);
+    const revealed = buildGlobeBorderBuffer(engine, 5);
+
+    expect(dormant.positions.length).toBe(revealed.positions.length);
+    expect(revealed.colors.length).toBe(revealed.positions.length);
+
+    const sameOwnerLength = revealed.positions.length;
+    engine.state.territories['drake-entry']!.ownerId = 'human';
+    engine.state.territories['drake-entry']!.coreOwnerId = 'rai';
+    engine.state.territories['drake-entry']!.integration = 0.2;
+    const conquered = buildGlobeBorderBuffer(engine, 5);
+    expect(conquered.positions.length).toBe(sameOwnerLength);
   });
 
   it('keeps subdivided border chords above the flat surface with sub-pixel clearance', () => {

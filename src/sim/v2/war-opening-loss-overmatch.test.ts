@@ -24,6 +24,7 @@ import {
   projectCombatExchangeV2,
   resolveBattlePulseV2,
 } from './war';
+import { enterPostBlackoutCampaignForTestV2 } from './testSupport';
 
 const belgium = nationIdV2('bel');
 const netherlands = nationIdV2('nld');
@@ -38,6 +39,7 @@ function declarationFixture() {
   state.wars = [];
   state.truces = [];
   state.offers = [];
+  enterPostBlackoutCampaignForTestV2(state);
   state.players[belgium]!.treasury = 1_000_000;
   state.territories[luxembourgTerritory]!.owner = belgium;
   state.territories[luxembourgTerritory]!.coreOwner = belgium;
@@ -60,12 +62,9 @@ function declarationFixture() {
 function projectedExchange(
   attackerManpower: number,
   defenderManpower: number,
-  defenderCondition = 1,
 ) {
   const state = createWorldStateV2(81_101);
   state.wars = [];
-  state.territories[belgiumTerritory]!.condition = 1;
-  state.territories[netherlandsTerritory]!.condition = defenderCondition;
   state.territories[belgiumTerritory]!.army = {
     ...state.territories[belgiumTerritory]!.army,
     manpower: attackerManpower,
@@ -188,13 +187,11 @@ describe('V2 declaration loss and extreme-overmatch exposure', () => {
     const equal = projectedExchange(0.10, 0.10);
     const threshold = projectedExchange(0.30, 0.10);
     const extreme = projectedExchange(0.80, 0.10);
-    const degraded = projectedExchange(0.80, 0.10, 0.20);
     const collapsed = projectedExchange(0.80, 0);
 
     expect(threshold.attackerLosses).toBeCloseTo(equal.attackerLosses, 9);
     expect(extreme.attackerLosses).toBeCloseTo(threshold.attackerLosses * 6, 9);
     expect(extreme.attackerLosses).toBeGreaterThan(threshold.attackerLosses * 5.5);
-    expect(degraded.attackerLosses).toBeLessThan(extreme.attackerLosses);
     expect(collapsed.attackerLosses).toBe(0);
   });
 });

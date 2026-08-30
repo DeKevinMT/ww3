@@ -146,60 +146,239 @@ export const ANTARCTICA_ACCESS_ANCHORS: readonly AntarcticaAccessAnchor[] = [
   { id: 'south-africa-corridor', corridor: 'south-africa', origin: [18.4, -33.9], longitude: 20, latitude: -70, mapPosition: projectAntarcticaMapPoint(20, -70), entrySectorId: 'maud-entry' },
   { id: 'australia-new-zealand-corridor', corridor: 'australia-new-zealand', origin: [172.6, -43.5], longitude: 155, latitude: -72, mapPosition: projectAntarcticaMapPoint(155, -72), entrySectorId: 'ross-entry' },
 ] as const;
+type AntarcticaCoordinate = readonly [number, number];
+
+/**
+ * Longitude-ordered political coast used by both renderers. The source coast
+ * remains the visual silhouette; this restrained simplification exists so the
+ * nine gameplay territories meet that silhouette without self-intersecting at
+ * the South Pole in an equirectangular atlas.
+ */
+export const ANTARCTICA_POLITICAL_COASTLINE: readonly AntarcticaCoordinate[] = (() => {
+  const binWidth = 2;
+  const binCount = Math.ceil(360 / binWidth);
+  const outerCoastByBin = new Map<number, AntarcticaCoordinate>();
+  for (const point of ANTARCTICA_COASTLINE) {
+    const bin = Math.min(binCount - 1, Math.max(0, Math.floor((point[0] + 180) / binWidth)));
+    const existing = outerCoastByBin.get(bin);
+    if (!existing || point[1] > existing[1]) outerCoastByBin.set(bin, point);
+  }
+  const anchors = [...outerCoastByBin.values()].sort((left, right) => left[0] - right[0]);
+  if (anchors[0]?.[0] !== -180) anchors.unshift([-180, -84.71]);
+  if (anchors.at(-1)?.[0] !== 180) anchors.push([180, -84.71]);
+
+  const rawLatitudes: number[] = [];
+  let anchorIndex = 0;
+  for (let longitude = -180; longitude <= 180; longitude += binWidth) {
+    while (anchorIndex < anchors.length - 2 && anchors[anchorIndex + 1]![0] < longitude) {
+      anchorIndex += 1;
+    }
+    const start = anchors[anchorIndex]!;
+    const end = anchors[Math.min(anchors.length - 1, anchorIndex + 1)]!;
+    const progress = Math.max(0, Math.min(
+      1,
+      (longitude - start[0]) / Math.max(0.001, end[0] - start[0]),
+    ));
+    const eased = progress * progress * (3 - 2 * progress);
+    rawLatitudes.push(start[1] + (end[1] - start[1]) * eased);
+  }
+
+  const smoothedLatitudes = rawLatitudes.map((rawLatitude, index) => {
+    let total = 0;
+    let weightTotal = 0;
+    for (let offset = -2; offset <= 2; offset += 1) {
+      const sample = Math.max(0, Math.min(rawLatitudes.length - 1, index + offset));
+      const weight = 3 - Math.abs(offset);
+      total += rawLatitudes[sample]! * weight;
+      weightTotal += weight;
+    }
+    // Preserve real coastal projections such as the Antarctic Peninsula. A
+    // smoothing pass may soften narrow bays, but must never erase the most
+    // northerly land that makes the source silhouette recognisable.
+    return Math.max(rawLatitude, total / weightTotal);
+  });
+  return smoothedLatitudes.map((latitude, index) => [
+    -180 + index * binWidth,
+    Math.max(-87.5, Math.min(-61.5, latitude)),
+  ] as const);
+})();
+
+function antarcticaCoastLatitude(longitude: number): number {
+  const normalized = Math.max(-180, Math.min(180, longitude));
+  const scaled = (normalized + 180) / 2;
+  const leftIndex = Math.max(0, Math.min(
+    ANTARCTICA_POLITICAL_COASTLINE.length - 1,
+    Math.floor(scaled),
+  ));
+  const rightIndex = Math.min(ANTARCTICA_POLITICAL_COASTLINE.length - 1, leftIndex + 1);
+  const progress = scaled - leftIndex;
+  return ANTARCTICA_POLITICAL_COASTLINE[leftIndex]![1] * (1 - progress)
+    + ANTARCTICA_POLITICAL_COASTLINE[rightIndex]![1] * progress;
+}
+
+const ANTARCTICA_DEPTH_BOUNDARIES = [0, 0.245, 0.545, 0.785, 1] as const;
+
+function antarcticaBoundaryDepth(boundary: number, longitude: number): number {
+  const base = ANTARCTICA_DEPTH_BOUNDARIES[boundary] ?? 0;
+  if (boundary === 0 || boundary === ANTARCTICA_DEPTH_BOUNDARIES.length - 1) return base;
+  const radians = longitude * Math.PI / 180;
+  const wobble = Math.sin(radians * (boundary + 1) + boundary * 0.83) * 0.014
+    + Math.sin(radians * 3 - boundary * 0.47) * 0.007;
+  return Math.max(0.04, Math.min(0.96, base + wobble));
+}
+
+function antarcticaLatitudeAtBoundary(longitude: number, boundary: number): number {
+  const coast = antarcticaCoastLatitude(longitude);
+  const depth = antarcticaBoundaryDepth(boundary, longitude);
+  return coast + (-90 - coast) * depth;
+}
+
+function splitAntarcticaLongitudeRange(
+  start: number,
+  end: number,
+): readonly (readonly [number, number])[] {
+  const ranges: Array<readonly [number, number]> = [];
+  let cursor = start;
+  while (cursor < end - 1e-8) {
+    const wrap = Math.floor((cursor + 180) / 360);
+    const seam = 180 + wrap * 360;
+    const rangeEnd = Math.min(end, seam);
+    ranges.push([cursor - wrap * 360, rangeEnd - wrap * 360]);
+    cursor = rangeEnd;
+  }
+  return ranges;
+}
+
+function sampleAntarcticaBoundary(
+  start: number,
+  end: number,
+  boundary: number,
+  reverse = false,
+): AntarcticaCoordinate[] {
+  const span = Math.max(0, end - start);
+  const steps = Math.max(1, Math.ceil(span / 2));
+  const points = Array.from({ length: steps + 1 }, (_, index) => {
+    const progress = index / steps;
+    const longitude = start + span * progress;
+    return [longitude, antarcticaLatitudeAtBoundary(longitude, boundary)] as const;
+  });
+  return reverse ? points.reverse() : points;
+}
+
+function antarcticaBandRings(
+  longitudeStart: number,
+  longitudeEnd: number,
+  outerBoundary: number,
+  innerBoundary: number,
+): readonly (readonly AntarcticaCoordinate[])[] {
+  return splitAntarcticaLongitudeRange(longitudeStart, longitudeEnd).map(([start, end]) => [
+    ...sampleAntarcticaBoundary(start, end, outerBoundary),
+    ...sampleAntarcticaBoundary(start, end, innerBoundary, true),
+  ] as const);
+}
+
+function projectAntarcticaSectorRings(
+  rings: readonly (readonly AntarcticaCoordinate[])[],
+): readonly (readonly (readonly [number, number])[])[] {
+  return rings.map((ring) => ring.map(([longitude, latitude]) => (
+    projectAntarcticaMapPoint(longitude, latitude)
+  )));
+}
 
 export interface AntarcticaSectorPresentation {
   readonly id: MapPolarSectorId;
   readonly name: string;
   readonly longitude: number;
   readonly latitude: number;
-  /** Angular hit proxy; picking stays analytical and never raycasts meshes. */
-  readonly hitRadiusDegrees: number;
+  /** One or two seam-safe country polygons clipped to the authored ice coast. */
+  readonly rings: readonly (readonly AntarcticaCoordinate[])[];
+  /** The exact same territory geometry in the Phaser map projection. */
+  readonly mapRings: readonly (readonly (readonly [number, number])[])[];
+  /** Authored strategic adjacency, used only for local border presentation. */
+  readonly neighbors: readonly MapPolarSectorId[];
   readonly focusDistance: number;
 }
 
-/** Immutable transforms allow all live sectors to share one instanced draw. */
-export const ANTARCTICA_SECTOR_PRESENTATIONS: readonly AntarcticaSectorPresentation[] = [
-  { id: 'drake-entry', name: 'Drake Beachhead', longitude: -58, latitude: -66, hitRadiusDegrees: 7.5, focusDistance: 8.7 },
-  { id: 'maud-entry', name: 'Maud Beachhead', longitude: 20, latitude: -70, hitRadiusDegrees: 7.5, focusDistance: 8.7 },
-  { id: 'ross-entry', name: 'Ross Beachhead', longitude: 155, latitude: -72, hitRadiusDegrees: 7.5, focusDistance: 8.7 },
-  { id: 'weddell-forge', name: 'Weddell Forge', longitude: -35, latitude: -76, hitRadiusDegrees: 6.5, focusDistance: 8.35 },
-  { id: 'queen-maud-grid', name: 'Queen Maud Grid', longitude: 36, latitude: -78, hitRadiusDegrees: 6.5, focusDistance: 8.35 },
-  { id: 'ross-array', name: 'Ross Array', longitude: 145, latitude: -80, hitRadiusDegrees: 6.5, focusDistance: 8.35 },
-  { id: 'sentinel-labyrinth', name: 'Sentinel Labyrinth', longitude: -91, latitude: -82, hitRadiusDegrees: 5.8, focusDistance: 8.05 },
-  { id: 'transantarctic-vault', name: 'Transantarctic Vault', longitude: 78, latitude: -84, hitRadiusDegrees: 5.8, focusDistance: 8.05 },
-  { id: 'zero-point-core', name: 'Zero Point Core', longitude: 0, latitude: -89, hitRadiusDegrees: 5.2, focusDistance: 7.8 },
+type AntarcticaSectorAuthoring = Omit<AntarcticaSectorPresentation, 'rings' | 'mapRings'> & {
+  readonly longitudeRange: readonly [number, number];
+  readonly outerBoundary: number;
+  readonly innerBoundary: number;
+};
+
+const ANTARCTICA_SECTOR_AUTHORING: readonly AntarcticaSectorAuthoring[] = [
+  { id: 'drake-entry', name: 'Drake Beachhead', longitude: -58, latitude: -69, longitudeRange: [-120, -18], outerBoundary: 0, innerBoundary: 1, neighbors: ['weddell-forge'], focusDistance: 8.7 },
+  { id: 'maud-entry', name: 'Maud Beachhead', longitude: 20, latitude: -73, longitudeRange: [-18, 92], outerBoundary: 0, innerBoundary: 1, neighbors: ['queen-maud-grid'], focusDistance: 8.7 },
+  { id: 'ross-entry', name: 'Ross Beachhead', longitude: 155, latitude: -74, longitudeRange: [92, 240], outerBoundary: 0, innerBoundary: 1, neighbors: ['ross-array'], focusDistance: 8.7 },
+  { id: 'weddell-forge', name: 'Weddell Forge', longitude: -48, latitude: -82, longitudeRange: [-120, -5], outerBoundary: 1, innerBoundary: 2, neighbors: ['drake-entry', 'queen-maud-grid', 'sentinel-labyrinth'], focusDistance: 8.35 },
+  { id: 'queen-maud-grid', name: 'Queen Maud Grid', longitude: 42, latitude: -80, longitudeRange: [-5, 105], outerBoundary: 1, innerBoundary: 2, neighbors: ['maud-entry', 'weddell-forge', 'ross-array', 'sentinel-labyrinth', 'transantarctic-vault'], focusDistance: 8.35 },
+  { id: 'ross-array', name: 'Ross Array', longitude: 148, latitude: -81, longitudeRange: [105, 240], outerBoundary: 1, innerBoundary: 2, neighbors: ['ross-entry', 'queen-maud-grid', 'transantarctic-vault'], focusDistance: 8.35 },
+  { id: 'sentinel-labyrinth', name: 'Sentinel Labyrinth', longitude: -91, latitude: -85, longitudeRange: [-180, 0], outerBoundary: 2, innerBoundary: 3, neighbors: ['weddell-forge', 'queen-maud-grid', 'transantarctic-vault', 'zero-point-core'], focusDistance: 8.05 },
+  { id: 'transantarctic-vault', name: 'Transantarctic Vault', longitude: 78, latitude: -85, longitudeRange: [0, 180], outerBoundary: 2, innerBoundary: 3, neighbors: ['queen-maud-grid', 'ross-array', 'sentinel-labyrinth', 'zero-point-core'], focusDistance: 8.05 },
+  { id: 'zero-point-core', name: 'Zero Point Core', longitude: 0, latitude: -89, longitudeRange: [-180, 180], outerBoundary: 3, innerBoundary: 4, neighbors: ['sentinel-labyrinth', 'transantarctic-vault'], focusDistance: 7.8 },
 ] as const;
+/** Nine immutable country-like polygons cover the full Antarctic silhouette. */
+export const ANTARCTICA_SECTOR_PRESENTATIONS: readonly AntarcticaSectorPresentation[] = (
+  ANTARCTICA_SECTOR_AUTHORING.map((sector) => {
+    const rings = antarcticaBandRings(
+      sector.longitudeRange[0],
+      sector.longitudeRange[1],
+      sector.outerBoundary,
+      sector.innerBoundary,
+    );
+    return Object.freeze({
+      id: sector.id,
+      name: sector.name,
+      longitude: sector.longitude,
+      latitude: (
+        antarcticaLatitudeAtBoundary(sector.longitude, sector.outerBoundary)
+          + antarcticaLatitudeAtBoundary(sector.longitude, sector.innerBoundary)
+      ) / 2,
+      neighbors: sector.neighbors,
+      focusDistance: sector.focusDistance,
+      rings,
+      mapRings: projectAntarcticaSectorRings(rings),
+    });
+  })
+);
 
 export const ANTARCTICA_SECTOR_PRESENTATION_BY_ID: ReadonlyMap<MapPolarSectorId, AntarcticaSectorPresentation> = new Map(
   ANTARCTICA_SECTOR_PRESENTATIONS.map((sector) => [sector.id, sector] as const),
 );
 
-/** Finds a visible sector with one spherical-distance pass and no allocations. */
+function pointInAntarcticaSectorRing(
+  longitude: number,
+  latitude: number,
+  ring: readonly AntarcticaCoordinate[],
+): boolean {
+  let inside = false;
+  for (let current = 0, previous = ring.length - 1; current < ring.length; previous = current, current += 1) {
+    const [currentLongitude, currentLatitude] = ring[current]!;
+    const [previousLongitude, previousLatitude] = ring[previous]!;
+    if ((currentLatitude > latitude) === (previousLatitude > latitude)) continue;
+    const crossingLongitude = (previousLongitude - currentLongitude)
+      * (latitude - currentLatitude) / (previousLatitude - currentLatitude)
+      + currentLongitude;
+    if (longitude < crossingLongitude) inside = !inside;
+  }
+  return inside;
+}
+
+/** Finds the exact visible political polygon with one bounded nine-sector pass. */
 export function antarcticaSectorAtCoordinates(
   longitude: number,
   latitude: number,
   visibleSectorIds: ReadonlySet<MapPolarSectorId>,
 ): MapPolarSectorId | undefined {
-  const latitudeRadians = latitude * Math.PI / 180;
-  const sinLatitude = Math.sin(latitudeRadians);
-  const cosLatitude = Math.cos(latitudeRadians);
-  let nearestId: MapPolarSectorId | undefined;
-  let nearestDistance = Number.POSITIVE_INFINITY;
+  const normalizedLongitude = ((longitude + 180) % 360 + 360) % 360 - 180;
   for (const sector of ANTARCTICA_SECTOR_PRESENTATIONS) {
     if (!visibleSectorIds.has(sector.id)) continue;
-    const sectorLatitude = sector.latitude * Math.PI / 180;
-    const longitudeDelta = (longitude - sector.longitude) * Math.PI / 180;
-    const cosine = Math.max(-1, Math.min(1,
-      sinLatitude * Math.sin(sectorLatitude)
-        + cosLatitude * Math.cos(sectorLatitude) * Math.cos(longitudeDelta),
-    ));
-    const distance = Math.acos(cosine) * 180 / Math.PI;
-    if (distance <= sector.hitRadiusDegrees && distance < nearestDistance) {
-      nearestId = sector.id;
-      nearestDistance = distance;
-    }
+    if (sector.rings.some((ring) => pointInAntarcticaSectorRing(
+      normalizedLongitude,
+      latitude,
+      ring,
+    ))) return sector.id;
   }
-  return nearestId;
+  return undefined;
 }
 
 /**
@@ -208,53 +387,3 @@ export function antarcticaSectorAtCoordinates(
  * or integration state before the future Arctic Secrets system exists.
  */
 export const ARCTIC_RESEARCH_ZONE_ID = 'arctic-research-zone' as const;
-
-/**
- * A restrained, authored summer ice edge. The first and last points are the
- * same physical point on the -180/+180 seam, making the path a closed polar
- * ring on the globe without introducing a playable landmass.
- */
-export const ARCTIC_ICE_COASTLINE: readonly (readonly [number, number])[] = [
-  [-180, 82.1], [-175, 82.5], [-170, 83.0], [-165, 82.7], [-160, 83.4],
-  [-155, 84.1], [-150, 83.7], [-145, 84.5], [-140, 85.2], [-135, 84.8],
-  [-130, 85.6], [-125, 85.1], [-120, 85.9], [-115, 86.4], [-110, 85.8],
-  [-105, 86.1], [-100, 85.4], [-95, 84.9], [-90, 85.3], [-85, 84.6],
-  [-80, 84.1], [-75, 84.5], [-70, 83.9], [-65, 84.3], [-60, 83.6],
-  [-55, 84.0], [-50, 83.3], [-45, 83.8], [-40, 84.4], [-35, 84.0],
-  [-30, 84.7], [-25, 84.2], [-20, 83.6], [-15, 84.0], [-10, 83.2],
-  [-5, 82.7], [0, 83.1], [5, 82.4], [10, 81.9], [15, 82.3],
-  [20, 81.6], [25, 81.3], [30, 81.8], [35, 81.2], [40, 81.6],
-  [45, 81.1], [50, 81.5], [55, 82.0], [60, 81.7], [65, 82.3],
-  [70, 81.9], [75, 82.5], [80, 82.1], [85, 82.8], [90, 82.4],
-  [95, 83.0], [100, 82.6], [105, 83.2], [110, 82.8], [115, 83.5],
-  [120, 83.1], [125, 83.8], [130, 83.4], [135, 84.0], [140, 83.5],
-  [145, 83.1], [150, 82.7], [155, 83.2], [160, 82.6], [165, 82.9],
-  [170, 82.4], [175, 82.0], [180, 82.1],
-] as const;
-
-/** Arctic countries from which an empire can support neutral polar research. */
-export const ARCTIC_RESEARCH_ACCESS_TERRITORY_IDS = [
-  'can', 'fin', 'grl', 'isl', 'nor', 'rus', 'swe', 'usa',
-] as const;
-
-export type ArcticResearchAccessTerritoryId =
-  (typeof ARCTIC_RESEARCH_ACCESS_TERRITORY_IDS)[number];
-
-export interface ArcticResearchTerritoryOwnership {
-  readonly ownerId: string;
-}
-
-/**
- * Returns the currently owned Arctic countries that grant an empire polar
- * access. Integration is intentionally irrelevant: conquest transfers access
- * as soon as the territory's live owner changes.
- */
-export function arcticResearchAccessTerritoriesForEmpire(
-  territories: Readonly<Record<string, ArcticResearchTerritoryOwnership | undefined>>,
-  playerId: string,
-): readonly ArcticResearchAccessTerritoryId[] {
-  if (!playerId) return [];
-  return ARCTIC_RESEARCH_ACCESS_TERRITORY_IDS.filter((territoryId) => (
-    territories[territoryId]?.ownerId === playerId
-  ));
-}

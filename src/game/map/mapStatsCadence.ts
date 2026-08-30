@@ -1,5 +1,5 @@
 /** Peaceful map badges are a strategic snapshot, not a second live simulation UI. */
-export const PEACE_MAP_STATS_REFRESH_TICKS = 4;
+export const PEACE_MAP_STATS_REFRESH_TICKS = 8;
 
 export interface MapStatsTerritoryIdentity {
   id: string;
@@ -12,6 +12,15 @@ export interface MapStatsCadenceInput {
   tick: number;
   territories: readonly MapStatsTerritoryIdentity[];
   warOwnerIds: ReadonlySet<string>;
+  /** Only real operation endpoints need exact live army/power projection. */
+  warTerritoryIds?: ReadonlySet<string>;
+}
+
+export interface MapStatsRefreshPlan {
+  /** Exact local bars/power records to rebuild. */
+  readonly territoryIds: ReadonlySet<string>;
+  /** One representative aggregate badge per owner; caller resolves its capital. */
+  readonly aggregateOwnerIds: ReadonlySet<string>;
 }
 
 /** Stable staggering prevents every peaceful country from refreshing in the same week. */
@@ -33,6 +42,7 @@ export function peacefulMapStatsBucket(ownerId: string): number {
 export class MapStatsRefreshCadence {
   private initialized = false;
   private readonly invalidatedOwnerIds = new Set<string>();
+  private readonly invalidatedTerritoryIds = new Set<string>();
   private readonly ownerByTerritory = new Map<string, string>();
   private readonly lifecycleByTerritory = new Map<string, string>();
   private warOwnerIds = new Set<string>();
@@ -42,8 +52,13 @@ export class MapStatsRefreshCadence {
     for (const ownerId of ownerIds) if (ownerId) this.invalidatedOwnerIds.add(ownerId);
   }
 
-  resolve(input: MapStatsCadenceInput): ReadonlySet<string> {
-    const refreshOwnerIds = new Set<string>();
+  invalidateTerritories(territoryIds: Iterable<string>): void {
+    for (const territoryId of territoryIds) if (territoryId) this.invalidatedTerritoryIds.add(territoryId);
+  }
+
+  resolve(input: MapStatsCadenceInput): MapStatsRefreshPlan {
+    const refreshTerritoryIds = new Set<string>();
+    const aggregateOwnerIds = new Set<string>();
     const currentOwnerIds = new Set<string>();
     const currentTerritoryIds = new Set<string>();
 
@@ -53,13 +68,15 @@ export class MapStatsRefreshCadence {
       const previousOwnerId = this.ownerByTerritory.get(territory.id);
       const previousLifecycle = this.lifecycleByTerritory.get(territory.id);
       if (this.initialized && previousOwnerId !== undefined && previousOwnerId !== territory.ownerId) {
-        refreshOwnerIds.add(previousOwnerId);
-        refreshOwnerIds.add(territory.ownerId);
+        refreshTerritoryIds.add(territory.id);
+        aggregateOwnerIds.add(previousOwnerId);
+        aggregateOwnerIds.add(territory.ownerId);
       }
       if (this.initialized && previousLifecycle !== undefined
         && previousLifecycle !== territory.lifecycleKey) {
-        if (previousOwnerId) refreshOwnerIds.add(previousOwnerId);
-        refreshOwnerIds.add(territory.ownerId);
+        refreshTerritoryIds.add(territory.id);
+        if (previousOwnerId) aggregateOwnerIds.add(previousOwnerId);
+        aggregateOwnerIds.add(territory.ownerId);
       }
       this.ownerByTerritory.set(territory.id, territory.ownerId);
       this.lifecycleByTerritory.set(territory.id, territory.lifecycleKey);
@@ -67,45 +84,57 @@ export class MapStatsRefreshCadence {
 
     for (const [territoryId, previousOwnerId] of this.ownerByTerritory) {
       if (currentTerritoryIds.has(territoryId)) continue;
-      refreshOwnerIds.add(previousOwnerId);
+      aggregateOwnerIds.add(previousOwnerId);
       this.ownerByTerritory.delete(territoryId);
       this.lifecycleByTerritory.delete(territoryId);
     }
 
     if (!this.initialized) {
-      for (const ownerId of currentOwnerIds) refreshOwnerIds.add(ownerId);
+      for (const territoryId of currentTerritoryIds) refreshTerritoryIds.add(territoryId);
+      for (const ownerId of currentOwnerIds) aggregateOwnerIds.add(ownerId);
     } else {
       // Starting or ending a war immediately materialises both sides once. A
       // country that remains at war continues through the live path below.
       for (const ownerId of this.warOwnerIds) {
-        if (!input.warOwnerIds.has(ownerId)) refreshOwnerIds.add(ownerId);
+        if (!input.warOwnerIds.has(ownerId)) aggregateOwnerIds.add(ownerId);
       }
       for (const ownerId of input.warOwnerIds) {
-        if (!this.warOwnerIds.has(ownerId)) refreshOwnerIds.add(ownerId);
+        if (!this.warOwnerIds.has(ownerId)) aggregateOwnerIds.add(ownerId);
       }
     }
 
-    for (const ownerId of this.invalidatedOwnerIds) refreshOwnerIds.add(ownerId);
-    this.invalidatedOwnerIds.clear();
-
-    for (const ownerId of currentOwnerIds) {
-      if (input.warOwnerIds.has(ownerId)) {
-        // Deliberately refresh again after a same-tick action: battle, reserve
-        // deployment and peace decisions should be visible without delay.
-        refreshOwnerIds.add(ownerId);
-        continue;
+    for (const ownerId of this.invalidatedOwnerIds) {
+      aggregateOwnerIds.add(ownerId);
+      for (const territory of input.territories) {
+        if (territory.ownerId === ownerId) refreshTerritoryIds.add(territory.id);
       }
+    }
+    this.invalidatedOwnerIds.clear();
+    for (const territoryId of this.invalidatedTerritoryIds) {
+      refreshTerritoryIds.add(territoryId);
+      const ownerId = this.ownerByTerritory.get(territoryId);
+      if (ownerId) aggregateOwnerIds.add(ownerId);
+    }
+    this.invalidatedTerritoryIds.clear();
+
+    for (const territoryId of input.warTerritoryIds ?? []) refreshTerritoryIds.add(territoryId);
+    // Aggregate empire power may change every combat tick, but only one
+    // representative badge per belligerent needs that live national value.
+    for (const ownerId of input.warOwnerIds) aggregateOwnerIds.add(ownerId);
+
+    for (const territory of input.territories) {
+      if (refreshTerritoryIds.has(territory.id)) continue;
       const due = ((input.tick % PEACE_MAP_STATS_REFRESH_TICKS)
         + PEACE_MAP_STATS_REFRESH_TICKS) % PEACE_MAP_STATS_REFRESH_TICKS
-        === peacefulMapStatsBucket(ownerId);
-      if (due && this.lastCadenceRefreshTick.get(ownerId) !== input.tick) {
-        refreshOwnerIds.add(ownerId);
-        this.lastCadenceRefreshTick.set(ownerId, input.tick);
+        === peacefulMapStatsBucket(territory.id);
+      if (due && this.lastCadenceRefreshTick.get(territory.id) !== input.tick) {
+        refreshTerritoryIds.add(territory.id);
+        this.lastCadenceRefreshTick.set(territory.id, input.tick);
       }
     }
 
     this.initialized = true;
     this.warOwnerIds = new Set(input.warOwnerIds);
-    return refreshOwnerIds;
+    return { territoryIds: refreshTerritoryIds, aggregateOwnerIds };
   }
 }

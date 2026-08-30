@@ -1,11 +1,15 @@
+import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { V2_RULES_VERSION } from '../sim/v2/balance';
 import type { DirectHostMessageEvent } from '../multiplayer/directConnect';
 import { HostLobbyModel } from '../multiplayer/lobbyModel';
-import type { LobbyStateMessage, SessionMessage, SnapshotMessage } from '../multiplayer/protocol';
+import { createNeutralMultiplayerDeploymentSnapshotV1 } from '../multiplayer/deployment';
+import { formMatchmakingGroups } from '../multiplayer/matchmakingGroups';
+import type { LobbyAction, LobbyStateMessage, SessionMessage, SnapshotMessage } from '../multiplayer/protocol';
 import { normalizeScenarioConfigV2, type ResolvedScenarioV2 } from '../sim/v2/scenarios';
 import { nationIdV2 } from '../sim/v2/types';
 import { WorldEngineV2 } from '../sim/v2/WorldEngineV2';
-import { MultiplayerLobby } from './MultiplayerLobby';
+import { MultiplayerLobby, multiplayerQueueCompatibilityKey } from './MultiplayerLobby';
 import { IntroOpeningMetricsCacheV2, renderNationPickerV2 } from './WorldUIV2';
 
 class FakeElement {
@@ -27,9 +31,17 @@ class FakeElement {
 
 const pickerEngine = new WorldEngineV2(20_260_823);
 const openingMetrics = new IntroOpeningMetricsCacheV2().read(pickerEngine);
+const stylesSource = readFileSync(new URL('../styles.css', import.meta.url), 'utf8');
+
+const selection = (countryId: ReturnType<typeof nationIdV2>) => ({
+  type: 'select-country' as const,
+  countryId,
+  deployment: createNeutralMultiplayerDeploymentSnapshotV1(countryId),
+});
 
 interface LobbyInternals {
   launched: boolean;
+  advancedPrivateOpen: boolean;
   mode: 'menu' | 'matchmaking' | 'host' | 'guest';
   root: FakeElement;
   host?: {
@@ -50,15 +62,32 @@ interface LobbyInternals {
   onHostMessage(event: DirectHostMessageEvent): void;
   onGuestMessage(message: SessionMessage): void;
   selectPreferredCountryIfAvailable(): void;
+  applyLocalAction(action: LobbyAction): void;
   changeScenario(mode: 'standard-2026' | 'random-world', reroll?: boolean): void;
   render(): void;
+}
+
+function stubMatchmakingSocket(): unknown[] {
+  const sockets: unknown[] = [];
+  class FakeWebSocket {
+    static readonly OPEN = 1;
+    readonly readyState = 0;
+    readonly send = vi.fn();
+    readonly close = vi.fn();
+
+    constructor(readonly url: string) { sockets.push(this); }
+
+    addEventListener(): void {}
+  }
+  vi.stubGlobal('WebSocket', FakeWebSocket);
+  return sockets;
 }
 
 function readyLobby(): HostLobbyModel {
   const model = new HostLobbyModel('host', 'Alice');
   model.connect('guest', 'Bob');
-  model.apply('host', { type: 'select-country', countryId: nationIdV2('bel') });
-  model.apply('guest', { type: 'select-country', countryId: nationIdV2('can') });
+  model.apply('host', selection(nationIdV2('bel')));
+  model.apply('guest', selection(nationIdV2('can')));
   model.apply('host', { type: 'set-ready', ready: true });
   model.apply('guest', { type: 'set-ready', ready: true });
   return model;
@@ -191,6 +220,94 @@ describe('multiplayer lobby launch recovery', () => {
     ui.destroy(false);
   });
 
+  it('applies shared-account unlocks and mastery to the local multiplayer picker', () => {
+    const belgium = nationIdV2('bel');
+    const canada = nationIdV2('can');
+    const usa = nationIdV2('usa');
+    const ui = new MultiplayerLobby({
+      onClose: vi.fn(), onHostLaunch: vi.fn(), onGuestLaunch: vi.fn(), openingMetrics,
+      availableCountryIds: new Set([belgium, canada]),
+      countryMasteryLevels: new Map([[belgium, 7], [canada, 3]]),
+    });
+    const internals = ui as unknown as LobbyInternals;
+    const model = new HostLobbyModel('host', 'Alice');
+    internals.mode = 'host';
+    internals.host = { hostPeerId: 'host', roomId: 'room', broadcast: vi.fn() };
+    internals.hostModel = model;
+    internals.lobby = model.snapshot();
+
+    internals.render();
+
+    expect(internals.root.innerHTML).toContain('data-country="bel"');
+    expect(internals.root.innerHTML).toContain('data-country="can"');
+    expect(internals.root.innerHTML).not.toContain('data-country="usa"');
+    expect(internals.root.innerHTML).toContain('MASTERY LV 7');
+    expect(internals.root.innerHTML).toContain('MASTERY LV 3');
+    expect(internals.root.innerHTML).toContain('MASTERY LEVEL 3');
+
+    internals.applyLocalAction({ type: 'select-country', countryId: usa });
+    expect(model.snapshot().players[0]?.countryId).toBeNull();
+    expect(internals.root.innerHTML).toContain('Unlock that nation');
+    ui.destroy(false);
+  });
+
+  it('rejects a locked preferred country without disturbing a remote seat', () => {
+    const belgium = nationIdV2('bel');
+    const canada = nationIdV2('can');
+    const usa = nationIdV2('usa');
+    const ui = new MultiplayerLobby({
+      onClose: vi.fn(), onHostLaunch: vi.fn(), onGuestLaunch: vi.fn(), openingMetrics,
+      preferredCountryId: usa,
+      availableCountryIds: new Set([belgium]),
+      countryMasteryLevels: new Map([[belgium, 4]]),
+    });
+    const internals = ui as unknown as LobbyInternals;
+    const model = new HostLobbyModel('host', 'Alice');
+    model.connect('guest', 'Bob');
+    model.apply('guest', selection(canada));
+    internals.mode = 'host';
+    internals.host = { hostPeerId: 'host', roomId: 'room', broadcast: vi.fn() };
+    internals.hostModel = model;
+    internals.lobby = model.snapshot();
+
+    internals.selectPreferredCountryIfAvailable();
+    internals.render();
+
+    expect(model.snapshot().players.find((player) => player.peerId === 'host')?.countryId).toBeNull();
+    expect(model.snapshot().players.find((player) => player.peerId === 'guest')?.countryId).toBe(canada);
+    expect(internals.root.innerHTML).toContain('not unlocked on this account');
+    expect(internals.root.innerHTML).toContain('MASTERY LEVEL 4');
+    ui.destroy(false);
+  });
+
+  it('can refresh local account access while preserving host and guest synchronization', () => {
+    const belgium = nationIdV2('bel');
+    const canada = nationIdV2('can');
+    const ui = new MultiplayerLobby({
+      onClose: vi.fn(), onHostLaunch: vi.fn(), onGuestLaunch: vi.fn(), openingMetrics,
+      availableCountryIds: new Set([belgium, canada]),
+    });
+    const internals = ui as unknown as LobbyInternals;
+    const model = new HostLobbyModel('host', 'Alice');
+    model.connect('guest', 'Bob');
+    model.apply('host', selection(canada));
+    model.apply('guest', selection(belgium));
+    internals.mode = 'host';
+    internals.host = { hostPeerId: 'host', roomId: 'room', broadcast: vi.fn() };
+    internals.hostModel = model;
+    internals.lobby = model.snapshot();
+
+    ui.setAccountCountries({
+      availableCountryIds: new Set([belgium]),
+      countryMasteryLevels: new Map([[belgium, 9]]),
+    });
+
+    expect(model.snapshot().players.find((player) => player.peerId === 'host')?.countryId).toBeNull();
+    expect(model.snapshot().players.find((player) => player.peerId === 'guest')?.countryId).toBe(belgium);
+    expect(internals.root.innerHTML).toContain('MASTERY LEVEL 9');
+    ui.destroy(false);
+  });
+
   it('rerenders the host lobby immediately after a guest selects a country', () => {
     const ui = new MultiplayerLobby({
       onClose: vi.fn(), onHostLaunch: vi.fn(), onGuestLaunch: vi.fn(), openingMetrics,
@@ -209,7 +326,7 @@ describe('multiplayer lobby launch recovery', () => {
       message: {
         type: 'lobby-action',
         revision: model.snapshot().revision,
-        action: { type: 'select-country', countryId: nationIdV2('can') },
+        action: selection(nationIdV2('can')),
       },
     });
 
@@ -303,5 +420,109 @@ describe('multiplayer lobby launch recovery', () => {
     expect(internals.root.innerHTML).toContain('multiplayer-lobby-card has-country-picker');
     expect(internals.root.innerHTML).toContain('country-select--lobby');
     ui.destroy(false);
+  });
+
+  it('uses distinct public queue cohorts for Campaign, Survival and Alternative Universe', () => {
+    const modes = ['standard-2026', 'survival', 'random-world'] as const;
+    const entries = modes.flatMap((mode, modeIndex) => [0, 1].map((seat) => ({
+      clientId: `${mode}-${seat}`,
+      rulesVersion: multiplayerQueueCompatibilityKey(mode),
+      queuedAt: modeIndex * 10 + seat,
+    })));
+    const groups = formMatchmakingGroups(entries);
+
+    expect(new Set(modes.map(multiplayerQueueCompatibilityKey))).toHaveLength(3);
+    expect(groups).toHaveLength(3);
+    expect(groups.every((group) => new Set(group.map((entry) => entry.rulesVersion)).size === 1)).toBe(true);
+    expect(groups.flat().every((entry) => entry.rulesVersion.startsWith(`${V2_RULES_VERSION}:`))).toBe(true);
+  });
+
+  it('starts direct matchmaking with the chosen nation and mission locked in', async () => {
+    const sockets = stubMatchmakingSocket();
+    const scenario = normalizeScenarioConfigV2({ mode: 'survival', seed: 77 });
+    const ui = new MultiplayerLobby({
+      onClose: vi.fn(), onHostLaunch: vi.fn(), onGuestLaunch: vi.fn(), openingMetrics,
+      scenarioConfig: scenario,
+      preferredCountryId: nationIdV2('bel'),
+      availableCountryIds: new Set([nationIdV2('bel')]),
+      directMatchmaking: true,
+    });
+    const internals = ui as unknown as LobbyInternals;
+
+    await vi.waitFor(() => expect(sockets).toHaveLength(1));
+
+    expect(internals.mode).toBe('matchmaking');
+    expect(internals.resolvedScenario.config).toEqual(scenario);
+    expect(internals.root.innerHTML).toContain('Belgium');
+    expect(internals.root.innerHTML).toContain('Survival');
+    expect(internals.root.innerHTML).toContain('Searching for teammates');
+    expect(internals.root.innerHTML).not.toContain('country-select--lobby');
+    expect(internals.root.innerHTML).not.toContain('data-mp-action="scenario-');
+    expect(internals.root.innerHTML).not.toContain('HOST PRIVATE ROOM');
+    expect(internals.root.innerHTML).not.toContain('invite code');
+    expect(internals.root.innerHTML).not.toContain('answer code');
+    ui.destroy();
+  });
+
+  it('keeps private/direct-connect setup collapsed until Advanced / Private is opened', () => {
+    const ui = new MultiplayerLobby({
+      onClose: vi.fn(), onHostLaunch: vi.fn(), onGuestLaunch: vi.fn(), openingMetrics,
+      preferredCountryId: nationIdV2('bel'),
+    });
+    const internals = ui as unknown as LobbyInternals;
+
+    expect(internals.root.innerHTML).toContain('ADVANCED / PRIVATE');
+    expect(internals.root.innerHTML).not.toContain('HOST PRIVATE ROOM');
+    expect(internals.root.innerHTML).not.toContain('JOIN PRIVATE ROOM');
+
+    internals.advancedPrivateOpen = true;
+    internals.render();
+
+    expect(internals.root.innerHTML).toContain('HOST PRIVATE ROOM');
+    expect(internals.root.innerHTML).toContain('JOIN PRIVATE ROOM');
+    ui.destroy(false);
+  });
+
+  it('renders a matchmade room as one readiness flow without a second nation or mode setup', async () => {
+    stubMatchmakingSocket();
+    const scenario = normalizeScenarioConfigV2({ mode: 'standard-2026', seed: 88 });
+    const ui = new MultiplayerLobby({
+      onClose: vi.fn(), onHostLaunch: vi.fn(), onGuestLaunch: vi.fn(), openingMetrics,
+      scenarioConfig: scenario,
+      preferredCountryId: nationIdV2('bel'),
+      directMatchmaking: true,
+    });
+    const internals = ui as unknown as LobbyInternals;
+    await Promise.resolve();
+    const model = new HostLobbyModel('host', 'Alice', scenario);
+    internals.host = { hostPeerId: 'host', roomId: 'room', broadcast: vi.fn() };
+    internals.hostModel = model;
+    internals.lobby = model.snapshot();
+    internals.selectPreferredCountryIfAvailable();
+    internals.render();
+
+    expect(internals.root.innerHTML).toContain('CO-OP TEAM');
+    expect(internals.root.innerHTML).not.toContain('ALLY');
+    expect(internals.root.innerHTML).toContain(
+      'Your countries stay independent; allied territory carries team supply.',
+    );
+    expect(internals.root.innerHTML).toContain('Belgium');
+    expect(internals.root.innerHTML).toContain('Campaign');
+    expect(internals.root.innerHTML).toContain('READY UP');
+    expect(internals.root.innerHTML.match(/data-mp-action="(?:toggle-ready|start)"/g)).toHaveLength(1);
+    expect(internals.root.innerHTML).not.toContain('country-select--lobby');
+    expect(internals.root.innerHTML).not.toContain('scenario-standard');
+    expect(internals.root.innerHTML).not.toContain('CREATE FRIEND INVITE');
+    expect(internals.root.innerHTML).not.toContain('Host invite code');
+    ui.destroy(false);
+  });
+
+  it('keeps lobby type floors readable and mobile inputs at 16px', () => {
+    expect(stylesSource).toContain('.mp-deployment-summary__item span');
+    expect(stylesSource).toMatch(/\.mp-deployment-summary__item span\s*\{[^}]*font-size:\s*11px/s);
+    expect(stylesSource).toMatch(/\.mp-one-line-help\s*\{[^}]*font-size:\s*11px/s);
+    expect(stylesSource).toMatch(/@media \(max-width: 700px\)[\s\S]*\.mp-field input,[\s\S]*font-size:\s*16px/);
+    expect(stylesSource).toContain('.multiplayer-lobby-card.is-direct-matchmaking:not(.has-country-picker)');
+    expect(stylesSource).toMatch(/\.mp-direct-room \.mp-player-list\s*\{[^}]*overflow-y:\s*auto/s);
   });
 });

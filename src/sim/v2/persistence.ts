@@ -7,12 +7,21 @@ import {
   V2_CONTENT_VERSION,
   V2_MAP_ID,
   V2_RULES_VERSION,
+  WAR_CAMPAIGN_MAX_TICKS,
   clamp,
+  round,
 } from './balance';
-import { createWorldStateV2 } from './bootstrap';
+import { createWorldStateV2, openingConflictScheduleV2 } from './bootstrap';
 import { pruneAllianceStateV2 } from './alliances';
+import { normalizeMandatoryApexAnalysisV2 } from './apexNarrative';
 import { synchronizeArmyCapacityV2 } from './capacity';
-import type { WorldContentV2 } from './content';
+import {
+  cloneCommanderForcesV2,
+  migrateLegacyCommanderEconomiesV2,
+  normalizeApexCapstoneProtocolV2,
+  reconcileCommanderForcesV2,
+} from './commanderForce';
+import { ROGUE_AI_NATION_ID_V2, type WorldContentV2 } from './content';
 import {
   absorbedNationSuccessorV2,
   retireDormantAbsorbedNationsV2,
@@ -20,30 +29,47 @@ import {
   territoryIntegrationDurationWeeksV2,
 } from './integration';
 import { assertInvariantsV2 } from './invariants';
+import { selectHumanEmpireDefeatWinnerV2 } from './humanPlayers';
 import {
   synchronizeOpeningArmyHumanRosterV2,
   trackExistingOpeningArmyHumanRosterV2,
 } from './nationState';
 import { OPENING_ARMY_BONUS_DURATION_TICKS_V2 } from './openingArmyBonus';
+import { normalizeRetiredFoodCompatibilityV2 } from './retiredFood';
 import {
   clonePolarEndgameV2,
   createInitialPolarEndgameV2,
   selectPolarVictoryWinnerV2,
 } from './polarEndgame';
+import {
+  cloneRunProgressionV2,
+  createInitialRunProgressionV2,
+  synchronizeRunProgressionRosterV2,
+} from './runProgression';
 import { contentVersionForWorldContentV2 } from './scenarios';
-import { selectFoodDomesticCapacityTargetV2 } from './selectors';
+import {
+  invalidateNationIndexV2,
+  invalidateTerritoryIndexV2,
+  selectFoodDomesticCapacityTargetV2,
+} from './selectors';
+import { activateRogueAiSurvivalV2 } from './survival';
+import { enforceSurvivalScorchedWorldV2 } from './survivalEmpire';
+import { reconcileSurvivalRogueFocusWarsV2 } from './survivalRogueFocus';
 import { registerTraitContentV2 } from './traits';
+import { canonicalizeWarFrontV2 } from './war';
 import type {
   AiEscalationStateV2,
   AllianceOfferV2,
   AllianceV2,
   CeasefireObligationV2,
+  CommanderForceStateV2,
   FrontOperationV2,
   IntegrationProgramStateV2,
   NationStateV2,
   PeaceOfferV2,
   PlayerId,
   PolarEndgameStateV2,
+  RunProgressionStateV2,
   TerritoryId,
   TerritoryStateV2,
   TruceStateV2,
@@ -63,6 +89,7 @@ export interface SaveGameV2 {
   humanPlayerId: PlayerId;
   humanPlayerIds: PlayerId[];
   firstIntegrationDiscountUsedBy: PlayerId[];
+  commanderForces: WorldStateV2['commanderForces'];
   players: Record<PlayerId, NationStateV2>;
   territories: Record<TerritoryId, TerritoryStateV2>;
   wars: WarStateV2[];
@@ -73,6 +100,7 @@ export interface SaveGameV2 {
   allianceOffers: AllianceOfferV2[];
   aiEscalation: AiEscalationStateV2;
   polarEndgame: PolarEndgameStateV2;
+  runProgression: RunProgressionStateV2;
   nextEventId: number;
   nextWarId: number;
   nextOfferId: number;
@@ -91,17 +119,43 @@ const LEGACY_RULES_VERSION_V20_RESEARCH = 'frontier-command-v2.56-research-expan
 const LEGACY_RULES_VERSION_V21 = 'frontier-command-v2.57-performance-multiplayer';
 /** Last authenticated schema-22 release before the V2.60 rule rebalance. */
 const LEGACY_RULES_VERSION_V22 = 'frontier-command-v2.59-country-traits';
-/** Last authenticated schema-22 release before Random World and opening human forces. */
+/**
+ * Last authenticated schema-22 release before Random World and opening human
+ * forces. Its former revolt chance was derived rather than persisted, so
+ * loading this ruleset into the current engine safely leaves every active
+ * Signal Purge intact without carrying a hidden scheduled event forward.
+ */
 const LEGACY_RULES_VERSION_V22_PRE_RANDOM = 'frontier-command-v2.60-revolutions-debt';
 /** Random World release whose boosted human armies did not yet track expiry. */
 const LEGACY_RULES_VERSION_V22_RANDOM = 'frontier-command-v2.61-random-world';
 /** Temporary opening-army release whose free surplus still faded over ten years. */
 const LEGACY_RULES_VERSION_V22_TEMPORARY = 'frontier-command-v2.62-temporary-opening-armies';
 const LEGACY_OPENING_ARMY_BONUS_DURATION_TICKS_V2 = 1_040;
+const LEGACY_WAR_CAMPAIGN_MAX_TICKS_V2 = 156;
 /** Last authenticated schema-22 release before the Arctic/Antarctic campaign. */
 const LEGACY_RULES_VERSION_V22_PRE_POLAR = 'frontier-command-v2.64-war-strain-counterattacks';
 /** Complete polar schema-22 release before the V2.66 strategic rebalance. */
 const LEGACY_RULES_VERSION_V22_POLAR = 'frontier-command-v2.65-polar-endgame';
+/** Last v7-content release before real Antarctic territories and Survival. */
+const LEGACY_RULES_VERSION_V22_66 = 'frontier-command-v2.66-strategic-rebalance';
+/** Survival release immediately before the non-territorial APEX network became canonical. */
+const LEGACY_RULES_VERSION_V22_67 = 'frontier-command-v2.67-survival-rebalance';
+/** First APEX network release, before deterministic idle autonomy metadata. */
+const LEGACY_RULES_VERSION_V22_68 = 'frontier-command-v2.68-commander-corps';
+/** Commander autonomy release, before country-trait progression became canonical. */
+const LEGACY_RULES_VERSION_V22_69 = 'frontier-command-v2.69-commander-autonomy';
+/** Country-trait progression release, before Commander doctrine capabilities became canonical. */
+const LEGACY_RULES_VERSION_V22_70 = 'frontier-command-v2.70-meta-traits';
+/** Last Commander-doctrine release before run-only drafts became canonical. */
+const LEGACY_RULES_VERSION_V22_71 = 'frontier-command-v2.71-commander-doctrines';
+/** Run-progression release whose APEX economy used the retired oversized scale. */
+const LEGACY_RULES_VERSION_V22_72 = 'frontier-command-v2.72-run-progression';
+/** Private-reserve APEX finance release before all output entered the shared Empire ledger. */
+const LEGACY_RULES_VERSION_V22_73 = 'frontier-command-v2.73-apex-finance';
+/** Last canonical release that persisted territorial land condition. */
+const LEGACY_RULES_VERSION_V22_74 = 'frontier-command-v2.74-shared-apex-economy';
+/** Last canonical release before civilian Food was retired in favour of Logistics Readiness. */
+const LEGACY_RULES_VERSION_V22_75 = 'frontier-command-v2.75-no-land-condition';
 const LEGACY_CONTENT_VERSION_V16 = 'natural-earth-countries-2026-v6-naval';
 const LEGACY_CONTENT_VERSION_V17 = 'natural-earth-countries-2026-v7-greenland';
 const LEGACY_BOT_MANPOWER_PER_UNIT = 0.10;
@@ -146,6 +200,7 @@ interface LegacyControlStateV2 {
   share: number;
 }
 type LegacyTerritoryBaseV17 = Omit<TerritoryStateV2, 'army' | 'coreOwner' | 'integrationProgram'> & {
+  condition: number;
   control?: LegacyControlStateV2;
 };
 type LegacyTerritoryV13 = LegacyTerritoryBaseV17 & { army: LegacyArmyV13 };
@@ -153,6 +208,7 @@ type LegacyTerritoryV14 = LegacyTerritoryBaseV17 & { army: LegacyArmyV14 };
 type LegacyTerritoryV17 = LegacyTerritoryBaseV17 & { army: LegacyArmyV17 };
 type LegacyIntegrationProgramV18 = Omit<IntegrationProgramStateV2, 'annualCost' | 'fromOwnerId'>;
 type LegacyTerritoryV18 = Omit<TerritoryStateV2, 'integrationProgram'> & {
+  condition: number;
   integrationProgram?: LegacyIntegrationProgramV18;
   control?: LegacyControlStateV2;
 };
@@ -162,16 +218,46 @@ type LegacyNationV20 = Omit<NationStateV2, 'openingArmyBonus'> & {
     effectLevels: NationStateV2['research']['effectLevels'] & { control?: number };
   };
 };
-type LegacyTerritoryV20 = TerritoryStateV2 & { control?: LegacyControlStateV2 };
+type LegacyTerritoryV20 = TerritoryStateV2 & { condition: number; control?: LegacyControlStateV2 };
 type LegacyPeaceOfferV20 = Omit<PeaceOfferV2, 'settlement'> & {
   settlement: PeaceOfferV2['settlement'] | 'control';
   territoryId?: TerritoryId;
 };
 type LegacyWarStateV21 = Omit<WarStateV2, 'revenge'>;
-type LegacySaveGameV22PrePolar = Omit<SaveGameV2, 'polarEndgame'>;
+type LegacyCommanderForceV268 = Omit<CommanderForceStateV2,
+  'capabilities' | 'countryTraitScale' | 'orderSource' | 'manualHoldUntilTick'>;
+type LegacyCommanderForceV269 = Omit<CommanderForceStateV2, 'capabilities' | 'countryTraitScale'>;
+type LegacyCommanderForceV270 = Omit<CommanderForceStateV2, 'capabilities'>;
+type LegacySaveGameV22RunV271 = Omit<SaveGameV2, 'rulesVersion' | 'runProgression'> & {
+  rulesVersion: typeof LEGACY_RULES_VERSION_V22_71;
+};
+type LegacySaveGameV22FinanceV272 = Omit<SaveGameV2, 'rulesVersion'> & {
+  rulesVersion: typeof LEGACY_RULES_VERSION_V22_72 | typeof LEGACY_RULES_VERSION_V22_73;
+};
+type LegacySaveGameV22ConditionV274 = Omit<SaveGameV2, 'rulesVersion' | 'territories'> & {
+  rulesVersion: typeof LEGACY_RULES_VERSION_V22_74;
+  territories: Record<TerritoryId, TerritoryStateV2 & { condition: number }>;
+};
+type LegacySaveGameV22FoodV275 = Omit<SaveGameV2, 'rulesVersion'> & {
+  rulesVersion: typeof LEGACY_RULES_VERSION_V22_75;
+};
+type LegacySaveGameV22CommanderV268 = Omit<SaveGameV2, 'rulesVersion' | 'commanderForces' | 'runProgression'> & {
+  rulesVersion: typeof LEGACY_RULES_VERSION_V22_68;
+  commanderForces: Partial<Record<PlayerId, LegacyCommanderForceV268>>;
+};
+type LegacySaveGameV22CommanderV269 = Omit<SaveGameV2, 'rulesVersion' | 'commanderForces' | 'runProgression'> & {
+  rulesVersion: typeof LEGACY_RULES_VERSION_V22_69;
+  commanderForces: Partial<Record<PlayerId, LegacyCommanderForceV269>>;
+};
+type LegacySaveGameV22CommanderV270 = Omit<SaveGameV2, 'rulesVersion' | 'commanderForces' | 'runProgression'> & {
+  rulesVersion: typeof LEGACY_RULES_VERSION_V22_70;
+  commanderForces: Partial<Record<PlayerId, LegacyCommanderForceV270>>;
+};
+type LegacySaveGameV22PreCommander = Omit<SaveGameV2, 'commanderForces' | 'runProgression'>;
+type LegacySaveGameV22PrePolar = Omit<LegacySaveGameV22PreCommander, 'polarEndgame'>;
 interface LegacySaveGameV21 extends Omit<SaveGameV2,
   'schemaVersion' | 'rulesVersion' | 'alliances' | 'allianceOffers'
-  | 'firstIntegrationDiscountUsedBy' | 'players' | 'polarEndgame' | 'wars'> {
+  | 'firstIntegrationDiscountUsedBy' | 'commanderForces' | 'players' | 'polarEndgame' | 'runProgression' | 'wars'> {
   schemaVersion: 21;
   rulesVersion: typeof LEGACY_RULES_VERSION_V21;
   players: Record<PlayerId, LegacyNationV21>;
@@ -254,8 +340,8 @@ export interface LegacySaveGameV13 extends Omit<LegacySaveGameV14,
 
 interface LegacyWorldStateV17 extends Omit<WorldStateV2,
   'schemaVersion' | 'rulesVersion' | 'contentVersion' | 'humanPlayerIds'
-  | 'firstIntegrationDiscountUsedBy' | 'players' | 'territories' | 'alliances' | 'allianceOffers'
-  | 'polarEndgame'> {
+  | 'firstIntegrationDiscountUsedBy' | 'commanderForces' | 'players' | 'territories' | 'alliances' | 'allianceOffers'
+  | 'polarEndgame' | 'runProgression'> {
   schemaVersion: 17;
   rulesVersion: typeof LEGACY_RULES_VERSION_V17;
   contentVersion: typeof LEGACY_CONTENT_VERSION_V17;
@@ -287,14 +373,20 @@ interface LegacyWorldStateV15 extends Omit<LegacyWorldStateV16,
 }
 
 const SAVE_KEYS = [
-  'actionSequence', 'aiEscalation', 'allianceOffers', 'alliances', 'canonicalStateHash', 'ceasefireObligations', 'contentVersion', 'firstIntegrationDiscountUsedBy', 'humanPlayerId', 'humanPlayerIds', 'mapId',
+  'actionSequence', 'aiEscalation', 'allianceOffers', 'alliances', 'canonicalStateHash', 'ceasefireObligations', 'commanderForces', 'contentVersion', 'firstIntegrationDiscountUsedBy', 'humanPlayerId', 'humanPlayerIds', 'mapId',
   'nextEventId', 'nextOfferId', 'nextWarId', 'offers', 'players', 'rngState', 'rulesVersion', 'schemaVersion',
   'polarEndgame', 'seed', 'territories', 'tick', 'truces', 'wars',
+  'runProgression',
 ].sort();
-const PRE_POLAR_SAVE_KEYS = SAVE_KEYS.filter((key) => key !== 'polarEndgame');
+const PRE_RUN_PROGRESSION_SAVE_KEYS = SAVE_KEYS.filter((key) => key !== 'runProgression');
+const PRE_COMMANDER_SAVE_KEYS = PRE_RUN_PROGRESSION_SAVE_KEYS.filter((key) => key !== 'commanderForces');
+const PRE_POLAR_SAVE_KEYS = PRE_COMMANDER_SAVE_KEYS.filter((key) => key !== 'polarEndgame');
 const PRE_V263_SAVE_KEYS = PRE_POLAR_SAVE_KEYS.filter((key) => key !== 'firstIntegrationDiscountUsedBy');
 const SCHEMA_21_SAVE_KEYS = PRE_V263_SAVE_KEYS.filter((key) => key !== 'alliances' && key !== 'allianceOffers');
 const LEGACY_SAVE_KEYS = SCHEMA_21_SAVE_KEYS.filter((key) => key !== 'humanPlayerIds');
+const RETIRED_CAMPAIGN_PRESSURE_SAVE_KEYS = [
+  'warStrain', 'warStrainLevel', 'warStrainScore',
+] as const;
 
 const LEGACY_NATION_KEYS_V13 = [
   'battleBots', 'budget', 'capitalId', 'ceasefiresRequested', 'empireName', 'foodSecurity', 'foodStock',
@@ -348,6 +440,57 @@ function sortedRecord<T>(record: Record<string, T>): Record<string, T> {
   return Object.fromEntries(Object.entries(record).sort(([left], [right]) => left.localeCompare(right)));
 }
 
+/**
+ * Clones the persisted per-war APEX ledger in stable player order. Present
+ * malformed values remain malformed so invariant validation rejects them after
+ * the original payload has been authenticated; only an absent legacy ledger
+ * receives the safe empty default.
+ */
+function cloneApexWarTelemetryV2(
+  value: unknown,
+): WarStateV2['apexTelemetryByPlayer'] {
+  if (value === undefined) return {};
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value as never;
+  return Object.fromEntries(Object.entries(value)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([playerId, telemetry]) => [
+      playerId,
+      telemetry && typeof telemetry === 'object' && !Array.isArray(telemetry)
+        ? { ...telemetry } : telemetry,
+    ])) as WarStateV2['apexTelemetryByPlayer'];
+}
+
+/** Deep-clone the save-stable report inputs without repairing authenticated
+ * malformed values before invariant validation. */
+function cloneWarReportBaselinesV2(
+  value: unknown,
+): WarStateV2['reportBaselineByPlayer'] {
+  if (value === undefined) return {};
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value as never;
+  return Object.fromEntries(Object.entries(value)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([playerId, baseline]) => [
+      playerId,
+      baseline && typeof baseline === 'object' && !Array.isArray(baseline)
+        ? {
+            ...baseline,
+            ...('ownedTerritoryIds' in baseline
+              ? { ownedTerritoryIds: Array.isArray(baseline.ownedTerritoryIds)
+                  ? [...baseline.ownedTerritoryIds] : baseline.ownedTerritoryIds }
+              : {}),
+            ...('touchedTerritoryIds' in baseline
+              ? { touchedTerritoryIds: Array.isArray(baseline.touchedTerritoryIds)
+                  ? [...baseline.touchedTerritoryIds] : baseline.touchedTerritoryIds }
+              : {}),
+            ...('allyContributorIds' in baseline
+              ? { allyContributorIds: Array.isArray(baseline.allyContributorIds)
+                  ? [...baseline.allyContributorIds] : baseline.allyContributorIds }
+              : {}),
+          }
+        : baseline,
+    ])) as WarStateV2['reportBaselineByPlayer'];
+}
+
 function payloadWithoutHash<T extends object>(save: T): Omit<T, 'canonicalStateHash'> {
   const { canonicalStateHash: _ignored, ...payload } = save as T & { canonicalStateHash?: unknown };
   return payload as Omit<T, 'canonicalStateHash'>;
@@ -372,10 +515,12 @@ export function createSaveV2(state: WorldStateV2, content: WorldContentV2): Save
     humanPlayerIds: [...state.humanPlayerIds].sort((left, right) => left.localeCompare(right)),
     firstIntegrationDiscountUsedBy: [...state.firstIntegrationDiscountUsedBy]
       .sort((left, right) => left.localeCompare(right)),
+    commanderForces: cloneCommanderForcesV2(state.commanderForces),
     players: Object.fromEntries((Object.entries(state.players) as Array<[PlayerId, NationStateV2]>)
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([id, nation]) => [id, {
         ...nation,
+        ceasefiresRequested: 0,
         openingArmyBonus: nation.openingArmyBonus ? { ...nation.openingArmyBonus } : null,
       }])) as Record<PlayerId, NationStateV2>,
     territories: sortedRecord(state.territories) as Record<TerritoryId, TerritoryStateV2>,
@@ -389,13 +534,16 @@ export function createSaveV2(state: WorldStateV2, content: WorldContentV2): Save
         defenderCivilianLosses: war.defenderCivilianLosses ?? 0,
         attackerOperations: war.attackerOperations.map((operation) => ({ ...operation })),
         defenderOperations: war.defenderOperations.map((operation) => ({ ...operation })),
+        apexTelemetryByPlayer: cloneApexWarTelemetryV2(war.apexTelemetryByPlayer),
+        reportBaselineByPlayer: cloneWarReportBaselinesV2(war.reportBaselineByPlayer),
         revenge: war.revenge ? { ...war.revenge } : null,
         ...(war.campaign ? { campaign: { ...war.campaign } } : {}),
       })),
     truces: [...state.truces].sort((a, b) => a.leftId.localeCompare(b.leftId) || a.rightId.localeCompare(b.rightId)),
-    ceasefireObligations: [...state.ceasefireObligations]
-      .sort((a, b) => a.payerId.localeCompare(b.payerId) || a.expiresTick - b.expiresTick || a.warId.localeCompare(b.warId)),
-    offers: state.offers.filter((offer) => offer.status === 'pending').sort((a, b) => a.id.localeCompare(b.id)),
+    // Retired compatibility fields remain canonical but can never persist
+    // negotiations or payment obligations into a new save.
+    ceasefireObligations: [],
+    offers: [],
     alliances: [...state.alliances]
       .sort((left, right) => left.leftId.localeCompare(right.leftId) || left.rightId.localeCompare(right.rightId))
       .map((alliance) => ({ ...alliance })),
@@ -405,6 +553,7 @@ export function createSaveV2(state: WorldStateV2, content: WorldContentV2): Save
       .map((offer) => ({ ...offer })),
     aiEscalation: { ...state.aiEscalation, coalitionMembers: [...state.aiEscalation.coalitionMembers] },
     polarEndgame: clonePolarEndgameV2(state.polarEndgame),
+    runProgression: cloneRunProgressionV2(state.runProgression, content),
     nextEventId: state.nextEventId,
     nextWarId: state.nextWarId,
     nextOfferId: state.nextOfferId,
@@ -422,6 +571,25 @@ function exactKeys(value: object, allowed: readonly string[]): boolean {
     .filter((key) => key !== 'control' || key in value)
     .sort();
   return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+}
+
+/**
+ * V2.74 is authenticated in its original form, then retired land condition is
+ * removed. Require that exact historical scalar before conversion so a
+ * re-signed malformed payload cannot masquerade as the compatibility schema.
+ * Every still-live canonical field is validated by the ordinary v2.75
+ * invariant pass after the scalar is stripped.
+ */
+function assertLegacyCanonicalShapeV274(save: LegacySaveGameV22ConditionV274): void {
+  for (const [territoryId, territory] of Object.entries(save.territories)) {
+    if (!territory || typeof territory !== 'object'
+      || !Object.prototype.hasOwnProperty.call(territory, 'condition')
+      || !Number.isFinite(territory.condition)
+      || territory.condition < 0.15
+      || territory.condition > 1) {
+      throw new Error(`Legacy V2.74 territory ${territoryId} has invalid land condition.`);
+    }
+  }
 }
 
 function assertLegacyCanonicalShapeV13(save: LegacySaveGameV13): void {
@@ -789,6 +957,7 @@ function legacyTerritoryFromCurrentV2(territory: TerritoryStateV2): LegacyTerrit
   } = territory;
   return {
     ...legacyTerritory,
+    condition: 1,
     army: {
       ...territory.army,
       veteranManpower: 0,
@@ -982,8 +1151,9 @@ function migrateLegacyStateV17(
       veteranExperience: _veteranExperience,
       ...army
     } = territory.army;
+    const { condition: _retiredCondition, ...territoryWithoutCondition } = territory;
     return [territoryId, {
-      ...territory,
+      ...territoryWithoutCondition,
       coreOwner: integratingForeignCore ? originalOwnerId : territory.owner,
       ...(integratingForeignCore ? {
         integrationProgram: {
@@ -1007,9 +1177,11 @@ function migrateLegacyStateV17(
     contentVersion: V2_CONTENT_VERSION,
     humanPlayerIds: [legacyState.humanPlayerId],
     firstIntegrationDiscountUsedBy: [],
+    commanderForces: {},
     alliances: [],
     allianceOffers: [],
     polarEndgame: createInitialPolarEndgameV2(),
+    runProgression: createInitialRunProgressionV2(content),
     players,
     territories,
     wars: legacyState.wars.map((war) => ({
@@ -1033,7 +1205,7 @@ function migrateLegacyStateV17(
 }
 
 function currentStateFromSave(
-  save: SaveGameV2 | LegacySaveGameV22PrePolar | LegacySaveGameV21 | LegacySaveGameV20 | LegacySaveGameV19 | LegacySaveGameV18,
+  save: SaveGameV2 | LegacySaveGameV22ConditionV274 | LegacySaveGameV22FinanceV272 | LegacySaveGameV22RunV271 | LegacySaveGameV22CommanderV268 | LegacySaveGameV22CommanderV269 | LegacySaveGameV22CommanderV270 | LegacySaveGameV22PreCommander | LegacySaveGameV22PrePolar | LegacySaveGameV21 | LegacySaveGameV20 | LegacySaveGameV19 | LegacySaveGameV18,
   content: WorldContentV2,
   retireLegacyCombatExperience = false,
 ): WorldStateV2 {
@@ -1059,13 +1231,28 @@ function currentStateFromSave(
       && !Array.isArray(serializedOpeningArmyBonus)
       ? { ...serializedOpeningArmyBonus }
       : serializedOpeningArmyBonus;
-    const serializedNation = nation as NationStateV2 & { combatExperience?: number };
-    const canonicalNation: NationStateV2 = retireLegacyCombatExperience
+    const serializedNation = nation as NationStateV2 & {
+      combatExperience?: number;
+      warStrain?: unknown;
+      warStrainLevel?: unknown;
+      warStrainScore?: unknown;
+    };
+    const canonicalNationWithRetiredFields: NationStateV2 = retireLegacyCombatExperience
       ? (({ combatExperience: _retiredCombatExperience, ...rest }) => ({
         ...rest,
         trainedReserves: 0,
       } as NationStateV2))(serializedNation)
       : serializedNation;
+    const {
+      warStrain: _retiredWarStrain,
+      warStrainLevel: _retiredWarStrainLevel,
+      warStrainScore: _retiredWarStrainScore,
+      ...canonicalNation
+    } = canonicalNationWithRetiredFields as NationStateV2 & {
+      warStrain?: unknown;
+      warStrainLevel?: unknown;
+      warStrainScore?: unknown;
+    };
     if (serializedCapacity === undefined) missingDomesticCapacity.add(playerId);
     return [playerId, {
       ...canonicalNation,
@@ -1088,11 +1275,14 @@ function currentStateFromSave(
     }];
   })) as Record<PlayerId, NationStateV2>;
   const territories = Object.fromEntries(Object.entries(save.territories).map(([rawId, territory]) => {
-    const serializedTerritory = territory as TerritoryStateV2;
+    const serializedTerritory = territory as TerritoryStateV2 & { condition?: unknown };
+    const { condition: _retiredCondition, ...territoryWithoutCondition } = serializedTerritory;
+    const canonicalTerritory = save.rulesVersion === V2_RULES_VERSION
+      ? serializedTerritory : territoryWithoutCondition;
     const program = serializedTerritory.integrationProgram;
     const serializedAnnualCost = (program as { annualCost?: number } | undefined)?.annualCost;
     return [rawId, {
-      ...serializedTerritory,
+      ...canonicalTerritory,
       ...(program ? {
         integrationProgram: {
           ...program,
@@ -1109,8 +1299,60 @@ function currentStateFromSave(
   const serializedDiscountLedger = (
     save as { firstIntegrationDiscountUsedBy?: unknown }
   ).firstIntegrationDiscountUsedBy;
+  const hasOpeningConflictProgress = Object.prototype.hasOwnProperty.call(
+    save.aiEscalation,
+    'openingConflictsStarted',
+  );
+  const serializedOpeningConflictsStarted = (
+    save.aiEscalation as { openingConflictsStarted?: unknown }
+  ).openingConflictsStarted;
+  const commanderForces = 'commanderForces' in save
+    ? cloneCommanderForcesV2(save.commanderForces as WorldStateV2['commanderForces'])
+    : {};
+  if (save.rulesVersion === LEGACY_RULES_VERSION_V22_68
+    || save.rulesVersion === LEGACY_RULES_VERSION_V22_69) {
+    for (const force of Object.values(commanderForces)) {
+      if (!force) continue;
+      force.countryTraitScale = 1;
+    }
+  }
+  if (save.rulesVersion === LEGACY_RULES_VERSION_V22_68
+    || save.rulesVersion === LEGACY_RULES_VERSION_V22_69
+    || save.rulesVersion === LEGACY_RULES_VERSION_V22_70) {
+    for (const force of Object.values(commanderForces)) {
+      if (!force) continue;
+      force.capabilities = {
+        mobileHeadquarters: false,
+        fieldHospital: false,
+        rapidResponse: false,
+        assaultSpecialist: false,
+        defenseSpecialist: false,
+        emergencyExtractionCharges: 0,
+      };
+    }
+  }
+  if (save.rulesVersion === LEGACY_RULES_VERSION_V22_68) {
+    for (const force of Object.values(commanderForces)) {
+      if (!force) continue;
+      // Retired manual assignments keep their physical mission and route, but
+      // never retain a player lock that could block the autonomous optimizer.
+      force.orderSource = 'autonomous';
+      force.manualHoldUntilTick = 0;
+      if (force.mission === 'evacuate' && !force.transit) {
+        force.mission = 'standby';
+      }
+    }
+  }
+  // Authenticated releases before exclusive protocol selection could freeze
+  // several capstones into one solo APEX. Preserve the most clearly active
+  // protocol and clear incompatible runtime state before canonical validation.
+  for (const force of Object.values(commanderForces)) {
+    if (force) normalizeApexCapstoneProtocolV2(force);
+  }
+  const authenticatedPayload = payloadWithoutHash(save) as Record<string, unknown>;
+  for (const key of RETIRED_CAMPAIGN_PRESSURE_SAVE_KEYS) delete authenticatedPayload[key];
   const state: WorldStateV2 = {
-    ...payloadWithoutHash(save),
+    ...authenticatedPayload as Omit<WorldStateV2, 'canonicalStateHash'>,
     schemaVersion: 22,
     rulesVersion: V2_RULES_VERSION,
     humanPlayerIds: 'humanPlayerIds' in save
@@ -1119,9 +1361,13 @@ function currentStateFromSave(
     firstIntegrationDiscountUsedBy: Array.isArray(serializedDiscountLedger)
       ? [...serializedDiscountLedger] as PlayerId[]
       : serializedDiscountLedger === undefined ? [] : serializedDiscountLedger as never,
+    commanderForces,
     polarEndgame: 'polarEndgame' in save
       ? clonePolarEndgameV2(save.polarEndgame as PolarEndgameStateV2)
       : createInitialPolarEndgameV2(),
+    runProgression: 'runProgression' in save
+      ? cloneRunProgressionV2(save.runProgression as RunProgressionStateV2, content)
+      : createInitialRunProgressionV2(content),
     players,
     territories,
     alliances: 'alliances' in save
@@ -1130,6 +1376,15 @@ function currentStateFromSave(
     allianceOffers: 'allianceOffers' in save
       ? save.allianceOffers.map((offer) => ({ ...offer }))
       : [],
+    aiEscalation: {
+      ...save.aiEscalation,
+      // Authenticated saves created just before this durable ledger was added
+      // are inferred below from their save-stable blackout schedule. A present
+      // malformed value is preserved so invariant validation still rejects it.
+      openingConflictsStarted: hasOpeningConflictProgress
+        ? serializedOpeningConflictsStarted as number
+        : 0,
+    },
     wars: save.wars.map((war) => ({
       ...war,
       // Same-schema saves made before cumulative civilian tracking remain
@@ -1140,6 +1395,8 @@ function currentStateFromSave(
         ? 0 : war.defenderCivilianLosses,
       attackerOperations: war.attackerOperations.map((operation) => ({ ...operation })),
       defenderOperations: war.defenderOperations.map((operation) => ({ ...operation })),
+      apexTelemetryByPlayer: cloneApexWarTelemetryV2(war.apexTelemetryByPlayer),
+      reportBaselineByPlayer: cloneWarReportBaselinesV2(war.reportBaselineByPlayer),
       revenge: !('revenge' in war) || war.revenge === undefined || war.revenge === null
         ? null
         : typeof war.revenge === 'object' && !Array.isArray(war.revenge)
@@ -1157,6 +1414,23 @@ function currentStateFromSave(
     winnerId: undefined,
     gameOver: false,
   };
+  const serializedPolar = 'polarEndgame' in save
+    ? save.polarEndgame as unknown as Record<string, unknown>
+    : undefined;
+  if (content.metadata?.scenarioId === 'standard-2026'
+    && serializedPolar
+    && !Object.prototype.hasOwnProperty.call(serializedPolar, 'communicationsBlackoutTick')) {
+    // Authenticated pre-prologue timelines remain playable; only newly saved
+    // campaigns can intentionally persist the calm pre-blackout state as null.
+    state.polarEndgame.communicationsBlackoutTick = state.tick;
+  }
+  if (!hasOpeningConflictProgress) {
+    const conflictOriginTick = state.polarEndgame.communicationsBlackoutTick;
+    state.aiEscalation.openingConflictsStarted = conflictOriginTick === null
+      ? 0
+      : openingConflictScheduleV2(state.seed, content)
+        .filter((entry) => conflictOriginTick + entry.tick <= state.tick).length;
+  }
   // Authentication happened before this function. Compatible saves made before
   // slow domestic capacity existed now receive a coherent live target;
   // any present invalid value remains untouched for invariant rejection.
@@ -1165,7 +1439,67 @@ function currentStateFromSave(
       selectFoodDomesticCapacityTargetV2(state, content, playerId),
     );
   }
+  if (save.rulesVersion === LEGACY_RULES_VERSION_V22_68) {
+    reconcileCommanderForcesV2(state, content);
+  }
   return state;
+}
+
+/**
+ * The v8 map adds the real Rogue empire after an old payload has authenticated.
+ * Ordinary nations and territories remain byte-for-byte the player's saved
+ * state; only definitions that did not exist in v7 are copied from a fresh
+ * deterministic baseline for the resolved scenario.
+ */
+function hydrateNewContentAfterAuthenticationV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+): void {
+  const missingPlayerIds = content.nationIds.filter((id) => !state.players[id]);
+  const missingTerritoryIds = content.territoryIds.filter((id) => !state.territories[id]);
+  const contentChanged = state.contentVersion !== contentVersionForWorldContentV2(content);
+  if (missingPlayerIds.length === 0 && missingTerritoryIds.length === 0 && !contentChanged) return;
+
+  const baseline = createWorldStateV2(state.seed, content);
+  for (const playerId of missingPlayerIds) {
+    const nation = baseline.players[playerId];
+    if (nation) state.players[playerId] = structuredClone(nation);
+  }
+  for (const territoryId of missingTerritoryIds) {
+    const territory = baseline.territories[territoryId];
+    if (territory) state.territories[territoryId] = structuredClone(territory);
+  }
+  state.contentVersion = contentVersionForWorldContentV2(content);
+  invalidateNationIndexV2(state);
+  invalidateTerritoryIndexV2(state);
+
+  const legacyPolar = clonePolarEndgameV2(state.polarEndgame);
+  const legacySurvivalActive = legacyPolar.phase === 'warning'
+    || legacyPolar.phase === 'contact'
+    || legacyPolar.phase === 'counteroffensive'
+    || legacyPolar.phase === 'core-exposed';
+  // Return surviving abstract expedition personnel before retiring the old
+  // subsystem. The migration creates no soldiers and loses no stored reserve.
+  for (const expedition of legacyPolar.expeditions) {
+    const nation = state.players[expedition.playerId];
+    if (nation) nation.trainedReserves += Math.max(0, expedition.manpower);
+  }
+  if (legacyPolar.phase !== 'victory') {
+    const freshPolar = createInitialPolarEndgameV2();
+    freshPolar.arcticPrograms = legacyPolar.arcticPrograms;
+    freshPolar.phase = legacyPolar.phase === 'arctic-research' ? 'arctic-research' : 'dormant';
+    freshPolar.visualRevision = legacyPolar.visualRevision + 1;
+    state.polarEndgame = freshPolar;
+    if (legacySurvivalActive) {
+      activateRogueAiSurvivalV2(
+        state,
+        content,
+        legacyPolar.revealedBy,
+      );
+      state.polarEndgame.globalWave = Math.max(1, legacyPolar.globalWave);
+    }
+  }
+  synchronizeArmyCapacityV2(state, content);
 }
 
 /**
@@ -1180,7 +1514,11 @@ function migrateLegacyStateV18(
   content: WorldContentV2,
 ): WorldStateV2 {
   const canonicalTerritories = Object.fromEntries(Object.entries(save.territories).map(([rawId, territory]) => {
-    const { integrationProgram: program, ...territoryWithoutProgram } = territory;
+    const {
+      integrationProgram: program,
+      condition: _retiredCondition,
+      ...territoryWithoutProgram
+    } = territory;
     if (program !== undefined
       && (!program || typeof program !== 'object'
         || !exactKeys(program, LEGACY_INTEGRATION_PROGRAM_KEYS_V18))) {
@@ -1250,12 +1588,8 @@ function migrateRetiredSystemsV2(state: WorldStateV2): void {
   for (const territory of Object.values(state.territories)) {
     delete (territory as LegacyTerritoryV20).control;
   }
-  state.offers = state.offers
-    .filter((offer) => (offer as LegacyPeaceOfferV20).settlement !== 'control')
-    .map((offer) => {
-      const { territoryId: _retiredTerritoryId, ...canonicalOffer } = offer as LegacyPeaceOfferV20;
-      return canonicalOffer as PeaceOfferV2;
-    });
+  state.offers = [];
+  state.ceasefireObligations = [];
   for (const nation of Object.values(state.players)) {
     const legacyLevels = nation.research.effectLevels as NationStateV2['research']['effectLevels'] & {
       control?: number;
@@ -1285,8 +1619,89 @@ function migrateRetiredSystemsV2(state: WorldStateV2): void {
   }
 }
 
+/**
+ * Survival now reserves human-facing aggression for the Rogue. Authenticated
+ * older saves may contain an ordinary AI offensive against a human seat; end
+ * only those wars at load while preserving human-initiated ordinary wars.
+ */
+function retireLegacySurvivalAiOffensivesV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+): void {
+  if (content.metadata?.scenarioId !== 'survival') return;
+  const humanIds = new Set(state.humanPlayerIds);
+  const retiredWarIds = new Set(state.wars.filter((war) => (
+    !humanIds.has(war.attackerId)
+      && war.attackerId !== ROGUE_AI_NATION_ID_V2
+      && humanIds.has(war.defenderId)
+  )).map((war) => war.id));
+  if (retiredWarIds.size === 0) return;
+  state.wars = state.wars.filter((war) => !retiredWarIds.has(war.id));
+  state.offers = state.offers.filter((offer) => !retiredWarIds.has(offer.warId));
+}
+
+/**
+ * The original four-project North Pole program paid ordinary national research
+ * levels when each project completed. The fourteen-stage program derives its
+ * deliberately much smaller effects from completed project IDs instead. An
+ * authenticated pre-V2.74 save therefore needs those exact old payouts removed
+ * once, or it would retain the retired bonuses and stack the new curve on top.
+ *
+ * Each tuple is an old project reward copied from the retired authored data.
+ * Normal branch research is preserved: only the known polar contribution is
+ * subtracted, and a subsequent current-version save can never run this again.
+ */
+const LEGACY_POLAR_RESEARCH_REWARDS_V2 = [
+  ['polar-demography', 'population-growth', 1],
+  ['polar-demography', 'recovery', 1],
+  ['polar-demography', 'food-storage', 1],
+  ['cryogenic-logistics', 'supply', 2],
+  ['cryogenic-logistics', 'casualty-reduction', 1],
+  ['cryogenic-logistics', 'research-efficiency', 1],
+  ['strategic-mobilisation', 'force-capacity', 2],
+  ['strategic-mobilisation', 'reserve-training', 2],
+  ['strategic-mobilisation', 'reserve-mobilization', 2],
+  ['deep-ice-signals', 'attack', 1],
+  ['deep-ice-signals', 'defense', 1],
+  ['deep-ice-signals', 'research-speed', 1],
+] as const;
+
+function retireLegacyPolarResearchRewardsV2(state: WorldStateV2): void {
+  for (const [playerId, progress] of Object.entries(state.polarEndgame.arcticPrograms)) {
+    const nation = state.players[playerId as PlayerId];
+    if (!nation || !progress) continue;
+    const completed = new Set(progress.completedProjects);
+    for (const [projectId, effect, levels] of LEGACY_POLAR_RESEARCH_REWARDS_V2) {
+      if (!completed.has(projectId)) continue;
+      nation.research.effectLevels[effect] = Math.max(
+        0,
+        nation.research.effectLevels[effect] - levels,
+      );
+    }
+  }
+}
+
+function legacyV7ContentMatchesResolvedScenarioV2(
+  serializedContentVersion: unknown,
+  content: WorldContentV2,
+  seed: number,
+): boolean {
+  if (serializedContentVersion === LEGACY_CONTENT_VERSION_V17) {
+    return content.metadata?.scenarioId === 'standard-2026';
+  }
+  if (typeof serializedContentVersion !== 'string'
+    || content.metadata?.scenarioId !== 'random-world') return false;
+  const match = /^random-world-v(\d+)@natural-earth-countries-2026-v7-greenland:seed-(\d+)$/.exec(
+    serializedContentVersion,
+  );
+  return Boolean(match
+    && Number(match[1]) === content.metadata.scenarioVersion
+    && Number(match[2]) === seed
+    && content.metadata.generatedFromSeed === seed);
+}
+
 export function loadSaveV2(
-  input: string | SaveGameV2 | LegacySaveGameV22PrePolar | LegacySaveGameV21 | LegacySaveGameV20 | LegacySaveGameV19 | LegacySaveGameV18 | LegacySaveGameV17 | LegacySaveGameV16 | LegacySaveGameV15 | LegacySaveGameV14 | LegacySaveGameV13,
+  input: string | SaveGameV2 | LegacySaveGameV22FoodV275 | LegacySaveGameV22ConditionV274 | LegacySaveGameV22FinanceV272 | LegacySaveGameV22RunV271 | LegacySaveGameV22CommanderV268 | LegacySaveGameV22CommanderV269 | LegacySaveGameV22CommanderV270 | LegacySaveGameV22PreCommander | LegacySaveGameV22PrePolar | LegacySaveGameV21 | LegacySaveGameV20 | LegacySaveGameV19 | LegacySaveGameV18 | LegacySaveGameV17 | LegacySaveGameV16 | LegacySaveGameV15 | LegacySaveGameV14 | LegacySaveGameV13,
   content: WorldContentV2,
 ): WorldStateV2 {
   registerTraitContentV2(content);
@@ -1308,6 +1723,16 @@ export function loadSaveV2(
                 : LEGACY_RULES_VERSION_V13;
   const supportedRules = schemaVersion === 22
     ? parsed.rulesVersion === V2_RULES_VERSION
+      || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_75
+      || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_74
+      || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_73
+      || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_72
+      || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_71
+      || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_70
+      || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_69
+      || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_68
+      || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_67
+      || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_66
       || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_POLAR
       || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_PRE_POLAR
       || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_TEMPORARY
@@ -1323,23 +1748,58 @@ export function loadSaveV2(
     : parsed.rulesVersion === expectedRules;
   if (!supportedRules) throw new Error(`Unsupported V2 rulesVersion: ${String(parsed.rulesVersion)}.`);
   const keys = Object.keys(parsed).sort();
+  const canonicalKeys = schemaVersion === 22
+    ? keys.filter((key) => !RETIRED_CAMPAIGN_PRESSURE_SAVE_KEYS
+      .includes(key as typeof RETIRED_CAMPAIGN_PRESSURE_SAVE_KEYS[number]))
+    : keys;
   const expectedSaveKeys = schemaVersion === 22
     ? parsed.rulesVersion === V2_RULES_VERSION
-      || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_POLAR
+      || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_75
+      || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_74
+      || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_73
+      || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_72
       ? SAVE_KEYS
-      : parsed.rulesVersion === LEGACY_RULES_VERSION_V22_PRE_POLAR
-        ? PRE_POLAR_SAVE_KEYS
-        : PRE_V263_SAVE_KEYS
+      : parsed.rulesVersion === LEGACY_RULES_VERSION_V22_71
+        || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_70
+        || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_69
+        || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_68
+        ? PRE_RUN_PROGRESSION_SAVE_KEYS
+      : parsed.rulesVersion === LEGACY_RULES_VERSION_V22_67
+        || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_66
+        || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_POLAR
+        ? PRE_COMMANDER_SAVE_KEYS
+        : parsed.rulesVersion === LEGACY_RULES_VERSION_V22_PRE_POLAR
+          ? PRE_POLAR_SAVE_KEYS
+          : PRE_V263_SAVE_KEYS
     : schemaVersion === 21 ? SCHEMA_21_SAVE_KEYS : LEGACY_SAVE_KEYS;
-  if (keys.length !== expectedSaveKeys.length || keys.some((key, index) => key !== expectedSaveKeys[index])) {
+  if (canonicalKeys.length !== expectedSaveKeys.length
+    || canonicalKeys.some((key, index) => key !== expectedSaveKeys[index])) {
     throw new Error('V2 save has missing or extra top-level keys.');
   }
   const expectedContent = schemaVersion === 22
     ? contentVersionForWorldContentV2(content)
     : schemaVersion >= 17 ? V2_CONTENT_VERSION : LEGACY_CONTENT_VERSION_V16;
-  if (parsed.contentVersion !== expectedContent) throw new Error(`Unsupported V2 contentVersion: ${String(parsed.contentVersion)}.`);
+  const legacyV7Content = schemaVersion === 22 && legacyV7ContentMatchesResolvedScenarioV2(
+    parsed.contentVersion,
+    content,
+    Number(parsed.seed),
+  );
+  if (parsed.contentVersion !== expectedContent && !legacyV7Content) {
+    throw new Error(`Unsupported V2 contentVersion: ${String(parsed.contentVersion)}.`);
+  }
   if (schemaVersion === 22 && parsed.contentVersion !== V2_CONTENT_VERSION
+    && !legacyV7Content
     && parsed.rulesVersion !== V2_RULES_VERSION
+    && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_75
+    && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_74
+    && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_73
+    && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_72
+    && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_71
+    && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_70
+    && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_69
+    && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_68
+    && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_67
+    && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_66
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_POLAR
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_PRE_POLAR
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_TEMPORARY
@@ -1355,9 +1815,12 @@ export function loadSaveV2(
   if (hash !== parsed.canonicalStateHash) {
     throw new Error(`V2 canonical hash mismatch: expected ${parsed.canonicalStateHash}, got ${hash}.`);
   }
+  if (schemaVersion === 22 && parsed.rulesVersion === LEGACY_RULES_VERSION_V22_74) {
+    assertLegacyCanonicalShapeV274(parsed as unknown as LegacySaveGameV22ConditionV274);
+  }
 
   const state = schemaVersion === 22
-    ? currentStateFromSave(parsed as unknown as SaveGameV2 | LegacySaveGameV22PrePolar, content)
+    ? currentStateFromSave(parsed as unknown as SaveGameV2 | LegacySaveGameV22FoodV275 | LegacySaveGameV22ConditionV274 | LegacySaveGameV22FinanceV272 | LegacySaveGameV22RunV271 | LegacySaveGameV22CommanderV268 | LegacySaveGameV22CommanderV269 | LegacySaveGameV22CommanderV270 | LegacySaveGameV22PreCommander | LegacySaveGameV22PrePolar, content)
     : schemaVersion === 21
       ? currentStateFromSave(parsed as unknown as LegacySaveGameV21, content)
       : schemaVersion === 20
@@ -1378,8 +1841,24 @@ export function loadSaveV2(
                   : migrateLegacySaveV13(parsed as unknown as LegacySaveGameV13),
                 content,
               )), content), content);
-  if (parsed.rulesVersion !== V2_RULES_VERSION) {
+  if (schemaVersion === 22
+    && parsed.rulesVersion !== V2_RULES_VERSION
+    && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_75
+    && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_74) {
+    retireLegacyPolarResearchRewardsV2(state);
+  }
+  // Only authenticated v7 worlds lack the new Antarctic content. A current
+  // v8 save can legitimately omit countries absorbed during play; hydrating
+  // those would resurrect defeated nations and break its canonical hash.
+  if (legacyV7Content) hydrateNewContentAfterAuthenticationV2(state, content);
+  if (parsed.rulesVersion !== V2_RULES_VERSION
+    && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_75
+    && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_74) {
     migrateRetiredSystemsV2(state);
+    migrateLegacyCommanderEconomiesV2(
+      state,
+      parsed.rulesVersion === LEGACY_RULES_VERSION_V22_73 ? 0.10 : 1.5,
+    );
     // V2.62–V2.64 persisted the temporary opening pool with a twenty-year
     // expiry. Extend only the authenticated metadata to the current thirty-
     // year horizon. Remaining physical manpower is never increased, so an old
@@ -1391,11 +1870,26 @@ export function loadSaveV2(
         bonus.expiresTick = bonus.startedTick + OPENING_ARMY_BONUS_DURATION_TICKS_V2;
       }
     }
+    // V2.66 persisted the former three-year campaign window. Extend only that
+    // exact authenticated span; custom or already-current windows stay intact.
+    for (const war of state.wars) {
+      const campaign = war.campaign;
+      if (campaign
+        && campaign.expiresTick - war.startedTick === LEGACY_WAR_CAMPAIGN_MAX_TICKS_V2) {
+        campaign.expiresTick = war.startedTick + WAR_CAMPAIGN_MAX_TICKS;
+      }
+    }
     // Supported older rule sets predate the current trait-capacity curve.
     // Capacity is derived, so preserving an obsolete stored value would make
     // an otherwise authentic save fail current invariants (notably Greenland).
     synchronizeArmyCapacityV2(state, content);
     if (schemaVersion === 22 && state.tick === 0
+      && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_73
+      && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_72
+      && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_70
+      && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_69
+      && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_68
+      && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_67
       && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_TEMPORARY
       && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_POLAR) {
       if (parsed.rulesVersion === LEGACY_RULES_VERSION_V22_RANDOM) {
@@ -1407,7 +1901,26 @@ export function loadSaveV2(
   }
   // Normalize authenticated legacy/current saves at the load boundary. This
   // never mutates the caller's live state or changes the authenticated input.
+  state.offers = [];
+  state.ceasefireObligations = [];
+  for (const nation of Object.values(state.players)) nation.ceasefiresRequested = 0;
+  normalizeRetiredFoodCompatibilityV2(state);
+  synchronizeRunProgressionRosterV2(state);
+  enforceSurvivalScorchedWorldV2(state, content);
+  synchronizeArmyCapacityV2(state, content);
+  reconcileSurvivalRogueFocusWarsV2(state, content);
   retireDormantAbsorbedNationsV2(state, content);
+  reconcileCommanderForcesV2(state, content);
+  normalizeMandatoryApexAnalysisV2(state);
+  retireLegacySurvivalAiOffensivesV2(state, content);
+  // Older authenticated saves could persist a front for every border and a
+  // second list for the counterattack. One opponent pair is now one canonical
+  // live front; normalization happens only after the original hash is proven.
+  for (const war of state.wars) {
+    if (war.apexTelemetryByPlayer === undefined) war.apexTelemetryByPlayer = {};
+    if (war.reportBaselineByPlayer === undefined) war.reportBaselineByPlayer = {};
+    canonicalizeWarFrontV2(state, content, war);
+  }
   if (schemaVersion < 22) pruneAllianceStateV2(state);
   // winnerId/gameOver are transient and intentionally omitted from saves. In
   // multiplayer, move the legacy/global focus to another living human seat;
@@ -1431,6 +1944,14 @@ export function loadSaveV2(
   assertInvariantsV2(state, content);
   if (state.polarEndgame.phase === 'victory') {
     state.winnerId = selectPolarVictoryWinnerV2(state);
+    state.gameOver = true;
+    state.speed = 0;
+    return state;
+  }
+  const humanDefeatWinner = state.gameOver
+    ? undefined : selectHumanEmpireDefeatWinnerV2(state);
+  if (humanDefeatWinner) {
+    state.winnerId = humanDefeatWinner;
     state.gameOver = true;
     state.speed = 0;
     return state;

@@ -3,6 +3,7 @@ import {
   DEEP_MAP_LABEL_MAX_ORDINARY_VISIBLE,
   DEEP_MAP_LABEL_MIN_SCREEN_SPAN,
   DEEP_MAP_LABEL_MIN_ZOOM,
+  PASSIVE_POWER_LABEL_LIMIT,
   hasDeepMapLabelSlot,
   mapCountryLabelDecision,
   type MapCountryLabelSignals,
@@ -11,7 +12,7 @@ import {
 const quietCountry = (overrides: Partial<MapCountryLabelSignals> = {}): MapCountryLabelSignals => ({
   hovered: false,
   selected: false,
-  topTenRealm: false,
+  topPowerRealm: false,
   humanRealm: false,
   warRealm: false,
   frontTerritory: false,
@@ -23,14 +24,15 @@ const quietCountry = (overrides: Partial<MapCountryLabelSignals> = {}): MapCount
 });
 
 describe('map country label visibility', () => {
-  it('keeps quiet non-top-ten countries hidden throughout ordinary zoom levels', () => {
+  it('limits passive overview namecards to the five strongest powers', () => {
+    expect(PASSIVE_POWER_LABEL_LIMIT).toBe(5);
     expect(mapCountryLabelDecision(quietCountry({ zoom: DEEP_MAP_LABEL_MIN_ZOOM - 0.01 })))
       .toMatchObject({ tier: 'hidden', visible: false, showDetail: false });
   });
 
-  it('shows the top ten at every zoom but reserves details for interaction/activity', () => {
-    expect(mapCountryLabelDecision(quietCountry({ zoom: 0.78, topTenRealm: true })))
-      .toMatchObject({ tier: 'top-ten', visible: true, showDetail: false, collisionProtected: true });
+  it('shows a member of the top-power cohort at every zoom but reserves details for activity', () => {
+    expect(mapCountryLabelDecision(quietCountry({ zoom: 0.78, topPowerRealm: true })))
+      .toMatchObject({ tier: 'top-power', visible: true, showDetail: false, collisionProtected: true });
   });
 
   it.each([

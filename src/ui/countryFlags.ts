@@ -1,3 +1,5 @@
+import rogueAiFlagUrl from '../assets/rogue-ai-flag.png?url&no-inline';
+
 /** ISO-3 game ids to ISO-2 flag assets. Kept static so selection never performs lookup work. */
 const ISO2_BY_NATION: Readonly<Record<string, string>> = {
   abw:'aw',afg:'af',ago:'ao',alb:'al',are:'ae',arg:'ar',arm:'am',atg:'ag',aus:'au',aut:'at',aze:'az',
@@ -25,6 +27,20 @@ const ISO2_BY_NATION: Readonly<Record<string, string>> = {
 export const MAP_FLAG_TEXTURE_WIDTH = 256;
 export const MAP_FLAG_TEXTURE_HEIGHT = 192;
 
+export interface CountryFlagAsset {
+  readonly url: string;
+  readonly loader: 'svg' | 'image';
+}
+
+const CUSTOM_FLAG_ASSET_BY_NATION: Readonly<Record<string, CountryFlagAsset>> = {
+  rai: { url: rogueAiFlagUrl, loader: 'image' },
+};
+
+/** Non-ISO nations that the Phaser fallback must preload even before content is mounted. */
+export const CUSTOM_FLAG_NATION_IDS: readonly string[] = Object.freeze(
+  Object.keys(CUSTOM_FLAG_ASSET_BY_NATION),
+);
+
 const RAW_FLAG_ASSETS = import.meta.glob('../../node_modules/flag-icons/flags/4x3/*.svg', {
   eager: true,
   import: 'default',
@@ -41,9 +57,16 @@ const FLAG_ASSET_BY_ISO2: Readonly<Record<string, string>> = Object.fromEntries(
   }),
 );
 
-export function countryFlagAssetUrl(nationId: string): string | undefined {
+export function countryFlagAsset(nationId: string): CountryFlagAsset | undefined {
+  const custom = CUSTOM_FLAG_ASSET_BY_NATION[nationId];
+  if (custom) return custom;
   const code = ISO2_BY_NATION[nationId];
-  return code ? FLAG_ASSET_BY_ISO2[code] : undefined;
+  const url = code ? FLAG_ASSET_BY_ISO2[code] : undefined;
+  return url ? { url, loader: 'svg' } : undefined;
+}
+
+export function countryFlagAssetUrl(nationId: string): string | undefined {
+  return countryFlagAsset(nationId)?.url;
 }
 
 export function countryFlagHtml(nationId: string, fallback: string, eager = false): string {

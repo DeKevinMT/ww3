@@ -8,9 +8,10 @@ import { countryFlagAssetUrl } from '../../../ui/countryFlags';
 import naturalEarthTextureUrl from '../assets/earth-natural-no-cloud-4096.webp?url';
 import {
   ANTARCTICA_COASTLINE,
-  ARCTIC_ICE_COASTLINE,
+  ANTARCTICA_SECTOR_PRESENTATIONS,
 } from '../mapGeographyPresentation';
 import type {
+  MapPolarSectorStatus,
   MapSelectionState,
   WorldMapEngineContract,
 } from '../bridge';
@@ -19,6 +20,14 @@ import {
   type TerrainTextureLayerPresentation,
 } from './terrainTexturePresentation';
 import { globeFlagOverlayAlpha } from './globeNaturalBasePresentation';
+import {
+  APEX_INTELLIGENCE_FOG_STYLE,
+  apexIntelligenceAtlasSignature,
+  apexPoliticalAtlasFogTerritoryPresentation,
+  apexTerritoryPoliticalIdentityVisible,
+  selectApexIntelligenceVisibility,
+} from '../apexIntelligenceFog';
+import { GlobeAtlasTrailingRedrawBatch } from './globeAtlasRedrawBatch';
 
 export const GLOBE_TEXTURE_WIDTH = 3072;
 export const GLOBE_TEXTURE_HEIGHT = 1536;
@@ -39,6 +48,9 @@ const PICK_TEXTURE_HEIGHT = 1024;
 const ANTARCTICA_PICK_ID = 0xff_ff_ff;
 const ARCTIC_PICK_ID = 0xff_ff_fe;
 const COUNTRY_PICK_COLOR_STEP = 0x9e_37_79;
+const OPEN_ANTARCTICA_POLITICAL_PHASES = new Set([
+  'warning', 'contact', 'counteroffensive', 'core-exposed', 'victory',
+]);
 
 export type GlobePickResult =
   | { kind: 'country'; territoryId: string }
@@ -63,9 +75,13 @@ interface PreparedCountry {
   rings: readonly PreparedRing[];
   principalRing?: PreparedRing;
   flagRings: readonly PreparedRing[];
-  iceRings: readonly PreparedRing[];
   pickId: number;
   terrainLayers: TerrainTextureLayerPresentation;
+}
+
+interface PreparedAntarcticaSector {
+  readonly id: (typeof ANTARCTICA_SECTOR_PRESENTATIONS)[number]['id'];
+  readonly rings: readonly PreparedRing[];
 }
 
 interface TextureSnapshot {
@@ -73,22 +89,25 @@ interface TextureSnapshot {
   selection: MapSelectionState;
 }
 
-export type GlobeFlagRingPolicy = 'all-non-ice' | 'principal-only';
+export type GlobeFlagRingPolicy = 'all-territory' | 'principal-only';
 
 export function globeFlagRingPolicy(countryId: string): GlobeFlagRingPolicy {
   return countryId === 'fra' || countryId === 'prt' || countryId === 'nld' || countryId === 'chl'
     ? 'principal-only'
-    : 'all-non-ice';
+    : 'all-territory';
 }
 
 export interface GlobeFlagTerritoryState {
   readonly ownerId: string;
   readonly coreOwnerId: string;
   readonly integration: number;
+  readonly transitOnly?: boolean;
 }
 
 export function globeTerritoryIsIntegrating(territory: GlobeFlagTerritoryState): boolean {
-  return territory.coreOwnerId !== territory.ownerId && territory.integration < 1;
+  return territory.transitOnly !== true
+    && territory.coreOwnerId !== territory.ownerId
+    && territory.integration < 1;
 }
 
 export function globeTerritoryFlagOwnerId(territory: GlobeFlagTerritoryState): string {
@@ -99,9 +118,11 @@ export function globeFlagProjectionKey(
   territoryId: string,
   territory: GlobeFlagTerritoryState,
 ): string {
-  return globeTerritoryIsIntegrating(territory)
-    ? `integrating:${territoryId}`
-    : `realm:${territory.ownerId}`;
+  if (globeTerritoryIsIntegrating(territory)) return `integrating:${territoryId}`;
+  // Every sovereign owner, including the Rogue AI, receives one continuous
+  // realm projection. Disconnected landmasses are still bounded by the atlas
+  // renderer, but adjacent machine possessions now read as one actual empire.
+  return `realm:${territory.ownerId}`;
 }
 
 /**
@@ -218,20 +239,15 @@ const PREPARED_COUNTRIES: readonly PreparedCountry[] = COUNTRIES.map((country, i
   });
   const byImportance = [...rings].sort((left, right) => right.visualArea - left.visualArea);
   const principalRing = byImportance[0];
-  const iceRings = rings.filter((ring) => (
-    ring !== principalRing && ring.maximumLatitude >= 72
-  ));
-  const iceRingSet = new Set(iceRings);
   const terrainProfile = terrainProfileForTerritory(country.id);
   const flagRings = globeFlagRingPolicy(country.id) === 'principal-only'
     ? principalRing ? [principalRing] : []
-    : rings.filter((ring) => !iceRingSet.has(ring));
+    : rings;
   return {
     country,
     rings,
     principalRing,
     flagRings,
-    iceRings,
     pickId: globeCountryPickId(index),
     terrainLayers: terrainTextureLayerPresentation(terrainProfile),
   };
@@ -241,6 +257,20 @@ const COUNTRY_BY_PICK_ID = new Map(PREPARED_COUNTRIES.map((country) => [
   country.pickId,
   country,
 ]));
+
+const PREPARED_ANTARCTICA_SECTORS: readonly PreparedAntarcticaSector[] = (
+  ANTARCTICA_SECTOR_PRESENTATIONS.map((sector) => ({
+    id: sector.id,
+    rings: sector.rings.flatMap((ring) => {
+      const prepared = prepareRing(ring);
+      return prepared ? [prepared] : [];
+    }),
+  }))
+);
+
+const PREPARED_ANTARCTICA_SECTOR_BY_ID = new Map(
+  PREPARED_ANTARCTICA_SECTORS.map((sector) => [sector.id, sector] as const),
+);
 
 /**
  * A globe's south pole collapses the full bottom edge of an equirectangular
@@ -365,21 +395,23 @@ function traceAntarctica(
   context.closePath();
 }
 
-function traceArcticIce(
+/** Small functional hit area for the physical North Pole signal marker only. */
+function traceNorthPoleResearchSite(
   context: CanvasRenderingContext2D,
   width: number,
   height: number,
 ): void {
+  const [x, y] = texturePoint(0, 88.6, width, height);
   context.beginPath();
-  ARCTIC_ICE_COASTLINE.forEach(([longitude, latitude], index) => {
-    const [x, y] = texturePoint(longitude, latitude, width, height);
-    if (index === 0) context.moveTo(x, y);
-    else context.lineTo(x, y);
-  });
-  const [northEastX, northY] = texturePoint(180, 90, width, height);
-  const [northWestX] = texturePoint(-180, 90, width, height);
-  context.lineTo(northEastX, northY);
-  context.lineTo(northWestX, northY);
+  context.ellipse(
+    x,
+    y,
+    Math.max(3, width * 5 / 360),
+    Math.max(3, height * 2.4 / 180),
+    0,
+    0,
+    Math.PI * 2,
+  );
   context.closePath();
 }
 
@@ -434,50 +466,6 @@ function drawOcean(
     context.stroke();
   }
 
-}
-
-function drawArcticIce(
-  context: CanvasRenderingContext2D,
-  width: number,
-  height: number,
-): void {
-  traceArcticIce(context, width, height);
-  const ice = context.createLinearGradient(0, 0, 0, height * 0.18);
-  ice.addColorStop(0, '#b9dde2');
-  ice.addColorStop(0.48, '#8db8c3');
-  ice.addColorStop(1, '#527e8b');
-  context.fillStyle = ice;
-  context.fill();
-
-  context.save();
-  traceArcticIce(context, width, height);
-  context.clip();
-  context.lineWidth = Math.max(0.7, width / 4200);
-  context.strokeStyle = 'rgba(235, 253, 255, 0.18)';
-  const iceDepth = height * 0.115;
-  for (let x = -width * 0.03; x <= width * 1.03; x += width / 28) {
-    context.beginPath();
-    for (let step = 0; step <= 8; step += 1) {
-      const y = step / 8 * iceDepth;
-      const drift = Math.sin(step * 1.37 + x / width * 17) * width * 0.0035;
-      if (step === 0) context.moveTo(x + drift, y);
-      else context.lineTo(x + drift, y);
-    }
-    context.stroke();
-  }
-  context.strokeStyle = 'rgba(30, 83, 99, 0.10)';
-  for (let y = height * 0.025; y < iceDepth; y += Math.max(9, height / 125)) {
-    context.beginPath();
-    context.moveTo(0, y);
-    context.bezierCurveTo(width * 0.28, y - 5, width * 0.72, y + 6, width, y - 2);
-    context.stroke();
-  }
-  context.restore();
-
-  traceArcticIce(context, width, height);
-  context.strokeStyle = 'rgba(220, 251, 255, 0.76)';
-  context.lineWidth = Math.max(1.1, width / 2500);
-  context.stroke();
 }
 
 function drawAntarctica(
@@ -747,6 +735,19 @@ function drawIntegrationOverlay(
   context.restore();
 }
 
+function antarcticaPoliticalVisible(engine: WorldMapEngineContract | undefined): boolean {
+  const phase = engine?.state.polarEndgame?.phase;
+  return Boolean(phase && OPEN_ANTARCTICA_POLITICAL_PHASES.has(phase));
+}
+
+function antarcticaSurfaceSignature(engine: WorldMapEngineContract): string {
+  const polar = engine.state.polarEndgame;
+  if (!polar || !antarcticaPoliticalVisible(engine)) return polar?.phase ?? 'dormant';
+  return `${polar.phase}:${ANTARCTICA_SECTOR_PRESENTATIONS.map((sector) => (
+    polar.sectors[sector.id]?.status ?? 'hidden'
+  )).join(',')}`;
+}
+
 export function globeTextureSelectionSignature(selection: MapSelectionState): string {
   return [
     selection.sourceId ?? '',
@@ -756,14 +757,20 @@ export function globeTextureSelectionSignature(selection: MapSelectionState): st
 }
 
 export function globePoliticalStateSignature(engine: WorldMapEngineContract): string {
-  const territorySignature = COUNTRIES.map((country) => {
-    const territory = engine.state.territories[country.id];
+  const paintedTerritoryIds = [
+    ...COUNTRIES.map((country) => country.id),
+    ...(antarcticaPoliticalVisible(engine)
+      ? ANTARCTICA_SECTOR_PRESENTATIONS.map((sector) => sector.id)
+      : []),
+  ];
+  const territorySignature = paintedTerritoryIds.map((territoryId) => {
+    const territory = engine.state.territories[territoryId];
     return territory
       ? `${territory.ownerId}:${territory.coreOwnerId}:${globeTerritoryIsIntegrating(territory) ? 'integrating' : 'core'}`
       : '';
   }).join(',');
   const humanSignature = [...engine.state.humanPlayerIds].sort().join(',');
-  return `${humanSignature}|${territorySignature}`;
+  return `${humanSignature}|${antarcticaSurfaceSignature(engine)}|${apexIntelligenceAtlasSignature(engine)}|${territorySignature}`;
 }
 
 export interface GlobePoliticalPaintState {
@@ -771,41 +778,52 @@ export interface GlobePoliticalPaintState {
   readonly coreOwnerId: string;
   readonly integrating: boolean;
   readonly flagOwnerId: string;
+  readonly transitOnly: boolean;
 }
 
 export interface GlobePoliticalPaintSnapshot {
   readonly humanSignature: string;
+  readonly surfaceSignature: string;
   readonly territories: Readonly<Record<string, GlobePoliticalPaintState>>;
 }
 
 export type GlobePoliticalAtlasUpdate =
   | { readonly kind: 'none' }
   | { readonly kind: 'full' }
+  | { readonly kind: 'realm-expansion'; readonly territoryIds: readonly string[] }
   | { readonly kind: 'capture'; readonly territoryIds: readonly string[] };
 
 export function captureGlobePoliticalPaintSnapshot(
   engine: WorldMapEngineContract,
 ): GlobePoliticalPaintSnapshot {
   const territories: Record<string, GlobePoliticalPaintState> = {};
-  for (const country of COUNTRIES) {
-    const territory = engine.state.territories[country.id];
+  const paintedTerritoryIds = [
+    ...COUNTRIES.map((country) => country.id),
+    ...(antarcticaPoliticalVisible(engine)
+      ? ANTARCTICA_SECTOR_PRESENTATIONS.map((sector) => sector.id)
+      : []),
+  ];
+  for (const territoryId of paintedTerritoryIds) {
+    const territory = engine.state.territories[territoryId];
     if (!territory) continue;
-    territories[country.id] = {
+    territories[territoryId] = {
       ownerId: territory.ownerId,
       coreOwnerId: territory.coreOwnerId,
       integrating: globeTerritoryIsIntegrating(territory),
       flagOwnerId: globeTerritoryFlagOwnerId(territory),
+      transitOnly: territory.transitOnly === true,
     };
   }
   return {
     humanSignature: [...engine.state.humanPlayerIds].sort().join(','),
+    surfaceSignature: `${antarcticaSurfaceSignature(engine)}|${apexIntelligenceAtlasSignature(engine)}`,
     territories,
   };
 }
 
 /**
  * Only a fresh conquest can be repainted as one isolated territory. Realm
- * merges, integration completion, revolutions and human-seat changes can alter
+ * merges, integration completion, ownership transfers and human-seat changes can alter
  * shared projections or borders elsewhere and therefore retain the safe full
  * atlas path.
  */
@@ -813,7 +831,9 @@ export function classifyGlobePoliticalAtlasUpdate(
   previous: GlobePoliticalPaintSnapshot | undefined,
   next: GlobePoliticalPaintSnapshot,
 ): GlobePoliticalAtlasUpdate {
-  if (!previous || previous.humanSignature !== next.humanSignature) return { kind: 'full' };
+  if (!previous
+    || previous.humanSignature !== next.humanSignature
+    || previous.surfaceSignature !== next.surfaceSignature) return { kind: 'full' };
   const beforeIds = Object.keys(previous.territories);
   const afterIds = Object.keys(next.territories);
   if (beforeIds.length !== afterIds.length
@@ -822,6 +842,7 @@ export function classifyGlobePoliticalAtlasUpdate(
   }
 
   const capturedTerritoryIds: string[] = [];
+  const realmExpansionTerritoryIds: string[] = [];
   for (const territoryId of afterIds) {
     const before = previous.territories[territoryId];
     const after = next.territories[territoryId];
@@ -829,7 +850,8 @@ export function classifyGlobePoliticalAtlasUpdate(
     if (before.ownerId === after.ownerId
       && before.coreOwnerId === after.coreOwnerId
       && before.integrating === after.integrating
-      && before.flagOwnerId === after.flagOwnerId) continue;
+      && before.flagOwnerId === after.flagOwnerId
+      && before.transitOnly === after.transitOnly) continue;
 
     const isIsolatedCapture = before.ownerId === before.coreOwnerId
       && !before.integrating
@@ -838,10 +860,30 @@ export function classifyGlobePoliticalAtlasUpdate(
       && after.coreOwnerId === before.coreOwnerId
       && before.flagOwnerId === before.coreOwnerId
       && after.flagOwnerId === after.coreOwnerId;
-    if (!isIsolatedCapture) return { kind: 'full' };
-    capturedTerritoryIds.push(territoryId);
+    if (isIsolatedCapture) {
+      capturedTerritoryIds.push(territoryId);
+      continue;
+    }
+    const isTransitRealmExpansion = before.ownerId === before.coreOwnerId
+      && before.coreOwnerId === after.coreOwnerId
+      && !before.integrating
+      && !before.transitOnly
+      && after.ownerId !== after.coreOwnerId
+      && !after.integrating
+      && after.transitOnly
+      && before.flagOwnerId === before.coreOwnerId
+      && after.flagOwnerId === after.ownerId;
+    if (!isTransitRealmExpansion) return { kind: 'full' };
+    realmExpansionTerritoryIds.push(territoryId);
   }
 
+  if (capturedTerritoryIds.length > 0 && realmExpansionTerritoryIds.length > 0) {
+    return { kind: 'full' };
+  }
+  if (realmExpansionTerritoryIds.length > 0) return {
+    kind: 'realm-expansion',
+    territoryIds: realmExpansionTerritoryIds,
+  };
   return capturedTerritoryIds.length > 0
     ? { kind: 'capture', territoryIds: capturedTerritoryIds }
     : { kind: 'none' };
@@ -854,9 +896,13 @@ export function classifyGlobePoliticalAtlasUpdate(
  */
 export class GlobePoliticalTexture {
   readonly canvas: HTMLCanvasElement;
+  /** Shared low-resolution alpha mask consumed by the globe's one cloud shell. */
+  readonly intelligenceFogMaskCanvas: HTMLCanvasElement;
   private readonly textureWidth: number;
   private readonly textureHeight: number;
   private readonly context: CanvasRenderingContext2D;
+  private readonly intelligenceFogMaskContext: CanvasRenderingContext2D;
+  private readonly intelligenceFogNoiseCanvas: HTMLCanvasElement;
   private readonly pickCanvas: HTMLCanvasElement;
   private readonly pickContext: CanvasRenderingContext2D;
   private pickPixels = new Uint8ClampedArray();
@@ -870,6 +916,7 @@ export class GlobePoliticalTexture {
   private politicalSignature = '';
   private paintedPoliticalState?: GlobePoliticalPaintSnapshot;
   private redrawTimer?: number;
+  private readonly realmExpansionRedrawBatch = new GlobeAtlasTrailingRedrawBatch();
   private textureUploadFrame?: number;
   private textureUploadTimer?: number;
 
@@ -913,6 +960,31 @@ export class GlobePoliticalTexture {
     this.context.lineJoin = 'round';
     this.context.lineCap = 'round';
 
+    this.intelligenceFogMaskCanvas = document.createElement('canvas');
+    this.intelligenceFogMaskCanvas.width = 1024;
+    this.intelligenceFogMaskCanvas.height = 512;
+    const intelligenceFogMaskContext = this.intelligenceFogMaskCanvas.getContext('2d');
+    if (!intelligenceFogMaskContext) throw new Error('The APEX intelligence mask could not be created.');
+    this.intelligenceFogMaskContext = intelligenceFogMaskContext;
+    this.intelligenceFogMaskContext.imageSmoothingEnabled = true;
+    this.intelligenceFogMaskContext.imageSmoothingQuality = 'high';
+
+    this.intelligenceFogNoiseCanvas = document.createElement('canvas');
+    this.intelligenceFogNoiseCanvas.width = 128;
+    this.intelligenceFogNoiseCanvas.height = 64;
+    const fogNoise = this.intelligenceFogNoiseCanvas.getContext('2d');
+    if (!fogNoise) throw new Error('The APEX intelligence noise texture could not be created.');
+    const noiseImage = fogNoise.createImageData(128, 64);
+    for (let index = 0; index < noiseImage.data.length; index += 4) {
+      const seed = (Math.imul(index / 4 + 97, 2_654_435_761) >>> 0) / 4_294_967_296;
+      const value = Math.round(54 + seed * 76);
+      noiseImage.data[index] = value;
+      noiseImage.data[index + 1] = value + 12;
+      noiseImage.data[index + 2] = value + 20;
+      noiseImage.data[index + 3] = Math.round(35 + seed * 70);
+    }
+    fogNoise.putImageData(noiseImage, 0, 0);
+
     this.pickCanvas = document.createElement('canvas');
     this.pickCanvas.width = PICK_TEXTURE_WIDTH;
     this.pickCanvas.height = PICK_TEXTURE_HEIGHT;
@@ -944,6 +1016,10 @@ export class GlobePoliticalTexture {
       this.paintedPoliticalState = nextPoliticalState;
       return;
     }
+    if (update.kind === 'realm-expansion') {
+      this.queueRealmExpansionRedraw();
+      return;
+    }
     if (update.kind === 'capture'
       && this.redrawTimer === undefined
       && this.drawCapturedTerritories(update.territoryIds)) {
@@ -965,6 +1041,7 @@ export class GlobePoliticalTexture {
 
   destroy(): void {
     if (this.redrawTimer !== undefined) window.clearTimeout(this.redrawTimer);
+    this.realmExpansionRedrawBatch.cancel();
     if (this.textureUploadFrame !== undefined) window.cancelAnimationFrame(this.textureUploadFrame);
     if (this.textureUploadTimer !== undefined) window.clearTimeout(this.textureUploadTimer);
     if (this.naturalBaseImage) {
@@ -1000,9 +1077,9 @@ export class GlobePoliticalTexture {
 
   private drawPickTexture(): void {
     this.pickContext.clearRect(0, 0, PICK_TEXTURE_WIDTH, PICK_TEXTURE_HEIGHT);
-    // The Arctic is sea ice rather than a country. Paint its neutral pick layer
-    // first so northern land polygons retain their normal country hit targets.
-    traceArcticIce(this.pickContext, PICK_TEXTURE_WIDTH, PICK_TEXTURE_HEIGHT);
+    // Only the physical North Pole research site has a neutral hit target.
+    // Real northern land polygons retain their normal country hit targets.
+    traceNorthPoleResearchSite(this.pickContext, PICK_TEXTURE_WIDTH, PICK_TEXTURE_HEIGHT);
     this.pickContext.fillStyle = 'rgb(254, 255, 255)';
     this.pickContext.fill();
     for (const country of PREPARED_COUNTRIES) {
@@ -1029,10 +1106,22 @@ export class GlobePoliticalTexture {
   private ensureSnapshotFlags(): void {
     const engine = this.snapshot.engine;
     if (!engine) return;
+    const intelligence = selectApexIntelligenceVisibility(engine);
     const nationIds = new Set<string>();
-    for (const country of COUNTRIES) {
-      const territory = engine.state.territories[country.id];
+    const paintedTerritoryIds = [
+      ...COUNTRIES.map((country) => country.id),
+      ...(antarcticaPoliticalVisible(engine)
+        ? ANTARCTICA_SECTOR_PRESENTATIONS.map((sector) => sector.id)
+        : []),
+    ];
+    for (const territoryId of paintedTerritoryIds) {
+      const territory = engine.state.territories[territoryId];
       if (!territory) continue;
+      if (!apexTerritoryPoliticalIdentityVisible(
+        intelligence,
+        territoryId,
+        territory.ownerId,
+      )) continue;
       nationIds.add(globeTerritoryFlagOwnerId(territory));
       // Preload the conquering owner's flag while integration is ongoing so
       // the lifecycle-completion redraw can switch flags without a blank frame.
@@ -1090,6 +1179,7 @@ export class GlobePoliticalTexture {
     if (!this.naturalBaseSettled
       || this.pendingFlagLoads.size > 0
       || this.redrawTimer !== undefined
+      || this.realmExpansionRedrawBatch.pending
       || this.textureUploadFrame !== undefined
       || this.textureUploadTimer !== undefined) return;
     const resolve = this.resolveMapReady;
@@ -1099,6 +1189,7 @@ export class GlobePoliticalTexture {
   }
 
   private queueRedraw(): void {
+    this.realmExpansionRedrawBatch.cancel();
     if (this.redrawTimer !== undefined) return;
     // Flags arrive in a burst. Batch their decodes so the political texture
     // is not rebuilt once per SVG during the opening screen.
@@ -1113,6 +1204,26 @@ export class GlobePoliticalTexture {
         this.resolveMapReadinessAfterBatch();
       }
     }, 90);
+  }
+
+  /**
+   * A transit-only Survival capture changes the Rogue realm's continuous flag
+   * bounds and therefore cannot use the isolated-country paint path. Keep its
+   * live border/nameplate update, but wait until the short capture burst
+   * settles before doing the one expensive safe atlas bake and GPU upload.
+   */
+  private queueRealmExpansionRedraw(): void {
+    this.realmExpansionRedrawBatch.schedule(() => {
+      if (!this.naturalBaseSettled || this.pendingFlagLoads.size > 0) {
+        this.queueRedraw();
+        return;
+      }
+      try {
+        this.redraw();
+      } finally {
+        this.resolveMapReadinessAfterBatch();
+      }
+    });
   }
 
   /** Coalesce full-canvas GPU uploads after the outcome/UI frame has painted. */
@@ -1172,15 +1283,6 @@ export class GlobePoliticalTexture {
         globeFlagOverlayAlpha(Boolean(flagOwner?.isHuman), true),
       );
       drawIntegrationOverlay(context, prepared.flagRings, width, height);
-
-      context.fillStyle = 'rgba(218, 239, 242, 0.96)';
-      for (const ring of prepared.iceRings) {
-        for (const shift of ring.longitudeShifts) {
-          context.beginPath();
-          tracePreparedRing(context, ring, shift, width, height);
-          context.fill();
-        }
-      }
 
     }
     return true;
@@ -1270,21 +1372,186 @@ export class GlobePoliticalTexture {
         drawIntegrationOverlay(context, prepared.flagRings, width, height);
       }
 
-      // Detached high-Arctic islands remain neutral ice after every country
-      // layer, so they never inherit flag or terrain colour fragments.
-      context.fillStyle = 'rgba(218, 239, 242, 0.96)';
-      for (const ring of prepared.iceRings) {
-        for (const shift of ring.longitudeShifts) {
-          context.beginPath();
-          tracePreparedRing(context, ring, shift, width, height);
-          context.fill();
-        }
-      }
+      // Every real northern island remains part of its country. The old Arctic
+      // gateway treatment repainted detached rings as white ice here, obscuring
+      // owner colour and continuous empire flag projection.
     }
 
     // Political borders are intentionally absent from this atlas. The globe's
     // one screen-space LineSegments2 layer owns coastlines, realm hiding and
     // integration perimeters without a divergent baked duplicate.
+  }
+
+  /**
+   * Paints the nine real Antarctic territories over, never instead of, the
+   * existing ice imagery. One owner flag is projected continuously across its
+   * Antarctic holdings while every sector retains its own gameplay polygon.
+   */
+  private drawAntarcticTerritories(
+    context: CanvasRenderingContext2D,
+    width: number,
+    height: number,
+  ): void {
+    const { engine } = this.snapshot;
+    if (!engine || !antarcticaPoliticalVisible(engine)) return;
+    const intelligence = selectApexIntelligenceVisibility(engine);
+
+    context.save();
+    traceAntarctica(context, width, height);
+    context.clip();
+
+    const projections = new Map<string, {
+      flagOwnerId: string;
+      rings: PreparedRing[];
+      integrating: boolean;
+    }>();
+    for (const prepared of PREPARED_ANTARCTICA_SECTORS) {
+      const territory = engine.state.territories[prepared.id];
+      if (!territory || prepared.rings.length === 0) continue;
+      if (!apexTerritoryPoliticalIdentityVisible(
+        intelligence,
+        prepared.id,
+        territory.ownerId,
+      )) continue;
+      const owner = engine.player(territory.ownerId);
+      tracePreparedRings(context, prepared.rings, width, height);
+      context.fillStyle = colorCss(owner?.color ?? 0x3d7f8d);
+      context.globalAlpha = owner?.isHuman ? 0.10 : 0.075;
+      context.fill('evenodd');
+
+      const projectionKey = `antarctica:${globeFlagProjectionKey(prepared.id, territory)}`;
+      const existing = projections.get(projectionKey);
+      if (existing) existing.rings.push(...prepared.rings);
+      else {
+        projections.set(projectionKey, {
+          flagOwnerId: globeTerritoryFlagOwnerId(territory),
+          rings: [...prepared.rings],
+          integrating: globeTerritoryIsIntegrating(territory),
+        });
+      }
+    }
+
+    context.globalAlpha = 1;
+    for (const projection of projections.values()) {
+      const flag = this.flagImages.get(projection.flagOwnerId);
+      if (!flag?.complete || flag.naturalWidth <= 0) continue;
+      const owner = engine.player(projection.flagOwnerId);
+      drawFlagIntoProjection(
+        context,
+        projection.rings,
+        flag,
+        width,
+        height,
+        globeFlagOverlayAlpha(Boolean(owner?.isHuman), projection.integrating) * 0.78,
+      );
+    }
+
+    const statusColor: Readonly<Record<MapPolarSectorStatus, number>> = {
+      hidden: 0x88a8af,
+      available: 0x5de6f2,
+      contested: 0xff655d,
+      secured: 0x67e49d,
+    };
+    const statusAlpha: Readonly<Record<MapPolarSectorStatus, number>> = {
+      hidden: 0.018,
+      available: 0.045,
+      contested: 0.115,
+      secured: 0.065,
+    };
+    for (const prepared of PREPARED_ANTARCTICA_SECTORS) {
+      const territory = engine.state.territories[prepared.id];
+      if (!territory) continue;
+      if (!apexTerritoryPoliticalIdentityVisible(
+        intelligence,
+        prepared.id,
+        territory.ownerId,
+      )) continue;
+      const status = engine.state.polarEndgame?.sectors[prepared.id]?.status ?? 'hidden';
+      tracePreparedRings(context, prepared.rings, width, height);
+      context.fillStyle = colorCss(statusColor[status]);
+      context.globalAlpha = statusAlpha[status];
+      context.fill('evenodd');
+      if (globeTerritoryIsIntegrating(territory)) {
+        context.globalAlpha = 1;
+        drawIntegrationOverlay(context, prepared.rings, width, height);
+      }
+    }
+    context.restore();
+  }
+
+  /**
+   * One topology-cached mask darkens unknown territory inside the political
+   * atlas and feeds the separate shared cloud shell. Nothing here runs per
+   * frame and no country receives its own material or mesh.
+   */
+  private drawApexIntelligenceFog(
+    context: CanvasRenderingContext2D,
+    width: number,
+    height: number,
+  ): void {
+    const mask = this.intelligenceFogMaskContext;
+    const maskWidth = this.intelligenceFogMaskCanvas.width;
+    const maskHeight = this.intelligenceFogMaskCanvas.height;
+    mask.clearRect(0, 0, maskWidth, maskHeight);
+    const { engine } = this.snapshot;
+    if (!engine) return;
+    const visibility = selectApexIntelligenceVisibility(engine);
+    if (!visibility.enabled) return;
+
+    const atlasTerritories: readonly {
+      readonly rings: readonly PreparedRing[];
+      readonly territoryId: string;
+      readonly ownerId: string | undefined;
+    }[] = [
+      ...PREPARED_COUNTRIES
+        .map((prepared) => ({
+          rings: prepared.rings,
+          territoryId: prepared.country.id,
+          ownerId: engine.state.territories[prepared.country.id]?.ownerId,
+        })),
+      ...PREPARED_ANTARCTICA_SECTORS
+          .map((prepared) => ({
+            rings: prepared.rings,
+            territoryId: prepared.id,
+            ownerId: engine.state.territories[prepared.id]?.ownerId,
+          })),
+    ];
+    const noisePattern = context.createPattern(this.intelligenceFogNoiseCanvas, 'repeat');
+    for (const { rings, territoryId, ownerId } of atlasTerritories) {
+      const presentation = apexPoliticalAtlasFogTerritoryPresentation(
+        visibility,
+        territoryId,
+        ownerId,
+      );
+      if (!presentation.obscured) continue;
+      tracePreparedRings(mask, rings, maskWidth, maskHeight);
+      mask.save();
+      mask.filter = 'blur(1.6px)';
+      mask.fillStyle = `rgba(255, 255, 255, ${presentation.charted
+        ? APEX_INTELLIGENCE_FOG_STYLE.chartedCloudMaskAlpha : 1})`;
+      mask.fill('evenodd');
+      mask.restore();
+
+      tracePreparedRings(context, rings, width, height);
+      context.save();
+      context.fillStyle = colorCss(presentation.fill);
+      context.globalAlpha = presentation.alpha;
+      context.shadowColor = presentation.rogueOccupied
+        ? 'rgba(96, 10, 53, 0.56)' : 'rgba(4, 19, 32, 0.72)';
+      context.shadowBlur = Math.max(3, APEX_INTELLIGENCE_FOG_STYLE.featherPixels * width / 3072);
+      context.fill('evenodd');
+      context.restore();
+
+      if (noisePattern) {
+        tracePreparedRings(context, rings, width, height);
+        context.save();
+        context.clip('evenodd');
+        context.globalAlpha = presentation.cloudAlpha;
+        context.fillStyle = noisePattern;
+        context.fillRect(0, 0, width, height);
+        context.restore();
+      }
+    }
   }
 
   private redraw(): void {
@@ -1296,7 +1563,6 @@ export class GlobePoliticalTexture {
     );
     if (!naturalBaseReady) {
       drawOcean(this.context, this.textureWidth, this.textureHeight);
-      drawArcticIce(this.context, this.textureWidth, this.textureHeight);
     }
     this.drawCountries(
       this.context,
@@ -1307,6 +1573,16 @@ export class GlobePoliticalTexture {
     if (!naturalBaseReady) {
       drawAntarctica(this.context, this.textureWidth, this.textureHeight);
     }
+    this.drawAntarcticTerritories(
+      this.context,
+      this.textureWidth,
+      this.textureHeight,
+    );
+    this.drawApexIntelligenceFog(
+      this.context,
+      this.textureWidth,
+      this.textureHeight,
+    );
     this.queueTextureUpload();
     const { engine } = this.snapshot;
     if (engine) this.paintedPoliticalState = captureGlobePoliticalPaintSnapshot(engine);

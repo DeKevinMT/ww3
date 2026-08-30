@@ -42,7 +42,7 @@ describe('V2 economic truth sheet', () => {
     expect(economy.weeklyRevenue).toBeCloseTo(ledger.weeklyTaxRevenue, 6);
   });
 
-  it('scales the taxable conquest base with integration without condition or war modifiers', () => {
+  it('scales the taxable conquest base with integration without war modifiers', () => {
     const state = createWorldStateV2(8_202);
     const control = createWorldStateV2(8_202);
     const belgium = nationIdV2('bel');
@@ -51,7 +51,6 @@ describe('V2 economic truth sheet', () => {
 
     state.territories[luxembourg]!.owner = belgium;
     control.territories[luxembourg]!.owner = belgium;
-    state.territories[luxembourg]!.condition = 0.42;
     state.territories[luxembourg]!.integration = 0.20;
     state.wars.push({
       id: 'war-economic-sheet', attackerId: belgium, defenderId: netherlands,
@@ -71,7 +70,6 @@ describe('V2 economic truth sheet', () => {
       6,
     );
     expect(ledger.effectivePopulation).toBeCloseTo(ledger.productivePopulation, 6);
-    expect(ledger.conditionAdjustedOutput).toBe(ledger.demographicOutput);
     expect(ledger.demographicOutput).toBe(controlLedger.demographicOutput);
     expect(ledger.integratedOutput).toBeCloseTo(
       state.territories[territoryIdV2('bel')]!.economy

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { nationIdV2 } from '../sim/v2/types';
 import { normalizeScenarioConfigV2 } from '../sim/v2/scenarios';
+import { createNeutralMultiplayerDeploymentSnapshotV1 } from './deployment';
 import {
   localCountryFromLobby,
   multiplayerControllerNamesFromLobby,
@@ -16,9 +17,30 @@ function lobby(): LobbyStateMessage {
     scenario: normalizeScenarioConfigV2({ mode: 'standard-2026', seed: 123 }),
     started: true,
     players: [
-      { peerId: 'host_12345678', displayName: 'Host', countryId: nationIdV2('BEL'), ready: true, connected: true },
-      { peerId: 'guest_12345678', displayName: 'Guest', countryId: nationIdV2('NLD'), ready: true, connected: true },
-      { peerId: 'old_guest_1234', displayName: 'Offline', countryId: nationIdV2('FRA'), ready: false, connected: false },
+      {
+        peerId: 'host_12345678',
+        displayName: 'Host',
+        countryId: nationIdV2('BEL'),
+        deployment: createNeutralMultiplayerDeploymentSnapshotV1('BEL'),
+        ready: true,
+        connected: true,
+      },
+      {
+        peerId: 'guest_12345678',
+        displayName: 'Guest',
+        countryId: nationIdV2('NLD'),
+        deployment: createNeutralMultiplayerDeploymentSnapshotV1('NLD'),
+        ready: true,
+        connected: true,
+      },
+      {
+        peerId: 'old_guest_1234',
+        displayName: 'Offline',
+        countryId: nationIdV2('FRA'),
+        deployment: createNeutralMultiplayerDeploymentSnapshotV1('FRA'),
+        ready: false,
+        connected: false,
+      },
     ],
   };
 }
@@ -44,6 +66,7 @@ describe('multiplayer launch orchestration', () => {
 
     const duplicate = lobby();
     duplicate.players[1]!.countryId = nationIdV2('BEL');
+    duplicate.players[1]!.deployment = createNeutralMultiplayerDeploymentSnapshotV1('BEL');
     expect(() => multiplayerSeatsFromLobby(duplicate)).toThrow(/unique/i);
   });
 });

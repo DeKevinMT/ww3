@@ -12,12 +12,22 @@ import {
 } from './bootstrap';
 import { synchronizeArmyCapacityV2 } from './capacity';
 import { WORLD_CONTENT_V2 } from './content';
+import { addWorldEventV2, pruneWorldHistoryV2 } from './events';
 import { STRATEGIC_SEA_ROUTE_PAIRS } from '../../game/data/worldMap';
 import { assertInvariantsV2 } from './invariants';
-import { selectWarAccessTypeV2, selectWarMobilizationCostV2 } from './selectors';
+import { canonicalStateHashV2, createSaveV2, loadSaveV2 } from './persistence';
+import {
+  selectCanonicalWarFrontV2,
+  selectWarAccessTypeV2,
+  selectWarMobilizationCostV2,
+} from './selectors';
 import { nationIdV2 } from './types';
 import { declareWarV2, processWarsV2, supplyFactorV2 } from './war';
 import { WorldEngineV2 } from './WorldEngineV2';
+import {
+  acknowledgeCampaignBlackoutForTestV2,
+  enterPostBlackoutCampaignForTestV2,
+} from './testSupport';
 
 const bel = nationIdV2('bel');
 const nld = nationIdV2('nld');
@@ -26,25 +36,31 @@ const che = nationIdV2('che');
 const chn = nationIdV2('chn');
 
 describe('2026 conflicts and strategic naval warfare', () => {
-  it('spreads three seed-varied opening conflicts across year one while crises damage countries immediately', () => {
+  it('stages one seed-varied proof-of-manipulation war after the blackout', () => {
     const state = createWorldStateV2(2026);
     expect(state.wars).toHaveLength(0);
     const schedule = openingConflictScheduleV2(2026, WORLD_CONTENT_V2);
-    expect(schedule).toHaveLength(3);
+    expect(schedule).toHaveLength(1);
     expect(schedule.map((entry) => entry.tick)).toEqual([...schedule.map((entry) => entry.tick)].sort((a, b) => a - b));
     expect(schedule[0]!.tick).toBeGreaterThanOrEqual(6);
-    expect(schedule[2]!.tick).toBeLessThanOrEqual(50);
-    expect(new Set(schedule.flatMap((entry) => [entry.attackerId, entry.defenderId])).size).toBe(6);
+    expect(schedule[0]!.tick).toBeLessThanOrEqual(8);
+    expect(new Set(schedule.flatMap((entry) => [entry.attackerId, entry.defenderId])).size).toBe(2);
     expect(openingConflictScheduleV2(2027, WORLD_CONTENT_V2).map((entry) => `${entry.attackerId}:${entry.defenderId}`))
       .not.toEqual(schedule.map((entry) => `${entry.attackerId}:${entry.defenderId}`));
 
     const engine = new WorldEngineV2(2026);
+    for (let week = 0; week < 20; week += 1) engine.step();
+    expect(engine.state.wars).toHaveLength(0);
+    const blackoutTick = engine.state.tick;
+    acknowledgeCampaignBlackoutForTestV2(engine.state);
     const seenStarts = new Map<string, number>();
-    for (let week = 1; week <= 50; week += 1) {
+    for (let week = 1; week <= 94; week += 1) {
       engine.step();
       for (const war of engine.state.wars) seenStarts.set(war.id, war.startedTick);
     }
-    expect([...seenStarts.values()].sort((a, b) => a - b)).toEqual(schedule.map((entry) => entry.tick));
+    expect([...seenStarts.values()].sort((a, b) => a - b)).toEqual(
+      schedule.map((entry) => blackoutTick + entry.tick),
+    );
 
     const reports = state.events.map((event) => event.message);
     expect(reports.some((message) => message.includes('Sudan civil war'))).toBe(true);
@@ -52,32 +68,32 @@ describe('2026 conflicts and strategic naval warfare', () => {
     expect(reports.some((message) => message.includes('Yemen conflict'))).toBe(true);
     expect(reports.some((message) => message.includes('Somalia conflict'))).toBe(true);
     expect(reports.some((message) => message.includes('Eastern DR Congo conflict'))).toBe(true);
-    expect(state.territories[nationIdV2('sdn')]!.condition).toBeLessThan(0.70);
+    expect(state.territories[nationIdV2('sdn')]).not.toHaveProperty('condition');
     assertInvariantsV2(state, WORLD_CONTENT_V2);
   }, 20_000);
 
-  it('blocks a scripted opening conflict only while its attacker has negative treasury', () => {
+  it('falls back deterministically when the scheduled attacker cannot fund the conflict', () => {
     const blockedState = createWorldStateV2(2026);
     const blockedScenario = openingConflictScheduleV2(blockedState.seed, WORLD_CONTENT_V2)[0]!;
     blockedState.tick = blockedScenario.tick;
+    acknowledgeCampaignBlackoutForTestV2(blockedState);
+    blockedState.polarEndgame.communicationsBlackoutTick = 0;
     synchronizeArmyCapacityV2(blockedState, WORLD_CONTENT_V2);
     blockedState.players[blockedScenario.attackerId]!.treasury = -0.001;
-    const blockedNextWarId = blockedState.nextWarId;
-    const blockedLastWarStartTick = blockedState.aiEscalation.lastWarStartTick;
-
-    processOpeningConflictsV2(blockedState, WORLD_CONTENT_V2);
-
-    expect(blockedState.wars).toHaveLength(0);
-    expect(blockedState.nextWarId).toBe(blockedNextWarId);
-    expect(blockedState.aiEscalation.lastWarStartTick).toBe(blockedLastWarStartTick);
+    expect(processOpeningConflictsV2(blockedState, WORLD_CONTENT_V2)).toBe(true);
+    expect(blockedState.wars).toHaveLength(1);
+    expect(blockedState.wars[0]?.attackerId).not.toBe(blockedScenario.attackerId);
+    expect(blockedState.events.at(-1)?.message).toContain('MANIPULATED CONFLICT');
 
     const solventState = createWorldStateV2(2026);
     const solventScenario = openingConflictScheduleV2(solventState.seed, WORLD_CONTENT_V2)[0]!;
     solventState.tick = solventScenario.tick;
+    acknowledgeCampaignBlackoutForTestV2(solventState);
+    solventState.polarEndgame.communicationsBlackoutTick = 0;
     synchronizeArmyCapacityV2(solventState, WORLD_CONTENT_V2);
     solventState.players[solventScenario.attackerId]!.treasury = 0;
 
-    processOpeningConflictsV2(solventState, WORLD_CONTENT_V2);
+    expect(processOpeningConflictsV2(solventState, WORLD_CONTENT_V2)).toBe(true);
 
     expect(solventState.wars).toHaveLength(1);
     expect(solventState.wars[0]).toMatchObject({
@@ -89,6 +105,56 @@ describe('2026 conflicts and strategic naval warfare', () => {
     assertInvariantsV2(solventState, WORLD_CONTENT_V2);
   });
 
+  it('never replays the scripted opening conflict after its event report is pruned', () => {
+    const state = createWorldStateV2(2026);
+    const scenario = openingConflictScheduleV2(state.seed, WORLD_CONTENT_V2)[0]!;
+    state.tick = scenario.tick;
+    acknowledgeCampaignBlackoutForTestV2(state);
+    state.polarEndgame.communicationsBlackoutTick = 0;
+
+    expect(processOpeningConflictsV2(state, WORLD_CONTENT_V2)).toBe(true);
+    expect(state.aiEscalation.openingConflictsStarted).toBe(1);
+
+    for (let index = 0; index < 300; index += 1) {
+      addWorldEventV2(state, 'system', 'info', `Archived world update ${index}.`);
+    }
+    pruneWorldHistoryV2(state);
+    expect(state.events.some((event) => event.message.startsWith('MANIPULATED CONFLICT ·')))
+      .toBe(false);
+
+    state.wars = [];
+    state.tick += 1;
+    expect(processOpeningConflictsV2(state, WORLD_CONTENT_V2)).toBe(false);
+    expect(state.wars).toHaveLength(0);
+
+    synchronizeArmyCapacityV2(state, WORLD_CONTENT_V2);
+    const reconnected = loadSaveV2(createSaveV2(state, WORLD_CONTENT_V2), WORLD_CONTENT_V2);
+    expect(reconnected.aiEscalation.openingConflictsStarted).toBe(1);
+    expect(processOpeningConflictsV2(reconnected, WORLD_CONTENT_V2)).toBe(false);
+    expect(reconnected.wars).toHaveLength(0);
+  });
+
+  it('infers the durable opening-conflict marker for authenticated pre-marker saves', () => {
+    const state = createWorldStateV2(2026);
+    const scenario = openingConflictScheduleV2(state.seed, WORLD_CONTENT_V2)[0]!;
+    state.tick = scenario.tick;
+    acknowledgeCampaignBlackoutForTestV2(state);
+    state.polarEndgame.communicationsBlackoutTick = 0;
+    expect(processOpeningConflictsV2(state, WORLD_CONTENT_V2)).toBe(true);
+
+    synchronizeArmyCapacityV2(state, WORLD_CONTENT_V2);
+    const legacy = structuredClone(createSaveV2(state, WORLD_CONTENT_V2)) as unknown as Record<string, any>;
+    delete legacy.aiEscalation.openingConflictsStarted;
+    legacy.canonicalStateHash = canonicalStateHashV2(legacy);
+
+    const loaded = loadSaveV2(legacy as never, WORLD_CONTENT_V2);
+    expect(loaded.aiEscalation.openingConflictsStarted).toBe(1);
+    loaded.wars = [];
+    loaded.tick += 1;
+    expect(processOpeningConflictsV2(loaded, WORLD_CONTENT_V2)).toBe(false);
+    expect(loaded.wars).toHaveLength(0);
+  });
+
   it('never lets a scripted AI-only opening conflict control or target a human seat', () => {
     for (const protectedSide of ['attackerId', 'defenderId'] as const) {
       const state = createWorldStateV2(2026);
@@ -96,14 +162,18 @@ describe('2026 conflicts and strategic naval warfare', () => {
       state.tick = scenario.tick;
       state.humanPlayerId = scenario[protectedSide];
       state.humanPlayerIds = [scenario[protectedSide]];
+      acknowledgeCampaignBlackoutForTestV2(state);
+      state.polarEndgame.communicationsBlackoutTick = 0;
 
-      processOpeningConflictsV2(state, WORLD_CONTENT_V2);
+      expect(processOpeningConflictsV2(state, WORLD_CONTENT_V2)).toBe(true);
 
-      expect(state.wars).toHaveLength(0);
+      expect(state.wars).toHaveLength(1);
+      expect(state.wars[0]?.attackerId).not.toBe(state.humanPlayerId);
+      expect(state.wars[0]?.defenderId).not.toBe(state.humanPlayerId);
     }
   });
 
-  it('removes air attacks while keeping a broad naval network with free declarations', () => {
+  it('removes air attacks while keeping a bounded regional naval network with free declarations', () => {
     const state = createWorldStateV2(77);
     state.wars = [];
     expect(selectWarAccessTypeV2(state, WORLD_CONTENT_V2, bel, nld)).toBe('land');
@@ -117,12 +187,14 @@ describe('2026 conflicts and strategic naval warfare', () => {
     expect(WAR_ACCESS_COST_MULTIPLIER.naval).toBeGreaterThan(WAR_ACCESS_COST_MULTIPLIER.land);
     expect(WAR_ACCESS_SUPPLY_MULTIPLIER.land).toBeGreaterThan(WAR_ACCESS_SUPPLY_MULTIPLIER.naval);
     expect(WAR_ACCESS_ASSAULT_MULTIPLIER.naval).toBe(WAR_ACCESS_ASSAULT_MULTIPLIER.land);
-    expect(STRATEGIC_SEA_ROUTE_PAIRS.length).toBeGreaterThan(225);
+    expect(STRATEGIC_SEA_ROUTE_PAIRS.length).toBeGreaterThan(100);
+    expect(STRATEGIC_SEA_ROUTE_PAIRS.length).toBeLessThan(170);
   });
 
   it('creates a live naval front with weaker supply and a real battle pulse', () => {
     const state = createWorldStateV2(91);
     state.wars = [];
+    enterPostBlackoutCampaignForTestV2(state);
     state.players[bel]!.treasury = 10_000;
     const capital = state.players[bel]!.capitalId;
     const landSupply = supplyFactorV2(state, WORLD_CONTENT_V2, bel, capital, 'land');
@@ -132,12 +204,12 @@ describe('2026 conflicts and strategic naval warfare', () => {
     state.tick = WAR_MOBILIZATION_TICKS;
     const battles = processWarsV2(state, WORLD_CONTENT_V2);
     expect(battles).toHaveLength(1);
-    expect(state.wars[0]?.attackerOperations[0]?.access).toBe('naval');
-    // National research and local condition can still make an attacker better
-    // supplied than its opponent. The identical-source comparison above proves
+    expect(state.wars[0] && selectCanonicalWarFrontV2(state.wars[0])?.access).toBe('naval');
+    // National research can still make an attacker better supplied than its
+    // opponent. The identical-source comparison above proves
     // the route penalty; the live pulse confirms that it stays deliberately mild.
-    expect(battles[0]!.attackerSupply).toBeGreaterThan(0.90);
-    expect(battles[0]!.attackerSupply).toBeLessThanOrEqual(1);
+    expect(battles[0]!.attackerSupply).toBeGreaterThanOrEqual(0.80);
+    expect(battles[0]!.attackerSupply).toBeLessThanOrEqual(0.90);
     assertInvariantsV2(state, WORLD_CONTENT_V2);
   });
 });

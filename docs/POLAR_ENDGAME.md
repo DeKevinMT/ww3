@@ -24,7 +24,7 @@ Only these gateways appear before first contact. Hidden sectors and their machin
 
 | Project | Base duration | Base cost | Permanent rewards |
 | --- | ---: | ---: | --- |
-| Polar Habitat Genome | 156 weeks | $80B | +3 Population Growth, +2 Recovery, +2 Food Storage |
+| Polar Habitat Genome | 156 weeks | $80B | +3 Population Growth, +2 Recovery |
 | Cryogenic Logistics Grid | 260 weeks | $180B | +4 Supply, +3 Casualty Reduction, +2 Research Efficiency |
 | Strategic Mobilisation Vaults | 416 weeks | $385B | +4 Force Capacity, +3 Reserve Training, +3 Reserve Mobilisation |
 | Deep-Ice Signal Array | 780 weeks | $760B | +2 Attack, +3 Defence, +2 Research Speed; reveal Antarctica |
@@ -49,7 +49,7 @@ Every deployment consumes real trained reserves. One expedition per player can b
 
 First contact is a global rules transition:
 
-- active ordinary wars, peace offers and alliance offers are cleared;
+- active ordinary wars and alliance offers are cleared;
 - AI countries stop planning interstate wars;
 - defence members join over time and contribute to a shared counteroffensive;
 - lagging member research receives bounded catch-up transfers;

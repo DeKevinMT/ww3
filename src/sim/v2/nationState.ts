@@ -4,7 +4,6 @@ import {
   EMPTY_RESEARCH_BREAKTHROUGHS,
   EMPTY_RESEARCH_EFFECT_LEVELS,
   EMPTY_RESEARCH_PROGRESS,
-  FOOD_TARGET_WEEKS,
   TRAINED_RESERVE_CAPACITY_MULTIPLIER,
   clamp,
   round,
@@ -207,18 +206,13 @@ export function createNationStateV2(
 ): NationStateV2 {
   const definition = content.nations[id];
   if (!definition) throw new Error(`Missing V2 nation content for ${id}.`);
-  const initialFoodBufferWeeks = FOOD_TARGET_WEEKS
-    * clamp(1 - 4 * definition.real.foodInsecurityRate, 0.08, 1);
   const initialArmyCapacity = initialNationArmyCapacityBenchmarkV2(content, id);
   return {
     empireName: '',
     treasury: openingStartingTreasuryV2(id, content, humanControlled),
-    foodStock: round(definition.real.population * initialFoodBufferWeeks),
+    // Retained only as neutral schema sentinels for authenticated old saves.
+    foodStock: 0,
     domesticFoodCapacity: 0,
-    // Food security is a live result of funded supply plus stored reserves,
-    // never a country-data percentage imposed on the simulation. Historical
-    // vulnerability still starts fragile systems with a smaller buffer and a
-    // higher production/import burden below.
     foodSecurity: 1,
     trainedReserves: initialTrainedReserveManpowerV2(String(id), initialArmyCapacity, content),
     budget: { ...DEFAULT_BUDGET_V2 },

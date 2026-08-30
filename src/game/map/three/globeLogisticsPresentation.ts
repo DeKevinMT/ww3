@@ -8,6 +8,13 @@ export interface GlobeLogisticsRoute {
   readonly capacity: number;
 }
 
+export type GlobeLogisticsAllegiance = 'human' | 'rogue-ai';
+
+export interface GlobeVisibleLogisticsRoute extends GlobeLogisticsRoute {
+  readonly allegiance: GlobeLogisticsAllegiance;
+  readonly access?: 'land' | 'naval';
+}
+
 /**
  * Recent simulation transfers may contain several pulses over the same lane.
  * Merge them before touching Three.js so one visible lane always remains one
@@ -36,4 +43,39 @@ export function groupGlobeLogisticsMovements(
       || left.targetId.localeCompare(right.targetId)
     ))
     .slice(0, Math.max(0, limit));
+}
+
+/**
+ * Keep the strongest recent routes for both sides. A per-side cap prevents a
+ * busy permanent Survival war from creating an unbounded Three.js material
+ * graph while still ensuring enemy logistics never displaces the player's.
+ */
+export function selectGlobeVisibleLogisticsRoutes(
+  movements: readonly MapLogisticsMovement[],
+  humanPlayerId: string,
+  roguePlayerId = 'rai',
+  perSideLimit = 5,
+): readonly GlobeVisibleLogisticsRoute[] {
+  const withAllegiance = (
+    routes: readonly GlobeLogisticsRoute[],
+    allegiance: GlobeLogisticsAllegiance,
+  ): GlobeVisibleLogisticsRoute[] => routes.map((route) => ({
+    ...route,
+    allegiance,
+    access: movements.find((movement) => (
+      movement.playerId === route.playerId
+        && movement.sourceId === route.sourceId
+        && movement.targetId === route.targetId
+    ))?.access,
+  }));
+  const human = withAllegiance(
+    groupGlobeLogisticsMovements(movements, humanPlayerId, perSideLimit),
+    'human',
+  );
+  if (humanPlayerId === roguePlayerId) return human;
+  const rogue = withAllegiance(
+    groupGlobeLogisticsMovements(movements, roguePlayerId, perSideLimit),
+    'rogue-ai',
+  );
+  return [...human, ...rogue];
 }

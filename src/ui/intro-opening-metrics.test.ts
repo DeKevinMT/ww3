@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import worldUiSource from './WorldUIV2.ts?raw';
 import { WorldEngineV2 } from '../sim/v2/WorldEngineV2';
-import { WORLD_CONTENT_V2 } from '../sim/v2/content';
+import { isHumanSelectableNationV2, WORLD_CONTENT_V2 } from '../sim/v2/content';
 import {
   humanOpeningTrainedReserveTermsForContentV2,
   humanStartingArmyMultiplierForContentV2,
@@ -80,7 +80,9 @@ describe('intro opening metrics cache', () => {
     const first = cache.read(engine);
     for (let index = 0; index < 50; index += 1) expect(cache.read(engine)).toBe(first);
 
-    expect(first.byNation.size).toBe(WORLD_CONTENT_V2.nationIds.length);
+    expect(first.byNation.size).toBe(WORLD_CONTENT_V2.nationIds.filter((id) => (
+      isHumanSelectableNationV2(WORLD_CONTENT_V2, id)
+    )).length);
     expect(engine.state).toEqual(authoritativeState);
     expect(preview).toHaveBeenCalledTimes(1);
 
@@ -98,7 +100,9 @@ describe('intro opening metrics cache', () => {
     const opening = new IntroOpeningMetricsCacheV2().read(engine);
     const sorted = WORLD_CONTENT_V2.nationIds
       .map((id) => WORLD_CONTENT_V2.nations[id])
-      .filter((nation): nation is NonNullable<typeof nation> => Boolean(nation))
+      .filter((nation): nation is NonNullable<typeof nation> => (
+        Boolean(nation) && nation!.kind !== 'rogue-ai'
+      ))
       .sort((left, right) => compareIntroNationMetricsV2(left, right, 'power', opening))
       .map((nation) => nation.id);
 
@@ -114,14 +118,12 @@ describe('intro opening metrics cache', () => {
     expect(INTRO_SORT_OPTIONS[0]?.label).toBe('Military ranking');
   });
 
-  it('offers optional browser fullscreen before a solo campaign starts', () => {
-    expect(worldUiSource).toContain('We recommend playing Frontier Command in fullscreen');
-    expect(worldUiSource).toContain('data-action="fullscreen-windowed"');
-    expect(worldUiSource).toContain('data-action="fullscreen-enter"');
-    expect(worldUiSource).toContain("document.documentElement.requestFullscreen?.()");
-    expect(worldUiSource).toContain("document.addEventListener('fullscreenchange', this.onFullscreenChange)");
-    expect(worldUiSource).toContain('You can leave fullscreen at any time with <kbd>Esc</kbd>');
-    expect(worldUiSource).toContain('Fullscreen was blocked by the browser. You can still continue normally.');
+  it('starts a solo campaign without an interrupting fullscreen prompt', () => {
+    expect(worldUiSource).not.toContain('We recommend playing Frontier Command in fullscreen');
+    expect(worldUiSource).not.toContain('data-action="fullscreen-windowed"');
+    expect(worldUiSource).not.toContain('data-action="fullscreen-enter"');
+    expect(worldUiSource).not.toContain("document.documentElement.requestFullscreen?.()");
+    expect(worldUiSource).not.toContain("document.addEventListener('fullscreenchange', this.onFullscreenChange)");
     expect(worldUiSource).not.toContain('country-preview__fullscreen');
   });
 

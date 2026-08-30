@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  PEACE_RECRUITMENT_ACCELERATION_COST_MULTIPLIER,
+  PEACE_RECRUITMENT_ACCELERATION_MULTIPLIER,
   TRAINED_RESERVE_DEPLOYMENT_THROUGHPUT_MULTIPLIER,
+  TRAINED_RESERVE_PEACETIME_BASE_TRICKLE_FACTOR,
   TRAINED_RESERVE_PEACETIME_TRICKLE_FACTOR,
   TRAINED_RESERVE_TRAINING_COST_MULTIPLIER,
   TRAINED_RESERVE_WARTIME_TRAINING_FACTOR,
@@ -23,6 +26,7 @@ import {
 import {
   projectFinanceManpowerPhaseV2,
   activeArmyReadyForReserveTrainingV2,
+  peacetimeReserveTrainingPipelineShareV2,
   selectRecruitmentTrainingPipelineV2,
   selectRecruitmentUnitCostV2,
   selectRapidRecruitmentTermsV2,
@@ -135,7 +139,10 @@ describe('finite trained reserves', () => {
       WORLD_CONTENT_V2,
     );
     expect(BELGIUM_OPENING_RESERVE_CAPACITY_SHARE_V2).toBe(0.40);
-    expect(canonicalBelgiumReserves).toBeCloseTo(0.0313228, 7);
+    expect(canonicalBelgiumReserves).toBeCloseTo(
+      belgiumOpeningBenchmark * BELGIUM_OPENING_RESERVE_CAPACITY_SHARE_V2,
+      9,
+    );
     expect(state.players[belgium]!.trainedReserves).toBeCloseTo(Math.min(
       belgiumCapacity,
       canonicalBelgiumReserves
@@ -143,36 +150,34 @@ describe('finite trained reserves', () => {
     ), 6);
     expect(canonicalBelgiumReserves / belgiumOpeningBenchmark)
       .toBeCloseTo(BELGIUM_OPENING_RESERVE_CAPACITY_SHARE_V2, 5);
-    expect(state.players[belgium]!.trainedReserves).toBeCloseTo(0.061893295, 8);
     expect(initialTrainedReserveManpowerV2('unreported-fixture', 1)).toBe(
       INITIAL_RESERVE_CADRE_CAPACITY_SHARE_V2,
     );
   });
 
-  it('opens paid peacetime reserve training at 85% active fill', () => {
+  it('keeps the 85% readiness diagnostic without using it as a training gate', () => {
     expect(activeArmyReadyForReserveTrainingV2(0.849999, 1)).toBe(false);
     expect(activeArmyReadyForReserveTrainingV2(0.85, 1)).toBe(true);
   });
 
-  it('keeps a small reserve trickle from 85% and scales it to the full peace pipeline', () => {
-    const state = fundedState(71_001);
-    setActiveFill(state, belgium, 0.80);
-    const restoring = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, belgium);
-    expect(restoring.passiveRecruitment + restoring.acceleratedRecruitment).toBeGreaterThan(0);
-    expect(restoring.reserveTraining).toBe(0);
+  it('trains reserves continuously alongside active recruiting on a smooth peace curve', () => {
+    expect(peacetimeReserveTrainingPipelineShareV2(0))
+      .toBe(TRAINED_RESERVE_PEACETIME_BASE_TRICKLE_FACTOR);
+    expect(peacetimeReserveTrainingPipelineShareV2(0.425)).toBeCloseTo(0.10, 9);
+    expect(peacetimeReserveTrainingPipelineShareV2(0.85))
+      .toBe(TRAINED_RESERVE_PEACETIME_TRICKLE_FACTOR);
+    expect(peacetimeReserveTrainingPipelineShareV2(1)).toBe(1);
 
-    setActiveFill(state, belgium, 0.85);
+    const state = fundedState(71_001);
+    setActiveFill(state, belgium, 0.50);
     state.players[belgium]!.trainedReserves = 0;
-    const trickle = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, belgium);
+    const concurrent = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, belgium);
+    expect(concurrent.passiveRecruitment + concurrent.acceleratedRecruitment).toBeGreaterThan(0);
+    expect(concurrent.reserveTraining).toBeGreaterThan(0);
+
     setActiveFill(state, belgium, 1);
     state.players[belgium]!.trainedReserves = 0;
     const full = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, belgium);
-    expect(trickle.reserveTraining).toBeGreaterThan(0);
-    // Finance manpower is rounded to the canonical simulation precision.
-    expect(trickle.reserveTraining).toBeCloseTo(
-      full.reserveTraining * TRAINED_RESERVE_PEACETIME_TRICKLE_FACTOR,
-      5,
-    );
     expect(full.reserveTraining).toBeGreaterThan(0);
     expect(full.trainedReservesAfter).toBe(full.reserveTraining);
   });
@@ -210,7 +215,36 @@ describe('finite trained reserves', () => {
       + finance.reserveTrainingCost + finance.standingOperations).toBeCloseTo(finance.military, 5);
   });
 
-  it('keeps a paid wartime trickle at exactly 5% of the normal peace pipeline', () => {
+  it('uses peace as a fast, lower-cost rebuild window across the normal readiness curve', () => {
+    const state = fundedState(71_012);
+    setActiveFill(state, belgium, 0.10);
+    state.players[belgium]!.trainedReserves = 0;
+    const before = selectTotalManpowerV2(state, belgium);
+    const finance = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, belgium);
+    const unitCost = selectRecruitmentUnitCostV2(state, belgium, WORLD_CONTENT_V2);
+
+    expect(PEACE_RECRUITMENT_ACCELERATION_MULTIPLIER).toBe(4);
+    expect(PEACE_RECRUITMENT_ACCELERATION_COST_MULTIPLIER).toBe(1.15);
+    expect(finance.acceleratedRecruitment).toBeGreaterThan(finance.passiveRecruitment);
+    expect(finance.recruitmentAccelerationCost / finance.acceleratedRecruitment)
+      .toBeCloseTo(unitCost * PEACE_RECRUITMENT_ACCELERATION_COST_MULTIPLIER, 3);
+
+    for (let week = 0; week < 52; week += 1) {
+      processFinanceMilitaryV2(
+        state,
+        WORLD_CONTENT_V2,
+        createFinancePlansV2(state, WORLD_CONTENT_V2),
+      );
+      state.tick += 1;
+    }
+    const after = selectTotalManpowerV2(state, belgium);
+    // A shattered 10%-ready peer now visibly rebuilds most of its field army
+    // during one calm year instead of barely moving for several campaigns.
+    expect(after.deployed / after.capacity).toBeGreaterThan(0.70);
+    expect(after.deployed).toBeGreaterThan(before.deployed);
+  });
+
+  it('freezes fresh active and reserve training completely during war', () => {
     const peace = fundedState(71_004);
     setActiveFill(peace, belgium, 1);
     const war = structuredClone(peace);
@@ -220,11 +254,13 @@ describe('finite trained reserves', () => {
     const warFinance = selectWeeklyFinanceBreakdownV2(war, WORLD_CONTENT_V2, belgium);
     expect(peaceFinance.reserveTraining).toBeGreaterThan(0);
     expect(warFinance.reserveDeployment).toBe(0);
-    expect(warFinance.reserveTraining).toBeCloseTo(
-      peaceFinance.reserveTraining * TRAINED_RESERVE_WARTIME_TRAINING_FACTOR,
-      6,
-    );
-    expect(warFinance.reserveTrainingCost).toBeGreaterThan(0);
+    expect(TRAINED_RESERVE_WARTIME_TRAINING_FACTOR).toBe(0);
+    expect(warFinance.passiveRecruitment).toBe(0);
+    expect(warFinance.acceleratedRecruitment).toBe(0);
+    expect(warFinance.reserveTraining).toBe(0);
+    expect(warFinance.recruitment).toBe(0);
+    expect(warFinance.recruitmentAccelerationCost).toBe(0);
+    expect(warFinance.reserveTrainingCost).toBe(0);
   });
 
   it('draws wartime replacements from reserves with no double recruitment and conserves personnel', () => {
@@ -240,15 +276,19 @@ describe('finite trained reserves', () => {
 
     expect(finance.passiveRecruitment).toBe(0);
     expect(finance.acceleratedRecruitment).toBe(0);
+    expect(trainingPipeline).toBe(0);
     expect(finance.reserveDeployment).toBeGreaterThan(finance.reserveTraining);
-    expect(finance.reserveDeployment).toBeGreaterThan(
-      trainingPipeline * TRAINED_RESERVE_DEPLOYMENT_THROUGHPUT_MULTIPLIER,
-    );
+    expect(finance.reserveDeployment).toBeGreaterThan(0);
+    expect(TRAINED_RESERVE_DEPLOYMENT_THROUGHPUT_MULTIPLIER).toBeGreaterThan(1);
+    expect(finance.recruitment).toBe(0);
+    expect(finance.recruitmentAccelerationCost).toBe(0);
+    expect(finance.reserveTrainingCost).toBe(0);
     expect(finance.fundedArmyUpkeep + finance.recruitmentAccelerationCost
       + finance.reserveTrainingCost + finance.standingOperations).toBeCloseTo(finance.military, 5);
     expect(projection.recruited).toBeCloseTo(projection.reserveDeployed, 6);
+    expect(projection.reserveTrained).toBe(0);
     expect(projection.deployedAfterFinance + projection.trainedReservesAfter).toBeCloseTo(
-      before + reserveBefore + projection.reserveTrained,
+      before + reserveBefore,
       5,
     );
     expect(projection.trainedReservesAfter).toBeLessThan(reserveBefore);
@@ -263,10 +303,11 @@ describe('finite trained reserves', () => {
     const projection = projectFinanceManpowerPhaseV2(state, WORLD_CONTENT_V2, belgium, finance);
 
     expect(finance.reserveDeployment).toBe(0);
-    expect(finance.reserveTraining).toBeGreaterThan(0);
+    expect(finance.reserveTraining).toBe(0);
+    expect(finance.reserveTrainingCost).toBe(0);
     expect(finance.passiveRecruitment + finance.acceleratedRecruitment).toBe(0);
     expect(projection.recruited).toBe(0);
-    expect(projection.trainedReservesAfter).toBeCloseTo(finance.reserveTraining, 6);
+    expect(projection.trainedReservesAfter).toBe(0);
   });
 
   it('commits the projected pool deterministically during the finance phase', () => {

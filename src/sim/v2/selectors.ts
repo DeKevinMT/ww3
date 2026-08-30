@@ -98,6 +98,8 @@ import {
   EXTREME_CRISIS_MAX_UPKEEP_FUNDING,
   PASSIVE_RECRUITMENT_CAPACITY_RATE,
   PASSIVE_RECRUITMENT_TRAINING_BONUS,
+  PEACE_READINESS_RECOVERY_CURVE_EXPONENT,
+  PEACE_READINESS_RECOVERY_MAX_MULTIPLIER,
   UPKEEP_OVERFUNDING_MAX_RATIO,
   RECRUITMENT_SIZE_REFERENCE_CAPACITY,
   RECRUITMENT_SIZE_SCALING_EXPONENT,
@@ -111,6 +113,7 @@ import {
   TRAINED_RESERVE_ACTIVE_READY_RATIO,
   TRAINED_RESERVE_CAPACITY_MULTIPLIER,
   TRAINED_RESERVE_DEPLOYMENT_THROUGHPUT_MULTIPLIER,
+  TRAINED_RESERVE_PEACETIME_BASE_TRICKLE_FACTOR,
   TRAINED_RESERVE_PEACETIME_TRICKLE_FACTOR,
   TRAINED_RESERVE_TRAINING_COST_MULTIPLIER,
   TRAINED_RESERVE_WARTIME_TRAINING_FACTOR,
@@ -146,8 +149,6 @@ import {
   TAX_EFFICIENCY_RESEARCH_EFFECTIVE_CEILING,
   TAX_EFFICIENCY_RESEARCH_HALF_SATURATION,
   NATIONAL_AI_FUNDED_FREE_CASHFLOW_SHARE,
-  WAR_RECRUITMENT_ACCELERATION_COST_MULTIPLIER,
-  WAR_RECRUITMENT_ACCELERATION_MULTIPLIER,
   countryInteriorOperationMultiplierV2,
   warAccessOperationMultiplierV2,
   WAR_FATIGUE_OPERATION_COST_MAX_BONUS,
@@ -159,12 +160,14 @@ import {
   clamp,
   debtPressureV2,
   diminishingResearchLevelV2,
+  effectiveTreasuryReserveTargetV2,
   excessTreasuryInvestmentV2,
   round,
   smoothstep,
   upkeepFundingTargetRatioV2,
 } from './balance';
 import {
+  ROGUE_AI_NATION_ID_V2,
   WORLD_CONTENT_V2,
   nationalCombatSystemQualityMultiplierV2,
   openingCombatQualityMultiplierV2,
@@ -173,7 +176,18 @@ import {
   territoryTerrainOperationCostMultiplierV2,
   type WorldContentV2,
 } from './content';
+import {
+  selectApexEmpireReplenishmentModifiersV2,
+  selectApexEmpireSupportV2,
+  selectCommanderWeeklyEmpireContributionV2,
+} from './commanderForce';
 import { calculateBlendedFiscalCapacityV2 } from './fiscal';
+import { isWorldConnectionOpenV2 } from './antarcticGateways';
+import {
+  selectBestCoopMilitaryAccessRouteV2,
+  selectCoopMilitaryAccessRouteBetweenV2,
+} from './coopAccess';
+import { selectNorthPoleModifiersV2 } from './northPoleModifiers';
 import { localArmyBaseQualityV2, mixArmyBaseQualityV2, nationArmyBaseQualityV2 } from './armyQuality';
 import {
   initialNationArmyCapacityBenchmarkV2,
@@ -181,12 +195,19 @@ import {
   nationalArmyCapacityTargetV2,
   openingArmyCapacityMultiplierV2,
   stateArmyCapacityTargetsV2,
+  synchronizeArmyCapacityV2,
 } from './capacity';
+import {
+  NEUTRAL_COUNTRY_MASTERY_RUNTIME_MODIFIERS_V2,
+  selectCountryMasteryNationalRuntimeV2,
+  selectCountryMasteryReplenishmentRuntimeV2,
+  selectRegisteredCountryMasteryRuntimeV2,
+  selectTerritoryCountryMasteryRuntimeV2,
+} from './countryMasteryRuntime';
 import {
   nationalAiEfficiencyV2,
   nationalAiTreasuryPolicyV2,
   optimizeNationalAiPlanV2,
-  redirectDevelopmentFundingToFoodV2,
 } from './nationalAi';
 import { initialManualActionCostV2, manualActionUseMultiplierV2 } from './manualActions';
 import { isHumanPlayerV2 } from './humanPlayers';
@@ -202,6 +223,8 @@ import {
   traitWarContextV2,
 } from './traitContext';
 import { applyResearchProgressTraitV2 } from './traitResearch';
+import { selectRunModifiersV2 } from './runProgression';
+import { isNationOperationalV2, isSurvivalStateV2 } from './survival';
 import {
   countryTraitFactorV2,
   countryTraitModifiersV2,
@@ -250,6 +273,39 @@ interface TerritoryIndexV2 {
   owned: Map<PlayerId, TerritoryId[]>;
 }
 const territoryIndexCache = new WeakMap<WorldStateV2, TerritoryIndexV2>();
+
+/**
+ * Once a non-Antarctic country falls in Survival it is permanently a supply
+ * corridor for every later owner. The sorted persisted registry is the sole
+ * authority; ownership changes never restore local institutions or output.
+ */
+export function isSurvivalScorchedTransitTerritoryV2(
+  state: WorldStateV2,
+  territoryId: TerritoryId,
+): boolean {
+  return isSurvivalStateV2(state)
+    && state.runProgression.scorchedWorldTerritoryIds.includes(territoryId);
+}
+
+/** Narrow compatibility view used by Rogue production/provenance callsites. */
+export function isSurvivalRogueTransitTerritoryV2(
+  state: WorldStateV2,
+  territoryId: TerritoryId,
+): boolean {
+  return isSurvivalScorchedTransitTerritoryV2(state, territoryId)
+    && state.territories[territoryId]?.owner === ROGUE_AI_NATION_ID_V2
+    ;
+}
+
+/** Territories that may actually create Rogue income, population or troops. */
+function selectProductionTerritoriesOfV2(
+  state: WorldStateV2,
+  playerId: PlayerId,
+): TerritoryViewV2[] {
+  return selectTerritoriesOfV2(state, playerId).filter((territory) => (
+    !isSurvivalScorchedTransitTerritoryV2(state, territory.id)
+  ));
+}
 
 /** Ephemeral derived values for one simulation phase; never stored in canonical state. */
 export interface PowerSnapshotV2 {
@@ -391,11 +447,13 @@ export function createMilitaryBaseSnapshotV2(
   for (const territoryId of sortedTerritoryIdsV2(state)) {
     const territory = state.territories[territoryId];
     if (!territory) continue;
-    const integration = clamp(territory.integration, 0, 1);
-    const economy = integratedEconomies.get(territory.owner) ?? { output: 0, population: 0 };
-    economy.output += territory.economy * integration;
-    economy.population += territory.population * integration;
-    integratedEconomies.set(territory.owner, economy);
+    if (!isSurvivalScorchedTransitTerritoryV2(state, territoryId)) {
+      const integration = clamp(territory.integration, 0, 1);
+      const economy = integratedEconomies.get(territory.owner) ?? { output: 0, population: 0 };
+      economy.output += territory.economy * integration;
+      economy.population += territory.population * integration;
+      integratedEconomies.set(territory.owner, economy);
+    }
     if (territory.army.manpower > 0) {
       const accumulator = accumulators.get(territory.owner) ?? {
         attackMass: 0, defenseMass: 0, manpower: 0,
@@ -591,6 +649,7 @@ function nationalIqFusionInputsV2(
     const territory = state.territories[territoryId];
     const projected = fullyIntegratedTerritoryIds?.has(territoryId) ?? false;
     if (!territory || (territory.owner !== playerId && !projected)) continue;
+    if (isSurvivalScorchedTransitTerritoryV2(state, territoryId)) continue;
     const originId = content.territories[territoryId]?.initialOwnerId ?? territory.coreOwner;
     const originBaseline = content.nations[originId]?.iqScore ?? NATIONAL_IQ_SCORE_NEUTRAL;
     const population = Number.isFinite(territory.population)
@@ -939,6 +998,11 @@ export function selectWarsOfV2(state: WorldStateV2, playerId: PlayerId): WarStat
   return state.wars.filter((war) => war.attackerId === playerId || war.defenderId === playerId);
 }
 
+/** A distinct hostile opponent pair is exactly one active front. */
+export function selectActiveFrontCountV2(state: WorldStateV2, playerId: PlayerId): number {
+  return selectWarsOfV2(state, playerId).length;
+}
+
 /**
  * One transparent wartime-pressure model shared by income, long-run growth and
  * the UI. Extra fronts hurt more than the first; accumulated fatigue keeps a
@@ -953,6 +1017,37 @@ export function selectWarPressureV2(state: WorldStateV2, playerId: PlayerId): {
 } {
   const fronts = selectWarsOfV2(state, playerId).length;
   const fatigue = clamp(state.players[playerId]?.warFatigue ?? 0, 0, 100);
+  if (fronts > 0 && isSurvivalStateV2(state)) {
+    const lostCoreTerritories = Object.values(state.territories).filter((territory) => (
+      territory.coreOwner === playerId && territory.owner !== playerId
+    )).length;
+    const fatigueShare = clamp(fatigue / 45, 0, 1);
+    const lostTerritoryPressure = Math.min(0.04, 0.012 * lostCoreTerritories);
+    const extraFrontPressure = Math.min(0.02, 0.008 * Math.max(0, fronts - 1));
+    return {
+      fronts,
+      outputPenalty: round(clamp(
+        0.018 + 0.055 * fatigueShare + lostTerritoryPressure + extraFrontPressure,
+        0,
+        0.14,
+      )),
+      economyGrowthDrag: round(clamp(
+        0.005 + 0.006 * fatigueShare + 0.002 * lostCoreTerritories,
+        0,
+        0.025,
+      )),
+      populationGrowthDrag: round(clamp(
+        0.0015 + 0.004 * fatigueShare + 0.0015 * lostCoreTerritories,
+        0,
+        0.012,
+      )),
+      researchPenalty: round(clamp(
+        0.07 + 0.10 * fatigueShare + 0.02 * lostCoreTerritories,
+        0,
+        0.28,
+      )),
+    };
+  }
   const peaceTransition = fronts === 0 ? clamp(fatigue / 8, 0, 1) : 0;
   return {
     fronts,
@@ -984,6 +1079,7 @@ export function selectControlledPopulationV2(state: WorldStateV2, playerId: Play
   const index = territoryIndexV2(state);
   let population = 0;
   for (const id of index.owned.get(playerId) ?? []) {
+    if (isSurvivalScorchedTransitTerritoryV2(state, id)) continue;
     const territory = state.territories[id]!;
     population += territory.population * attributedShare(territory, playerId);
   }
@@ -1028,7 +1124,11 @@ export function selectTaxEfficiencyMultiplierV2(state: WorldStateV2, playerId: P
   ), 9);
 }
 
-export function selectBaseOperatingCostShareV2(state: WorldStateV2, playerId: PlayerId): number {
+export function selectBaseOperatingCostShareV2(
+  state: WorldStateV2,
+  playerId: PlayerId,
+  content: WorldContentV2 = WORLD_CONTENT_V2,
+): number {
   const level = state.players[playerId]?.research.effectLevels['operating-efficiency'] ?? 0;
   const effectiveLevel = diminishingResearchLevelV2(
     level,
@@ -1040,11 +1140,22 @@ export function selectBaseOperatingCostShareV2(state: WorldStateV2, playerId: Pl
     BASE_OPERATING_COST_TAX_REVENUE_SHARE
       - OPERATING_EFFICIENCY_RESEARCH_REDUCTION_PER_EFFECTIVE_LEVEL * effectiveLevel,
   );
-  return round(researchedShare * countryTraitFactorV2(
+  const mastery = selectCountryMasteryNationalRuntimeV2(
+    state,
+    content,
     playerId,
-    'base-operating-cost',
-    traitNationContextV2(state, playerId),
-  ), 9);
+    selectProductionTerritoriesOfV2(state, playerId).map((territory) => territory.id),
+  );
+  return round(
+    researchedShare
+      * countryTraitFactorV2(
+        playerId,
+        'base-operating-cost',
+        traitNationContextV2(state, playerId),
+      )
+      * mastery.standingOperatingCostMultiplier,
+    9,
+  );
 }
 
 export function selectEconomicOutputLedgerV2(
@@ -1059,6 +1170,7 @@ export function selectEconomicOutputLedgerV2(
   let integratedOutput = 0;
   const index = territoryIndexV2(state);
   for (const id of index.owned.get(playerId) ?? []) {
+    if (isSurvivalScorchedTransitTerritoryV2(state, id)) continue;
     const territory = state.territories[id]!;
     // Territory economy is total live output, not output per baseline citizen.
     // Population growth therefore changes wealth per person but does not
@@ -1097,7 +1209,6 @@ export function selectEconomicOutputLedgerV2(
     wealthPerPerson: fiscalCapacity.wealthPerPerson,
     fiscalReferenceWealthPerPerson: fiscalCapacity.fiscalReferenceWealthPerPerson,
     demographicOutput: round(demographicOutput),
-    conditionAdjustedOutput: round(demographicOutput),
     integratedOutput: round(integratedOutput),
     warOutputPenalty: 0,
     warAdjustedOutput: round(integratedOutput),
@@ -1106,7 +1217,8 @@ export function selectEconomicOutputLedgerV2(
     taxRate: round(fiscalCapacity.dynamicTaxRate, 9),
     referenceTaxRate: referenceTaxRate === null ? null : round(referenceTaxRate, 9),
     weeklyTaxRevenue: round(
-      fiscalCapacity.weeklyTaxRevenue * selectTaxEfficiencyMultiplierV2(state, playerId),
+      fiscalCapacity.weeklyTaxRevenue * selectTaxEfficiencyMultiplierV2(state, playerId)
+        * selectRunModifiersV2(state, playerId).taxRevenueMultiplier,
     ),
   };
 }
@@ -1115,8 +1227,30 @@ export function selectTotalManpowerV2(state: WorldStateV2, playerId: PlayerId): 
   let deployed = 0;
   let capacity = 0;
   for (const id of territoryIndexV2(state).owned.get(playerId) ?? []) {
-    deployed += state.territories[id]!.army.manpower;
-    capacity += state.territories[id]!.army.capacity;
+    const army = state.territories[id]!.army;
+    deployed += army.manpower;
+    // A deployed corridor garrison remains real combat power, but the lost
+    // local population creates no empty recruitment capacity for its owner.
+    capacity += isSurvivalScorchedTransitTerritoryV2(state, id)
+      ? army.manpower : army.capacity;
+  }
+  return { deployed: round(deployed), capacity: round(capacity) };
+}
+
+/**
+ * Recruitment is local to productive territory. In Survival this guarantees
+ * every real machine replacement originates inside Antarctica while ruined
+ * occupied countries remain usable only as physical transit nodes.
+ */
+export function selectRecruitmentBaseManpowerV2(
+  state: WorldStateV2,
+  playerId: PlayerId,
+): TotalManpowerV2 {
+  let deployed = 0;
+  let capacity = 0;
+  for (const territory of selectProductionTerritoriesOfV2(state, playerId)) {
+    deployed += territory.army.manpower;
+    capacity += territory.army.capacity;
   }
   return { deployed: round(deployed), capacity: round(capacity) };
 }
@@ -1161,6 +1295,60 @@ export function selectNuclearPowerV2(
   };
 }
 
+function selectCountryMasteryCombatRuntimeV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  playerId: PlayerId,
+  army: ArmyStateV2,
+): Readonly<{ attackMultiplier: number; defenseMultiplier: number }> {
+  if (!selectRegisteredCountryMasteryRuntimeV2(content, playerId)) {
+    return NEUTRAL_COUNTRY_MASTERY_RUNTIME_MODIFIERS_V2;
+  }
+  const localTerritoryId = (territoryIndexV2(state).owned.get(playerId) ?? [])
+    .find((territoryId) => state.territories[territoryId]?.army === army);
+  if (localTerritoryId) {
+    return selectTerritoryCountryMasteryRuntimeV2(
+      content,
+      localTerritoryId,
+      playerId,
+    );
+  }
+  // Forecast/HUD callers sometimes pass a synthetic national army. Preserve
+  // the exact local-origin result by weighting ATK and DEF against the same
+  // stored base-quality mass that was used to build that national army view.
+  let baseAttackMass = 0;
+  let baseDefenseMass = 0;
+  let masteredAttackMass = 0;
+  let masteredDefenseMass = 0;
+  for (const territoryId of territoryIndexV2(state).owned.get(playerId) ?? []) {
+    const territory = state.territories[territoryId];
+    if (!territory || territory.army.manpower <= 0) continue;
+    const local = selectTerritoryCountryMasteryRuntimeV2(
+      content,
+      territoryId,
+      playerId,
+    );
+    const attackMass = territory.army.baseAttack * territory.army.manpower;
+    const defenseMass = territory.army.baseDefense * territory.army.manpower;
+    baseAttackMass += attackMass;
+    baseDefenseMass += defenseMass;
+    masteredAttackMass += attackMass * local.attackMultiplier;
+    masteredDefenseMass += defenseMass * local.defenseMultiplier;
+  }
+  if (baseAttackMass > 0 && baseDefenseMass > 0) {
+    return {
+      attackMultiplier: round(masteredAttackMass / baseAttackMass, 12),
+      defenseMultiplier: round(masteredDefenseMass / baseDefenseMass, 12),
+    };
+  }
+  return selectCountryMasteryNationalRuntimeV2(
+    state,
+    content,
+    playerId,
+    selectProductionTerritoriesOfV2(state, playerId).map((territory) => territory.id),
+  );
+}
+
 export function selectEffectiveAttackV2(
   state: WorldStateV2,
   content: WorldContentV2,
@@ -1173,9 +1361,17 @@ export function selectEffectiveAttackV2(
     state, content, playerId, militaryBaseSnapshot,
   );
   const deterrence = selectNuclearPowerV2(state, content, playerId);
+  const mastery = selectCountryMasteryCombatRuntimeV2(
+    state,
+    content,
+    playerId,
+    army,
+  );
   const researchMultiplier = (1 + 0.01 * level * nationalQuality.researchConversion)
     * (1 + deterrence.attackBonus);
-  return round(army.baseAttack * nationalQuality.combinedMultiplier * researchMultiplier);
+  return round(army.baseAttack * nationalQuality.combinedMultiplier * researchMultiplier
+    * selectRunModifiersV2(state, playerId).nationalAttackMultiplier
+    * mastery.attackMultiplier);
 }
 
 export function selectEffectiveDefenseV2(
@@ -1190,11 +1386,19 @@ export function selectEffectiveDefenseV2(
     state, content, playerId, militaryBaseSnapshot,
   );
   const convertedLevel = level * nationalQuality.researchConversion;
+  const mastery = selectCountryMasteryCombatRuntimeV2(
+    state,
+    content,
+    playerId,
+    army,
+  );
   const researchBonus = convertedLevel <= 0 ? 0
     : DEFENSE_RESEARCH_MAX_BONUS * convertedLevel
       / (convertedLevel + DEFENSE_RESEARCH_HALF_SATURATION);
   const researchMultiplier = 1 + researchBonus;
-  const rawDefense = army.baseDefense * nationalQuality.combinedMultiplier * researchMultiplier;
+  const rawDefense = army.baseDefense * nationalQuality.combinedMultiplier * researchMultiplier
+    * selectRunModifiersV2(state, playerId).nationalDefenseMultiplier
+    * mastery.defenseMultiplier;
   return round(effectiveDefenseStatV2(rawDefense));
 }
 
@@ -1208,8 +1412,8 @@ export function selectTerritoryPowerV2(
   if (!territory) return 0;
   const attack = selectEffectiveAttackV2(state, content, territory.owner, territory.army, militaryBaseSnapshot);
   const defense = selectEffectiveDefenseV2(state, content, territory.owner, territory.army, militaryBaseSnapshot);
-  return round(1_000 * selectArmyCombatManpowerV2(state, territory.owner, territory.army) * (0.55 * attack + 0.45 * defense)
-    * (0.65 + 0.35 * territory.condition));
+  return round(1_000 * selectArmyCombatManpowerV2(state, territory.owner, territory.army)
+    * (0.55 * attack + 0.45 * defense));
 }
 
 export function selectCurrentPowerV2(
@@ -1234,8 +1438,7 @@ export function selectConventionalPowerV2(
     const attack = selectEffectiveAttackV2(state, content, playerId, territory.army, militaryBaseSnapshot);
     const defense = selectEffectiveDefenseV2(state, content, playerId, territory.army, militaryBaseSnapshot);
     return sum + 1_000 * selectArmyCombatManpowerV2(state, playerId, territory.army)
-      * (0.55 * attack + 0.45 * defense)
-      * (0.65 + 0.35 * territory.condition);
+      * (0.55 * attack + 0.45 * defense);
   }, 0));
 }
 
@@ -1250,7 +1453,8 @@ export function createPowerSnapshotV2(
   for (const playerId of sortedNationIdsV2(state)) {
     const power = selectCurrentPowerV2(state, content, playerId, militaryBaseSnapshot);
     byNation.set(playerId, power);
-    if (!selectIsEliminatedV2(state, playerId)) {
+    if (!selectIsEliminatedV2(state, playerId)
+      && isNationOperationalV2(state, content, playerId)) {
       leaderPower = Math.max(leaderPower, power);
       leaderBreakthroughs = Math.max(leaderBreakthroughs,
         Object.values(state.players[playerId]!.research.breakthroughs).reduce((sum, value) => sum + value, 0));
@@ -1342,8 +1546,15 @@ export function selectEffectiveRecoveryV2(
   const nation = state.players[playerId];
   if (!nation) return 0;
   const gap = Math.max(0, army.capacity - army.manpower);
-  const throughput = Math.max(0.000001, army.capacity * 0.0022)
-    * (1 + 0.01 * nation.research.effectLevels.training)
+  const nationalCapacity = selectRecruitmentBaseManpowerV2(state, playerId).capacity;
+  // Recovery is a local view over the same canonical national pipeline that
+  // trains active and reserve personnel. Keeping North Pole recovery inside that shared
+  // pipeline prevents this preview from applying its +8% a second time.
+  const localPipelineShare = nationalCapacity > 0
+    ? clamp(army.capacity / nationalCapacity, 0, 1)
+    : 0;
+  const throughput = selectRecruitmentTrainingPipelineV2(state, content, playerId)
+    * localPipelineShare
     * (1 + 0.01 * nation.research.effectLevels.recovery)
     * selectCatchUpFactorV2(state, content, playerId, powerSnapshot);
   return round(Math.min(gap, throughput));
@@ -1380,11 +1591,19 @@ export function selectRecruitmentUnitCostV2(
   const baseCost = 2 * qualityPremium * (1 - 0.01 * efficiency)
     * costOfLiving
     / nationalAiEfficiencyV2(selectNationalIqViewV2(state, content, playerId).score);
-  return round(baseCost * countryTraitFactorV2(
+  const mastery = selectCountryMasteryNationalRuntimeV2(
+    state,
+    content,
     playerId,
-    'recruitment-cost',
-    traitNationContextV2(state, playerId),
-  ));
+    selectProductionTerritoriesOfV2(state, playerId).map((territory) => territory.id),
+  );
+  return round(baseCost
+    * countryTraitFactorV2(
+      playerId,
+      'recruitment-cost',
+      traitNationContextV2(state, playerId),
+    )
+    * mastery.recruitmentCostMultiplier);
 }
 
 /**
@@ -1417,7 +1636,7 @@ export function selectRapidRecruitmentTermsV2(
   playerId: PlayerId,
 ): RapidRecruitmentTermsV2 {
   const nation = state.players[playerId];
-  const army = selectTotalManpowerV2(state, playerId);
+  const army = selectRecruitmentBaseManpowerV2(state, playerId);
   const gap = Math.max(0, army.capacity - army.deployed);
   const amount = round(Math.min(gap, army.capacity * 0.05));
   const atWar = selectWarsOfV2(state, playerId).length > 0;
@@ -1478,15 +1697,14 @@ export function selectRecruitmentThroughputV2(
   playerId: PlayerId,
   _powerSnapshot?: PowerSnapshotV2,
 ): number {
-  const army = selectTotalManpowerV2(state, playerId);
+  const army = selectRecruitmentBaseManpowerV2(state, playerId);
   // The free opening soldiers remain a finite, separately tracked pool, but
   // their temporary live Army cap is genuine room for ordinary paid training.
   // Free and paid soldiers both occupy that room, so only the physical gap can
   // be recruited and the capacity disappears on its normal 20-year schedule.
   const gap = Math.max(0, army.capacity - army.deployed);
   const activeWars = selectWarsOfV2(state, playerId).length;
-  const wartimeTraining = activeWars > 0
-    ? WAR_RECRUITMENT_THROUGHPUT_FACTOR / Math.sqrt(activeWars) : 1;
+  const wartimeTraining = activeWars > 0 ? WAR_RECRUITMENT_THROUGHPUT_FACTOR : 1;
   const passiveTraitFactor = activeWars === 0
     ? countryTraitFactorV2(
       playerId,
@@ -1506,13 +1724,18 @@ export function selectRecruitmentThroughputV2(
  */
 export function selectRecruitmentTrainingPipelineV2(
   state: WorldStateV2,
-  _content: WorldContentV2,
+  content: WorldContentV2,
   playerId: PlayerId,
 ): number {
   const nation = state.players[playerId];
   if (!nation) return 0;
-  const army = selectTotalManpowerV2(state, playerId);
+  const army = selectRecruitmentBaseManpowerV2(state, playerId);
   if (army.capacity <= 0) return 0;
+  // A war declaration shuts the whole fresh-personnel pipeline down for the
+  // nation, irrespective of front count, controller or game mode. Existing
+  // trained reservists and territorial forces remain real personnel and may
+  // still be transferred without increasing the combined headcount.
+  if (selectWarsOfV2(state, playerId).length > 0) return 0;
   // Every nation shares the same baseline. Scaling is deliberately sublinear:
   // a small maximum army reaches readiness sooner than a very large one, while
   // the bounded factor prevents microstates or superpowers becoming outliers.
@@ -1527,10 +1750,28 @@ export function selectRecruitmentTrainingPipelineV2(
     0.000001,
     army.capacity * PASSIVE_RECRUITMENT_CAPACITY_RATE * sizeSpeed,
   );
+  const readinessRecovery = peacetimeRecruitmentReadinessMultiplierV2(
+    army.deployed,
+    army.capacity,
+    false,
+  );
+  const countryMasteryReplenishment = selectCountryMasteryReplenishmentRuntimeV2(
+    state,
+    content,
+    playerId,
+    selectProductionTerritoriesOfV2(state, playerId).map((territory) => territory.id),
+  );
   const trainingLevel = diminishingResearchLevelV2(nation.research.effectLevels.training, 30, 20);
   const trained = base
+    * readinessRecovery
     * (1 + PASSIVE_RECRUITMENT_TRAINING_BONUS * trainingLevel)
-    * clamp(nation.foodSecurity, 0.10, 1);
+    * selectRunModifiersV2(state, playerId).recruitmentMultiplier
+    // North Pole recovery improves the one gross throughput source used by active
+    // recruitment, passive reserves and wartime replacement. It must never be
+    // repeated in any of those downstream allocation branches.
+    * selectNorthPoleModifiersV2(state, playerId).recoveryMultiplier
+    * selectApexEmpireReplenishmentModifiersV2(state, playerId).recruitmentMultiplier
+    * countryMasteryReplenishment.recruitmentMultiplier;
   return round(trained * countryTraitFactorV2(
     playerId,
     'recruitment-throughput',
@@ -1540,7 +1781,7 @@ export function selectRecruitmentTrainingPipelineV2(
 
 /** A lower live cap blocks further training but never deletes existing reserves. */
 export function selectTrainedReserveCapacityV2(state: WorldStateV2, playerId: PlayerId): number {
-  return round(selectTotalManpowerV2(state, playerId).capacity
+  return round(selectRecruitmentBaseManpowerV2(state, playerId).capacity
     * TRAINED_RESERVE_CAPACITY_MULTIPLIER
     * countryTraitFactorV2(
       playerId,
@@ -1551,6 +1792,51 @@ export function selectTrainedReserveCapacityV2(state: WorldStateV2, playerId: Pl
 
 export function activeArmyReadyForReserveTrainingV2(deployed: number, capacity: number): boolean {
   return capacity > 0 && deployed >= capacity * TRAINED_RESERVE_ACTIVE_READY_RATIO;
+}
+
+/**
+ * Continuous readiness-sensitive recovery: no hidden emergency band or hard
+ * cutoff, and almost no acceleration remains near a fully staffed army.
+ */
+export function peacetimeRecruitmentReadinessMultiplierV2(
+  deployed: number,
+  capacity: number,
+  atWar: boolean,
+): number {
+  if (atWar || capacity <= 0) return 1;
+  const readiness = clamp(deployed / capacity, 0, 1);
+  const readinessGap = 1 - readiness;
+  return round(1 + (
+    PEACE_READINESS_RECOVERY_MAX_MULTIPLIER - 1
+  ) * readinessGap ** PEACE_READINESS_RECOVERY_CURVE_EXPONENT);
+}
+
+/**
+ * Reserve training never fully stops in peace. It rises slowly from a protected
+ * 5% base to 15% at 85% field readiness, then uses spare training capacity
+ * increasingly quickly as the active army reaches its cap.
+ */
+export function peacetimeReserveTrainingPipelineShareV2(activeFill: number): number {
+  const fill = clamp(activeFill, 0, 1);
+  if (fill <= TRAINED_RESERVE_ACTIVE_READY_RATIO) {
+    return round(
+      TRAINED_RESERVE_PEACETIME_BASE_TRICKLE_FACTOR
+        + (TRAINED_RESERVE_PEACETIME_TRICKLE_FACTOR
+          - TRAINED_RESERVE_PEACETIME_BASE_TRICKLE_FACTOR)
+          * fill / Math.max(0.000001, TRAINED_RESERVE_ACTIVE_READY_RATIO),
+      9,
+    );
+  }
+  return round(
+    TRAINED_RESERVE_PEACETIME_TRICKLE_FACTOR
+      + (1 - TRAINED_RESERVE_PEACETIME_TRICKLE_FACTOR) * clamp(
+        (fill - TRAINED_RESERVE_ACTIVE_READY_RATIO)
+          / Math.max(0.000001, 1 - TRAINED_RESERVE_ACTIVE_READY_RATIO),
+        0,
+        1,
+      ),
+    9,
+  );
 }
 
 export function selectFoodLandCapacityV2(
@@ -1573,22 +1859,12 @@ export function selectFoodLandCapacityV2(
   let productivePopulation = 0;
   let calibratedProduction = 0;
   for (const view of selectTerritoriesOfV2(state, playerId)) {
+    if (isSurvivalScorchedTransitTerritoryV2(state, view.id)) continue;
     const territory = state.territories[view.id]!;
     const definition = content.territories[view.id]!;
     const integrationYield = clamp(territory.integration, 0, 1);
     const population = territory.population * integrationYield;
     if (population <= 0) continue;
-    const openingCondition = clamp(
-      0.66 + Math.log10(definition.baseline.gdp + 1) * 0.055
-        + definition.baseline.powerIndex / 1_200,
-      0.62,
-      0.96,
-    );
-    const conditionYield = clamp(
-      territory.condition / Math.max(0.01, openingCondition),
-      0.20,
-      1.10,
-    );
     const liveEconomicStrength = clamp(
       territory.economy / Math.max(0.10, definition.baseline.gdp),
       0.25,
@@ -1604,15 +1880,16 @@ export function selectFoodLandCapacityV2(
       : 1;
     productivePopulation += population;
     calibratedProduction += population * selfSufficiency
-      * conditionYield * economicYield
+      * economicYield
       * territoryTerrainFoodProductionMultiplierV2(content, view.id);
   }
   if (productivePopulation <= 0) return 0;
   // FAOSTAT's calorie-based self-sufficiency ratio is the immutable opening
-  // anchor. Live damage, integration, the economy, research and war then move
+  // anchor. Integration, the economy, research and war then move
   // actual capacity without confusing agricultural supply with food access.
   return round(demand * calibratedProduction / productivePopulation
     * yieldResearch * warDisruption
+    * selectApexEmpireSupportV2(state, playerId).foodProductionMultiplier
     * countryTraitFactorV2(
       playerId,
       'food-production',
@@ -1632,11 +1909,10 @@ export function selectFoodAccessCeilingV2(
   playerId: PlayerId,
 ): number {
   const nation = state.players[playerId];
-  const territories = selectTerritoriesOfV2(state, playerId);
+  const territories = selectProductionTerritoriesOfV2(state, playerId);
   if (!nation || territories.length === 0) return 0;
   let population = 0;
   let vulnerability = 0;
-  let condition = 0;
   let currentOutput = 0;
   let baselineOutput = 0;
   for (const view of territories) {
@@ -1644,12 +1920,10 @@ export function selectFoodAccessCeilingV2(
     const definition = content.territories[view.id]!;
     population += territory.population;
     vulnerability += definition.baseline.foodInsecurityRate * territory.population;
-    condition += territory.condition * territory.population;
     currentOutput += territory.economy;
     baselineOutput += definition.baseline.gdp;
   }
   const weightedVulnerability = vulnerability / Math.max(0.01, population);
-  const averageCondition = condition / Math.max(0.01, population);
   const liveOutputPerPerson = currentOutput / Math.max(0.01, population);
   const baselineOutputPerPerson = baselineOutput / Math.max(0.01,
     territories.reduce((sum, view) => sum + content.territories[view.id]!.baseline.population, 0));
@@ -1658,11 +1932,9 @@ export function selectFoodAccessCeilingV2(
   const economicStress = Math.max(0, -Math.log2(Math.min(1, prosperityRatio))) * 0.05;
   const researchRelief = weightedVulnerability * Math.min(0.60,
     nation.research.effectLevels['economy-growth'] * FOOD_ACCESS_RESEARCH_RELIEF_PER_LEVEL);
-  const conditionPenalty = Math.max(0, 0.78 - averageCondition) * 0.35;
   const warPenalty = selectWarPressureV2(state, playerId).outputPenalty * 0.75;
   const unmodifiedRemainingVulnerability = Math.max(0.005,
-    weightedVulnerability - researchRelief - economicRelief + economicStress
-      + conditionPenalty + warPenalty);
+    weightedVulnerability - researchRelief - economicRelief + economicStress + warPenalty);
   const remainingVulnerability = Math.max(0.005,
     unmodifiedRemainingVulnerability * countryTraitFactorV2(
       playerId,
@@ -1672,7 +1944,7 @@ export function selectFoodAccessCeilingV2(
   const rawAccess = clamp(1 - remainingVulnerability, 0.20, 0.995);
   // Food access is a real last-mile limit. Money can buy imports, but fragile
   // distribution and institutions still leave part of the population without
-  // reliable nutrition until condition, prosperity or research improves.
+  // reliable nutrition until prosperity or research improves.
   return round(rawAccess);
 }
 
@@ -1727,6 +1999,7 @@ export function selectFoodStorageCapacityV2(
   const physicalCapacity = (demand * FOOD_STORAGE_BASE_WEEKS
     + landArea * FOOD_STORAGE_MILLIONS_PER_KM2)
     * economicInfrastructure * researchInfrastructure
+    * selectApexEmpireSupportV2(state, playerId).foodStorageMultiplier
     * countryTraitFactorV2(
       playerId,
       'food-storage-capacity',
@@ -1741,6 +2014,7 @@ export function selectFoodStorageCapacityV2(
 
 interface FoodPlanV2 {
   demand: number;
+  apexFoodSupply: number;
   landCapacity: number;
   accessCeiling: number;
   importThroughput: number;
@@ -1764,6 +2038,7 @@ interface FoodCapacityPlanV2 {
 }
 
 interface FundedFoodPlanV2 {
+  apexFoodContribution: number;
   foodProduction: number;
   foodProduced: number;
   foodDomesticProduced: number;
@@ -1887,9 +2162,19 @@ function selectFoodPlanV2(
     demandOverride,
     economyOverride,
   );
-  const domesticTarget = Number.isFinite(nation.domesticFoodCapacity)
+  const completedDomesticCapacity = Number.isFinite(nation.domesticFoodCapacity)
     ? Math.max(0, nation.domesticFoodCapacity)
     : Math.min(capacityPlan.desiredProduction, capacityPlan.landCapacity);
+  // Installed farms and distribution capacity cannot produce more than the
+  // territory network that is physically available this week. This matters
+  // after conquest: the captured sector is preserved canonically, while only
+  // the integration-accessible share comes online and rises with Signal Purge.
+  // Taking the minimum also prevents that preserved sector being counted on
+  // top of the live land model.
+  const domesticTarget = Math.min(
+    completedDomesticCapacity,
+    capacityPlan.landCapacity,
+  );
   // Imports are the responsive channel: they immediately fill the gap left by
   // slowly changing domestic farms, processing and distribution capacity.
   // When old capacity temporarily exceeds demand it remains funded and may be
@@ -1898,9 +2183,14 @@ function selectFoodPlanV2(
     0,
     capacityPlan.storageCapacity - nation.foodStock,
   );
+  const apexFoodSupply = Math.min(
+    usefulSupplyLimit,
+    selectApexEmpireSupportV2(state, playerId).annualFoodOutput / 52,
+  );
   const importTarget = Math.max(
     0,
-    Math.min(capacityPlan.desiredProduction, usefulSupplyLimit) - domesticTarget,
+    Math.min(capacityPlan.desiredProduction, usefulSupplyLimit)
+      - domesticTarget - apexFoodSupply,
   );
   const economy = economyOverride ?? selectNationalEconomyV2(state, content, playerId);
   const outputPerPerson = economy.output / Math.max(0.01, economy.population);
@@ -1933,6 +2223,7 @@ function selectFoodPlanV2(
     // Import dependence and actual access vulnerability remain the visible risks.
     * (1 + 0.70 * dependency + 1.50 * systemInefficiency)
     * (1 + 2 * warPressure) * debtImportCostMultiplier
+    * selectApexEmpireSupportV2(state, playerId).foodImportCostMultiplier
     * countryTraitFactorV2(
       playerId,
       'food-import-cost',
@@ -1940,6 +2231,7 @@ function selectFoodPlanV2(
     );
   return {
     demand: capacityPlan.demand,
+    apexFoodSupply: round(apexFoodSupply, 9),
     landCapacity: capacityPlan.landCapacity,
     accessCeiling: capacityPlan.accessCeiling,
     importThroughput: capacityPlan.importThroughput,
@@ -1951,6 +2243,16 @@ function selectFoodPlanV2(
     importUnitCost: round(importUnitCost, 9),
     request: round(domesticTarget * domesticUnitCost + importTarget * importUnitCost),
   };
+}
+
+/** Exact live import price used by the weekly food-finance plan. */
+export function selectFoodImportUnitCostV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  playerId: PlayerId,
+): number {
+  if (!state.players[playerId]) return 0;
+  return selectFoodPlanV2(state, content, playerId).importUnitCost;
 }
 
 /** Fund one immutable food plan and account for storage before exports. */
@@ -1970,14 +2272,21 @@ function fundFoodPlanV2(
     0,
     foodProduction - Math.min(foodProduction, domesticCost),
   );
+  const storageRoom = Math.max(0, plan.storageCapacity - nation.foodStock);
+  // APEX supply is free, but never displaces stored food, overfills storage or
+  // becomes an export. It is applied after paid domestic output and before
+  // deciding how much of the funded import shipment reaches the Empire.
+  const apexFoodContribution = Math.min(
+    plan.apexFoodSupply,
+    Math.max(0, plan.demand + storageRoom - foodDomesticProduced),
+  );
   // Import bills cover cargo loaded at origin; wartime route loss means only
   // part of that paid shipment reaches the domestic food network.
   const foodImported = Math.min(
     plan.importTarget,
     foodFundingAfterDomestic / plan.importUnitCost,
   ) * plan.importThroughput;
-  const foodProduced = foodDomesticProduced + foodImported;
-  const storageRoom = Math.max(0, plan.storageCapacity - nation.foodStock);
+  const foodProduced = apexFoodContribution + foodDomesticProduced + foodImported;
   // Exports come exclusively from domestic output remaining after a complete
   // week of national demand and every empty physical storage slot. Imports and
   // reserves can therefore never be re-exported.
@@ -2005,6 +2314,7 @@ function fundFoodPlanV2(
     plan.storageCapacity,
   ) - nation.foodStock;
   return {
+    apexFoodContribution,
     foodProduction,
     foodProduced,
     foodDomesticProduced,
@@ -2054,9 +2364,6 @@ export function selectNationalAggressivenessV2(
   const treasuryWeeks = player.treasury / Math.max(0.01, economy.weeklyRevenue);
   const cashReadiness = clamp((treasuryWeeks + 2) / 10, 0, 1);
   const territories = selectTerritoriesOfV2(state, playerId);
-  const condition = territories.length > 0
-    ? territories.reduce((sum, territory) => sum + territory.condition, 0) / territories.length
-    : 0;
   const fatigue = clamp(player.warFatigue / 100, 0, 1);
   const activeWars = selectWarsOfV2(state, playerId);
   const frontLoad = clamp(activeWars.length / 2, 0, 1);
@@ -2084,15 +2391,13 @@ export function selectNationalAggressivenessV2(
     0,
     1,
   );
-  const foodSecurity = clamp(player.foodSecurity, 0, 1);
   return round(clamp(
     4
       + 55 * clamp(content.nations[playerId]?.ambition ?? 0.30, 0, 1)
       + 8 * powerConfidence
       + 9 * armyReadiness
       + 5 * cashReadiness
-      + 4 * condition
-      + 3 * foodSecurity
+      + 7
       + 18 * recentMilitaryActivity
       - 20 * fatigue
       - 8 * frontLoad,
@@ -2193,9 +2498,9 @@ export function selectResearchOutputV2(
     * selectResearchInstitutionalCapacityV2(state, content, playerId)
     * (catchUpOverride ?? selectResearchCatchUpFactorV2(state, content, playerId))
     * nationalAiEfficiencyV2(selectNationalIqViewV2(state, content, playerId).score)
-    * (1 - finance.warResearchPenalty)
-    * (0.55 + 0.45 * clamp(nation.foodSecurity, 0, 1));
-  return round(output * countryTraitFactorV2(
+    * (1 - finance.warResearchPenalty);
+  return round(output * selectNorthPoleModifiersV2(state, playerId).researchOutputMultiplier
+    * countryTraitFactorV2(
     playerId,
     'research-output',
     nationContextOverride ?? traitNationContextV2(state, playerId),
@@ -2243,7 +2548,6 @@ interface NationalAiPlanSelectorInputsV2 {
   army: TotalManpowerV2;
   territories: readonly TerritoryViewV2[];
   economy: NationalEconomyV2;
-  foodDemand: number;
   populationTrend: PopulationDynamicsV2;
   activeWarCount: number;
   iqScore: number;
@@ -2261,40 +2565,32 @@ export function selectNationalAiPlanV2(
   if (!nation) throw new Error(`Unknown nation ${playerId}.`);
   const army = selectorInputs?.army ?? selectTotalManpowerV2(state, playerId);
   const territories = selectorInputs?.territories ?? selectTerritoriesOfV2(state, playerId);
-  const averageCondition = territories.length > 0
-    ? territories.reduce((sum, territory) => sum + territory.condition, 0) / territories.length : 0;
   const breakthroughs = Object.values(nation.research.breakthroughs).reduce((sum, value) => sum + value, 0);
   const economy = selectorInputs?.economy ?? selectNationalEconomyV2(state, content, playerId);
-  const foodDemand = selectorInputs?.foodDemand
-    ?? Math.max(0.01, selectFoodDemandV2(state, playerId));
   const populationTrend = selectorInputs?.populationTrend
     ?? selectPopulationDynamicsV2(state, content, playerId, 0);
   return optimizeNationalAiPlanV2({
     intent: intentOverride ?? nation.budget,
     activeWars: selectorInputs?.activeWarCount ?? selectWarsOfV2(state, playerId).length,
     fillRatio: army.capacity > 0 ? clamp(army.deployed / army.capacity, 0, 1) : 0,
-    averageCondition,
     researchGap: Math.max(0, powerSnapshot.leaderBreakthroughs - breakthroughs),
     treasuryWeeks: nation.treasury / Math.max(0.001, economy.weeklyRevenue),
-    foodSecurity: nation.foodSecurity,
     populationGrowthRate: populationTrend.annualNetRate,
-    foodReserveWeeks: nation.foodStock / foodDemand,
     iqScore: selectorInputs?.iqScore ?? selectNationalIqViewV2(state, content, playerId).score,
   });
 }
 
 /**
  * National investment is later distributed across every live owned economy.
- * Weighting its trait factor over those same territories lets an existing
- * local condition scope (for example condition below 80%) affect only its
- * share, without ever consulting absorbed owners or stacking their traits.
+ * Weighting its trait factor over those same territories keeps terrain and
+ * homeland scopes local without consulting absorbed owners or stacking traits.
  */
 function developmentEconomyGrowthTraitFactorV2(
   state: WorldStateV2,
   content: WorldContentV2,
   playerId: PlayerId,
 ): number {
-  const territories = selectTerritoriesOfV2(state, playerId);
+  const territories = selectProductionTerritoriesOfV2(state, playerId);
   const nationContext = traitNationContextV2(state, playerId);
   if (territories.length === 0) {
     return countryTraitFactorV2(playerId, 'development-economy-growth', nationContext);
@@ -2322,7 +2618,6 @@ function economicGrowthRatesV2(
   playerId: PlayerId,
   economy: NationalEconomyV2,
   productiveInvestment: number,
-  foodCoverage: number,
   aiEfficiency: number,
   warGrowthDrag: number,
 ): {
@@ -2351,11 +2646,7 @@ function economicGrowthRatesV2(
   const investment = rawInvestment * iqGrowthMultiplier
     * developmentEconomyGrowthTraitFactorV2(state, content, playerId);
   const research = rawResearch * iqGrowthMultiplier;
-  const food = foodCoverage >= 0.98
-    ? ECONOMY_FOOD_SURPLUS_MAX_BONUS * clamp((foodCoverage - 0.98) / 0.02, 0, 1)
-    : -ECONOMY_FOOD_SHORTAGE_MAX_DRAG
-      * clamp((0.90 - foodCoverage) / 0.50, 0, 1) ** 1.25;
-  const territories = selectTerritoriesOfV2(state, playerId);
+  const territories = selectProductionTerritoriesOfV2(state, playerId);
   const terrainWeight = territories.reduce((sum, territory) => (
     sum + Math.max(0.000001, territory.economy)
   ), 0);
@@ -2366,12 +2657,13 @@ function economicGrowthRatesV2(
   return {
     // Terrain is projected before the canonical national bounds. The commit
     // phase consumes this one final rate, so visible and applied growth agree.
-    annual: clamp(base + investment + research + food + terrain - warGrowthDrag,
+    annual: clamp(base + investment + research + terrain - warGrowthDrag,
       ECONOMY_ANNUAL_GROWTH_MIN, ECONOMY_ANNUAL_GROWTH_MAX),
     base,
     investment,
     research,
-    food,
+    // Retired DTO field retained for authenticated save/report compatibility.
+    food: 0,
   };
 }
 
@@ -2493,7 +2785,7 @@ export function selectWeeklyFinanceBreakdownV2(
   const nationTraitContext = traitNationContextV2(state, playerId);
   const budget = { ...(budgetOverride ?? nation.budget) };
   const economy = selectNationalEconomyV2(state, content, playerId);
-  const army = selectTotalManpowerV2(state, playerId);
+  const army = selectRecruitmentBaseManpowerV2(state, playerId);
   const paidDeployed = Math.max(
     0,
     army.deployed - selectOpeningArmyBonusRemainingV2(state, playerId),
@@ -2514,31 +2806,21 @@ export function selectWeeklyFinanceBreakdownV2(
   // Temporary opening capacity is operationally recruitable. Keep the
   // underlying paid capacity separately for standing-cap upkeep so the free
   // opening envelope itself does not acquire a hidden maintenance bill.
-  const recruitableArmyGap = Math.max(0, army.capacity - army.deployed);
+  const recruitmentArmy = selectRecruitmentBaseManpowerV2(state, playerId);
+  const recruitableArmyGap = Math.max(
+    0,
+    recruitmentArmy.capacity - recruitmentArmy.deployed,
+  );
   const warPressure = selectWarPressureV2(state, playerId);
   const activeWars = warPressure.fronts;
   const atWar = activeWars > 0;
   const territories = selectTerritoriesOfV2(state, playerId);
-  const baseFoodDemand = Math.max(0.01, selectFoodDemandV2(state, playerId));
-  const foodPlan = selectFoodPlanV2(
-    state,
-    content,
-    playerId,
-    baseFoodDemand,
-    economy,
-  );
-  const foodExportIncomeTraitFactor = countryTraitFactorV2(
-    playerId,
-    'food-export-income',
-    nationTraitContext,
-  );
   const iq = selectNationalIqViewV2(state, content, playerId);
   const populationTrend = selectPopulationDynamicsV2(
     state,
     content,
     playerId,
     0,
-    foodPlan.targetStock,
   );
   const aiPlan = selectNationalAiPlanV2(
     state,
@@ -2550,108 +2832,55 @@ export function selectWeeklyFinanceBreakdownV2(
       army,
       territories,
       economy,
-      foodDemand: baseFoodDemand,
       populationTrend,
       activeWarCount: activeWars,
       iqScore: iq.score,
     },
   );
-  const ownerIndex = territoryIndexV2(state).owned;
-  const activeObligations = state.ceasefireObligations
-    .filter((obligation) => state.tick > obligation.startsTick && state.tick <= obligation.expiresTick
-      && (ownerIndex.get(obligation.payerId)?.length ?? 0) > 0
-      && (ownerIndex.get(obligation.payeeId)?.length ?? 0) > 0);
-  // Peace contracts are sovereign obligations, not optional spending. The
-  // receiver gets the complete amount; a payer without liquidity borrows.
-  const ceasefireIncome = activeObligations
-    .filter((obligation) => obligation.payeeId === playerId)
-    .reduce((sum, obligation) => sum + obligation.weeklyCost, 0);
-  const ceasefirePayment = activeObligations
-    .filter((obligation) => obligation.payerId === playerId)
-    .reduce((sum, obligation) => sum + obligation.weeklyCost, 0);
+  // Retired compatibility fields remain in the finance DTO but are inert.
+  const ceasefireIncome = 0;
+  const ceasefirePayment = 0;
   const integrationCost = territories.reduce((sum, territory) => sum
       + (territory.integrationProgram?.annualCost ?? 0) / 52, 0);
-  const baseOperatingCost = economy.weeklyRevenue * selectBaseOperatingCostShareV2(state, playerId);
+  const apexContribution = selectCommanderWeeklyEmpireContributionV2(state, playerId);
+  const totalRecurringIncome = economy.weeklyRevenue + apexContribution;
+  const baseOperatingCost = economy.weeklyRevenue * selectBaseOperatingCostShareV2(
+    state,
+    playerId,
+    content,
+  );
   const recurringRevenueAfterMandatory = Math.max(
     0,
-    economy.weeklyRevenue + ceasefireIncome
+    totalRecurringIncome + ceasefireIncome
       - baseOperatingCost - ceasefirePayment - integrationCost,
   );
   // A negative treasury is debt, not the disappearance of the country's new
   // weekly revenue. Positive reserves can fund a surge; debt cannot.
-  const cashAfterRevenue = Math.max(0, nation.treasury) + economy.weeklyRevenue + ceasefireIncome;
-  const cashAfterMandatory = Math.max(
-    0,
-    cashAfterRevenue - ceasefirePayment - integrationCost - baseOperatingCost,
-  );
-  // Food remains first priority, but it cannot consume several years of a
-  // fragile country's public revenue in one week. Severe access crises may
-  // command up to 72% of weekly revenue; the resulting unmet need remains a
-  // real food shortage instead of silently draining all reserves and every
-  // other national system.
-  const foodFundingStress = clamp((0.98 - nation.foodSecurity) / 0.58, 0, 1);
-  const foodSystemInefficiency = clamp((1 - foodPlan.accessCeiling) / 0.35, 0, 1);
-  const foodReserveRatio = clamp(
-    nation.foodStock / Math.max(0.01, foodPlan.targetStock),
-    0,
-    1,
-  );
-  const foodReserveStress = 1 - foodReserveRatio;
-  const foodBudgetShare = clamp(
-    0.12 + 0.32 * foodSystemInefficiency + 0.25 * foodFundingStress
-      + 0.30 * foodReserveStress,
-    0.12,
-    0.78,
-  );
-  const ordinaryFoodAllowance = recurringRevenueAfterMandatory * foodBudgetShare;
-  const reserveWeeks = nation.foodStock / Math.max(0.01, foodPlan.demand);
-  const foodEmergency = reserveWeeks < 1 || nation.foodSecurity < 0.65;
-  const preventiveReserveDrawShare = foodEmergency ? 1
-    : smoothstep(0.15, 0.90, foodReserveStress);
-  // In a genuine food emergency the national cash reserve is a survival fund.
-  // It may bridge the remaining bill after normal weekly food funding, but it
-  // never borrows extra money or spends beyond the actual food request.
-  const emergencyReserveDraw = Math.min(
-    Math.max(0, nation.treasury),
-    Math.max(0, foodPlan.request - ordinaryFoodAllowance) * preventiveReserveDrawShare,
-  );
-  const foodSpendable = Math.min(
-    cashAfterMandatory,
-    ordinaryFoodAllowance + emergencyReserveDraw,
-  );
-  const ordinaryFoodProduction = Math.min(foodPlan.request, foodSpendable);
-  const ordinaryFood = fundFoodPlanV2(
-    nation,
-    foodPlan,
-    ordinaryFoodProduction,
-    foodExportIncomeTraitFactor,
-  );
-  // A healthy export receipt is ordinary public income and can finance the
-  // same week's national programs. Crisis transfers are resolved later and do
-  // not create a circular promise here; shortages cannot export in practice.
-  const discretionaryRevenue = Math.max(
-    0,
-    recurringRevenueAfterMandatory + ordinaryFood.foodExportIncome - ordinaryFoodProduction,
-  );
-  const treasuryWeeks = nation.treasury / Math.max(0.001, economy.weeklyRevenue);
+  const discretionaryRevenue = recurringRevenueAfterMandatory;
+  const treasuryWeeks = nation.treasury / Math.max(0.001, totalRecurringIncome);
   const debtPressure = debtPressureV2(treasuryWeeks);
   // Free cash is a strategic reserve rather than an invitation to buy sudden
   // one-off advantages. National IQ only improves the consistency of this
   // shared cash discipline; selection status never changes the rules.
-  const economyScale = clamp(Math.log10(economy.weeklyRevenue + 1) / 2, 0, 1);
+  const economyScale = clamp(Math.log10(totalRecurringIncome + 1) / 2, 0, 1);
   const treasuryPolicy = nationalAiTreasuryPolicyV2(
     iq.score,
     activeWars,
     economyScale,
   );
-  const reserveTarget = economy.weeklyRevenue * treasuryPolicy.reserveWeeks;
+  const reserveTarget = effectiveTreasuryReserveTargetV2(
+    totalRecurringIncome,
+    treasuryPolicy.reserveWeeks,
+    economy.controlledOutput + apexContribution * 52,
+  ).effectiveTarget;
   const excessCashInvestment = excessTreasuryInvestmentV2(
     nation.treasury,
-    economy.controlledOutput,
-    economy.weeklyRevenue,
+    economy.controlledOutput + apexContribution * 52,
+    totalRecurringIncome,
+    reserveTarget,
   ).weeklyDraw;
   const reserveProgress = clamp(
-    treasuryWeeks / Math.max(0.25, treasuryPolicy.reserveWeeks),
+    nation.treasury / Math.max(0.001, reserveTarget),
     0,
     1,
   );
@@ -2660,7 +2889,8 @@ export function selectWeeklyFinanceBreakdownV2(
     + (1.02 - disciplinedSpendingRate) * smoothstep(
       0,
       6,
-      Math.max(0, treasuryWeeks - treasuryPolicy.reserveWeeks),
+      Math.max(0, nation.treasury - reserveTarget)
+        / Math.max(0.001, totalRecurringIncome),
     );
   const debtProgramPenalty = (atWar
     ? DEBT_PROGRAM_PENALTY_WAR_RECOVERY : DEBT_PROGRAM_PENALTY_PEACE_RECOVERY)
@@ -2670,7 +2900,7 @@ export function selectWeeklyFinanceBreakdownV2(
       * debtPressure.critical;
   const envelopeRate = debtPressure.debtWeeks > 0
     // A one-week overdraft keeps the ordinary disciplined envelope. Deeper
-    // debt then contracts every existing programme smoothly while treaty and
+    // debt then contracts every existing programme smoothly while active
     // integration obligations continue to consume real national revenue.
     ? clamp(
       disciplinedSpendingRate - debtProgramPenalty,
@@ -2722,8 +2952,10 @@ export function selectWeeklyFinanceBreakdownV2(
       nationTraitContext,
     );
   const trainedReserveCapacity = selectTrainedReserveCapacityV2(state, playerId);
-  const recruitmentSystemNeedsFunding = recruitableArmyGap > 0.000000001
-    || nation.trainedReserves < trainedReserveCapacity - 0.000000001;
+  const recruitmentSystemNeedsFunding = !atWar && (
+    recruitableArmyGap > 0.000000001
+      || nation.trainedReserves < trainedReserveCapacity - 0.000000001
+  );
   // Ordinary revenue uses the persisted budget exactly. A GDP-scale cash
   // surplus may supplement only real military needs before its remainder is
   // routed into productive research and development below.
@@ -2742,18 +2974,18 @@ export function selectWeeklyFinanceBreakdownV2(
   const baseMandatoryFundingRatio = mandatoryRequest > 0
     ? clamp(baseMandatoryFunded / mandatoryRequest, 0, 1)
     : 1;
-  // Once ordinary upkeep is complete, genuine cash above the national reserve
-  // target may fund a smooth, expensive readiness surge. This is an extra
-  // recurring bill rather than reusable recruitment money.
+  // Once ordinary upkeep is complete, the shared excess-cash envelope may
+  // fund a smooth readiness surge. Drawing from that one envelope prevents
+  // the same national surplus being counted again for research/development.
   const upkeepFundingTarget = baseMandatoryFundingRatio >= 0.999999
     && recruitmentSystemNeedsFunding
-    ? upkeepFundingTargetRatioV2(nation.treasury, reserveTarget, economy.weeklyRevenue)
+    ? upkeepFundingTargetRatioV2(nation.treasury, reserveTarget, totalRecurringIncome)
     : baseMandatoryFundingRatio;
   const upkeepOverfunding = mandatoryRequest > 0
     && baseMandatoryFundingRatio >= 0.999999
     && recruitmentSystemNeedsFunding
     ? Math.min(
-      Math.max(0, nation.treasury - reserveTarget),
+      excessCashRemaining,
       mandatoryRequest * Math.max(0, upkeepFundingTarget - 1),
     )
     : 0;
@@ -2763,6 +2995,7 @@ export function selectWeeklyFinanceBreakdownV2(
     : 1;
   let remainingMilitary = Math.max(0, military - baseMandatoryFunded);
   military += upkeepOverfunding;
+  excessCashRemaining -= upkeepOverfunding;
   const passiveRecruitmentRequest = selectRecruitmentThroughputV2(state, content, playerId, powerSnapshot);
   const fundedPassiveCapacity = Math.min(
     recruitableArmyGap,
@@ -2770,15 +3003,67 @@ export function selectWeeklyFinanceBreakdownV2(
   );
   const trainingPipeline = selectRecruitmentTrainingPipelineV2(state, content, playerId);
   const recruitmentUnitCost = selectRecruitmentUnitCostV2(state, playerId, content);
+  const reserveTrainingLevel = diminishingResearchLevelV2(
+    nation.research.effectLevels['reserve-training'],
+    RESERVE_TRAINING_RESEARCH_EFFECTIVE_CEILING,
+    RESERVE_TRAINING_RESEARCH_HALF_SATURATION,
+  );
+  const apexReplenishment = selectApexEmpireReplenishmentModifiersV2(state, playerId);
+  const countryMasteryReplenishment = selectCountryMasteryReplenishmentRuntimeV2(
+    state,
+    content,
+    playerId,
+    selectProductionTerritoriesOfV2(state, playerId).map((territory) => territory.id),
+  );
+  // The gross training pipeline already carries APEX active instruction. Use
+  // only the reserve/active ratio here so reserve training reaches its exact
+  // total APEX multiplier without double-applying that shared contribution.
+  const reserveTrainingMultiplier = (
+    1 + RESERVE_TRAINING_RESEARCH_BONUS_PER_EFFECTIVE_LEVEL * reserveTrainingLevel
+  ) * apexReplenishment.reserveTrainingMultiplier
+    / apexReplenishment.recruitmentMultiplier
+    * countryMasteryReplenishment.reserveTrainingMultiplier
+    / countryMasteryReplenishment.recruitmentMultiplier;
+  const reserveTrainingTraitFactor = countryTraitFactorV2(
+    playerId,
+    'reserve-training',
+    nationTraitContext,
+  );
+  const reserveTrainingCostPerUnit = recruitmentUnitCost * TRAINED_RESERVE_TRAINING_COST_MULTIPLIER;
+  const reserveRoomBeforeDeployment = Math.max(0, trainedReserveCapacity - nation.trainedReserves);
+  const anticipatedWartimeReserveRoom = 0;
+  const protectedReserveTrainingRequest = Math.min(
+    reserveRoomBeforeDeployment + anticipatedWartimeReserveRoom,
+    trainingPipeline * mandatoryFundingRatio
+      * (atWar
+        ? TRAINED_RESERVE_WARTIME_TRAINING_FACTOR
+        : TRAINED_RESERVE_PEACETIME_BASE_TRICKLE_FACTOR)
+      * reserveTrainingMultiplier
+      * reserveTrainingTraitFactor,
+  );
+  const protectedReserveTrainingCostRequest = protectedReserveTrainingRequest
+    * reserveTrainingCostPerUnit;
+  // Preserve the slow reserve pipeline before accelerated active recruitment.
+  // Any ultimately unused protection remains ordinary standing operations, so
+  // this ordering never invents expenditure or manpower.
+  const excessProtectedReserveTraining = mandatoryFundingRatio >= 0.999999 ? Math.min(
+    excessCashRemaining,
+    Math.max(0, protectedReserveTrainingCostRequest - remainingMilitary),
+  ) : 0;
+  military += excessProtectedReserveTraining;
+  remainingMilitary += excessProtectedReserveTraining;
+  excessCashRemaining -= excessProtectedReserveTraining;
+  const protectedReserveTrainingFunds = mandatoryFundingRatio >= 0.999999
+    ? Math.min(remainingMilitary, protectedReserveTrainingCostRequest)
+    : 0;
+  remainingMilitary = Math.max(0, remainingMilitary - protectedReserveTrainingFunds);
   const fillRatio = army.capacity > 0 ? army.deployed / army.capacity : 0;
   const accelerationNeed = atWar
-    ? clamp((0.90 - fillRatio) / 0.45, 0, 1)
+    ? 0
     : clamp((AI_HEALTHY_ARMY_TARGET - fillRatio) / 0.50, 0, 1);
-  const accelerationMultiplier = atWar
-    ? WAR_RECRUITMENT_ACCELERATION_MULTIPLIER : PEACE_RECRUITMENT_ACCELERATION_MULTIPLIER;
-  const accelerationCostMultiplier = atWar
-    ? WAR_RECRUITMENT_ACCELERATION_COST_MULTIPLIER : PEACE_RECRUITMENT_ACCELERATION_COST_MULTIPLIER;
-  const acceleratedRecruitmentRequest = Math.min(
+  const accelerationMultiplier = PEACE_RECRUITMENT_ACCELERATION_MULTIPLIER;
+  const accelerationCostMultiplier = PEACE_RECRUITMENT_ACCELERATION_COST_MULTIPLIER;
+  const acceleratedRecruitmentRequest = atWar ? 0 : Math.min(
     Math.max(0, recruitableArmyGap - fundedPassiveCapacity),
     trainingPipeline * accelerationMultiplier * accelerationNeed
       * countryTraitFactorV2(
@@ -2800,8 +3085,9 @@ export function selectWeeklyFinanceBreakdownV2(
   const affordableAcceleratedRecruitment = recruitmentUnitCost > 0
     ? affordableRecruitmentCost / (recruitmentUnitCost * accelerationCostMultiplier) : 0;
   // Peace creates new active soldiers first. War does not: the finite trained
-  // pool supplies replacements. Existing reservists can mobilise faster than
-  // fresh soldiers can be trained, without creating a second manpower source.
+  // pool may only be transferred into field formations. This mobilization is
+  // bounded by funded upkeep, but carries no training or recruitment bill and
+  // conserves deployed + reserve manpower exactly.
   const reserveMobilizationLevel = diminishingResearchLevelV2(
     nation.research.effectLevels['reserve-mobilization'],
     RESERVE_MOBILIZATION_RESEARCH_EFFECTIVE_CEILING,
@@ -2817,74 +3103,56 @@ export function selectWeeklyFinanceBreakdownV2(
     );
   const passiveRecruitment = atWar ? 0 : fundedPassiveCapacity;
   const acceleratedRecruitment = atWar ? 0 : affordableAcceleratedRecruitment;
+  const reserveMobilizationBase = army.capacity
+    * PASSIVE_RECRUITMENT_CAPACITY_RATE
+    * clamp(
+      (RECRUITMENT_SIZE_REFERENCE_CAPACITY / Math.max(0.000001, army.capacity))
+        ** RECRUITMENT_SIZE_SCALING_EXPONENT,
+      RECRUITMENT_SIZE_SPEED_MIN,
+      RECRUITMENT_SIZE_SPEED_MAX,
+    );
   const reservePassiveDeployment = atWar ? Math.min(
     nation.trainedReserves,
     recruitableArmyGap,
-    fundedPassiveCapacity * reserveDeploymentThroughput,
+    reserveMobilizationBase * mandatoryFundingRatio * reserveDeploymentThroughput,
   ) : 0;
-  const reserveAcceleratedDeployment = atWar ? Math.min(
-    Math.max(0, nation.trainedReserves - reservePassiveDeployment),
-    Math.max(0, recruitableArmyGap - reservePassiveDeployment),
-    affordableAcceleratedRecruitment * reserveDeploymentThroughput,
-  ) : 0;
+  const reserveAcceleratedDeployment = 0;
   const reserveDeployment = reservePassiveDeployment + reserveAcceleratedDeployment;
-  const recruitment = atWar
-    ? reserveAcceleratedDeployment
-      / reserveDeploymentThroughput
-      * recruitmentUnitCost * accelerationCostMultiplier
-    : affordableRecruitmentCost;
+  const recruitment = atWar ? 0 : affordableRecruitmentCost;
   const reserveRoomAfterDeployment = Math.max(
     0,
     trainedReserveCapacity - (nation.trainedReserves - reserveDeployment),
   );
   const deployedAfterFinanceRecruitment = army.deployed
     + passiveRecruitment + acceleratedRecruitment + reserveDeployment;
-  const activeReadyForReserve = activeArmyReadyForReserveTrainingV2(
-    deployedAfterFinanceRecruitment,
-    army.capacity,
-  );
   const activeFillAfterRecruitment = army.capacity > 0
     ? deployedAfterFinanceRecruitment / army.capacity
     : 0;
-  const peacetimeReservePipelineShare = activeReadyForReserve
-    ? TRAINED_RESERVE_PEACETIME_TRICKLE_FACTOR
-      + (1 - TRAINED_RESERVE_PEACETIME_TRICKLE_FACTOR) * clamp(
-        (activeFillAfterRecruitment - TRAINED_RESERVE_ACTIVE_READY_RATIO)
-          / Math.max(0.000001, 1 - TRAINED_RESERVE_ACTIVE_READY_RATIO),
-        0,
-        1,
-      )
-    : 0;
-  const reserveTrainingLevel = diminishingResearchLevelV2(
-    nation.research.effectLevels['reserve-training'],
-    RESERVE_TRAINING_RESEARCH_EFFECTIVE_CEILING,
-    RESERVE_TRAINING_RESEARCH_HALF_SATURATION,
+  const peacetimeReservePipelineShare = peacetimeReserveTrainingPipelineShareV2(
+    activeFillAfterRecruitment,
   );
-  const reserveTrainingMultiplier = 1
-    + RESERVE_TRAINING_RESEARCH_BONUS_PER_EFFECTIVE_LEVEL * reserveTrainingLevel;
-  const reserveTrainingRequest = (atWar || activeReadyForReserve)
-    ? trainingPipeline * mandatoryFundingRatio
-      * (atWar ? TRAINED_RESERVE_WARTIME_TRAINING_FACTOR : peacetimeReservePipelineShare)
-      * reserveTrainingMultiplier
-      * countryTraitFactorV2(
-        playerId,
-        'reserve-training',
-        nationTraitContext,
-      )
-    : 0;
-  const reserveTrainingCostPerUnit = recruitmentUnitCost * TRAINED_RESERVE_TRAINING_COST_MULTIPLIER;
+  const reserveTrainingRequest = trainingPipeline * mandatoryFundingRatio
+    * (atWar ? TRAINED_RESERVE_WARTIME_TRAINING_FACTOR : peacetimeReservePipelineShare)
+    * reserveTrainingMultiplier
+    * reserveTrainingTraitFactor;
   const reserveTrainingCostRequest = Math.min(
     reserveRoomAfterDeployment,
     reserveTrainingRequest,
   ) * reserveTrainingCostPerUnit;
   const excessReserveTraining = mandatoryFundingRatio >= 0.999999 ? Math.min(
     excessCashRemaining,
-    Math.max(0, reserveTrainingCostRequest - Math.max(0, remainingMilitary - recruitment)),
+    Math.max(
+      0,
+      reserveTrainingCostRequest
+        - protectedReserveTrainingFunds
+        - Math.max(0, remainingMilitary - recruitment),
+    ),
   ) : 0;
   military += excessReserveTraining;
   remainingMilitary += excessReserveTraining;
   excessCashRemaining -= excessReserveTraining;
-  const reserveTrainingFunds = Math.max(0, remainingMilitary - recruitment);
+  const reserveTrainingFunds = protectedReserveTrainingFunds
+    + Math.max(0, remainingMilitary - recruitment);
   const reserveTraining = mandatoryFundingRatio >= 0.999999 && reserveTrainingCostPerUnit > 0
     ? Math.min(
       reserveRoomAfterDeployment,
@@ -2897,8 +3165,7 @@ export function selectWeeklyFinanceBreakdownV2(
     Math.max(0, nation.trainedReserves - reserveDeployment + reserveTraining),
   );
   // Once genuine readiness needs are covered, all remaining surplus goes to
-  // programmes that always create durable output. Development retains its
-  // existing repair-first and food-emergency redirection behavior.
+  // programmes that always create durable output.
   const nonMilitaryBudget = budget.research + budget.development;
   const excessResearchShare = clamp(
     nonMilitaryBudget > 0 ? budget.research / nonMilitaryBudget : 0.45,
@@ -2907,49 +3174,17 @@ export function selectWeeklyFinanceBreakdownV2(
   );
   const excessResearch = excessCashRemaining * excessResearchShare;
   const excessDevelopment = excessCashRemaining - excessResearch;
-  // Research remains fully financed in food crises because its logistics,
-  // medicine and economy programs are the durable route out of shortages.
   const research = envelope * budget.research / 100 + excessResearch;
   const plannedDevelopment = envelope * budget.development / 100 + excessDevelopment;
-  const foodDevelopmentRedirect = redirectDevelopmentFundingToFoodV2({
-    baseBudget: budget,
-    plannedDevelopment,
-    foodFundingGap: foodPlan.request - ordinaryFoodProduction,
-    foodCoverage: ordinaryFood.foodCoverage,
-    foodReserveWeeks: reserveWeeks,
-    foodStockChange: ordinaryFood.foodStockChange,
-    foodDemand: foodPlan.demand,
-    iqScore: iq.score,
-  });
-  const development = foodDevelopmentRedirect.development;
-  const foodDevelopmentTransfer = foodDevelopmentRedirect.transfer;
-  const fundedFood = fundFoodPlanV2(
-    nation,
-    foodPlan,
-    ordinaryFoodProduction + foodDevelopmentTransfer,
-    foodExportIncomeTraitFactor,
-  );
-  const {
-    foodProduction,
-    foodProduced,
-    foodDomesticProduced,
-    foodImported,
-    foodExported,
-    foodExportIncome,
-    foodConsumed,
-    foodCoverage,
-    foodStockChange,
-  } = fundedFood;
+  const development = plannedDevelopment;
   const standingOperations = Math.max(
     0,
     military - mandatoryFunded - recruitment - reserveTrainingCost,
   );
-  const catastrophicFoodCrisis = foodCoverage < EXTREME_CRISIS_FOOD_COVERAGE
-    && reserveWeeks < EXTREME_CRISIS_FOOD_RESERVE_WEEKS;
   const catastrophicDebtCrisis = treasuryWeeks < -AI_SEVERE_DEBT_REVENUE_WEEKS;
   const shouldDemobilize = !atWar
     && mandatoryFundingRatio <= EXTREME_CRISIS_MAX_UPKEEP_FUNDING
-    && (catastrophicFoodCrisis || catastrophicDebtCrisis);
+    && catastrophicDebtCrisis;
   // This legacy-named telemetry field now represents the only permitted force
   // reduction: at most 0.05% per week in an extreme survival crisis.
   const acceleratedDemobilization = shouldDemobilize
@@ -2959,26 +3194,20 @@ export function selectWeeklyFinanceBreakdownV2(
         - army.capacity * EXTREME_CRISIS_HOME_GUARD_CAPACITY_SHARE),
     ), 9) : 0;
   const demobilizationCost = 0;
-  const conditionRequest = territories
-    .reduce((sum, territory) => sum + (1 - territory.condition) * 0.20, 0);
-  const productiveDevelopment = development;
-  const condition = Math.min(productiveDevelopment, conditionRequest);
-  const developmentRemainder = Math.max(0, productiveDevelopment - condition);
-  const economyGrowth = developmentRemainder * 0.70;
-  const populationGrowth = developmentRemainder * 0.30;
+  const economyGrowth = development * 0.70;
+  const populationGrowth = development * 0.30;
   const growthRates = economicGrowthRatesV2(
     state,
     content,
     playerId,
     economy,
     economyGrowth,
-    foodCoverage,
     aiPlan.efficiency,
     warPressure.economyGrowthDrag,
   );
-  const actuallySpent = baseOperatingCost + ceasefirePayment + integrationCost + foodProduction
+  const actuallySpent = baseOperatingCost + ceasefirePayment + integrationCost
     + military + research + development + warOperations;
-  const operatingNet = economy.weeklyRevenue + ceasefireIncome + foodExportIncome - actuallySpent;
+  const operatingNet = totalRecurringIncome + ceasefireIncome - actuallySpent;
   const prePremiumTreasury = nation.treasury + operatingNet;
   const debtBefore = Math.max(0, -nation.treasury);
   const debtAfterBeforePremium = Math.max(0, -prePremiumTreasury);
@@ -2998,37 +3227,35 @@ export function selectWeeklyFinanceBreakdownV2(
   // a final successful repayment never reopens a microscopic balance.
   const oldDebtRemaining = Math.min(debtBefore, debtAfterBeforePremium);
   const carryingPremium = Math.min(
-    economy.weeklyRevenue * DEBT_CARRYING_PREMIUM_MAX_REVENUE_SHARE,
+    totalRecurringIncome * DEBT_CARRYING_PREMIUM_MAX_REVENUE_SHARE,
     oldDebtRemaining * carryingPremiumRate,
   );
   const debtPremium = newBorrowing * DEBT_NEW_BORROWING_PREMIUM + carryingPremium;
   const closingTreasury = prePremiumTreasury - debtPremium;
   return roundedFinanceV2({
-    activeBudget: { ...foodDevelopmentRedirect.activeBudget },
+    activeBudget: { ...budget },
     aiMode: aiPlan.mode,
     aiEfficiency: aiPlan.efficiency,
     revenue: economy.weeklyRevenue,
-    foodDemand: foodPlan.demand,
-    foodLandCapacity: foodPlan.landCapacity,
-    foodStorageCapacity: foodPlan.storageCapacity,
-    foodAccessCeiling: foodPlan.accessCeiling,
-    foodProduced,
-    foodDomesticProduced,
-    foodImported,
-    foodExported,
-    foodExportIncome,
-    foodConsumed,
-    // Negative means either supply is structurally below demand or the food
-    // network cannot reach everyone. Positive is reserved for a real increase
-    // in stored reserves, so an empty warehouse can never hide famine as zero.
-    foodBalance: foodCoverage < 0.999999
-      ? foodConsumed - foodPlan.demand
-      : foodStockChange,
-    foodStockChange,
-    foodProduction,
-    foodDevelopmentTransfer,
-    foodCoverage,
-    foodTargetStock: foodPlan.targetStock,
+    apexContribution,
+    // Retained as neutral wire/save sentinels until the next schema break.
+    apexFoodContribution: 0,
+    foodDemand: 0,
+    foodLandCapacity: 0,
+    foodStorageCapacity: 0,
+    foodAccessCeiling: 1,
+    foodProduced: 0,
+    foodDomesticProduced: 0,
+    foodImported: 0,
+    foodExported: 0,
+    foodExportIncome: 0,
+    foodConsumed: 0,
+    foodBalance: 0,
+    foodStockChange: 0,
+    foodProduction: 0,
+    foodDevelopmentTransfer: 0,
+    foodCoverage: 1,
+    foodTargetStock: 0,
     ceasefirePayment,
     ceasefireIncome,
     integrationCost,
@@ -3056,7 +3283,6 @@ export function selectWeeklyFinanceBreakdownV2(
     acceleratedDemobilization,
     demobilizationCost,
     standingOperations,
-    condition,
     economyGrowth,
     annualEconomyGrowthRate: growthRates.annual,
     economyBaseGrowthRate: growthRates.base,
@@ -3070,13 +3296,12 @@ export function selectWeeklyFinanceBreakdownV2(
     reserveTarget,
     mandatoryFundingRatio,
     recruitmentFundingRatio: recruitmentRequest > 0 ? recruitment / recruitmentRequest : 1,
-    conditionFundingRatio: conditionRequest > 0 ? condition / conditionRequest : 1,
     warEconomicPenalty: warPressure.outputPenalty,
     warEconomyGrowthDrag: warPressure.economyGrowthDrag,
     warPopulationDrag: warPressure.populationGrowthDrag,
     warResearchPenalty: warPressure.researchPenalty,
     mode: atWar ? 'war' : nation.treasury <= 0.000001 ? 'insolvent'
-      : nation.treasury < economy.weeklyRevenue * treasuryPolicy.reserveWeeks ? 'conserving' : 'normal',
+      : nation.treasury < reserveTarget ? 'conserving' : 'normal',
   });
 }
 
@@ -3150,7 +3375,7 @@ export function projectFinanceManpowerPhaseV2(
     trainedReservesBefore: 0, trainedReservesAfter: 0,
     reserveTrained: 0, reserveDeployed: 0,
   };
-  const current = selectTerritoriesOfV2(state, playerId).map((view) => {
+  const current = selectProductionTerritoriesOfV2(state, playerId).map((view) => {
     const army = state.territories[view.id]!.army;
     return {
       id: view.id,
@@ -3258,7 +3483,7 @@ export function selectWeeklyManpowerProjectionV2(
   playerId: PlayerId,
 ): WeeklyManpowerProjectionV2 {
   // WorldEngine advances the calendar before it creates the next finance
-  // plan. Forecast against that exact tick so treaty start/end boundaries do
+  // plan. Forecast against that exact tick so weekly programme boundaries do
   // not create a one-week mismatch in the header.
   const deployedBefore = selectTotalManpowerV2(state, playerId).deployed;
   // The authoritative step retires the temporary opening entitlement before
@@ -3279,6 +3504,7 @@ export function selectWeeklyManpowerProjectionV2(
       }])) as Record<TerritoryId, TerritoryStateV2>,
   };
   processOpeningArmyBonusDecayV2(financeState, content);
+  synchronizeArmyCapacityV2(financeState, content);
   const powerSnapshot = createPowerSnapshotV2(financeState, content);
   const finance = selectWeeklyFinanceBreakdownV2(financeState, content, playerId, powerSnapshot);
   const phase = projectFinanceManpowerPhaseV2(financeState, content, playerId, finance);
@@ -3318,14 +3544,12 @@ export function selectWeeklyPopulationTrendV2(state: WorldStateV2, content: Worl
  * Explicit demographic accounting. The source population-growth input is net
  * of normal deaths, so the calibrated birth estimate reconstructs it by adding
  * the separate crude death rate. There is no cross-border migration system.
- * Crisis mortality is then added once to avoid double-counting deaths.
  */
 export function selectPopulationDynamicsV2(
   state: WorldStateV2,
   content: WorldContentV2,
   playerId: PlayerId,
   populationGrowthFunding?: number,
-  foodTargetStockOverride?: number,
 ): PopulationDynamicsV2 {
   const nation = state.players[playerId];
   if (!nation) return {
@@ -3348,14 +3572,9 @@ export function selectPopulationDynamicsV2(
   const baselineDeathRate = owned.reduce((sum, territory) => sum
     + (content.territories[territory.id]?.baseline.deathRatePerThousand ?? 8) / 1_000 * territory.population, 0)
     / Math.max(0.01, population);
-  const averageCondition = owned.reduce((sum, territory) => sum + territory.condition * territory.population, 0)
-    / Math.max(0.01, population);
   const level = nation.research.effectLevels['population-growth'];
   const impact = selectResearchEffectImpactV2(state, content, playerId, 'population-growth');
   const warPressure = selectWarPressureV2(state, playerId);
-  // Views use this week's projected access immediately; the canonical economy
-  // phase stores the same value before applying population change.
-  const foodSecurity = clamp(projectedFinance?.foodCoverage ?? nation.foodSecurity, 0, 1);
   const researchedNet = baselineNetRate >= 0
     ? baselineNetRate * (1 + 0.005 * level * impact)
     : baselineNetRate * (1 - 0.004 * level * impact);
@@ -3383,22 +3602,7 @@ export function selectPopulationDynamicsV2(
   );
   const medicalReduction = 0.20 * nation.research.effectLevels.recovery
     / (nation.research.effectLevels.recovery + 46.67);
-  const foodCrisis = clamp((0.90 - foodSecurity) / 0.50, 0, 1);
-  const foodTargetStock = foodTargetStockOverride
-    ?? selectFoodCapacityPlanV2(state, content, playerId).targetStock;
-  const foodReserveShare = nation.foodStock / Math.max(0.01, foodTargetStock);
-  const depletedReserve = clamp(
-    (FOOD_MORTALITY_RESERVE_START_SHARE - foodReserveShare)
-      / FOOD_MORTALITY_RESERVE_START_SHARE,
-    0,
-    1,
-  );
-  const acuteShortage = clamp((0.95 - foodSecurity) / 0.45, 0, 1);
-  const foodMortality = FOOD_SHORTAGE_POPULATION_LOSS * 52 * foodCrisis
-    + FOOD_EMPTY_RESERVE_ANNUAL_MORTALITY_MAX * depletedReserve * acuteShortage;
-  const conditionMortality = Math.max(0, 0.65 - averageCondition) * 0.015;
-  const annualDeathRate = Math.max(0,
-    baselineDeathRate * (1 - medicalReduction) + foodMortality + conditionMortality);
+  const annualDeathRate = Math.max(0, baselineDeathRate * (1 - medicalReduction));
   const annualWarPenaltyRate = Math.max(0, warPressure.populationGrowthDrag);
   const annualNetRate = clamp(
     annualBirthRate - annualDeathRate - annualWarPenaltyRate,
@@ -3436,7 +3640,7 @@ export function selectConquestForecastV2(
       * selectTreasurySeizureShareV2(state, targetId)),
     inheritedEnemyManpower: 0,
     asOfTick: state.tick,
-    assumptions: ['10% initial integration', '15–~204 year immutable size curve', 'conquest guard transferred from attacker', `${round(selectTreasurySeizureShareV2(state, targetId) * 100, 3)}% treasury only on final elimination`, 'no enemy manpower inheritance'],
+    assumptions: ['10% initial integration', '1–6 year immutable Signal Purge calendar', 'conquest guard transferred from attacker', `${round(selectTreasurySeizureShareV2(state, targetId) * 100, 3)}% treasury only on final elimination`, 'no enemy manpower inheritance'],
   };
 }
 
@@ -3491,7 +3695,9 @@ export function selectGlobalRankingV2(
   content: WorldContentV2,
   powerSnapshot: PowerSnapshotV2 = createPowerSnapshotV2(state, content),
 ): RankingEntryV2[] {
-  return sortedNationIdsV2(state).filter((id) => !selectIsEliminatedV2(state, id)).map((id) => {
+  return sortedNationIdsV2(state).filter((id) => (
+    !selectIsEliminatedV2(state, id) && isNationOperationalV2(state, content, id)
+  )).map((id) => {
     const combatPower = powerSnapshot.byNation.get(id) ?? 0;
     const economicOutput = selectNationalEconomyV2(state, content, id).controlledOutput;
     return {
@@ -3504,18 +3710,12 @@ export function selectGlobalRankingV2(
 }
 
 export function selectWarAccessTypeV2(state: WorldStateV2, content: WorldContentV2, attackerId: PlayerId, defenderId: PlayerId): WarAccessV2 {
-  let naval = false;
-  const sources = selectTerritoriesOfV2(state, attackerId);
-  const targets = selectTerritoriesOfV2(state, defenderId);
-  for (const source of sources) {
-    for (const connection of content.territories[source.id]?.connections ?? []) {
-      if (state.territories[connection.targetId]?.owner !== defenderId) continue;
-      if (connection.kind === 'land') return 'land';
-      naval = true;
-    }
-  }
-  if (naval) return 'naval';
-  return 'none';
+  return selectBestCoopMilitaryAccessRouteV2(
+    state,
+    content,
+    attackerId,
+    defenderId,
+  )?.access ?? 'none';
 }
 
 /** Cheapest direct access between two individual territories. */
@@ -3554,6 +3754,27 @@ export function selectWarOperationV2(state: WorldStateV2, warId: string, command
   return selectWarOperationsV2(state, warId, commanderId)[0];
 }
 
+/** One opponent pair is one front, even for an unnormalized legacy fixture. */
+export function selectCanonicalWarFrontV2(
+  war: Pick<WarStateV2, 'attackerOperations' | 'defenderOperations'>,
+): FrontOperationV2 | undefined {
+  return [...war.attackerOperations, ...war.defenderOperations]
+    .sort((left, right) => (
+      Number(right.access === 'land') - Number(left.access === 'land')
+      || right.momentum - left.momentum
+      || left.commanderId.localeCompare(right.commanderId)
+      || left.sourceId.localeCompare(right.sourceId)
+      || left.targetId.localeCompare(right.targetId)
+    ))[0];
+}
+
+export function selectCanonicalWarFrontsV2(
+  war: Pick<WarStateV2, 'attackerOperations' | 'defenderOperations'>,
+): readonly FrontOperationV2[] {
+  const operation = selectCanonicalWarFrontV2(war);
+  return operation ? [operation] : [];
+}
+
 export function selectWarOperationsV2(
   state: WorldStateV2,
   warId: string,
@@ -3561,8 +3782,8 @@ export function selectWarOperationsV2(
 ): readonly FrontOperationV2[] {
   const war = state.wars.find((candidate) => candidate.id === warId);
   if (!war) return [];
-  return war.attackerId === commanderId ? war.attackerOperations
-    : war.defenderId === commanderId ? war.defenderOperations : [];
+  if (war.attackerId !== commanderId && war.defenderId !== commanderId) return [];
+  return selectCanonicalWarFrontsV2(war);
 }
 
 export function relationKeyV2(leftId: PlayerId, rightId: PlayerId): string {
@@ -3600,10 +3821,20 @@ export function finiteStateNumbersV2(state: WorldStateV2): boolean {
       || !finiteRecord(nation.research.effectLevels)
       || !finiteRecord(nation.research.breakthroughs)) return false;
   }
+  for (const force of Object.values(state.commanderForces ?? {})) {
+    if (!force
+      || !finiteRecord(force.army)
+      || !Number.isFinite(force.economy.treasury)
+      || !Number.isFinite(force.economy.annualOutput)
+      || !Number.isFinite(force.economy.supplyStock)
+      || !finiteRecord(force.economy.priorities)
+      || !Number.isFinite(force.transit?.distanceKm ?? 0)
+      || !Number.isFinite(force.transit?.departTick ?? 0)
+      || !Number.isFinite(force.transit?.arriveTick ?? 0)) return false;
+  }
   for (const territory of Object.values(state.territories)) {
     if (!Number.isFinite(territory.population)
       || !Number.isFinite(territory.economy)
-      || !Number.isFinite(territory.condition)
       || !Number.isFinite(territory.integration)
       || !Number.isFinite(territory.army.manpower)
       || !Number.isFinite(territory.army.capacity)
@@ -3616,22 +3847,19 @@ export function finiteStateNumbersV2(state: WorldStateV2): boolean {
   return true;
 }
 
-/** Shortest direct route between two empires; land reports zero kilometres. */
+/** Shortest legal direct/co-op-relay route; an all-land corridor reports zero. */
 export function selectWarRouteDistanceKmV2(
   state: WorldStateV2,
   content: WorldContentV2,
   attackerId: PlayerId,
   defenderId: PlayerId,
 ): number | undefined {
-  let shortest = Number.POSITIVE_INFINITY;
-  for (const source of selectTerritoriesOfV2(state, attackerId)) {
-    for (const connection of content.territories[source.id]?.connections ?? []) {
-      if (state.territories[connection.targetId]?.owner !== defenderId) continue;
-      if (connection.kind === 'land') return 0;
-      shortest = Math.min(shortest, connection.distanceKm ?? 0);
-    }
-  }
-  return Number.isFinite(shortest) ? shortest : undefined;
+  return selectBestCoopMilitaryAccessRouteV2(
+    state,
+    content,
+    attackerId,
+    defenderId,
+  )?.distanceKm;
 }
 
 export function selectTerritoryRouteDistanceKmV2(
@@ -3657,24 +3885,18 @@ function representativeWarRouteV2(
   commanderId: PlayerId,
   opponentId: PlayerId,
 ): RepresentativeWarRouteV2 | undefined {
-  const candidates: RepresentativeWarRouteV2[] = [];
-  for (const source of selectTerritoriesOfV2(state, commanderId)) {
-    for (const connection of content.territories[source.id]?.connections ?? []) {
-      if (state.territories[connection.targetId]?.owner !== opponentId) continue;
-      candidates.push({
-        sourceId: source.id,
-        targetId: connection.targetId,
-        access: connection.kind === 'sea' ? 'naval' : 'land',
-        distanceKm: connection.distanceKm,
-      });
-    }
-  }
-  return candidates.sort((left, right) => (
-    Number(left.access === 'naval') - Number(right.access === 'naval')
-      || (left.distanceKm ?? 0) - (right.distanceKm ?? 0)
-      || left.sourceId.localeCompare(right.sourceId)
-      || left.targetId.localeCompare(right.targetId)
-  ))[0];
+  const route = selectBestCoopMilitaryAccessRouteV2(
+    state,
+    content,
+    commanderId,
+    opponentId,
+  );
+  return route ? {
+    sourceId: route.sourceId,
+    targetId: route.targetId,
+    access: route.access,
+    distanceKm: route.distanceKm,
+  } : undefined;
 }
 
 function selectWarOperationsLogisticsLoadV2(
@@ -3703,9 +3925,18 @@ function selectWarOperationsLogisticsLoadV2(
       return sum + warAccessOperationMultiplierV2(access, distance) * terrainLoad * interiorLoad;
     }
     return sum + operations.reduce((fronts, operation) => {
+      const operationRoute = selectCoopMilitaryAccessRouteBetweenV2(
+        state,
+        content,
+        playerId,
+        opponentId,
+        operation.sourceId,
+        operation.targetId,
+      );
       const load = warAccessOperationMultiplierV2(
         operation.access,
-        selectTerritoryRouteDistanceKmV2(content, operation.sourceId, operation.targetId),
+        operationRoute?.distanceKm
+          ?? selectTerritoryRouteDistanceKmV2(content, operation.sourceId, operation.targetId),
       );
       const traitFactor = activeOperationTrait
         ? countryTraitFactorV2(
@@ -3789,7 +4020,15 @@ function selectWarOperationsCostLoadV2(
       fronts + traitAdjustedOperationCostLoadV2(
         playerId,
         operation.access,
-        selectTerritoryRouteDistanceKmV2(content, operation.sourceId, operation.targetId),
+        selectCoopMilitaryAccessRouteBetweenV2(
+          state,
+          content,
+          playerId,
+          opponentId,
+          operation.sourceId,
+          operation.targetId,
+        )?.distanceKm
+          ?? selectTerritoryRouteDistanceKmV2(content, operation.sourceId, operation.targetId),
         traitOperationContextV2(state, content, war, operation, playerId),
         territoryTerrainOperationCostMultiplierV2(content, operation.targetId),
         countryInteriorOperationMultiplierV2(
@@ -3806,6 +4045,9 @@ export function roundedFinanceV2(value: WeeklyFinanceBreakdownV2): WeeklyFinance
     const item = rounded[key];
     if (typeof item === 'number') rounded[key] = round(item);
   }
+  // Preserve the exact tiny APEX transfer in the public ledger; ordinary
+  // finance remains on its established six-decimal canonical scale.
+  rounded.apexContribution = round(value.apexContribution, 9);
   return rounded;
 }
 

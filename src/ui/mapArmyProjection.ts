@@ -27,7 +27,7 @@ export function projectMapArmyV2(
     manpower: territory.army.manpower,
     capacity: territory.army.capacity,
     combatStrength,
-    power: round(1_000 * combatStrength * quality * (0.65 + 0.35 * territory.condition)),
+    power: round(1_000 * combatStrength * quality),
     attack,
     defense,
   };

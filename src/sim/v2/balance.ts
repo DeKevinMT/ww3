@@ -7,14 +7,14 @@ import type {
   TerrainType,
 } from './types';
 
-export const V2_RULES_VERSION = 'frontier-command-v2.66-strategic-rebalance';
-export const V2_CONTENT_VERSION = 'natural-earth-countries-2026-v7-greenland';
+export const V2_RULES_VERSION = 'frontier-command-v2.76-logistics-readiness';
+export const V2_CONTENT_VERSION = 'natural-earth-countries-2026-v8-antarctica-survival';
 export const V2_MAP_ID = 'natural-earth-countries-2026';
 export const V2_TICK_DURATION_MS = 1_000;
 export const V2_MAX_CATCH_UP_TICKS = 8;
 
 export const RAPID_RECRUITMENT_COOLDOWN_TICKS = 104;
-/** Emergency recruiting is priced per million soldiers before ATK/DEF quality and wartime multipliers. */
+/** Emergency peacetime recruiting is priced per million soldiers before ATK/DEF quality. */
 export const RAPID_RECRUITMENT_COST_MULTIPLIER = 400;
 /** A targeted Research Surge is a rare four-year national effort. */
 export const RESEARCH_SURGE_COOLDOWN_TICKS = 208;
@@ -69,8 +69,15 @@ export const EXTREME_CRISIS_MAX_UPKEEP_FUNDING = 0.50;
 export const EXTREME_CRISIS_DEMOBILIZATION_RATE = 0.0005;
 /** Even an extreme fiscal collapse preserves one quarter of live capacity as a home guard. */
 export const EXTREME_CRISIS_HOME_GUARD_CAPACITY_SHARE = 0.25;
-/** Normal training is slow and predictable; Training research improves the pipeline. */
-export const PASSIVE_RECRUITMENT_CAPACITY_RATE = 0.00085;
+/** Peace is the visible rebuild phase: 0.135% of live capacity per week before modifiers. */
+export const PASSIVE_RECRUITMENT_CAPACITY_RATE = 0.00135;
+/**
+ * One smooth 0–100% peacetime recovery curve. A nearly empty army has the
+ * largest training need; the acceleration fades cubically toward ordinary
+ * training as readiness approaches full strength, with no threshold mode.
+ */
+export const PEACE_READINESS_RECOVERY_MAX_MULTIPLIER = 5;
+export const PEACE_READINESS_RECOVERY_CURVE_EXPONENT = 3;
 /** Smaller maximum armies complete the same readiness rebuild somewhat sooner. */
 export const RECRUITMENT_SIZE_REFERENCE_CAPACITY = 0.10;
 export const RECRUITMENT_SIZE_SCALING_EXPONENT = 0.10;
@@ -81,15 +88,17 @@ export const PASSIVE_RECRUITMENT_TRAINING_BONUS = 0.02;
 export const UPKEEP_OVERFUNDING_MAX_RATIO = 1.25;
 /** The maximum is approached smoothly across twelve revenue-weeks above reserve. */
 export const UPKEEP_OVERFUNDING_FULL_SURPLUS_WEEKS = 12;
-/** A finite trained pool: at most one full active army, with a paid trickle once the field army is 85% ready. */
+/** A finite trained pool: at most one full active army, trained continuously alongside the field army. */
 export const TRAINED_RESERVE_CAPACITY_MULTIPLIER = 1;
 export const TRAINED_RESERVE_ACTIVE_READY_RATIO = 0.85;
-/** At the readiness threshold, only this share of the normal reserve pipeline is available. */
+/** Even an empty field army keeps this protected share of the normal reserve pipeline active. */
+export const TRAINED_RESERVE_PEACETIME_BASE_TRICKLE_FACTOR = 0.05;
+/** At 85% field readiness, this share of the normal reserve pipeline is available. */
 export const TRAINED_RESERVE_PEACETIME_TRICKLE_FACTOR = 0.15;
 /** Existing trained soldiers mobilise faster than the pipeline can train fresh replacements. */
 export const TRAINED_RESERVE_DEPLOYMENT_THROUGHPUT_MULTIPLIER = 3.44;
-/** War keeps only a paid 5% training trickle while normal replacement draw remains much faster. */
-export const TRAINED_RESERVE_WARTIME_TRAINING_FACTOR = 0.05;
+/** Active war freezes fresh reserve training for every participant. */
+export const TRAINED_RESERVE_WARTIME_TRAINING_FACTOR = 0;
 export const TRAINED_RESERVE_TRAINING_COST_MULTIPLIER = 1.25;
 /** Dedicated reserve research improves throughput, never the one-active-army reserve cap. */
 export const RESERVE_TRAINING_RESEARCH_BONUS_PER_EFFECTIVE_LEVEL = 0.02;
@@ -98,11 +107,13 @@ export const RESERVE_TRAINING_RESEARCH_HALF_SATURATION = 15;
 export const RESERVE_MOBILIZATION_RESEARCH_BONUS_PER_EFFECTIVE_LEVEL = 0.015;
 export const RESERVE_MOBILIZATION_RESEARCH_EFFECTIVE_CEILING = 20;
 export const RESERVE_MOBILIZATION_RESEARCH_HALF_SATURATION = 12;
-/** Extra AI mobilization is paid above upkeep; wartime speed carries a much steeper premium. */
-export const PEACE_RECRUITMENT_ACCELERATION_MULTIPLIER = 1.5;
-export const WAR_RECRUITMENT_ACCELERATION_MULTIPLIER = 3;
-export const PEACE_RECRUITMENT_ACCELERATION_COST_MULTIPLIER = 2.5;
-export const WAR_RECRUITMENT_ACCELERATION_COST_MULTIPLIER = 4.5;
+/**
+ * Peace is the efficient rebuild window: fresh formations recover quickly and
+ * at a modest 15% fast-track premium. War may only move existing reservists;
+ * it can never create fresh active or reserve manpower.
+ */
+export const PEACE_RECRUITMENT_ACCELERATION_MULTIPLIER = 4;
+export const PEACE_RECRUITMENT_ACCELERATION_COST_MULTIPLIER = 1.15;
 /** No hidden universal defender layer; terrain and visible logistics provide positional defence. */
 export const DEFENDER_POSITION_MULTIPLIER = 1;
 /** Prepared firing positions also improve defender counter-fire without duplicating the full shield bonus. */
@@ -127,9 +138,11 @@ export const COMBAT_POWER_RATIO_EXPONENT = 1;
 /**
  * Converts effective opposing combat pressure into real manpower damage.
  * Every soldier present contributes; the former per-pulse casualty ceiling is
- * deliberately gone. At 0.8% this is half of the previous baseline.
+ * deliberately gone. A 1.25% peer baseline makes each fortnightly field
+ * engagement strategically visible and lets depleted peer wars resolve in a
+ * natural campaign timescale, while still requiring many real battle pulses.
  */
-export const COMBAT_DAMAGE_EFFECTIVENESS = 0.008;
+export const COMBAT_DAMAGE_EFFECTIVENESS = 0.0125;
 /** Individual pulses use a much wider ±25% band than the former ±6%. */
 export const BATTLE_DAMAGE_VARIANCE_HALF_RANGE_V2 = 0.25;
 /** Expected damage starts slightly above the old baseline and rises through year one. */
@@ -178,6 +191,12 @@ export const COMBAT_DEFENSE_BASE_EFFECT_V2 = 0.75;
 /** Relative DEF advantages bend logarithmically beyond opposing ATK parity. */
 export const COMBAT_DEFENSE_RELATIVE_SOFTNESS_V2 = 8;
 /**
+ * Universal combat-only ceiling for a DEF advantage over incoming ATK.
+ * The asymptote applies to nations, mastery, APEX and the Rogue AI alike;
+ * terrain, positioning and supply remain separate real multipliers.
+ */
+export const COMBAT_DEFENSE_RELATIVE_EFFECT_MAX_V2 = 4;
+/**
  * Convert the unchanged displayed DEF stat into combat-only protection. The
  * curve is relative to opposing ATK, so equal technological growth preserves
  * peer balance. Every point remains useful, while an exceptional DEF advantage
@@ -195,7 +214,12 @@ export function combatDefenseEffectV2(
   const compressedRatio = 1 + COMBAT_DEFENSE_RELATIVE_SOFTNESS_V2 * Math.log1p(
     (relativeDefense - 1) / COMBAT_DEFENSE_RELATIVE_SOFTNESS_V2,
   );
-  return attack * compressedRatio * COMBAT_DEFENSE_BASE_EFFECT_V2;
+  const boundedRatio = 1 + (COMBAT_DEFENSE_RELATIVE_EFFECT_MAX_V2 - 1) * (
+    1 - Math.exp(
+      -(compressedRatio - 1) / (COMBAT_DEFENSE_RELATIVE_EFFECT_MAX_V2 - 1),
+    )
+  );
+  return attack * boundedRatio * COMBAT_DEFENSE_BASE_EFFECT_V2;
 }
 /** A fresh entrant cannot claim a force another war already destroyed. */
 export const CAPTURE_MIN_CONTRIBUTION_SHARE = 0.10;
@@ -217,40 +241,24 @@ export const BATTLE_INTERVAL_TICKS = 2;
 export const WAR_MOBILIZATION_TICKS = 8;
 export const STALE_WAR_TICKS = 26;
 export const TRUCE_TICKS = 26;
-/** No side can ask to end a war before it has run for one full year. */
-export const PEACE_REQUEST_MIN_WAR_AGE_TICKS = 52;
-/** A declined or expired peace offer can be retried after half a year. */
-export const PEACE_REQUEST_COOLDOWN_TICKS = 26;
-/** Peace decisions remain available for half a year instead of disappearing between AI reviews. */
-export const PEACE_OFFER_DURATION_TICKS = 26;
 /** Human-player alliance invitations remain actionable for half a year. */
 export const ALLIANCE_OFFER_DURATION_TICKS = 26;
 /** A revenge claim is useful for at most one year after it is triggered. */
 export const WAR_REVENGE_WINDOW_TICKS = 52;
 /** A capture pauses both armies long enough to secure supply before the next objective. */
 export const WAR_CAPTURE_CONSOLIDATION_TICKS = 8;
-/** Even a live, contested campaign must resolve within three campaign years. */
-export const WAR_CAMPAIGN_MAX_TICKS = 156;
+/** Even a live, contested campaign must resolve within five campaign years. */
+export const WAR_CAMPAIGN_MAX_TICKS = 260;
 /** A victor this depleted consolidates its gain instead of chaining another assault. */
 export const WAR_CAMPAIGN_MIN_CONTINUE_FILL_RATIO = 0.18;
 /** Multi-war empires need substantially more field strength to keep advancing. */
 export const WAR_CAMPAIGN_MULTI_WAR_MIN_CONTINUE_FILL_RATIO = 0.40;
-/** Severe domestic exhaustion converts the latest conquest into a negotiated endpoint. */
+/** Severe domestic exhaustion makes the victor consolidate its latest conquest. */
 export const WAR_CAMPAIGN_CONSOLIDATE_FATIGUE = 80;
-/** Ending a war unilaterally creates a material 52-week treaty burden. */
-export const CEASEFIRE_PAYMENT_WEEKS = 52;
-/** Neither signatory may restart the war until two full years after the last instalment. */
-export const CEASEFIRE_POST_PAYMENT_TRUCE_TICKS = 104;
-/** A unilateral exit is a costly surrender without becoming a jackpot for a much smaller recipient. */
-export const CEASEFIRE_PAYER_WEEKLY_REVENUE_SHARE = 0.45;
-export const CEASEFIRE_PAYEE_WEEKLY_REVENUE_CAP_SHARE = 0.35;
-export const CEASEFIRE_REPEAT_COST_MULTIPLIER = 1.10;
 /** AI invaders at or below this live deployed/capacity ratio must leave offensive wars. */
 export const AI_OFFENSIVE_EXHAUSTION_ARMY_FILL_RATIO = 0.10;
-/** Exhaustion is an expensive surrender: the normal ceasefire instalment is raised by 50%. */
-export const AI_EXHAUSTION_CEASEFIRE_COST_MULTIPLIER = 1.50;
-/** Active combat consumes the training pipeline; only a fifth reaches the field. */
-export const WAR_RECRUITMENT_THROUGHPUT_FACTOR = 0.20;
+/** Active combat freezes the national training pipeline completely. */
+export const WAR_RECRUITMENT_THROUGHPUT_FACTOR = 0;
 /** Ending the final front leaves a short, gradually fading economic-recovery tail. */
 export const POST_WAR_TRANSITION_FATIGUE = 8;
 /** Peacetime clears operational fatigue at roughly 17.2 points per year. */
@@ -284,10 +292,17 @@ export const FOOD_STORAGE_RESEARCH_EFFECTIVE_CEILING = 30;
 export const FOOD_STORAGE_RESEARCH_HALF_SATURATION = 15;
 export const FOOD_DOMESTIC_COST_PER_MILLION = 0.0006;
 export const FOOD_IMPORT_COST_PER_MILLION = 0.0018;
-/** Food is a material public expense without overwhelming the wider economy. */
-export const FOOD_COST_GLOBAL_MULTIPLIER = 1.20;
+/** Food is material, but leaves a viable programme budget in low-income African openings. */
+export const FOOD_COST_GLOBAL_MULTIPLIER = 1.05;
 /** National farm/processing capacity takes five years to complete a full-scale transition. */
 export const FOOD_DOMESTIC_CAPACITY_RAMP_WEEKS = 260;
+/**
+ * A conquered civilian food network is not loot that vanishes with the old
+ * government. Sixty percent of the local stores survives the fighting and
+ * stays with the people; the rest represents spoilage, evacuation and route
+ * damage during the handover.
+ */
+export const FOOD_CONQUEST_LOCAL_STOCK_RETENTION_SHARE = 0.60;
 /** Genuine food danger may temporarily redirect every live development dollar. */
 export const FOOD_DEVELOPMENT_PAUSE_COVERAGE = 0.98;
 export const FOOD_DEVELOPMENT_PAUSE_RESERVE_WEEKS = 2;
@@ -393,11 +408,11 @@ export const WAR_ACCESS_COST_MULTIPLIER = {
 /** Starting a campaign is accessible; sustaining its weekly operations is the real economic commitment. */
 export const WAR_MOBILIZATION_COST_FACTOR = 0.35;
 /** Active fronts are a real surcharge outside the ordinary national budget. */
-export const WAR_OPERATION_REVENUE_SHARE = 0.08;
-export const WAR_OPERATION_COST_PER_MILLION = 0.08;
-/** Repeat campaigns strain the same treasury and logistics network; the softened surcharge is bounded at +30%. */
-export const WAR_FATIGUE_OPERATION_COST_PER_POINT = 0.015;
-export const WAR_FATIGUE_OPERATION_COST_MAX_BONUS = 0.30;
+export const WAR_OPERATION_REVENUE_SHARE = 0.07;
+export const WAR_OPERATION_COST_PER_MILLION = 0.07;
+/** Repeat campaigns strain the same treasury and logistics network; the softened surcharge is bounded at +20%. */
+export const WAR_FATIGUE_OPERATION_COST_PER_POINT = 0.0075;
+export const WAR_FATIGUE_OPERATION_COST_MAX_BONUS = 0.20;
 /** Sea battles create less sustained national fatigue than equivalent ground contact. */
 export const NAVAL_BATTLE_FATIGUE_MULTIPLIER = 0.45;
 export const WAR_ACCESS_OPERATION_MULTIPLIER = {
@@ -406,9 +421,9 @@ export const WAR_ACCESS_OPERATION_MULTIPLIER = {
 } as const;
 export const WAR_ACCESS_SUPPLY_MULTIPLIER = {
   land: 1,
-  // Sea campaigns pay primarily through mobilisation and weekly operations;
-  // ordinary naval supply only trims combat effectiveness slightly.
-  naval: 0.98,
+  // Even a short sea crossing is an expedition: it can be sustained, but it
+  // never projects the same weekly combat mass as a contiguous land front.
+  naval: 0.85,
 } as const;
 /** Naval routes remain usable at global range, but distance increasingly taxes fleets and supply. */
 export const NAVAL_ROUTE_BASE_DISTANCE_KM = 1_500;
@@ -417,8 +432,8 @@ export const NAVAL_ROUTE_MAX_DISTANCE_KM = 9_000;
 export const NAVAL_ROUTE_LONG_DISTANCE_THRESHOLD_KM = 5_000;
 export const NAVAL_ROUTE_LONG_DISTANCE_COST_PER_5K_KM = 0.55;
 export const NAVAL_ROUTE_OPERATION_MULTIPLIER_MAX = 2.15;
-/** Even the longest route keeps 90% combat supply; its main penalty is financial. */
-export const NAVAL_ROUTE_SUPPLY_MULTIPLIER_MIN = 0.90;
+/** A prepared global expedition keeps a viable, deliberately limited supply corridor. */
+export const NAVAL_ROUTE_SUPPLY_MULTIPLIER_MIN = 0.70;
 
 /**
  * Equivalent-radius proxy for the domestic distance between a country's
@@ -674,7 +689,9 @@ export const RESEARCH_BRANCH_EFFECTS: Readonly<Record<ResearchBranchV2, readonly
   'defensive-systems': ['defense', 'casualty-reduction'],
   'logistics-medicine': ['recovery', 'supply'],
   'economy-science': ['economy-growth', 'research-speed', 'research-efficiency'],
-  'food-systems': ['food-production', 'food-storage'],
+  // The stable branch id keeps authenticated saves and multiplayer snapshots
+  // compatible; its gameplay is now military sustainment, not civilian food.
+  'food-systems': ['supply', 'recovery'],
   'reserve-doctrine': ['reserve-training', 'reserve-mobilization'],
   'public-administration': ['tax-efficiency', 'operating-efficiency'],
   'education-intelligence': ['iq-increase'],
@@ -779,17 +796,6 @@ export const TERRAIN_OPERATION_COST_MODIFIER: Readonly<Record<TerrainType, numbe
   arctic: 1.20,
 };
 
-/** Weekly infrastructure/land-condition recovery efficiency. */
-export const TERRAIN_CONDITION_RECOVERY_MODIFIER: Readonly<Record<TerrainType, number>> = {
-  urban: 1.12,
-  plains: 1.05,
-  coastal: 1.04,
-  mountain: 0.92,
-  desert: 0.90,
-  jungle: 0.88,
-  arctic: 0.82,
-};
-
 /** Domestic food capacity on top of the calibrated real-world opening anchor. */
 export const TERRAIN_FOOD_PRODUCTION_MODIFIER: Readonly<Record<TerrainType, number>> = {
   plains: 1.08,
@@ -854,21 +860,52 @@ export interface ExcessTreasuryInvestmentV2 {
   weeklyDraw: number;
 }
 
+export interface EffectiveTreasuryReserveTargetV2 {
+  /** Ordinary cash runway selected by the national treasury policy. */
+  operatingTarget: number;
+  /** Long-horizon liquidity that prevents GDP-scale cash piles from being treated as free money. */
+  strategicTarget: number;
+  /** Single source of truth for spending, previews and the HUD. */
+  effectiveTarget: number;
+}
+
 /**
- * Pure GDP-scaled surplus curve for recurring autonomous investment. The untouched
- * ten-percent buffer is materially larger than the ordinary revenue runway;
- * the smooth five-percent ramp and two independent caps prevent windfall
- * spending while accumulated cash itself supplies all required memory.
+ * Builds one truthful shared reserve target from national tax plus the exact
+ * APEX contribution. APEX has no private treasury or separate shortfall.
+ */
+export function effectiveTreasuryReserveTargetV2(
+  weeklyRevenue: number,
+  reserveWeeks: number,
+  controlledOutput: number,
+): EffectiveTreasuryReserveTargetV2 {
+  const safeRevenue = Math.max(0, Number.isFinite(weeklyRevenue) ? weeklyRevenue : 0);
+  const safeReserveWeeks = Math.max(0, Number.isFinite(reserveWeeks) ? reserveWeeks : 0);
+  const safeOutput = Math.max(0, Number.isFinite(controlledOutput) ? controlledOutput : 0);
+  const operatingTarget = safeRevenue * safeReserveWeeks;
+  const strategicTarget = safeOutput * AI_EXCESS_TREASURY_GDP_THRESHOLD_SHARE;
+  return {
+    operatingTarget,
+    strategicTarget,
+    effectiveTarget: Math.max(operatingTarget, strategicTarget),
+  };
+}
+
+/**
+ * Pure GDP-scaled surplus curve for recurring autonomous investment. Its
+ * threshold is supplied explicitly by the same reserve calculation shown to
+ * the player. The smooth five-percent-GDP ramp and two independent caps
+ * prevent windfall spending while accumulated cash supplies all memory.
  */
 export function excessTreasuryInvestmentV2(
   treasury: number,
   controlledOutput: number,
   weeklyRevenue: number,
+  reserveTarget: number,
 ): ExcessTreasuryInvestmentV2 {
   const safeTreasury = Math.max(0, Number.isFinite(treasury) ? treasury : 0);
   const safeOutput = Math.max(0, Number.isFinite(controlledOutput) ? controlledOutput : 0);
   const safeRevenue = Math.max(0, Number.isFinite(weeklyRevenue) ? weeklyRevenue : 0);
-  const threshold = safeOutput * AI_EXCESS_TREASURY_GDP_THRESHOLD_SHARE;
+  const threshold = Math.max(0, Number.isFinite(reserveTarget) ? reserveTarget : 0);
   const excess = Math.max(0, safeTreasury - threshold);
   const rampWidth = safeOutput * AI_EXCESS_TREASURY_RAMP_GDP_SHARE;
   const activation = rampWidth > 0 ? smoothstep(0, rampWidth, excess) : 0;

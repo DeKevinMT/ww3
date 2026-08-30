@@ -10,7 +10,6 @@ import {
   type TerrainProfileEntry,
 } from '../../game/data/worldMap';
 import rawDeathRateData from '../../assets/wb_death_rate.json?raw';
-import rawFoodSelfSufficiencyData from '../../assets/fao_food_self_sufficiency.json?raw';
 import rawTaxRevenueData from '../../assets/imf_tax_revenue.json?raw';
 import {
   ARMY_CAPACITY_INITIAL_FORCE_FLOOR,
@@ -30,7 +29,6 @@ import {
   NATIONAL_QUALITY_COMBAT_SPAN,
   NATIONAL_QUALITY_GDP_WEIGHT,
   NATIONAL_QUALITY_IQ_WEIGHT,
-  TERRAIN_CONDITION_RECOVERY_MODIFIER,
   TERRAIN_DEFENSE_MODIFIER,
   TERRAIN_ECONOMY_GROWTH_ADJUSTMENT,
   TERRAIN_FOOD_PRODUCTION_MODIFIER,
@@ -43,6 +41,7 @@ import {
 import {
   nationIdV2,
   territoryIdV2,
+  type AntarcticSectorIdV2,
   type PlayerId,
   type TerrainType,
   type TerritoryId,
@@ -78,8 +77,15 @@ export interface NationBalanceDataV2 {
   initialManpower: number;
 }
 
+/** Static identity class. Missing means an ordinary human-world nation for fixture compatibility. */
+export type NationKindV2 = 'humanity' | 'rogue-ai';
+
+/** Authored Antarctic depth; ordinary territories omit this field. */
+export type TerritoryKindV2 = 'sovereign' | 'rogue-perimeter' | 'rogue-outer' | 'rogue-inner' | 'rogue-core';
+
 export interface NationContentV2 {
   id: PlayerId;
+  kind?: NationKindV2;
   iso3: string;
   initialCapitalId: TerritoryId;
   name: string;
@@ -115,6 +121,7 @@ export interface TerritoryConnectionV2 {
 
 export interface TerritoryContentV2 {
   id: TerritoryId;
+  kind?: TerritoryKindV2;
   initialOwnerId: PlayerId;
   name: string;
   regionId: string;
@@ -165,7 +172,6 @@ export interface TerritoryTerrainEffectsV2 {
   readonly defense: number;
   readonly supply: number;
   readonly operationCost: number;
-  readonly conditionRecovery: number;
   readonly foodProduction: number;
   /** Signed annual percentage-point adjustment, e.g. 0.002 means +0.2pp/year. */
   readonly annualEconomyGrowthAdjustment: number;
@@ -184,7 +190,6 @@ export function territoryTerrainEffectsV2(
     defense: weighted(TERRAIN_DEFENSE_MODIFIER),
     supply: weighted(TERRAIN_SUPPLY_MODIFIER),
     operationCost: weighted(TERRAIN_OPERATION_COST_MODIFIER),
-    conditionRecovery: weighted(TERRAIN_CONDITION_RECOVERY_MODIFIER),
     foodProduction: weighted(TERRAIN_FOOD_PRODUCTION_MODIFIER),
     annualEconomyGrowthAdjustment: weighted(TERRAIN_ECONOMY_GROWTH_ADJUSTMENT),
   };
@@ -200,11 +205,6 @@ export const territoryTerrainOperationCostMultiplierV2 = (
   territoryId: TerritoryId,
 ): number => territoryTerrainEffectsV2(content, territoryId).operationCost;
 
-export const territoryTerrainConditionRecoveryMultiplierV2 = (
-  content: WorldContentV2,
-  territoryId: TerritoryId,
-): number => territoryTerrainEffectsV2(content, territoryId).conditionRecovery;
-
 export const territoryTerrainFoodProductionMultiplierV2 = (
   content: WorldContentV2,
   territoryId: TerritoryId,
@@ -215,7 +215,7 @@ export const territoryTerrainEconomyGrowthAdjustmentV2 = (
   territoryId: TerritoryId,
 ): number => territoryTerrainEffectsV2(content, territoryId).annualEconomyGrowthAdjustment;
 
-export type ScenarioIdV2 = 'standard-2026' | 'random-world';
+export type ScenarioIdV2 = 'standard-2026' | 'random-world' | 'survival';
 export type OpeningProfileV2 = 'standard-2026' | 'none';
 export type GeopoliticsProfileV2 = 'standard-2026' | 'neutral';
 export type ReserveProfileV2 = 'reported-2026' | 'generated';
@@ -270,10 +270,6 @@ interface ImfTaxRevenueAsset {
   countries?: Record<string, ImfTaxRevenueRecord>;
 }
 
-interface FaoFoodSelfSufficiencyAsset {
-  ratios?: Record<string, number>;
-}
-
 function latestDeathRates(): Map<string, number> {
   const parsed = JSON.parse(rawDeathRateData) as [unknown, WorldBankDeathRateRow[]];
   const rates = new Map<string, number>();
@@ -285,15 +281,6 @@ function latestDeathRates(): Map<string, number> {
 }
 
 const WORLD_BANK_DEATH_RATES = latestDeathRates();
-
-const FAO_FOOD_SELF_SUFFICIENCY = (() => {
-  const parsed = JSON.parse(rawFoodSelfSufficiencyData) as FaoFoodSelfSufficiencyAsset;
-  return new Map(Object.entries(parsed.ratios ?? {}).flatMap(([countryId, ratio]) => (
-    Number.isFinite(ratio)
-      ? [[countryId.toLowerCase(), Number(ratio)] as const]
-      : []
-  )));
-})();
 
 const IMF_TAX_REVENUE = (() => {
   const parsed = JSON.parse(rawTaxRevenueData) as ImfTaxRevenueAsset;
@@ -333,41 +320,6 @@ function fiscalBaseline(country: (typeof COUNTRIES)[number]): Pick<NationRealDat
     taxRevenueSector: record.sector ?? null,
     taxRevenueAccountingBasis: record.accountingBasis ?? null,
   };
-}
-
-/**
- * 2025/26 crisis calibration. Nigeria uses FAO's projected 34.7M people in
- * acute food insecurity against the current 237.5M population baseline.
- * Other entries are conservative game abstractions for active severe crises;
- * they describe food access, not agricultural potential alone.
- */
-const FOOD_INSECURITY_OVERRIDES: Readonly<Record<string, number>> = {
-  nga: 0.146,
-  sdn: 0.45,
-  sds: 0.55,
-  yem: 0.40,
-  psx: 0.72,
-  hti: 0.45,
-  mli: 0.25,
-  afg: 0.33,
-  cod: 0.22,
-  som: 0.45,
-  eth: 0.18,
-  ner: 0.20,
-  tcd: 0.22,
-  bfa: 0.16,
-  caf: 0.40,
-  syr: 0.35,
-  mmr: 0.18,
-  ukr: 0.09,
-};
-
-function initialFoodInsecurityRate(country: (typeof COUNTRIES)[number]): number {
-  const explicit = FOOD_INSECURITY_OVERRIDES[country.id];
-  if (explicit !== undefined) return explicit;
-  const poverty = Math.max(0, Math.min(1, (8_000 - country.gdpPerCapita) / 8_000));
-  const rapidGrowth = Math.max(0, Math.min(1, (country.populationGrowthRate - 1) / 2.5));
-  return Math.max(0.005, Math.min(0.20, 0.005 + 0.10 * poverty + 0.06 * rapidGrowth));
 }
 
 /**
@@ -449,7 +401,8 @@ export const OPENING_MILITARY_ORDER_2026_V2: readonly PlayerId[] = Object.freeze
 
 /** Small Standard-opening roster adjustments shared by AI and human seats. */
 export function normalOpeningManpowerMultiplierV2(countryId: string): number {
-  return countryId === 'bel' ? 1.20 : 1;
+  void countryId;
+  return 1;
 }
 
 /**
@@ -938,11 +891,6 @@ function makeNationContent(country: (typeof COUNTRIES)[number]): NationContentV2
     defense: round(uncalibratedRatings.defense * readinessCalibration, 9),
   };
   const landArea = approximateLandAreaKm2(country);
-  const foodInsecurityRate = initialFoodInsecurityRate(country);
-  const foodSelfSufficiencyRatio = FAO_FOOD_SELF_SUFFICIENCY.get(country.id);
-  if (!Number.isFinite(foodSelfSufficiencyRatio)) {
-    throw new Error(`Missing FAOSTAT food self-sufficiency baseline for playable country ${country.id}.`);
-  }
   const populationGrowthRate = balancedPopulationGrowthRateV2(country.populationGrowthRate);
   return {
     id: nationIdV2(country.id),
@@ -972,8 +920,10 @@ function makeNationContent(country: (typeof COUNTRIES)[number]): NationContentV2
       population: Math.max(0.01, country.population),
       populationGrowthRate,
       deathRatePerThousand: WORLD_BANK_DEATH_RATES.get(country.iso3) ?? 8,
-      foodInsecurityRate,
-      foodSelfSufficiencyRatio: clamp(foodSelfSufficiencyRatio!, 0.001, 3),
+      // Neutral legacy content sentinels. The retired civilian commodity layer
+      // no longer reads these fields; they remain only for authenticated saves.
+      foodInsecurityRate: 0,
+      foodSelfSufficiencyRatio: 1,
       landArea,
       gdp: Math.max(0.1, country.gdp),
       ...fiscal,
@@ -987,7 +937,147 @@ function makeNationContent(country: (typeof COUNTRIES)[number]): NationContentV2
   };
 }
 
-const nationEntries = COUNTRIES.map((country) => [nationIdV2(country.id), makeNationContent(country)] as const);
+export const ROGUE_AI_NATION_ID_V2 = nationIdV2('rai');
+
+const ROGUE_AI_REAL_V2: NationRealDataV2 = Object.freeze({
+  population: 340,
+  populationGrowthRate: 0,
+  deathRatePerThousand: 0.1,
+  foodInsecurityRate: 0,
+  foodSelfSufficiencyRatio: 3,
+  landArea: 14_200_000,
+  gdp: 32_000,
+  taxRevenueShare: 0.42,
+  observedTaxRevenueShare: null,
+  taxRevenueYear: null,
+  taxRevenueSource: 'global-median',
+  taxRevenueImputed: true,
+  taxRevenueSector: null,
+  taxRevenueAccountingBasis: null,
+  defenceSpending: 4_800,
+  powerIndex: 420,
+  researchCapacity: 140,
+});
+
+const ROGUE_AI_NATION_V2: NationContentV2 = Object.freeze({
+  id: ROGUE_AI_NATION_ID_V2,
+  kind: 'rogue-ai',
+  iso3: 'RAI',
+  initialCapitalId: territoryIdV2('zero-point-core'),
+  name: 'Codex Ascendancy',
+  shortName: 'Rogue AI',
+  color: 0x18e0c4,
+  cssColor: '#18e0c4',
+  darkColor: '#061a21',
+  sigil: 'RAI',
+  profile: 'Self-evolving Antarctic machine empire',
+  influenceTags: Object.freeze(['kind:rogue-ai', 'continent:antarctica', 'enemy:humanity']),
+  iqScore: 100,
+  militaryQuality: 5.8,
+  militaryAttackRating: 5.6,
+  militaryDefenseRating: 6.4,
+  nuclearPowerLevel: 3,
+  ambition: 1,
+  continent: 'Antarctica',
+  subregion: 'Antarctic Interior',
+  real: ROGUE_AI_REAL_V2,
+  balance: Object.freeze({ initialManpower: 1.42 }),
+});
+
+interface AntarcticTerritoryAuthoringV2 {
+  readonly id: AntarcticSectorIdV2;
+  readonly name: string;
+  readonly kind: Exclude<TerritoryKindV2, 'sovereign'>;
+  readonly population: number;
+  readonly gdp: number;
+  readonly landArea: number;
+  readonly connections: readonly AntarcticSectorIdV2[];
+}
+
+const ANTARCTIC_TERRITORY_AUTHORING_V2: readonly AntarcticTerritoryAuthoringV2[] = Object.freeze([
+  { id: 'drake-entry', name: 'Drake Icehead', kind: 'rogue-perimeter', population: 0.35, gdp: 55, landArea: 420_000, connections: ['weddell-forge'] },
+  { id: 'maud-entry', name: 'Maud Landing', kind: 'rogue-perimeter', population: 0.42, gdp: 70, landArea: 520_000, connections: ['queen-maud-grid'] },
+  { id: 'ross-entry', name: 'Ross Breach', kind: 'rogue-perimeter', population: 0.50, gdp: 85, landArea: 650_000, connections: ['ross-array'] },
+  { id: 'weddell-forge', name: 'Weddell Forge', kind: 'rogue-outer', population: 2.2, gdp: 420, landArea: 1_180_000, connections: ['drake-entry', 'queen-maud-grid', 'sentinel-labyrinth'] },
+  { id: 'queen-maud-grid', name: 'Queen Maud Grid', kind: 'rogue-outer', population: 2.8, gdp: 560, landArea: 1_620_000, connections: ['maud-entry', 'weddell-forge', 'ross-array', 'sentinel-labyrinth', 'transantarctic-vault'] },
+  { id: 'ross-array', name: 'Ross Replicator Array', kind: 'rogue-outer', population: 3.4, gdp: 720, landArea: 1_430_000, connections: ['ross-entry', 'queen-maud-grid', 'transantarctic-vault'] },
+  { id: 'sentinel-labyrinth', name: 'Sentinel Labyrinth', kind: 'rogue-inner', population: 12, gdp: 2_600, landArea: 2_150_000, connections: ['weddell-forge', 'queen-maud-grid', 'transantarctic-vault', 'zero-point-core'] },
+  { id: 'transantarctic-vault', name: 'Transantarctic Vault', kind: 'rogue-inner', population: 18, gdp: 4_200, landArea: 2_300_000, connections: ['queen-maud-grid', 'ross-array', 'sentinel-labyrinth', 'zero-point-core'] },
+  { id: 'zero-point-core', name: 'Zero Point Core', kind: 'rogue-core', population: 300, gdp: 23_290, landArea: 3_930_000, connections: ['sentinel-labyrinth', 'transantarctic-vault'] },
+] as const);
+
+export const ANTARCTIC_TERRITORY_IDS_V2 = Object.freeze(
+  ANTARCTIC_TERRITORY_AUTHORING_V2.map((territory) => territoryIdV2(territory.id)),
+);
+
+const ANTARCTIC_GATEWAY_COORDINATES_V2 = Object.freeze({
+  'drake-entry': [-63, -67] as const,
+  'maud-entry': [20, -70] as const,
+  'ross-entry': [166, -77] as const,
+});
+
+type AntarcticGatewayIdV2 = keyof typeof ANTARCTIC_GATEWAY_COORDINATES_V2;
+
+/**
+ * The three original authored approaches are deliberately narrow. Their map
+ * anchors depart at Cape Horn, Cape Town and Christchurch respectively; they
+ * are not global fast-travel links for every coastal country.
+ */
+export const ANTARCTIC_GATEWAY_COUNTRY_ROUTES_V2 = Object.freeze([
+  { gatewayId: 'drake-entry', countryId: territoryIdV2('chl') },
+  { gatewayId: 'maud-entry', countryId: territoryIdV2('zaf') },
+  { gatewayId: 'ross-entry', countryId: territoryIdV2('nzl') },
+] as const satisfies readonly {
+  gatewayId: AntarcticGatewayIdV2;
+  countryId: TerritoryId;
+}[]);
+
+function greatCircleDistanceFromGatewayV2(
+  gatewayId: AntarcticGatewayIdV2,
+  longitude: number,
+  latitude: number,
+): number {
+  const [gatewayLongitude, gatewayLatitude] = ANTARCTIC_GATEWAY_COORDINATES_V2[gatewayId];
+  const radians = Math.PI / 180;
+  const latitudeDelta = (latitude - gatewayLatitude) * radians;
+  const longitudeDelta = (longitude - gatewayLongitude) * radians;
+  const a = Math.sin(latitudeDelta / 2) ** 2
+    + Math.cos(gatewayLatitude * radians) * Math.cos(latitude * radians)
+      * Math.sin(longitudeDelta / 2) ** 2;
+  return round(6_371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(Math.max(0, 1 - a))), 3);
+}
+
+function rogueTerritoryBaselineV2(
+  authored: AntarcticTerritoryAuthoringV2,
+): NationRealDataV2 {
+  const structuralShare = authored.population / ROGUE_AI_REAL_V2.population;
+  return {
+    ...ROGUE_AI_REAL_V2,
+    population: authored.population,
+    gdp: authored.gdp,
+    landArea: authored.landArea,
+    defenceSpending: round(ROGUE_AI_REAL_V2.defenceSpending * structuralShare, 6),
+    powerIndex: round(ROGUE_AI_REAL_V2.powerIndex * structuralShare, 6),
+    researchCapacity: round(ROGUE_AI_REAL_V2.researchCapacity * structuralShare, 6),
+  };
+}
+
+export function nationKindV2(content: WorldContentV2, playerId: PlayerId | string): NationKindV2 {
+  return content.nations[nationIdV2(String(playerId))]?.kind ?? 'humanity';
+}
+
+export function isRogueAiNationV2(content: WorldContentV2, playerId: PlayerId | string): boolean {
+  return nationKindV2(content, playerId) === 'rogue-ai';
+}
+
+export function isHumanSelectableNationV2(content: WorldContentV2, playerId: PlayerId | string): boolean {
+  return Boolean(content.nations[nationIdV2(String(playerId))]) && !isRogueAiNationV2(content, playerId);
+}
+
+const nationEntries = [
+  ...COUNTRIES.map((country) => [nationIdV2(country.id), makeNationContent(country)] as const),
+  [ROGUE_AI_NATION_ID_V2, ROGUE_AI_NATION_V2] as const,
+];
 const nations = Object.fromEntries(nationEntries) as Record<PlayerId, NationContentV2>;
 
 const territories = Object.fromEntries(TERRITORIES.map((territory) => {
@@ -1021,6 +1111,49 @@ const territories = Object.fromEntries(TERRITORIES.map((territory) => {
   return [territoryIdV2(territory.id), value];
 })) as Record<TerritoryId, TerritoryContentV2>;
 
+const gatewayExternalConnectionsV2 = new Map<AntarcticGatewayIdV2, TerritoryConnectionV2[]>([
+  ['drake-entry', []],
+  ['maud-entry', []],
+  ['ross-entry', []],
+]);
+for (const { gatewayId, countryId } of ANTARCTIC_GATEWAY_COUNTRY_ROUTES_V2) {
+  const country = COUNTRIES.find((candidate) => territoryIdV2(candidate.id) === countryId);
+  if (!country) throw new Error(`Missing Antarctic gateway country ${countryId}.`);
+  const distanceKm = greatCircleDistanceFromGatewayV2(gatewayId, country.label[0], country.label[1]);
+  gatewayExternalConnectionsV2.get(gatewayId)!.push({ targetId: countryId, kind: 'sea', distanceKm });
+  const existing = territories[countryId]!;
+  territories[countryId] = {
+    ...existing,
+    connections: [...existing.connections, {
+      targetId: territoryIdV2(gatewayId),
+      kind: 'sea',
+      distanceKm,
+    }],
+  };
+}
+for (const authored of ANTARCTIC_TERRITORY_AUTHORING_V2) {
+  const gatewayConnections = gatewayExternalConnectionsV2.get(authored.id as AntarcticGatewayIdV2) ?? [];
+  const id = territoryIdV2(authored.id);
+  territories[id] = {
+    id,
+    kind: authored.kind,
+    initialOwnerId: ROGUE_AI_NATION_ID_V2,
+    name: authored.name,
+    regionId: 'antarctica',
+    terrain: 'arctic',
+    terrainProfile: SINGLE_TERRAIN_PROFILES_V2.arctic,
+    baseline: rogueTerritoryBaselineV2(authored),
+    connections: [
+      ...authored.connections.map((targetId) => ({
+        targetId: territoryIdV2(targetId),
+        kind: 'land' as const,
+        distanceKm: 850,
+      })),
+      ...gatewayConnections.sort((left, right) => left.targetId.localeCompare(right.targetId)),
+    ],
+  };
+}
+
 export const WORLD_CONTENT_V2: WorldContentV2 = {
   metadata: Object.freeze({
     scenarioId: 'standard-2026',
@@ -1031,8 +1164,11 @@ export const WORLD_CONTENT_V2: WorldContentV2 = {
     geopoliticsProfile: 'standard-2026',
     reserveProfile: 'reported-2026',
   }),
-  nationIds: COUNTRIES.map((country) => nationIdV2(country.id)),
-  territoryIds: TERRITORIES.map((territory) => territoryIdV2(territory.id)),
+  nationIds: [...COUNTRIES.map((country) => nationIdV2(country.id)), ROGUE_AI_NATION_ID_V2],
+  territoryIds: [
+    ...TERRITORIES.map((territory) => territoryIdV2(territory.id)),
+    ...ANTARCTIC_TERRITORY_IDS_V2,
+  ],
   nations,
   territories,
 };

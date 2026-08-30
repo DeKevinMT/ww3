@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  STALE_WAR_TICKS,
+  TRUCE_TICKS,
   WAR_CAMPAIGN_MAX_TICKS,
   WAR_CAPTURE_CONSOLIDATION_TICKS,
   WAR_MOBILIZATION_TICKS,
@@ -9,7 +11,8 @@ import { createWorldStateV2 } from './bootstrap';
 import { WORLD_CONTENT_V2 } from './content';
 import { invalidateTerritoryIndexV2 } from './selectors';
 import { nationIdV2, territoryIdV2, type WorldStateV2 } from './types';
-import { declareWarV2, processWarsV2 } from './war';
+import { declareWarV2, hasLegalWarFrontV2, processWarsV2 } from './war';
+import { enterPostBlackoutCampaignForTestV2 } from './testSupport';
 
 const bel = nationIdV2('bel');
 const nld = nationIdV2('nld');
@@ -25,6 +28,7 @@ function conquerFirstTerritory(seed: number): { state: WorldStateV2; warId: stri
   state.wars = [];
   state.offers = [];
   state.truces = [];
+  enterPostBlackoutCampaignForTestV2(state);
   state.players[bel]!.treasury = 1_000_000;
 
   // Three connected holdings produce a two-territory formal attacker goal.
@@ -106,14 +110,43 @@ describe('V2 bounded multi-territory campaigns', () => {
     expect(state.wars.some((war) => war.id === warId)).toBe(false);
   });
 
-  it('ends a live stalemate at the persisted three-year campaign deadline', () => {
+  it('closes a stale campaign through the no-legal-battle rule', () => {
     const { state, warId } = conquerFirstTerritory(8_230_102);
     const active = state.wars.find((war) => war.id === warId)!;
-    state.tick = active.campaign!.expiresTick;
+    state.tick = active.lastBattleTick + STALE_WAR_TICKS;
 
     processWarsV2(state, WORLD_CONTENT_V2);
 
     expect(state.wars.some((war) => war.id === warId)).toBe(false);
     expect(state.truces).toHaveLength(1);
+    expect(state.events.at(-1)?.message).toContain('without a legal battle front');
+  });
+
+  it('ends an ordinary legal front exactly at the five-year campaign boundary', () => {
+    const state = createWorldStateV2(8_230_103);
+    state.wars = [];
+    state.offers = [];
+    state.truces = [];
+    enterPostBlackoutCampaignForTestV2(state);
+    state.players[bel]!.treasury = 1_000_000;
+    expect(declareWarV2(state, WORLD_CONTENT_V2, bel, nld).accepted).toBe(true);
+    const active = state.wars.find((war) => war.attackerId === bel && war.defenderId === nld)!;
+    expect(WAR_CAMPAIGN_MAX_TICKS).toBe(260);
+    expect(active.campaign!.expiresTick - active.startedTick).toBe(WAR_CAMPAIGN_MAX_TICKS);
+
+    state.tick = active.campaign!.expiresTick;
+    active.lastBattleTick = state.tick - 1;
+    expect(hasLegalWarFrontV2(state, WORLD_CONTENT_V2, bel, nld)
+      || hasLegalWarFrontV2(state, WORLD_CONTENT_V2, nld, bel)).toBe(true);
+
+    processWarsV2(state, WORLD_CONTENT_V2);
+
+    expect(state.wars.some((war) => war.id === active.id)).toBe(false);
+    expect(state.truces).toEqual([{
+      leftId: bel,
+      rightId: nld,
+      expiresTick: state.tick + TRUCE_TICKS,
+    }]);
+    expect(state.events.at(-1)?.message).toContain('five-year campaign window ended');
   });
 });

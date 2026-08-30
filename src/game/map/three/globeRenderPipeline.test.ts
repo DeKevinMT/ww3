@@ -1,13 +1,19 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
 import globeBordersSource from './globeBorders.ts?raw';
 import naturalBaseSource from './globeNaturalBasePresentation.ts?raw';
 import globeSurfaceSource from './globeSurfacePresentation.ts?raw';
 import globeSceneSource from './ThreeGlobeScene.ts?raw';
 import globeTextureSource from './globeTexture.ts?raw';
+import worldMapSceneSource from '../WorldMapScene.ts?raw';
+const stylesSource = readFileSync(new URL('../../../styles.css', import.meta.url), 'utf8');
 
 describe('globe render pipeline performance contract', () => {
-  it('uses one political texture, one small sun sprite and one globe mesh', () => {
-    expect(globeSceneSource.match(/new THREE\.CanvasTexture\(/g)).toHaveLength(2);
+  it('uses one political texture, one fog pair, one neural-field atlas and one globe mesh', () => {
+    // Political atlas, fog mask/noise/clear crossfade, sun and exactly one
+    // shared territory-wide APEX/PRIME coverage atlas.
+    expect(globeSceneSource.match(/new THREE\.CanvasTexture\(/g)).toHaveLength(6);
+    expect(globeSceneSource.match(/sharedTerritoryNeuralFieldLayer/g)).toHaveLength(1);
     expect(globeSceneSource.match(/new THREE\.Mesh\(new THREE\.SphereGeometry\(/g))
       .toHaveLength(1);
     expect(globeSceneSource).not.toContain('politicalDetail');
@@ -17,7 +23,12 @@ describe('globe render pipeline performance contract', () => {
     expect(globeSceneSource).not.toContain('updateGlobeBorderVisibility');
     expect(globeSceneSource).not.toContain('highlightGroup');
     expect(globeSceneSource.match(/new LineSegments2\(/g)).toHaveLength(1);
-    expect(globeSceneSource).not.toContain('new THREE.LineSegments(');
+    // One authored gateway batch, one transit network and one pooled true dome.
+    // Political edges still stay in one screen-space LineSegments2 batch.
+    expect(globeSceneSource.match(/new THREE\.LineSegments\(/g)).toHaveLength(3);
+    expect(globeSceneSource).toContain('authoredIntercontinentalGatewayBatch');
+    expect(globeSceneSource).toContain('this.neuralNetworkGeometry');
+    expect(globeSceneSource).toContain('pooledTerritoryNeuralDome');
   });
 
   it('never redraws or upgrades flags because the camera zoomed or moved', () => {
@@ -136,15 +147,15 @@ describe('globe render pipeline performance contract', () => {
 
   it('draws at most one flag image per owner realm while preserving geographic exceptions', () => {
     expect(globeTextureSource).toContain('flagRings: readonly PreparedRing[];');
-    expect(globeTextureSource).toContain('iceRings: readonly PreparedRing[];');
+    expect(globeTextureSource).not.toContain('iceRings');
     expect(globeTextureSource).toContain("countryId === 'fra' || countryId === 'prt' || countryId === 'nld' || countryId === 'chl'");
     expect(globeTextureSource).toContain("globeFlagRingPolicy(country.id) === 'principal-only'");
-    expect(globeTextureSource).toContain(': rings.filter((ring) => !iceRingSet.has(ring));');
+    expect(globeTextureSource).toContain(': rings;');
     expect(globeTextureSource).toContain('const flagProjections = new Map<string');
     expect(globeTextureSource).toContain('existing.rings.push(...prepared.flagRings);');
     expect(globeTextureSource).toContain('flagOwnerId: globeTerritoryFlagOwnerId(territory)');
-    // One helper definition, one full-atlas call and one isolated capture repaint.
-    expect(globeTextureSource.match(/drawFlagIntoProjection\(/g)).toHaveLength(3);
+    // One helper, ordinary full-atlas, Antarctic full-atlas and isolated capture calls.
+    expect(globeTextureSource.match(/drawFlagIntoProjection\(/g)).toHaveLength(4);
     const flagProjectionSource = globeTextureSource.slice(
       globeTextureSource.indexOf('function drawFlagIntoProjection('),
       globeTextureSource.indexOf('function drawIntegrationOverlay('),
@@ -154,7 +165,9 @@ describe('globe render pipeline performance contract', () => {
     expect(globeTextureSource).toContain('const drawLeft = Math.floor(bounds.left);');
     expect(globeTextureSource).toContain('const drawRight = Math.ceil(bounds.right);');
     expect(globeTextureSource).not.toContain('coreFlag');
-    expect(globeTextureSource).toContain("context.fillStyle = 'rgba(218, 239, 242, 0.96)';");
+    expect(globeTextureSource).not.toContain("context.fillStyle = 'rgba(218, 239, 242, 0.96)';");
+    expect(globeTextureSource).not.toMatch(/traceArcticIce|drawArcticIce|ARCTIC_ICE_COASTLINE/);
+    expect(globeTextureSource).toContain('traceNorthPoleResearchSite(this.pickContext');
   });
 
   it('bakes only the fixed integration fill cue while geometry owns its physical perimeter', () => {
@@ -163,9 +176,10 @@ describe('globe render pipeline performance contract', () => {
     expect(globeTextureSource).toContain('const fade = context.createLinearGradient(');
     expect(globeTextureSource).toContain("context.strokeStyle = 'rgba(255, 225, 150, 0.26)';");
     expect(globeBordersSource).not.toContain('INTEGRATION_BORDER_COLOR');
-    expect(globeBordersSource).toContain('const edgeColor = edge.color;');
-    expect(globeBordersSource).toContain('edgeIsIntegrating(edge, engine)');
-    expect(globeBordersSource).toContain('if (edge.internalCanonicalEdge) return true;');
+    expect(globeBordersSource).toContain('for (const { points, color: edgeColor } of visibleEdges)');
+    expect(globeBordersSource).not.toContain('edgeIsIntegrating');
+    expect(globeBordersSource).toContain('return GLOBE_BORDER_COLORS.neutral;');
+    expect(globeBordersSource).toContain('if (edge.internalCanonicalEdge) return undefined;');
     const overlaySource = globeTextureSource.slice(
       globeTextureSource.indexOf('function drawIntegrationOverlay('),
       globeTextureSource.indexOf('export function globeTextureSelectionSignature('),
@@ -188,20 +202,42 @@ describe('globe render pipeline performance contract', () => {
     expect(cadenceSource).not.toContain('hoveredPolarRegion');
   });
 
-  it('uses one instanced polar overlay and revision-gated visual sync', () => {
-    expect(globeSceneSource.match(/new THREE\.InstancedMesh\(/g)).toHaveLength(1);
-    expect(globeSceneSource).toContain('polar.visualRevision');
+  it('uses real Antarctic polygons without floating circular sector markers', () => {
+    expect(globeSceneSource).not.toContain('new THREE.InstancedMesh(');
+    expect(globeSceneSource).not.toContain('new THREE.RingGeometry(');
+    expect(globeSceneSource).not.toContain('polarSectorMarkers');
+    expect(globeSceneSource).toContain('globePolarPresentationSignature(polar)');
+    expect(globeSceneSource).not.toContain('`${polar.phase}:${polar.visualRevision}`');
     expect(globeSceneSource).toContain("mapBridge.onPolarRegionClick?.(pick.kind)");
     expect(globeSceneSource).toContain('mapBridge.onPolarSectorClick(pick.sectorId)');
+    expect(globeSceneSource).toContain('this.hoveredPolarSectorId = polarSectorId;');
+    expect(globeSceneSource).toContain('mapBridge.onTerritoryHover?.(territoryId ?? polarSectorId');
     expect(globeSceneSource).toContain('clearPolarFocus(): void');
     expect(globeSceneSource).toContain('this.clearPolarFocus();');
     expect(globeSceneSource).toContain('new THREE.Vector3(0, -1, 0)');
     expect(globeSceneSource).toContain('const ANTARCTICA_OVERVIEW_DISTANCE = 14.5;');
+    expect(globeTextureSource).toContain('private drawAntarcticTerritories(');
+    expect(globeTextureSource).toContain('PREPARED_ANTARCTICA_SECTORS');
+    expect(worldMapSceneSource).toContain('this.createAntarcticaTerritories();');
+    expect(worldMapSceneSource).toContain('sector.mapRings');
+    expect(worldMapSceneSource).toContain('setInteractive(new Phaser.Geom.Polygon(points)');
     const routeRebuildSource = globeSceneSource.slice(
       globeSceneSource.indexOf('private rebuildRoutes(): void'),
       globeSceneSource.indexOf('private bindInput(): void'),
     );
     expect(routeRebuildSource).not.toContain('operation.momentum');
+  });
+
+  it('keeps Antarctic readiness on terrain and reserves readable labels for live borders', () => {
+    expect(globeSceneSource).toContain("definition.polar ? 'is-antarctic' : ''");
+    expect(worldMapSceneSource).toContain("fontSize: '11px'");
+    expect(worldMapSceneSource).not.toContain("color: '#ffaaa4', backgroundColor: '#18090be6'");
+    expect(worldMapSceneSource).toContain('rogueTerritory.showPower || activeFront || humanBorder || apexSupport || primeSupport');
+    expect(worldMapSceneSource).toContain('visual.barBack.setVisible(visible && clearIntel);');
+    expect(worldMapSceneSource).toContain('visual.power.setVisible(showPower);');
+    expect(stylesSource).toContain('.globe-map__country-label.is-antarctic.is-rogue-threat span { font-size: 11px; }');
+    expect(stylesSource).toContain('.globe-map__country-label.is-antarctic.is-rogue-compact {');
+    expect(stylesSource).toContain('background: transparent;');
   });
 
   it('bakes irregular Antarctic ice detail without concentric latitude hatching', () => {
@@ -231,32 +267,39 @@ describe('globe render pipeline performance contract', () => {
   });
 
   it('reuses bounded route materials for visible logistics flow', () => {
-    expect(globeSceneSource).toContain('groupGlobeLogisticsMovements(');
-    expect(globeSceneSource).toContain('flowSpeed: 0.24');
+    expect(globeSceneSource).toContain('selectGlobeVisibleLogisticsRoutes(');
+    expect(globeSceneSource).toContain("'rai',");
+    expect(globeSceneSource).toContain('flowSpeed: rogueRoute ? 0.31 : 0.24');
+    expect(globeSceneSource).toContain('color: rogueRoute ? 0xff5f57 : 0x86f0ff');
     expect(globeSceneSource).toContain('route.dashOffsetUniform.value = -(');
     expect(globeSceneSource).toContain('uniform float routeDashOffset;');
-    expect(globeSceneSource).toContain('groupGlobeLogisticsMovements(');
   });
 
   it('keeps local readiness in DOM nameplates instead of the WebGL graph', () => {
     expect(globeSceneSource).toContain('globeTerritoryReadinessPresentation(territory.army)');
     expect(globeSceneSource).toContain('globe-map__territory-readiness');
     expect(globeSceneSource).toContain('globeTerritorySupplyNodePresentation(');
+    expect(globeSceneSource).toContain('globeRogueTerritoryPresentation(');
     expect(globeSceneSource).toContain('const compactSupplyNode = supplyNode.compact;');
-    expect(globeSceneSource).toContain('if (absorbed && !compactSupplyNode) continue;');
+    expect(globeSceneSource).toContain('if (absorbed && !compactSupplyNode && !rogueTerritory.rogue');
     expect(globeSceneSource).toContain('function compactNameplateCombatPower(power: number): string');
     expect(globeSceneSource).toContain("replace(/^(\\d+\\.\\d)\\d([KMBT]?)$/, '$1$2')");
-    expect(globeSceneSource).toContain('`INT ${integratingPercent}% · ${integratingLocalPower}`');
-    expect(globeSceneSource).toContain('`Integrating ${integratingPercent}% · Local power ${compactMapCombatPower(territory.army.power)}`');
-    expect(globeSceneSource).toContain("territory.coreOwnerId !== territory.ownerId ? compactNameplateCombatPower(territory.army.power) : ''");
+    expect(globeSceneSource).toContain('`PURGE ${integratingPercent}% · ${integratingLocalPower}`');
+    expect(globeSceneSource).toContain('`Signal purge ${integratingPercent}% · Local power ${compactMapCombatPower(territory.army.power)}`');
+    expect(globeSceneSource).toContain("territory.ownerId === 'rai' || territory.coreOwnerId !== territory.ownerId");
     expect(globeSceneSource).toContain("compactSupplyNode ? 'is-local-absorbed' : ''");
+    expect(globeSceneSource).toContain("rogueTerritory.compact ? 'is-rogue-compact' : ''");
+    expect(globeSceneSource).toContain("rogueTerritory.showPower ? 'is-rogue-threat' : ''");
     expect(globeSceneSource).toContain("integrating && !compactSupplyNode ? 'is-integrating' : ''");
-    expect(globeSceneSource).toContain('width: opening ? 154 : compactSupplyNode ? integrating ? 92 : 72 : integrating ? 112 : 122');
-    expect(globeSceneSource).toContain('return `${engine.state.humanPlayerId}|${territorySignature}');
+    expect(globeSceneSource).toContain('width: remotePassive ? 122');
+    expect(globeSceneSource).toContain(': signalBadge ? localHeadquarters ? 78 : 122');
+    expect(globeSceneSource).toContain(': rogueTerritory.compact ? 30');
+    expect(globeSceneSource).toContain('...ANTARCTICA_SECTOR_PRESENTATIONS.map((sector, index) => ({');
+    expect(globeSceneSource).toContain('return `${this.intelligenceVisibility.signature}|${engine.state.humanPlayerId}|${territorySignature}');
   });
 
   it('keeps country cards compact while zooming out', () => {
-    expect(globeSceneSource).toContain('const COUNTRY_LABEL_FAR_SCALE = 0.74;');
+    expect(globeSceneSource).toContain('const COUNTRY_LABEL_FAR_SCALE = 1;');
     expect(globeSceneSource).toContain('function countryLabelScaleForDistance(cameraDistance: number): number');
     expect(globeSceneSource).toContain('label.width * countryLabelScale');
     expect(globeSceneSource).toContain('scale(${countryLabelScale.toFixed(3)})');
@@ -268,5 +311,20 @@ describe('globe render pipeline performance contract', () => {
     expect(globeSceneSource).toContain('position.data.needsUpdate = true;');
     const frameSource = globeSceneSource.slice(globeSceneSource.indexOf('private readonly renderFrame'));
     expect(frameSource).not.toContain('buildGlobeBorderBuffer(');
+  });
+
+  it('updates borders and nameplates immediately while a Rogue realm atlas batch settles', () => {
+    const syncSource = globeSceneSource.slice(
+      globeSceneSource.indexOf('sync(engine: WorldMapEngineContract)'),
+      globeSceneSource.indexOf('private captureApexFogClearAtlas()'),
+    );
+    const atlas = syncSource.indexOf('this.globeTexture.sync(engine, this.selection);');
+    const borders = syncSource.indexOf('this.updateGlobeBorderDetail(engine);');
+    const labelSignature = syncSource.indexOf('this.buildCountryLabelSignature(engine);');
+    const labels = syncSource.indexOf('this.rebuildCountryLabels();');
+    expect(atlas).toBeGreaterThanOrEqual(0);
+    expect(borders).toBeGreaterThan(atlas);
+    expect(labelSignature).toBeGreaterThan(borders);
+    expect(labels).toBeGreaterThan(labelSignature);
   });
 });

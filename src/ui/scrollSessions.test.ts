@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
+  captureDisclosureSessions,
   captureScrollSessions,
   drawerScrollSessionId,
+  restoreDisclosureSessions,
   restoreScrollSessions,
+  type DisclosureSessionTarget,
   type ScrollSessionTarget,
 } from './scrollSessions';
+import worldUiSource from './WorldUIV2.ts?raw';
 
 function target(
   session: string,
@@ -120,5 +124,77 @@ describe('DOM scroll sessions', () => {
     restoreScrollSessions([unrelated], new Map([['drawer:war', 120]]));
 
     expect(unrelated.scrollTop).toBe(37);
+  });
+});
+
+describe('drawer disclosure sessions', () => {
+  const disclosure = (session: string, open: boolean): DisclosureSessionTarget => ({
+    dataset: { disclosureSession: session },
+    open,
+  });
+
+  it('keeps an Economy detail section open across a weekly render', () => {
+    const snapshot = captureDisclosureSessions([
+      disclosure('drawer:economy:annual-ledger', true),
+    ]);
+    const rerendered = disclosure('drawer:economy:annual-ledger', false);
+
+    restoreDisclosureSessions([rerendered], snapshot);
+
+    expect(rerendered.open).toBe(true);
+  });
+
+  it('keeps independent drawer sections isolated', () => {
+    let snapshot = captureDisclosureSessions([
+      disclosure('drawer:nation:people-food', true),
+      disclosure('drawer:nation:apex-purge', false),
+    ]);
+    snapshot = captureDisclosureSessions([
+      disclosure('drawer:research:programs', true),
+    ], snapshot);
+    const nationPeople = disclosure('drawer:nation:people-food', false);
+    const nationPurge = disclosure('drawer:nation:apex-purge', true);
+    const research = disclosure('drawer:research:programs', false);
+
+    restoreDisclosureSessions([nationPeople, nationPurge, research], snapshot);
+
+    expect(nationPeople.open).toBe(true);
+    expect(nationPurge.open).toBe(false);
+    expect(research.open).toBe(true);
+  });
+
+  it('does not force a never-opened disclosure away from its authored default', () => {
+    const fresh = disclosure('drawer:war:campaigns', true);
+
+    restoreDisclosureSessions([fresh], new Map());
+
+    expect(fresh.open).toBe(true);
+  });
+
+  it('does not leak one completed war report choice into the next report', () => {
+    const firstReport = disclosure('modal:war-outcome:war-1:full-breakdown', true);
+    const snapshot = captureDisclosureSessions([firstReport]);
+    const secondReport = disclosure('modal:war-outcome:war-2:full-breakdown', false);
+
+    restoreDisclosureSessions([secondReport], snapshot);
+
+    expect(secondReport.open).toBe(false);
+  });
+
+  it('gives every live World UI disclosure an explicit stable surface key', () => {
+    const disclosureTags = worldUiSource.match(/<details\b[^>]*>/g) ?? [];
+
+    expect(disclosureTags.length).toBeGreaterThan(0);
+    expect(disclosureTags.every((tag) => tag.includes('data-disclosure-session='))).toBe(true);
+    expect(worldUiSource).toContain('data-disclosure-session="drawer:economy:annual-ledger"');
+    expect(worldUiSource).toContain('data-disclosure-session="drawer:research:programs"');
+    expect(worldUiSource).toContain(
+      'data-disclosure-session="modal:war-outcome:${escapeHtml(outcome.warId)}:full-breakdown"',
+    );
+  });
+
+  it('restores disclosure and scroll state in both normal and eliminated renders', () => {
+    expect(worldUiSource.match(/restoreDisclosureSessions\(/g)).toHaveLength(2);
+    expect(worldUiSource.match(/restoreScrollSessions\(/g)).toHaveLength(2);
   });
 });

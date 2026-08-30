@@ -1,15 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
-  CEASEFIRE_PAYEE_WEEKLY_REVENUE_CAP_SHARE,
-  CEASEFIRE_PAYMENT_WEEKS,
-  CEASEFIRE_PAYER_WEEKLY_REVENUE_SHARE,
-  CEASEFIRE_REPEAT_COST_MULTIPLIER,
-  PEACE_REQUEST_COOLDOWN_TICKS,
-  round,
+  WAR_OPERATION_COST_PER_MILLION,
+  WAR_OPERATION_REVENUE_SHARE,
 } from './balance';
 import { createWorldStateV2 } from './bootstrap';
 import { WORLD_CONTENT_V2 } from './content';
-import { createFinancePlansV2, processDevelopmentPhaseV2, processFinanceMilitaryV2 } from './economy';
+import { createFinancePlansV2, processDevelopmentPhaseV2 } from './economy';
 import {
   selectNationalEconomyV2,
   selectResearchOutputV2,
@@ -18,7 +14,6 @@ import {
   selectWeeklyPopulationTrendV2,
 } from './selectors';
 import { nationIdV2, territoryIdV2, type WorldStateV2 } from './types';
-import { ceasefireTermsV2, requestCeasefireV2, respondToOfferV2 } from './war';
 
 function addFront(state: WorldStateV2, index: number, defenderId: 'nld' | 'lux'): void {
   state.wars.push({
@@ -108,112 +103,6 @@ describe('V2 wartime economy pressure', () => {
     expect(selectWarPressureV2(war, belgium).fronts).toBe(2);
   });
 
-  it('keeps both countries in a gradual post-war transition after their final front closes', () => {
-    const state = createWorldStateV2(881);
-    state.wars = [];
-    state.truces = [];
-    state.offers = [];
-    state.tick = 52;
-    addFront(state, 1, 'nld');
-    state.wars[0]!.startedTick = 0;
-    state.players[nationIdV2('bel')].treasury = 1_000;
-    expect(requestCeasefireV2(state, WORLD_CONTENT_V2, state.wars[0]!.id, nationIdV2('bel')).accepted).toBe(true);
-    const offer = state.offers.find((candidate) => candidate.status === 'pending')!;
-    expect(respondToOfferV2(state, WORLD_CONTENT_V2, offer.id, true).accepted).toBe(true);
-    expect(state.wars).toHaveLength(0);
-    expect(state.players[nationIdV2('bel')].warFatigue).toBeGreaterThanOrEqual(8);
-    expect(state.players[nationIdV2('nld')].warFatigue).toBeGreaterThanOrEqual(8);
-    const transition = selectWarPressureV2(state, nationIdV2('bel'));
-    expect(transition.outputPenalty).toBeCloseTo(0.03, 6);
-    expect(transition.researchPenalty).toBeCloseTo(0.08, 6);
-
-    const recoveryWeeks = Math.ceil(state.players[nationIdV2('bel')].warFatigue / 0.25);
-    for (let week = 0; week < recoveryWeeks; week += 1) {
-      const plans = createFinancePlansV2(state, WORLD_CONTENT_V2);
-      processFinanceMilitaryV2(state, WORLD_CONTENT_V2, plans);
-      state.tick += 1;
-    }
-    expect(state.players[nationIdV2('bel')].warFatigue).toBe(0);
-    expect(selectWarPressureV2(state, nationIdV2('bel')).outputPenalty).toBe(0);
-    expect(selectWarPressureV2(state, nationIdV2('bel')).researchPenalty).toBe(0);
-  }, 10_000);
-
-  it('stacks a fresh recovery load after every campaign instead of reusing one floor', () => {
-    const state = createWorldStateV2(882);
-    const belgium = nationIdV2('bel');
-    state.wars = [];
-    state.truces = [];
-    state.offers = [];
-    state.tick = 52;
-
-    const endCampaign = (index: number, defender: 'nld' | 'lux'): void => {
-      addFront(state, index, defender);
-      const war = state.wars.find((candidate) => candidate.id === `war-pressure-${index}`)!;
-      war.startedTick = 0;
-      const defenderId = nationIdV2(defender);
-      state.players[defenderId]!.treasury = 1_000;
-      expect(requestCeasefireV2(state, WORLD_CONTENT_V2, war.id, defenderId).accepted).toBe(true);
-      const offer = state.offers.find((candidate) => candidate.warId === war.id && candidate.status === 'pending')!;
-      expect(respondToOfferV2(state, WORLD_CONTENT_V2, offer.id, true).accepted).toBe(true);
-    };
-
-    endCampaign(1, 'nld');
-    expect(state.players[belgium]!.warFatigue).toBe(8);
-    endCampaign(2, 'lux');
-    expect(state.players[belgium]!.warFatigue).toBe(16);
-  });
-
-  it('prices surrender as a major one-year burden and escalates repeat exits', () => {
-    const state = pressureState(1);
-    const belgium = nationIdV2('bel');
-    const opponent = nationIdV2('nld');
-    state.tick = 52;
-    const payerRevenue = selectNationalEconomyV2(state, WORLD_CONTENT_V2, belgium).weeklyRevenue;
-    const payeeRevenue = selectNationalEconomyV2(state, WORLD_CONTENT_V2, opponent).weeklyRevenue;
-    const first = ceasefireTermsV2(state, WORLD_CONTENT_V2, state.wars[0]!.id, belgium);
-    const balancedBase = Math.min(
-      payerRevenue * CEASEFIRE_PAYER_WEEKLY_REVENUE_SHARE,
-      payeeRevenue * CEASEFIRE_PAYEE_WEEKLY_REVENUE_CAP_SHARE,
-    );
-    const expectedWeekly = round(Math.max(0.001, balancedBase));
-
-    expect(first.allowed).toBe(true);
-    expect(first.weeklyCost).toBe(expectedWeekly);
-    expect(first.totalCost).toBe(round(expectedWeekly * CEASEFIRE_PAYMENT_WEEKS));
-
-    state.players[belgium]!.ceasefiresRequested = 1;
-    const repeat = ceasefireTermsV2(state, WORLD_CONTENT_V2, state.wars[0]!.id, belgium);
-    expect(repeat.repeatMultiplier).toBe(CEASEFIRE_REPEAT_COST_MULTIPLIER);
-    expect(repeat.weeklyCost).toBe(round(Math.max(
-      0.001,
-      balancedBase * CEASEFIRE_REPEAT_COST_MULTIPLIER,
-    )));
-  });
-
-  it('replaces the one-off peace request with a clear retry cooldown', () => {
-    const state = pressureState(1);
-    const belgium = nationIdV2('bel');
-    const war = state.wars[0]!;
-    state.tick = 52;
-
-    expect(requestCeasefireV2(state, WORLD_CONTENT_V2, war.id, belgium).accepted).toBe(true);
-    const offer = state.offers.find((candidate) => candidate.warId === war.id)!;
-    expect(respondToOfferV2(state, WORLD_CONTENT_V2, offer.id, false).accepted).toBe(true);
-    expect(ceasefireTermsV2(state, WORLD_CONTENT_V2, war.id, belgium).cooldownRemaining)
-      .toBe(PEACE_REQUEST_COOLDOWN_TICKS);
-
-    state.tick += PEACE_REQUEST_COOLDOWN_TICKS - 1;
-    const waiting = ceasefireTermsV2(state, WORLD_CONTENT_V2, war.id, belgium);
-    expect(waiting.allowed).toBe(false);
-    expect(waiting.cooldownRemaining).toBe(1);
-
-    state.tick += 1;
-    const retry = ceasefireTermsV2(state, WORLD_CONTENT_V2, war.id, belgium);
-    expect(retry.allowed).toBe(true);
-    expect(retry.cooldownRemaining).toBe(0);
-    expect(requestCeasefireV2(state, WORLD_CONTENT_V2, war.id, belgium).accepted).toBe(true);
-  });
-
   it('makes repeat-war operations progressively more expensive with a bounded surcharge', () => {
     const belgium = nationIdV2('bel');
     const operationsAt = (fatigue: number): number => {
@@ -223,9 +112,30 @@ describe('V2 wartime economy pressure', () => {
     };
 
     const fresh = operationsAt(0);
-    expect(operationsAt(8) / fresh).toBeCloseTo(1.12, 4);
-    expect(operationsAt(16) / fresh).toBeCloseTo(1.24, 4);
-    expect(operationsAt(20) / fresh).toBeCloseTo(1.30, 4);
-    expect(operationsAt(80)).toBeCloseTo(operationsAt(20), 6);
+    expect(WAR_OPERATION_REVENUE_SHARE).toBe(0.07);
+    expect(WAR_OPERATION_COST_PER_MILLION).toBe(0.07);
+    expect(operationsAt(8) / fresh).toBeCloseTo(1.06, 4);
+    expect(operationsAt(16) / fresh).toBeCloseTo(1.12, 4);
+    expect(operationsAt(20) / fresh).toBeCloseTo(1.15, 4);
+    expect(operationsAt(80) / fresh).toBeCloseTo(1.20, 4);
+    expect(operationsAt(100)).toBeCloseTo(operationsAt(80), 6);
+  });
+
+  it('keeps retired settlement obligations financially inert', () => {
+    const state = pressureState(0);
+    const belgium = nationIdV2('bel');
+    state.ceasefireObligations = [{
+      warId: 'retired-obligation',
+      payerId: belgium,
+      payeeId: nationIdV2('nld'),
+      weeklyCost: 999,
+      startsTick: 0,
+      expiresTick: 1_000,
+    }];
+
+    const belgian = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, belgium);
+    const dutch = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, nationIdV2('nld'));
+    expect(belgian.ceasefirePayment).toBe(0);
+    expect(dutch.ceasefireIncome).toBe(0);
   });
 });

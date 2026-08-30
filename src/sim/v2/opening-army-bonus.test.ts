@@ -453,8 +453,10 @@ describe('temporary human opening-army bonus', () => {
       createSaveV2(engine.state, WORLD_CONTENT_V2),
     ) as Record<string, any>;
     legacy.rulesVersion = 'frontier-command-v2.61-random-world';
+    delete legacy.commanderForces;
     delete legacy.firstIntegrationDiscountUsedBy;
     delete legacy.polarEndgame;
+    delete legacy.runProgression;
     for (const nation of Object.values(legacy.players) as Array<Record<string, any>>) {
       delete nation.openingArmyBonus;
     }

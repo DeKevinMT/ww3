@@ -16,14 +16,21 @@ import {
   NATIONAL_IQ_SCORE_MIN,
   aiHighSuspicionAlertV2,
   aiActiveWarCapV2,
-  PEACE_REQUEST_MIN_WAR_AGE_TICKS,
   RESEARCH_BRANCHES,
   clamp,
   smoothstep,
 } from './balance';
+import { isWorldConnectionOpenV2 } from './antarcticGateways';
+import {
+  campaignAiVsAiWarsUnlockedV2,
+  campaignHumanWarsUnlockedV2,
+  campaignWarsUnlockedV2,
+} from './campaignPrologue';
+import { addWorldEventV2 } from './events';
 import { nextRandom } from '../../game/random';
-import type { WorldContentV2 } from './content';
+import { isRogueAiNationV2, type WorldContentV2 } from './content';
 import { selectHumanPlayerIdsV2 } from './humanPlayers';
+import { selectLocalHostileThreatV2 } from './localHostileThreat';
 import {
   moveBudgetTowardTargetV2,
   moveResearchTowardTargetV2,
@@ -38,7 +45,6 @@ import {
   createPowerSnapshotV2,
   selectArmyStrengthV2,
   selectControlledPopulationV2,
-  selectFoodDemandV2,
   selectIsEliminatedV2,
   selectNationalAggressivenessV2,
   selectNationalEconomyV2,
@@ -53,20 +59,22 @@ import {
   selectWarsOfV2,
   sortedNationIdsV2,
   type PowerSnapshotV2,
+  type MilitaryBaseSnapshotV2,
 } from './selectors';
 import { isDefensiveFederationV2, selectGlobalResistanceV2 } from './resistance';
+import { isSurvivalStateV2, rogueAiSurvivalActiveV2 } from './survival';
 import {
   aiAttackerIsOffensivelyExhaustedV2,
   aiAttackerMustStandDownV2,
   forecastWarV2,
-  peaceProposalTermsV2,
+  warDeclarationStatusV2,
 } from './war';
 import {
-  counterattackRiskForWarStrainV2,
+  counterattackRiskForExpansionThreatV2,
   selectExpansionThreatSummaryV2,
   type NeighborCounterattackRiskV2,
   type NeighborCounterattackRiskLevelV2,
-} from './warStrain';
+} from './expansionThreat';
 
 /**
  * Soft strategic deterrence between nuclear powers. It is strongest between
@@ -110,6 +118,236 @@ interface RegionalEscalationCandidateV2 {
 export const AI_EXPANSION_ROLLS_PER_DECISION = 1;
 /** Urgent land-neighbour reactions get one spare global slot, never a dogpile. */
 export const AI_COUNTERATTACK_EXTRA_WAR_CAP = 1;
+/** A boxed-in Campaign player gets one peaceful year after the communications blackout. */
+export const AI_BOXED_HUMAN_GRACE_TICKS = 52;
+/** A local rival must visibly mobilise before its first declaration roll. */
+export const AI_BOXED_HUMAN_WARNING_TICKS = 16;
+/** Pressure grows over a further year rather than flipping on in one review. */
+export const AI_BOXED_HUMAN_RAMP_TICKS = 52;
+/** A canonical forecast at or above this value is a credible player-led escape route. */
+export const AI_BOXED_HUMAN_REASONABLE_WIN_CHANCE = 42;
+/** Nearby island pressure remains possible; arbitrary intercontinental pressure does not. */
+export const AI_BOXED_HUMAN_MAX_NAVAL_THREAT_DISTANCE_KM = 2_500;
+export const AI_NAVAL_EXPEDITION_BASE_PRIORITY_PENALTY_V2 = 10;
+export const AI_NAVAL_EXPEDITION_DISTANCE_PENALTY_PER_LOG2_V2 = 7;
+export const AI_NAVAL_EXPEDITION_DISTANCE_RUNWAY_KM_V2 = 2_000;
+/** Campaign stays at one simultaneous autonomous AI conflict for its first decade. */
+export const CAMPAIGN_SINGLE_AI_VS_AI_WAR_PHASE_TICKS_V2 = 520;
+/** Even the mature manipulated world remains readable: two wars, then three in the late game. */
+export const CAMPAIGN_TWO_AI_VS_AI_WAR_PHASE_TICKS_V2 = 1_560;
+
+/**
+ * Human wars and Rogue wave wars are deliberately outside this budget. The
+ * cap only controls background national AI fighting so the player's theatre
+ * remains legible and the opening story conflict can develop in isolation.
+ */
+export function autonomousAiVsAiWarCapV2(
+  state: Pick<WorldStateV2, 'tick' | 'polarEndgame'>,
+  content: WorldContentV2,
+  livingNations: number,
+): number {
+  if (content.metadata?.scenarioId === 'survival') return 0;
+  if (content.metadata?.scenarioId !== 'standard-2026') {
+    return aiActiveWarCapV2(livingNations, state.tick);
+  }
+  const blackoutTick = state.polarEndgame.communicationsBlackoutTick;
+  if (blackoutTick === null) return 0;
+  const elapsed = Math.max(0, state.tick - blackoutTick);
+  if (elapsed < CAMPAIGN_SINGLE_AI_VS_AI_WAR_PHASE_TICKS_V2) return 1;
+  if (elapsed < CAMPAIGN_TWO_AI_VS_AI_WAR_PHASE_TICKS_V2) return 2;
+  return 3;
+}
+
+export function activeAutonomousAiVsAiWarsV2(
+  state: Pick<WorldStateV2, 'wars' | 'humanPlayerIds'>,
+  content: WorldContentV2,
+): number {
+  const humans = new Set(state.humanPlayerIds);
+  return state.wars.filter((war) => (
+    !humans.has(war.attackerId)
+      && !humans.has(war.defenderId)
+      && !isRogueAiNationV2(content, war.attackerId)
+      && !isRogueAiNationV2(content, war.defenderId)
+  )).length;
+}
+
+export interface AiRoutePreferenceV2 {
+  access: Exclude<WarAccessV2, 'none'>;
+  distanceKm: number;
+  sameRegion: boolean;
+  priorityPenalty: number;
+  expeditionRunwayWeeks: number;
+}
+
+/** Deterministic physical route cost shared by serious-mode AI target planning. */
+export function aiRoutePreferenceV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  attackerId: PlayerId,
+  targetId: PlayerId,
+  access: Exclude<WarAccessV2, 'none'>,
+): AiRoutePreferenceV2 {
+  let distanceKm = Number.POSITIVE_INFINITY;
+  let sameRegion = false;
+  for (const source of selectTerritoriesOfV2(state, attackerId)) {
+    for (const edge of content.territories[source.id]?.connections ?? []) {
+      if (!isWorldConnectionOpenV2(state, source.id, edge.targetId)) continue;
+      if (state.territories[edge.targetId]?.owner !== targetId) continue;
+      const edgeAccess = edge.kind === 'land' ? 'land' : 'naval';
+      if (edgeAccess !== access) continue;
+      distanceKm = Math.min(distanceKm, edgeAccess === 'land' ? 0 : edge.distanceKm ?? 2_500);
+      sameRegion ||= content.territories[source.id]?.regionId
+        === content.territories[edge.targetId]?.regionId;
+    }
+  }
+  if (!Number.isFinite(distanceKm)) distanceKm = access === 'land' ? 0 : 8_000;
+  const priorityPenalty = access === 'naval'
+    ? AI_NAVAL_EXPEDITION_BASE_PRIORITY_PENALTY_V2
+      + AI_NAVAL_EXPEDITION_DISTANCE_PENALTY_PER_LOG2_V2
+        * Math.log2(1 + distanceKm / 1_000)
+    : 0;
+  return {
+    access,
+    distanceKm,
+    sameRegion,
+    priorityPenalty,
+    expeditionRunwayWeeks: access === 'naval'
+      ? 2 + Math.ceil(distanceKm / AI_NAVAL_EXPEDITION_DISTANCE_RUNWAY_KM_V2)
+      : 0,
+  };
+}
+
+/**
+ * Anti-stalemate pressure for a human who has not expanded and has no weaker
+ * route out. It is deliberately zero when even one nearby country is not
+ * stronger, so normal expansion remains the player's first solution.
+ */
+export function aiBoxedHumanPressureV2(
+  weeksSinceExpansion: number,
+  strongerNeighborCount: number,
+  neighborCount: number,
+): number {
+  const neighbors = Math.max(0, Math.floor(neighborCount));
+  const stronger = Math.max(0, Math.floor(strongerNeighborCount));
+  if (neighbors === 0 || stronger < neighbors) return 0;
+  return smoothstep(
+    AI_BOXED_HUMAN_GRACE_TICKS,
+    AI_BOXED_HUMAN_GRACE_TICKS + AI_BOXED_HUMAN_RAMP_TICKS,
+    Math.max(0, weeksSinceExpansion),
+  );
+}
+
+export interface AiBoxedHumanAssessmentV2 {
+  boxed: boolean;
+  weeksSinceProgress: number;
+  pressure: number;
+  viableTargetIds: PlayerId[];
+  threatenerId: PlayerId | null;
+  threatAccess: Exclude<WarAccessV2, 'none'> | null;
+  threatDistanceKm: number | null;
+}
+
+function boxedHumanWarningMessageV2(
+  content: WorldContentV2,
+  threatenerId: PlayerId,
+): string {
+  const name = content.nations[threatenerId]?.shortName ?? threatenerId;
+  return `APEX EARLY WARNING · ${name} is mobilising along a local route. Pressure window: ${AI_BOXED_HUMAN_WARNING_TICKS} weeks.`;
+}
+
+function assessAiBoxedHumanV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  humanId: PlayerId,
+  accessIndex: AiWarAccessIndexV2,
+  militaryBaseSnapshot: MilitaryBaseSnapshotV2,
+  powerSnapshot: PowerSnapshotV2,
+): AiBoxedHumanAssessmentV2 {
+  const none = (weeksSinceProgress = 0, viableTargetIds: PlayerId[] = []): AiBoxedHumanAssessmentV2 => ({
+    boxed: false,
+    weeksSinceProgress,
+    pressure: 0,
+    viableTargetIds,
+    threatenerId: null,
+    threatAccess: null,
+    threatDistanceKm: null,
+  });
+  if (content.metadata?.scenarioId !== 'standard-2026'
+    || !campaignWarsUnlockedV2(state, content)
+    || selectIsEliminatedV2(state, humanId)
+    || selectWarsOfV2(state, humanId).length > 0) return none();
+
+  const opponents = accessibleOwnersV2(accessIndex, humanId).filter(({ targetId }) => (
+    state.players[targetId]
+      && !selectIsEliminatedV2(state, targetId)
+      && !isRogueAiNationV2(content, targetId)
+  ));
+  const viableTargetIds = opponents.filter(({ targetId }) => {
+    if (!warDeclarationStatusV2(state, content, humanId, targetId).allowed) return false;
+    return forecastWarV2(
+      state,
+      content,
+      humanId,
+      targetId,
+      militaryBaseSnapshot,
+    ).winChance >= AI_BOXED_HUMAN_REASONABLE_WIN_CHANCE;
+  }).map(({ targetId }) => targetId).sort((left, right) => left.localeCompare(right));
+
+  const blackoutTick = state.polarEndgame.communicationsBlackoutTick ?? state.tick;
+  const lastExpansionTick = state.events.reduce((latest, event) => (
+    event.kind === 'conquest' && event.playerId === humanId
+      ? Math.max(latest, event.tick)
+      : latest
+  ), blackoutTick);
+  const weeksSinceProgress = Math.max(0, state.tick - Math.max(blackoutTick, lastExpansionTick));
+  if (viableTargetIds.length > 0) return none(weeksSinceProgress, viableTargetIds);
+
+  const humanPower = powerSnapshot.byNation.get(humanId) ?? 0;
+  const threats = accessibleOwnersV2(accessIndex, humanId).flatMap(({ targetId, access }) => {
+    if (!state.players[targetId]
+      || selectIsEliminatedV2(state, targetId)
+      || isRogueAiNationV2(content, targetId)) return [];
+    const power = powerSnapshot.byNation.get(targetId) ?? 0;
+    if (power <= humanPower * 1.05) return [];
+    const route = aiRoutePreferenceV2(state, content, targetId, humanId, access);
+    if (access === 'naval'
+      && (!route.sameRegion || route.distanceKm > AI_BOXED_HUMAN_MAX_NAVAL_THREAT_DISTANCE_KM)) return [];
+    return [{ targetId, access, power, route }];
+  }).sort((left, right) => (left.access === 'land' ? 0 : 1) - (right.access === 'land' ? 0 : 1)
+    || Number(right.route.sameRegion) - Number(left.route.sameRegion)
+    || left.route.distanceKm - right.route.distanceKm
+    // The least overwhelming credible neighbour creates the fairest escape pressure.
+    || left.power - right.power
+    || left.targetId.localeCompare(right.targetId));
+  const threat = threats[0];
+  if (!threat) return none(weeksSinceProgress, viableTargetIds);
+  return {
+    boxed: true,
+    weeksSinceProgress,
+    pressure: aiBoxedHumanPressureV2(weeksSinceProgress, 1, 1),
+    viableTargetIds,
+    threatenerId: threat.targetId,
+    threatAccess: threat.access,
+    threatDistanceKm: threat.route.distanceKm,
+  };
+}
+
+/** Canonical Campaign stuck-state selector, shared by AI pacing and focused tests/UI. */
+export function selectAiBoxedHumanAssessmentV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  humanId: PlayerId,
+): AiBoxedHumanAssessmentV2 {
+  const militaryBaseSnapshot = createMilitaryBaseSnapshotV2(state, content);
+  return assessAiBoxedHumanV2(
+    state,
+    content,
+    humanId,
+    createAiWarAccessIndexV2(state, content),
+    militaryBaseSnapshot,
+    createPowerSnapshotV2(state, content, militaryBaseSnapshot),
+  );
+}
 
 /**
  * Converts the player's long-term political Suspicion into the share of an
@@ -151,11 +389,11 @@ export function aiEarthDefenseMilitaryPriorityV2(
 
 /** Suspicion modestly amplifies an existing human-neighbour opening but creates none by itself. */
 export function aiCounterattackPressureWithSuspicionV2(
-  strainPressure: number,
+  expansionPressure: number,
   globalThreat: number,
   humanTarget: boolean,
 ): number {
-  const pressure = clamp(strainPressure, 0, 1);
+  const pressure = clamp(expansionPressure, 0, 1);
   if (!humanTarget || pressure <= 0) return pressure;
   return clamp(pressure * (1 + 0.20 * clamp(globalThreat / 100, 0, 1)
     + 0.55 * aiHighSuspicionAlertV2(globalThreat)), 0, 1);
@@ -170,87 +408,14 @@ export function aiCounterattackCooldownV2(
   return Math.max(12, Math.round(base * (1 - 0.20 * clamp(combinedPressure, 0, 1))));
 }
 
-export type AiHumanWarStrainOpportunityV2 = NeighborCounterattackRiskV2;
+export type AiHumanExpansionOpportunityV2 = NeighborCounterattackRiskV2;
 
 /**
  * Compatibility export for existing callers. New planning uses the canonical
  * land-neighbour selector for every country, not a human-only exception.
  */
-export function aiHumanWarStrainOpportunityV2(score: number): AiHumanWarStrainOpportunityV2 {
-  return counterattackRiskForWarStrainV2(score, true);
-}
-
-export interface AiPeaceOfferDecisionV2 {
-  aggressiveness: number;
-  warFatigue: number;
-  armyFillRatio: number;
-  activeWarCount: number;
-  powerRatio: number;
-  warScore: number;
-  opponentTerritoryCount: number;
-  settlementGenerosity: number;
-  revengePending: boolean;
-  /** A human-authored treaty receives a real diplomatic consideration bonus. */
-  humanRequester?: boolean;
-}
-
-/**
- * AI peace is an exceptional escape hatch, not the default end of a campaign.
- * A confident country close to conquest values the territory above a small
- * payment; serious military collapse, exhaustion and multiple fronts are the
- * circumstances that make a treaty credible.
- */
-export function aiPeaceOfferAcceptanceChanceV2(input: AiPeaceOfferDecisionV2): number {
-  if (input.revengePending) return 0;
-  const fatigue = clamp(input.warFatigue, 0, 1);
-  const collapse = clamp((0.42 - input.armyFillRatio) / 0.36, 0, 1);
-  const strengthRisk = clamp((0.95 - input.powerRatio) / 0.70, 0, 1);
-  const losing = clamp((-input.warScore - 4) / 42, 0, 1);
-  const multiFront = clamp((input.activeWarCount - 1) / 2, 0, 1);
-  const emergency = clamp(
-    0.31 * fatigue + 0.29 * collapse + 0.24 * losing
-      + 0.10 * strengthRisk + 0.06 * multiFront,
-    0,
-    1,
-  );
-  const generosity = clamp(input.settlementGenerosity, 0, 1.5) / 1.5;
-  const aggressionBrake = 1 - 0.55 * clamp(input.aggressiveness, 0, 1);
-  let chance = (0.004 + 0.12 * emergency ** 2
-    + 0.035 * generosity * (0.25 + 0.75 * emergency)) * aggressionBrake;
-  if (input.humanRequester) chance = 0.035 + 1.65 * chance;
-  const nearConquest = input.warScore >= 15
-    || (input.opponentTerritoryCount <= 1 && input.warScore >= 0)
-    || input.powerRatio >= 1.65;
-  if (nearConquest && input.settlementGenerosity < 0.50) {
-    chance = Math.min(chance, input.humanRequester ? 0.015 : 0.005);
-  }
-  return clamp(chance, 0, input.humanRequester ? 0.28 : 0.16);
-}
-
-export interface AiPeaceRequestDecisionV2 {
-  aggressiveness: number;
-  warAge: number;
-  warFatigue: number;
-  armyFillRatio: number;
-  activeWarCount: number;
-  strengthGap: number;
-  revengePending: boolean;
-}
-
-/** A country asks to withdraw only after a long campaign and a real crisis. */
-export function aiPeaceRequestChanceV2(input: AiPeaceRequestDecisionV2): number {
-  if (input.revengePending || input.warAge < 104) return 0;
-  const fatigue = clamp((input.warFatigue - 45) / 55, 0, 1);
-  const collapse = clamp((0.32 - input.armyFillRatio) / 0.27, 0, 1);
-  const losing = clamp((input.strengthGap - 12) / 55, 0, 1);
-  const multiFront = clamp((input.activeWarCount - 1) / 2, 0, 1);
-  const crisis = clamp(0.34 * fatigue + 0.32 * collapse + 0.25 * losing + 0.09 * multiFront, 0, 1);
-  const prolongedStalemate = input.warAge >= 208
-    && Math.abs(input.strengthGap) <= 12 && input.warFatigue >= 0.35;
-  if (crisis < 0.42 && !prolongedStalemate) return 0;
-  const aggressionBrake = 1 - 0.45 * clamp(input.aggressiveness, 0, 1);
-  return clamp((0.006 + 0.11 * crisis ** 2
-    + 0.018 * multiFront + (prolongedStalemate ? 0.018 : 0)) * aggressionBrake, 0, 0.14);
+export function aiHumanExpansionOpportunityV2(score: number): AiHumanExpansionOpportunityV2 {
+  return counterattackRiskForExpansionThreatV2(score, true);
 }
 
 export interface AiWarDisciplineV2 {
@@ -295,8 +460,6 @@ interface AiExpansionChanceInputsV2 {
   regionalEscalation: boolean;
   rivalInvaderCount: number;
   neighborCounterattackPressure?: number;
-  /** @deprecated Compatibility input; prefer neighborCounterattackPressure. */
-  humanWarStrainPressure?: number;
   globalWarLoad?: number;
 }
 
@@ -310,29 +473,24 @@ export function aiExpansionDeclarationChanceV2({
   regionalEscalation,
   rivalInvaderCount,
   neighborCounterattackPressure,
-  humanWarStrainPressure,
   globalWarLoad = 0,
 }: AiExpansionChanceInputsV2): number {
-  const strainPressure = clamp(
-    neighborCounterattackPressure ?? humanWarStrainPressure ?? 0,
-    0,
-    1,
-  );
+  const counterattackPressure = clamp(neighborCounterattackPressure ?? 0, 0, 1);
   const worldLoad = clamp(globalWarLoad, 0, 1);
   const unbrakedChance = clamp(0.08 + 0.10 * Math.max(0, ratio - 1)
     + 0.58 * expansionChance
     + (regionalEscalation ? 0.03 : 0), 0.055, regionalEscalation ? 0.36 : 0.30);
   // Existing world conflict suppresses optional AI-vs-AI escalation. A
-  // A critically strained land neighbour removes most, but never all, of that
-  // caution so the intended anti-overreach response remains clearly visible.
-  const worldBrake = 1 - 0.50 * worldLoad * (1 - 0.75 * strainPressure);
+  // Critical expansion threat from a land neighbour removes most, but never
+  // all, of that caution so the anti-overreach response remains visible.
+  const worldBrake = 1 - 0.50 * worldLoad * (1 - 0.75 * counterattackPressure);
   const baseChance = unbrakedChance * worldBrake;
   if (rivalInvaderCount > 0 && !regionalEscalation) {
     const ordinaryDogpileChance = Math.min(0.05, baseChance * 0.12);
-    return clamp(ordinaryDogpileChance + 0.18 * strainPressure, 0, 0.24);
+    return clamp(ordinaryDogpileChance + 0.18 * counterattackPressure, 0, 0.24);
   }
   return clamp(
-    baseChance + 0.18 * strainPressure,
+    baseChance + 0.18 * counterattackPressure,
     0.04,
     regionalEscalation ? 0.50 : 0.48,
   );
@@ -368,6 +526,7 @@ function createAiWarAccessIndexV2(
     const targets = index.get(sourceOwner) ?? new Map<PlayerId, Exclude<WarAccessV2, 'none'>>();
     index.set(sourceOwner, targets);
     for (const connection of content.territories[sourceId]?.connections ?? []) {
+      if (!isWorldConnectionOpenV2(state, sourceId, connection.targetId)) continue;
       const targetOwner = state.territories[connection.targetId]?.owner;
       if (!targetOwner || targetOwner === sourceOwner) continue;
       const access = connection.kind === 'land' ? 'land' : 'naval';
@@ -669,7 +828,6 @@ interface AiNationalPlanningViewV2 {
   integrationWeeklyCost: number;
   controlledPopulation: number;
   populationAnnualNetRate: number;
-  foodDemand: number;
   effectiveIq: number;
 }
 
@@ -699,7 +857,6 @@ function createAiNationalPlanningViewV2(
       playerId,
       0,
     ).annualNetRate,
-    foodDemand: Math.max(0.01, selectFoodDemandV2(state, playerId)),
     effectiveIq: selectNationalIqViewV2(state, content, playerId).score,
   };
 }
@@ -730,11 +887,8 @@ function aiBudgetTargetV2(
 ): BudgetPolicyV2 {
   const wars = view.activeWars;
   const player = state.players[playerId]!;
-  const foodStress = clamp((0.98 - state.players[playerId]!.foodSecurity) / 0.58, 0, 1);
   const army = view.army;
   const territories = view.territories;
-  const condition = territories.length > 0
-    ? territories.reduce((sum, territory) => sum + territory.condition, 0) / territories.length : 0;
   const economy = view.economy;
   const treasuryWeeks = player.treasury / Math.max(0.01, economy.weeklyRevenue);
   const ownResearch = Object.values(player.research.breakthroughs).reduce((a, b) => a + b, 0);
@@ -759,34 +913,30 @@ function aiBudgetTargetV2(
     0,
     1,
   );
-  const foodReserveWeeks = player.foodStock / view.foodDemand;
-  const reserveStress = clamp((2 - foodReserveWeeks) / 2, 0, 1);
   const survivalStress = Math.max(
-    foodStress,
     populationDecline,
-    reserveStress,
     debtStress,
     integrationStress,
   );
   const earthDefenseMilitaryPriority = aiEarthDefenseMilitaryPriorityV2(state);
   const suspicionMilitaryPriority = earthDefenseMilitaryPriority <= 0
+    && content.metadata?.scenarioId !== 'standard-2026'
+    && content.metadata?.scenarioId !== 'survival'
     ? aiSuspicionMilitaryPriorityV2(state.aiEscalation.globalThreat, wars.length)
     : 0;
   if (wars.length === 0 && survivalStress > 0.02) {
     return weightedBudgetPolicyV2({
       military: 0.40 + 0.30 * (1 - army.fillRatio)
         + suspicionMilitaryPriority + earthDefenseMilitaryPriority,
-      research: 0.80 + 0.85 * researchGap + 0.90 * foodStress,
-      development: 2.80 + 3.20 * survivalStress + 1.20 * (1 - condition) + 0.80 * poverty,
+      research: 0.80 + 0.85 * researchGap,
+      development: 2.80 + 3.20 * survivalStress + 0.80 * poverty,
     });
   }
   return weightedBudgetPolicyV2({
     military: 1.15 + wars.length * 1.25 + 1.65 * (1 - army.fillRatio)
       + 0.45 * nation.ambition + suspicionMilitaryPriority + earthDefenseMilitaryPriority,
-    research: 0.85 + 1.30 * researchGap + 0.80 * researchStrength
-      + 0.65 * foodStress,
-    development: 1.10 + 1.65 * foodStress + 1.10 * (1 - condition)
-      + 1.20 * integrationStress
+    research: 0.85 + 1.30 * researchGap + 0.80 * researchStrength,
+    development: 1.10 + 1.20 * integrationStress
       + 1.25 * debtStress + 0.85 * poverty + (wars.length === 0 ? 0.35 : 0),
   });
 }
@@ -833,8 +983,6 @@ export function selectAiResearchAllocationsV2(
   const army = view.army;
   const economy = view.economy;
   const territories = view.territories;
-  const averageCondition = territories.length > 0
-    ? territories.reduce((sum, territory) => sum + territory.condition, 0) / territories.length : 0;
   const ownPower = powers.byNation.get(playerId) ?? 0;
   const enemyPower = activeWars.reduce((sum, war) => {
     const enemyId = war.attackerId === playerId ? war.defenderId : war.attackerId;
@@ -853,7 +1001,6 @@ export function selectAiResearchAllocationsV2(
   const poverty = clamp((45 - outputPerPerson) / 40, 0, 1);
   const wealth = clamp((outputPerPerson - 18) / 65, 0, 1);
   const fillGap = clamp((0.90 - army.fillRatio) / 0.65, 0, 1);
-  const damage = clamp((0.92 - averageCondition) / 0.65, 0, 1);
   const warPressure = activeWars.length === 0 ? 0 : clamp(enemyPower / Math.max(1, ownPower), 0.35, 2.5) / 2.5;
   const operations = activeWars.flatMap((war) => (
     war.attackerId === playerId ? war.attackerOperations : war.defenderOperations
@@ -866,11 +1013,6 @@ export function selectAiResearchAllocationsV2(
   const elitePotential = clamp((nation.real.researchCapacity - 8) / 22, 0, 1);
   const ambition = clamp(nation.ambition, 0, 1);
   const fatigue = clamp(player.warFatigue / 70, 0, 1);
-  const foodStress = clamp((0.98 - player.foodSecurity) / 0.58, 0, 1);
-  const foodReserveWeeks = player.foodStock / view.foodDemand;
-  const foodReserveStress = clamp((2 - foodReserveWeeks) / 2, 0, 1);
-  const foodRecoveryStress = Math.max(foodStress, foodReserveStress);
-  const foodImportDependence = clamp(1 - nation.real.foodSelfSufficiencyRatio, 0, 1);
   const reserveCapacity = Math.max(0.000001, selectTrainedReserveCapacityV2(state, playerId));
   const reserveGap = clamp(1 - player.trainedReserves / reserveCapacity, 0, 1);
   const treasuryWeeks = player.treasury / Math.max(0.01, economy.weeklyRevenue);
@@ -893,19 +1035,20 @@ export function selectAiResearchAllocationsV2(
 
   const scores: Record<ResearchBranchV2, number> = {
     'population-recruitment': Math.max(0.10, 0.75 + 2.4 * fillGap + 1.0 * smallPopulation
-      + 1.25 * populationDecline + 0.35 * warPressure - 2.50 * foodRecoveryStress),
+      + 1.25 * populationDecline + 0.35 * warPressure),
     'military-industry': 0.80 + 0.95 * fillGap + 0.55 * activeWars.length
       + 0.40 * ambition,
     'advanced-weapons': 0.80 + 0.85 * wealth + 0.70 * elitePotential + 0.70 * lowQuality
       + 0.65 * deterrenceResearchValue
       + (activeWars.length > 0 ? 1.0 * (1 - warPressure) : 0.35 * ambition),
-    'defensive-systems': 0.75 + 2.0 * warPressure + 0.75 * damage + 0.45 * fatigue + 0.40 * multipleFronts,
-    'logistics-medicine': 0.80 + 1.15 * activeWars.length + 1.15 * multipleFronts + 1.0 * damage
-      + 0.45 * overseasFronts + 0.45 * fillGap + 7.0 * foodRecoveryStress,
+    'defensive-systems': 0.75 + 2.0 * warPressure + 0.45 * fatigue + 0.40 * multipleFronts,
+    'logistics-medicine': 0.80 + 1.15 * activeWars.length + 1.15 * multipleFronts
+      + 0.45 * overseasFronts + 0.45 * fillGap,
     'economy-science': 0.95 + 2.15 * poverty + 1.35 * researchGap + (activeWars.length === 0 ? 0.65 : 0)
-      + 0.45 * (1 - elitePotential) + 5.0 * foodRecoveryStress,
-    'food-systems': 0.65 + 5.5 * foodRecoveryStress + 1.6 * foodImportDependence
-      + 0.65 * poverty + (activeWars.length === 0 ? 0.25 : 0),
+      + 0.45 * (1 - elitePotential),
+    // Stable legacy branch id; this is now military sustainment research.
+    'food-systems': 0.65 + 1.35 * activeWars.length + 1.25 * multipleFronts
+      + 1.15 * overseasFronts + 0.60 * fillGap,
     'reserve-doctrine': 0.55 + 2.2 * reserveGap + 1.4 * fillGap + 0.90 * warPressure
       + 0.75 * activeWars.length + 0.35 * ambition,
     'public-administration': 0.70 + 1.2 * empireScale + 1.5 * integrationLoad
@@ -914,7 +1057,7 @@ export function selectAiResearchAllocationsV2(
       ? 0.01
       : Math.max(0.08, 0.20 + educationFeasibility * (0.65 + 1.65 * iqHeadroom)
         + 0.40 * researchGap + (activeWars.length === 0 ? 0.45 : -0.35)
-        - 1.8 * foodRecoveryStress - 0.65 * debtStress),
+        - 0.65 * debtStress),
   };
   for (const branch of RESEARCH_BRANCHES) {
     // Repeating the same branch becomes exponentially harder in the research
@@ -929,13 +1072,126 @@ export function selectAiResearchAllocationsV2(
   return weightedResearchAllocationsV2(scores, inactiveBranches);
 }
 
-export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): WorldCommandV2[] {
-  if (state.tick === 0 || state.tick % NATIONAL_AI_REVIEW_TICKS !== 0 || state.gameOver) return [];
-  const commands: WorldCommandV2[] = [];
-  const living = sortedNationIdsV2(state).filter((id) => !selectIsEliminatedV2(state, id));
-  const humanPlayerIds = new Set(selectHumanPlayerIdsV2(state));
+/**
+ * Runtime-only accounting used by deterministic performance regressions. It
+ * records bounded work units, never wall-clock time, and is not canonical
+ * state.
+ */
+export interface AiPlanningWorkStatsV2 {
+  managementNationReviews: number;
+  strategicNationReviews: number;
+  warAccessIndexBuilds: number;
+}
+
+/** One stable authored phase per country keeps the 8-week cadence smooth. */
+export function survivalAiManagementPhaseV2(seed: number, authoredIndex: number): number {
+  return ((seed >>> 0) + Math.max(0, Math.floor(authoredIndex)))
+    % NATIONAL_AI_REVIEW_TICKS;
+}
+
+export function selectSurvivalAiManagementCohortV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+): PlayerId[] {
+  const phase = state.tick % NATIONAL_AI_REVIEW_TICKS;
+  return [...content.nationIds]
+    .sort((left, right) => left.localeCompare(right))
+    .filter((playerId, authoredIndex) => (
+      survivalAiManagementPhaseV2(state.seed, authoredIndex) === phase
+        && Boolean(state.players[playerId])
+        && !selectIsEliminatedV2(state, playerId)
+        && (!isRogueAiNationV2(content, playerId) || rogueAiSurvivalActiveV2(state))
+    ));
+}
+
+/**
+ * Survival delegates all declarations to the deterministic Rogue wave system.
+ * Countries still adapt budgets and research every eight weeks, but their
+ * reviews are spread over eight simulation ticks instead of freezing one tick
+ * with a global diplomacy/access/target scan that can never produce a valid
+ * ordinary war.
+ */
+function planSurvivalAiManagementCommandsV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  work?: AiPlanningWorkStatsV2,
+): WorldCommandV2[] {
+  if (state.tick === 0 || state.gameOver) return [];
+  const cohort = selectSurvivalAiManagementCohortV2(state, content);
+  if (work) work.managementNationReviews += cohort.length;
+  if (cohort.length === 0) return [];
   const militaryBaseSnapshot = createMilitaryBaseSnapshotV2(state, content);
   const powerSnapshot = createPowerSnapshotV2(state, content, militaryBaseSnapshot);
+  const commands: WorldCommandV2[] = [];
+  for (const playerId of cohort) {
+    const player = state.players[playerId]!;
+    const planningView = createAiNationalPlanningViewV2(state, content, playerId);
+    const effectiveIq = planningView.effectiveIq;
+    commands.push(...budgetCommands(playerId, player.budget, aiBudgetTargetV2(
+      state,
+      content,
+      playerId,
+      powerSnapshot.leaderBreakthroughs,
+      planningView,
+    ), effectiveIq));
+    const allocations = moveResearchTowardTargetV2(
+      player.research.allocations,
+      selectAiResearchAllocationsV2(
+        state,
+        content,
+        playerId,
+        powerSnapshot,
+        planningView,
+      ),
+      effectiveIq,
+    );
+    if (!sameResearchAllocationsV2(player.research.allocations, allocations)) {
+      commands.push({ type: 'set-research-allocations', playerId, allocations });
+    }
+  }
+  return commands;
+}
+
+/** Engine entry point: smooth Survival management, full strategy elsewhere. */
+export function planRuntimeAiCommandsV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  work?: AiPlanningWorkStatsV2,
+): WorldCommandV2[] {
+  return isSurvivalStateV2(state)
+    ? planSurvivalAiManagementCommandsV2(state, content, work)
+    : planAiCommandsV2(state, content, work);
+}
+
+export function planAiCommandsV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  work?: AiPlanningWorkStatsV2,
+): WorldCommandV2[] {
+  if (state.tick === 0 || state.tick % NATIONAL_AI_REVIEW_TICKS !== 0 || state.gameOver) return [];
+  const commands: WorldCommandV2[] = [];
+  // The Rogue AI has its own deterministic wave scheduler. Its wars still use
+  // the ordinary war engine, but ordinary diplomacy/expansion must never make
+  // it awaken early or negotiate away the survival threat.
+  const living = sortedNationIdsV2(state).filter((id) => (
+    !selectIsEliminatedV2(state, id)
+      && (!isRogueAiNationV2(content, id) || rogueAiSurvivalActiveV2(state))
+  ));
+  if (work) work.strategicNationReviews += living.length;
+  const humanPlayerIds = new Set(selectHumanPlayerIdsV2(state));
+  const seriousBilateralWars = content.metadata?.scenarioId === 'standard-2026'
+    || content.metadata?.scenarioId === 'survival';
+  const militaryBaseSnapshot = createMilitaryBaseSnapshotV2(state, content);
+  const powerSnapshot = createPowerSnapshotV2(state, content, militaryBaseSnapshot);
+  const localHumanThreatByTarget = new Map<PlayerId, ReturnType<typeof selectLocalHostileThreatV2>>();
+  const localHumanThreatFor = (attackerId: PlayerId, targetId: PlayerId) => {
+    let summary = localHumanThreatByTarget.get(targetId);
+    if (!summary) {
+      summary = selectLocalHostileThreatV2(state, content, targetId, powerSnapshot);
+      localHumanThreatByTarget.set(targetId, summary);
+    }
+    return summary.candidates.find((candidate) => candidate.attackerId === attackerId);
+  };
   // Most countries are never considered as targets during one review. Cache
   // geopolitical expansion threat lazily so an exhausting single war does not
   // masquerade as rapid conquest in the anti-overreach loop.
@@ -948,6 +1204,7 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
     return score;
   };
   const warAccessIndex = createAiWarAccessIndexV2(state, content);
+  if (work) work.warAccessIndexBuilds += 1;
   // Rotate strategic initiative so every country gets credible expansion
   // windows instead of alphabetically early nations consuming the war slot.
   const initiativeOffset = living.length > 0
@@ -969,6 +1226,12 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
     ...persistentMajorPowers.slice(0, majorInitiativeOffset),
   ];
   const activeWarCap = aiActiveWarCapV2(living.length, state.tick);
+  const autonomousAiWarCap = autonomousAiVsAiWarCapV2(
+    state,
+    content,
+    living.length,
+  );
+  const autonomousAiWarCount = activeAutonomousAiVsAiWarsV2(state, content);
   // Reserve every other global expansion window for the powers able to reshape
   // a region. Previously a rotating minor almost always consumed the single
   // declaration slot before a major power was evaluated, making the top states
@@ -979,10 +1242,11 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
     : rotatingOrder;
   const warInitiative = new Set<PlayerId>([...rotatingInitiative, ...persistentMajorPowers]);
   const escalationWarCap = activeWarCap + AI_REGIONAL_ESCALATION_EXTRA_WAR_CAP;
-  const resistance = selectGlobalResistanceV2(state);
-  const regionalWarsByTarget = regionalWarsByTargetV2(state);
+  const resistance = selectGlobalResistanceV2(state, content);
+  const regionalWarsByTarget = seriousBilateralWars
+    ? new Map<PlayerId, readonly WarStateV2[]>() : regionalWarsByTargetV2(state);
   const defensiveAidSupporters = new Set<PlayerId>();
-  for (const war of state.wars) {
+  for (const war of seriousBilateralWars ? [] : state.wars) {
     const aggressorPower = powerSnapshot.byNation.get(war.attackerId) ?? 0;
     const defenderPower = powerSnapshot.byNation.get(war.defenderId) ?? 0;
     if (aggressorPower / Math.max(1, defenderPower) < AI_DEFENSIVE_AID_AGGRESSOR_RATIO) continue;
@@ -994,12 +1258,42 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
       }
     }
   }
-  // HIGH/CRITICAL strain creates an emergency review lane for current land
+  // A genuinely stuck Campaign player receives one local, telegraphed pressure
+  // lane. Canonical forecasts decide whether APEX still has a credible escape
+  // route; raw troop totals alone no longer classify the opening.
+  const boxedHumanPressureByTarget = new Map<PlayerId, number>();
+  const boxedHumanThreatByTarget = new Map<PlayerId, PlayerId>();
+  const boxedHumanPressureResponders = new Set<PlayerId>();
+  for (const targetId of humanPlayerIds) {
+    const assessment = assessAiBoxedHumanV2(
+      state,
+      content,
+      targetId,
+      warAccessIndex,
+      militaryBaseSnapshot,
+      powerSnapshot,
+    );
+    if (!assessment.boxed || !assessment.threatenerId
+      || assessment.weeksSinceProgress < AI_BOXED_HUMAN_GRACE_TICKS) continue;
+    const warningMessage = boxedHumanWarningMessageV2(content, assessment.threatenerId);
+    let warning = [...state.events].reverse().find((event) => (
+      event.playerId === targetId && event.kind === 'war' && event.message === warningMessage
+    ));
+    if (!warning) {
+      addWorldEventV2(state, 'war', 'action', warningMessage, undefined, targetId);
+      warning = state.events[state.events.length - 1];
+    }
+    if (!warning || state.tick - warning.tick < AI_BOXED_HUMAN_WARNING_TICKS) continue;
+    boxedHumanPressureByTarget.set(targetId, Math.max(assessment.pressure, 0.12));
+    boxedHumanThreatByTarget.set(targetId, assessment.threatenerId);
+    boxedHumanPressureResponders.add(assessment.threatenerId);
+  }
+  // HIGH/CRITICAL Expansion Threat creates an emergency review lane for land
   // neighbours. The ordinary single-declaration roll still prevents a world
   // dogpile, but the opportunity no longer waits behind rotating initiative.
   const counterattackSupporters = new Set<PlayerId>();
   for (const targetId of living) {
-    const counterattackRisk = counterattackRiskForWarStrainV2(
+    const counterattackRisk = counterattackRiskForExpansionThreatV2(
       expansionThreatScoreFor(targetId),
       true,
     );
@@ -1011,16 +1305,14 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
       }
     }
   }
-  // At extreme visible Suspicion, every land neighbour reviews the human now.
-  // The ordinary single-roll, global cooldown and war caps remain unchanged.
-  const highSuspicionResponders = new Set<PlayerId>();
-  if (state.aiEscalation.globalThreat >= AI_HIGH_SUSPICION_REACTION_THRESHOLD) {
-    for (const targetId of humanPlayerIds) {
-      for (const supporterId of living) {
-        if (humanPlayerIds.has(supporterId) || supporterId === targetId) continue;
-        if (warAccessIndex.get(supporterId)?.get(targetId) === 'land') {
-          highSuspicionResponders.add(supporterId);
-        }
+  // High local threat gets an immediate review lane. This is per opponent and
+  // physical route; no global suspicion score can wake distant countries.
+  const highLocalThreatResponders = new Set<PlayerId>();
+  for (const targetId of humanPlayerIds) {
+    for (const attackerId of living) {
+      if (humanPlayerIds.has(attackerId) || attackerId === targetId) continue;
+      if ((localHumanThreatFor(attackerId, targetId)?.score ?? 0) >= 48) {
+        highLocalThreatResponders.add(attackerId);
       }
     }
   }
@@ -1053,9 +1345,10 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
     if (!sameResearchAllocationsV2(player.research.allocations, allocations)) {
       commands.push({ type: 'set-research-allocations', playerId, allocations });
     }
-    if (state.polarEndgame.phase === 'contact'
-      || state.polarEndgame.phase === 'counteroffensive'
-      || state.polarEndgame.phase === 'core-exposed') continue;
+    // Waves own the Rogue empire's target timing. Once active it still uses
+    // the normal national AI for budgets/research and the normal war engine
+    // for fronts, but it never enters ordinary diplomacy or random expansion.
+    if (isRogueAiNationV2(content, playerId)) continue;
     // Recurring budgets, research and the reserve-training pipeline are the
     // complete AI spending path. Manual one-off purchase commands stay
     // player-facing, so neither selected-country APEX nor rivals can turn a
@@ -1078,92 +1371,10 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
     const humanControlled = humanPlayerIds.has(playerId);
     let offensivelyExhausted = false;
     if (!humanControlled) {
-      const attackingWars = wars.filter((war) => war.attackerId === playerId)
-        .sort((left, right) => left.id.localeCompare(right.id));
-      offensivelyExhausted = aiAttackerIsOffensivelyExhaustedV2(
-        state,
-        playerId,
-      );
-      if (offensivelyExhausted && attackingWars.length > 0) {
-        // A defender's pending offer would make the defender pay. Decline it
-        // first, then submit the attacker's own costly surrender in the same
-        // deterministic command batch. An existing outgoing offer is left for
-        // its recipient to resolve.
-        for (const war of attackingWars) {
-          const pendingOffer = state.offers.find((offer) => (
-            offer.warId === war.id
-              && offer.status === 'pending'
-              && offer.expiresTick > state.tick
-          ));
-          if (pendingOffer?.fromId === playerId) continue;
-          if (pendingOffer) {
-            commands.push({ type: 'respond-to-offer', offerId: pendingOffer.id, accept: false });
-          }
-          commands.push({ type: 'request-ceasefire', warId: war.id, requesterId: playerId });
-        }
-        continue;
-      }
-      const incomingOffer = state.offers.filter((offer) => (
-        offer.toId === playerId && offer.status === 'pending' && offer.expiresTick > state.tick
-      )).sort((left, right) => left.createdTick - right.createdTick || left.id.localeCompare(right.id))[0];
-      if (incomingOffer) {
-        const offerWar = state.wars.find((war) => war.id === incomingOffer.warId);
-        const requesterPower = powerSnapshot.byNation.get(incomingOffer.fromId) ?? 0;
-        const ownPower = powerSnapshot.byNation.get(playerId) ?? 0;
-        const ownWarScore = offerWar
-          ? (offerWar.attackerId === playerId ? offerWar.warScore : -offerWar.warScore) : 0;
-        const settlementValue = incomingOffer.cashAmount
-          ?? (incomingOffer.weeklyCost ?? 0) * (incomingOffer.paymentWeeks ?? 0);
-        const settlementGenerosity = settlementValue
-          / Math.max(0.01, planningView.economy.weeklyRevenue * 52);
-        const acceptChance = aiPeaceOfferAcceptanceChanceV2({
-          aggressiveness: dynamicAggressiveness(),
-          warFatigue: player.warFatigue / 100,
-          armyFillRatio: army.fillRatio,
-          activeWarCount: wars.length,
-          powerRatio: ownPower / Math.max(1, requesterPower),
-          warScore: ownWarScore,
-          opponentTerritoryCount: selectTerritoriesOfV2(state, incomingOffer.fromId).length,
-          settlementGenerosity,
-          humanRequester: humanPlayerIds.has(incomingOffer.fromId),
-          revengePending: offerWar?.revenge?.claimantId === playerId
-            && offerWar.revenge.expiresTick > state.tick,
-        });
-        commands.push({
-          type: 'respond-to-offer',
-          offerId: incomingOffer.id,
-          accept: nextRandom(state) < acceptChance,
-        });
-        continue;
-      }
-      // Peace is a strategic decision after a sustained campaign, never a
-      // reaction re-rolled alongside routine battle pulses.
-      const peaceCandidate = wars.filter((war) => (
-        state.tick - war.startedTick >= PEACE_REQUEST_MIN_WAR_AGE_TICKS
-      )).map((war) => ({
-        war,
-        terms: peaceProposalTermsV2(state, content, war.id, playerId),
-      })).filter((candidate) => candidate.terms.allowed)
-        .sort((left, right) => right.terms.strengthGap - left.terms.strengthGap
-          || left.war.id.localeCompare(right.war.id))[0];
-      if (peaceCandidate) {
-        const pressure = aiPeaceRequestChanceV2({
-          aggressiveness: dynamicAggressiveness(),
-          warAge: state.tick - peaceCandidate.war.startedTick,
-          warFatigue: player.warFatigue / 100,
-          armyFillRatio: army.fillRatio,
-          activeWarCount: wars.length,
-          strengthGap: peaceCandidate.terms.strengthGap,
-          revengePending: peaceCandidate.war.revenge?.claimantId === playerId
-            && peaceCandidate.war.revenge.expiresTick > state.tick,
-        });
-        if (pressure > 0 && nextRandom(state) < pressure) {
-          commands.push({ type: 'request-ceasefire', warId: peaceCandidate.war.id, requesterId: playerId });
-          continue;
-        }
-      }
+      offensivelyExhausted = aiAttackerIsOffensivelyExhaustedV2(state, playerId);
     }
     if (humanControlled) continue;
+    if (!campaignWarsUnlockedV2(state, content)) continue;
     if (offensivelyExhausted
       || wars.some((war) => war.attackerId === playerId
         && aiAttackerMustStandDownV2(state, war))) continue;
@@ -1171,9 +1382,11 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
     // initiative. This preserves rare defensive help without increasing the
     // frequency of ordinary wars.
     const hasCounterattackOpportunity = counterattackSupporters.has(playerId);
-    const hasHighSuspicionOpportunity = highSuspicionResponders.has(playerId);
+    const hasHighLocalThreatOpportunity = highLocalThreatResponders.has(playerId);
+    const hasBoxedHumanPressureOpportunity = boxedHumanPressureResponders.has(playerId);
     if (!warInitiative.has(playerId) && !defensiveAidSupporters.has(playerId)
-      && !hasCounterattackOpportunity && !hasHighSuspicionOpportunity) continue;
+      && !hasCounterattackOpportunity && !hasHighLocalThreatOpportunity
+      && !hasBoxedHumanPressureOpportunity) continue;
     const coalitionMember = resistance.memberIds.includes(playerId);
     const federation = isDefensiveFederationV2(state, playerId);
     const nation = content.nations[playerId]!;
@@ -1183,7 +1396,9 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
     const ownWars = wars;
     const ownWarLimit = aiConcurrentWarLimitV2(majorPowerDrive, state.tick);
     const weeksSinceGlobalStart = state.tick - state.aiEscalation.lastWarStartTick;
-    const normalWindowOpen = state.wars.length < activeWarCap
+    const humanPressureWindow = hasHighLocalThreatOpportunity
+      || hasBoxedHumanPressureOpportunity;
+    const normalWindowOpen = (autonomousAiWarCount < autonomousAiWarCap || humanPressureWindow)
       && weeksSinceGlobalStart >= AI_GLOBAL_WAR_COOLDOWN;
     const escalationWindowOpen = regionalWarsByTarget.size > 0
       && state.wars.length < escalationWarCap
@@ -1191,8 +1406,12 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
     const counterattackWindowOpen = hasCounterattackOpportunity
       && state.wars.length < counterattackWarCap
       && weeksSinceGlobalStart >= 8;
-    if (warPlanned || state.wars.length >= counterattackWarCap
-      || (!normalWindowOpen && !escalationWindowOpen && !counterattackWindowOpen)
+    const boxedHumanWindowOpen = hasBoxedHumanPressureOpportunity
+      && state.wars.length < activeWarCap
+      && weeksSinceGlobalStart >= AI_BOXED_HUMAN_WARNING_TICKS;
+    if (warPlanned
+      || (!normalWindowOpen && !escalationWindowOpen && !counterattackWindowOpen
+        && !boxedHumanWindowOpen)
       || ownWars.length >= ownWarLimit || player.warFatigue >= Math.max(9, 18 - ownWars.length * 5)) continue;
     const ownPower = (powerSnapshot.byNation.get(playerId) ?? 0) / (1 + ownWars.length * 0.65);
     const ownEconomy = planningView.economy;
@@ -1202,33 +1421,45 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
       ownEconomy.weeklyRevenue,
       treasuryWeeks,
     );
-    const foodReserveWeeks = player.foodStock / planningView.foodDemand;
     const populationTrend = planningView.populationAnnualNetRate;
-    const survivalBlocksExpansion = player.foodSecurity < 0.92 || foodReserveWeeks < 0.75
-      || populationTrend < -0.005 || player.treasury < 0
+    const survivalBlocksExpansion = populationTrend < -0.005 || player.treasury < 0
       || integrationPressure.blocksExpansion;
     const candidates = accessibleOwnersV2(warAccessIndex, playerId).filter(({ targetId, access }) => (
       !selectIsEliminatedV2(state, targetId)
-      // The ordinary world keeps its quiet opening. A human country has no
-      // calendar shield: positive Suspicion can expose it immediately, while
-      // exact zero still removes it through the canonical gate below.
-      && (state.tick >= AI_FIRST_WAR_TICK || humanPlayerIds.has(targetId))
+      // Survival is the human/Rogue war. Ordinary nations may defend or fight
+      // wars the human starts, but never open an offensive against a human seat.
+      && !(isSurvivalStateV2(state)
+        && humanPlayerIds.has(targetId)
+        && !isRogueAiNationV2(content, playerId))
+      // The ordinary world keeps its quiet opening. Humans become candidates
+      // only through a real local route and opponent-specific pressure.
+      && (humanPlayerIds.has(targetId)
+        || (content.metadata?.scenarioId === 'standard-2026'
+          ? campaignAiVsAiWarsUnlockedV2(state, content)
+          : state.tick >= AI_FIRST_WAR_TICK))
+      && (!humanPlayerIds.has(targetId)
+        || campaignHumanWarsUnlockedV2(state, content, targetId))
       && !(humanPlayerIds.has(targetId)
-        && aiHumanAttackSuspicionFactorV2(state.aiEscalation.globalThreat) <= 0)
+        && (localHumanThreatFor(playerId, targetId)?.score ?? 0) <= 0
+        && (boxedHumanThreatByTarget.get(targetId) !== playerId
+          || (boxedHumanPressureByTarget.get(targetId) ?? 0) <= 0))
       // A loose containment network is diplomatic preparation, not an
       // automatic pile-on. Its members neither attack one another nor open a
       // new player front; they wait to fuse into a real federation first.
       && !(coalitionMember && resistance.memberIds.includes(targetId))
       && !(coalitionMember && !federation && humanPlayerIds.has(targetId)
-        && counterattackRiskForWarStrainV2(
+        && counterattackRiskForExpansionThreatV2(
           expansionThreatScoreFor(targetId),
           access === 'land',
         ).level !== 'high'
-        && counterattackRiskForWarStrainV2(
+        && counterattackRiskForExpansionThreatV2(
           expansionThreatScoreFor(targetId),
           access === 'land',
         ).level !== 'critical')
     )).map(({ targetId, access }) => {
+      const routePreference = aiRoutePreferenceV2(
+        state, content, playerId, targetId, access,
+      );
       const regionalEscalation = (!coalitionMember || federation)
         && !resistance.memberIds.includes(targetId)
         ? regionalEscalationCandidateV2(
@@ -1249,15 +1480,11 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
         .filter((id) => id !== playerId && id !== interventionAlly
           && !ownWars.some((war) => war.attackerId === id || war.defenderId === id)))];
       const rivalPower = rivalInvaderIds.reduce((sum, id) => sum + (powerSnapshot.byNation.get(id) ?? 0), 0);
-      const neighborCounterattackRisk = counterattackRiskForWarStrainV2(
+      const neighborCounterattackRisk = counterattackRiskForExpansionThreatV2(
         expansionThreatScoreFor(targetId),
         access === 'land',
       );
-      const counterattackPressure = aiCounterattackPressureWithSuspicionV2(
-        neighborCounterattackRisk.pressure,
-        state.aiEscalation.globalThreat,
-        humanPlayerIds.has(targetId),
-      );
+      const counterattackPressure = neighborCounterattackRisk.pressure;
       const rivalCautionMultiplier = 1 - 0.55 * counterattackPressure;
       const counterattackPriorityBonus = 36 * counterattackPressure;
       const counterattackCooldown = aiCounterattackCooldownV2(
@@ -1268,15 +1495,23 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
         || neighborCounterattackRisk.level === 'critical';
       const independentHumanPressureWar = humanPlayerIds.has(targetId)
         && neighborCounterattackRisk.score >= 75;
-      const humanAttackSuspicionFactor = humanPlayerIds.has(targetId)
-        ? aiHumanAttackSuspicionFactorV2(state.aiEscalation.globalThreat)
+      const boxedHumanPressure = boxedHumanThreatByTarget.get(targetId) === playerId
+        ? boxedHumanPressureByTarget.get(targetId) ?? 0
+        : 0;
+      const localHumanThreat = humanPlayerIds.has(targetId)
+        ? localHumanThreatFor(playerId, targetId) : undefined;
+      const humanAttackThreatFactor = humanPlayerIds.has(targetId)
+        ? Math.max(
+          clamp(0.15 + (localHumanThreat?.score ?? 0) / 80, 0.15, 1.25),
+          boxedHumanPressure > 0 ? 0.25 + 0.45 * boxedHumanPressure : 0,
+        )
         : 1;
-      const humanHighAlertPriority = humanPlayerIds.has(targetId)
-        ? 14 * aiHighSuspicionAlertV2(state.aiEscalation.globalThreat)
+      const humanLocalThreatPriority = humanPlayerIds.has(targetId)
+        ? 0.30 * ((localHumanThreat?.score ?? 0) - 35)
         : 0;
       // A country already under attack is not discounted as a free prize: a
-      // new invader still prices in rival armies. Only a critically strained
-      // land neighbour softens that caution, and never removes it completely.
+      // new invader still prices in rival armies. Only critical recent expansion
+      // by a land neighbour softens that caution, never removing it completely.
       const targetPower = (powerSnapshot.byNation.get(targetId) ?? 0)
         + rivalPower * rivalCautionMultiplier;
       const ratio = ownPower / Math.max(1, targetPower);
@@ -1304,7 +1539,8 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
         state.seed, state.tick, playerId, targetId,
       );
       const expansionPriority = 8 * expansionAmbition + 10 * majorPowerDrive
-        + 10 * regionalFit + (access === 'land' ? 5 : 0)
+        + 10 * regionalFit + (routePreference.sameRegion ? 8 : 0)
+        + (access === 'land' ? 18 : 0)
         + geopoliticalGuidance + campaignVariation;
       const cost = selectWarMobilizationCostV2(state, content, playerId, targetId);
       const costWeeks = cost / Math.max(0.01, ownEconomy.weeklyRevenue);
@@ -1316,7 +1552,8 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
         4 + ownWars.length * 4 - 1.5 * majorPowerDrive + (access === 'naval' ? 0.5 : 0),
       )
         + (regionalEscalation ? 0.50 : 1) * warDiscipline.additionalRunwayWeeks
-        + integrationPressure.additionalRunwayWeeks;
+        + integrationPressure.additionalRunwayWeeks
+        + routePreference.expeditionRunwayWeeks;
       const remainingRunway = treasuryWeeks - costWeeks;
       return {
         targetId,
@@ -1328,9 +1565,10 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
           + expansionPriority
           + counterattackPriorityBonus
           + (humanPlayerIds.has(targetId)
-            ? 18 * Math.log(Math.max(0.01, humanAttackSuspicionFactor))
+            ? 10 * Math.log(Math.max(0.05, humanAttackThreatFactor))
             : 0)
-          + humanHighAlertPriority
+          + humanLocalThreatPriority
+          + 28 * boxedHumanPressure
           + (regionalEscalation?.priority ?? 0)
           - majorPeerWarRisk
           - nuclearDeterrence
@@ -1339,14 +1577,14 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
           - 1.5 * targetWars * targetAlignment
           - 2.5 * costWeeks - 3 * Math.max(0, requiredRunway + 2 - remainingRunway)
           - 12 * integrationPressure.burden
-          - (access === 'naval' ? 2 : 0),
+          - routePreference.priorityPenalty,
         cost,
         remainingRunway,
         requiredRunway,
         regionalEscalation,
         targetWars,
         rivalInvaderCount: rivalInvaderIds.length,
-        // High neighbour strain creates one independent pressure war;
+        // High neighbour Expansion Threat creates one independent response war;
         // otherwise a contested declaration also creates one real rival war
         // per existing invader. Every actual war is counted whole.
         prospectiveFronts: independentHumanPressureWar
@@ -1356,10 +1594,13 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
         counterattackPressure,
         counterattackCooldown,
         urgentCounterattack,
-        humanAttackSuspicionFactor,
+        boxedHumanPressure,
+        humanAttackThreatFactor,
+        localHumanThreatScore: localHumanThreat?.score ?? 0,
         rivalCautionMultiplier,
+        routePreference,
         expansionChance: 0.03 * expansionAmbition + 0.03 * majorPowerDrive + 0.02 * regionalFit
-          + 0.0015 * Math.max(0, geopoliticalGuidance),
+          + 0.0015 * Math.max(0, geopoliticalGuidance) + 0.04 * boxedHumanPressure,
       };
     }).filter((candidate) => !ownWars.some((war) => (
       (war.attackerId === playerId && war.defenderId === candidate.targetId)
@@ -1369,12 +1610,14 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
         (truce.leftId === playerId && truce.rightId === candidate.targetId)
         || (truce.leftId === candidate.targetId && truce.rightId === playerId)
       ))
-      && state.wars.length + candidate.prospectiveFronts
-        <= (candidate.urgentCounterattack
-          ? counterattackWarCap
-          : candidate.regionalEscalation ? escalationWarCap : activeWarCap)
+      && (humanPlayerIds.has(candidate.targetId)
+        || (isRogueAiNationV2(content, candidate.targetId)
+          ? state.wars.length + candidate.prospectiveFronts <= activeWarCap
+          : autonomousAiWarCount + candidate.prospectiveFronts <= autonomousAiWarCap))
       && state.tick - state.aiEscalation.lastWarStartTick >= (candidate.urgentCounterattack
         ? candidate.counterattackCooldown
+        : candidate.boxedHumanPressure > 0
+          ? AI_BOXED_HUMAN_WARNING_TICKS
         : candidate.regionalEscalation
           ? candidate.regionalEscalation.defensiveAid
             ? AI_DEFENSIVE_AID_COOLDOWN : AI_REGIONAL_ESCALATION_COOLDOWN
@@ -1401,7 +1644,8 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
             * candidate.rivalCautionMultiplier
           + (state.tick < AI_MAJOR_POWER_AVOIDANCE_TICKS
             ? 0.30 * majorPowerDrive * clamp(((content.nations[candidate.targetId]?.real.powerIndex ?? 0) - 45) / 55, 0, 1)
-            : 0))
+            : 0)
+          - 0.08 * candidate.boxedHumanPressure)
       && player.treasury >= candidate.cost
       && candidate.remainingRunway >= candidate.requiredRunway)
       .sort((a, b) => b.priority - a.priority || a.targetId.localeCompare(b.targetId));
@@ -1434,7 +1678,8 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
             + candidate.rivalInvaderCount * 12
               * candidate.rivalCautionMultiplier
             + (candidate.access === 'naval' ? 1 : 0)
-            - 20 * candidate.counterattackPressure);
+            - 20 * candidate.counterattackPressure
+            - 10 * candidate.boxedHumanPressure);
       return candidate.forecast.winChance >= minimumChance;
     }).sort((left, right) => right.priority - left.priority || left.targetId.localeCompare(right.targetId));
     const candidate = forecastedCandidates[0];
@@ -1455,15 +1700,24 @@ export function planAiCommandsV2(state: WorldStateV2, content: WorldContentV2): 
         regionalEscalation: Boolean(candidate.regionalEscalation),
         rivalInvaderCount: candidate.rivalInvaderCount,
         neighborCounterattackPressure: candidate.counterattackPressure,
-        globalWarLoad: state.wars.length / Math.max(1, activeWarCap),
+        globalWarLoad: humanPlayerIds.has(candidate.targetId)
+          ? candidate.targetWars / Math.max(1, aiTargetWarLimitV2(false, false))
+          : autonomousAiWarCount / Math.max(1, autonomousAiWarCap),
       });
-    const chance = clamp(baseChance * candidate.humanAttackSuspicionFactor, 0, 1);
+    const chance = clamp(
+      (baseChance + 0.08 * candidate.boxedHumanPressure)
+        * candidate.humanAttackThreatFactor,
+      0,
+      1,
+    );
     if (nextRandom(state) >= chance) continue;
     commands.push({
       type: 'declare-war',
       attackerId: playerId,
       defenderId: candidate.targetId,
-      escalatedFromWarId: candidate.regionalEscalation?.linkedWarId,
+      ...(seriousBilateralWars ? {} : {
+        escalatedFromWarId: candidate.regionalEscalation?.linkedWarId,
+      }),
     });
     warPlanned = true;
   }

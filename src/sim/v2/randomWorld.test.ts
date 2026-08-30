@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { createWorldStateV2 } from './bootstrap';
-import { WORLD_CONTENT_V2, type WorldContentV2 } from './content';
+import {
+  isRogueAiNationV2,
+  WORLD_CONTENT_V2,
+  type WorldContentV2,
+} from './content';
 import { assertInvariantsV2 } from './invariants';
 import {
   RANDOM_WORLD_GENERATOR_VERSION_V2,
@@ -52,7 +56,8 @@ describe('Alternative Universe content generation', () => {
     for (const id of generated.nationIds) {
       const base = WORLD_CONTENT_V2.nations[id]!;
       const random = generated.nations[id]!;
-      expect(random).not.toBe(base);
+      if (isRogueAiNationV2(generated, id)) expect(random).toBe(base);
+      else expect(random).not.toBe(base);
       expect(random).toMatchObject({
         id: base.id,
         iso3: base.iso3,
@@ -81,7 +86,11 @@ describe('Alternative Universe content generation', () => {
       });
       expect(random.connections).toEqual(base.connections);
       expect(random.connections).not.toBe(base.connections);
-      expect(random.baseline).toEqual(generated.nations[random.initialOwnerId]!.real);
+      expect(random.baseline).toEqual(
+        isRogueAiNationV2(generated, random.initialOwnerId)
+          ? base.baseline
+          : generated.nations[random.initialOwnerId]!.real,
+      );
       expect(random.baseline).not.toBe(generated.nations[random.initialOwnerId]!.real);
     }
     expect(JSON.stringify(WORLD_CONTENT_V2)).toBe(originalSnapshot);
@@ -129,6 +138,7 @@ describe('Alternative Universe content generation', () => {
     expect(randomPower / basePower).toBeLessThan(1.25);
 
     for (const id of generated.nationIds) {
+      if (isRogueAiNationV2(generated, id)) continue;
       const nation = generated.nations[id]!;
       const perCapita = nation.real.gdp / nation.real.population * 1_000;
       const defenceBurden = nation.real.defenceSpending / nation.real.gdp;
@@ -157,10 +167,12 @@ describe('Alternative Universe content generation', () => {
 
   it('assigns deterrence to generated great powers and has no fixed country leader', () => {
     const generated = createRandomWorldContentV2(99_005);
-    const ranked = [...generated.nationIds].sort((left, right) => (
+    const ranked = generated.nationIds
+      .filter((id) => !isRogueAiNationV2(generated, id))
+      .sort((left, right) => (
       generated.nations[right]!.real.powerIndex - generated.nations[left]!.real.powerIndex
         || left.localeCompare(right)
-    ));
+      ));
     expect(ranked.slice(0, 2).every((id) => generated.nations[id]!.nuclearPowerLevel === 3)).toBe(true);
     expect(ranked.slice(2, 5).every((id) => generated.nations[id]!.nuclearPowerLevel === 2)).toBe(true);
     expect(ranked.slice(5, 9).every((id) => generated.nations[id]!.nuclearPowerLevel === 1)).toBe(true);
@@ -168,10 +180,12 @@ describe('Alternative Universe content generation', () => {
 
     const leaders = Array.from({ length: 20 }, (_, index) => {
       const world = createRandomWorldContentV2(20_000 + index);
-      return [...world.nationIds].sort((left, right) => (
+      return world.nationIds
+        .filter((id) => !isRogueAiNationV2(world, id))
+        .sort((left, right) => (
         world.nations[right]!.real.powerIndex - world.nations[left]!.real.powerIndex
           || left.localeCompare(right)
-      ))[0]!;
+        ))[0]!;
     });
     expect(new Set(leaders).size).toBeGreaterThanOrEqual(5);
     expect(leaders.some((id) => String(id) !== 'usa')).toBe(true);

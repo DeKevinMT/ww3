@@ -8,27 +8,30 @@ import {
   round,
 } from './balance';
 import {
-  stateTerritoryArmyCapacityTargetV2,
   synchronizeArmyCapacityV2,
 } from './capacity';
-import { territoryTerrainTypesV2, type WorldContentV2 } from './content';
+import {
+  ANTARCTIC_TERRITORY_IDS_V2,
+  territoryTerrainTypesV2,
+  type WorldContentV2,
+} from './content';
 import { addWorldEventV2 } from './events';
 import { isHumanPlayerV2, selectHumanPlayerIdsV2 } from './humanPlayers';
-import { createNationStateV2 } from './nationState';
 import {
-  polarEarthUnityActiveV2,
+  selectApexSignalPurgeFocusV2,
+  selectApexSignalPurgeQueueV2,
+} from './apexSignalPurgeFocus';
+import { selectNorthPoleModifiersV2 } from './northPoleModifiers';
+import {
   retirePolarNationReferencesV2,
 } from './polarEndgame';
 import { invalidateNationIndexV2, invalidateTerritoryIndexV2 } from './selectors';
 import { composeTraitContextV2, traitNationContextV2 } from './traitContext';
 import { countryTraitFactorV2, type TraitEvaluationContextV2 } from './traits';
-import { selectWarStrainSummaryV2 } from './warStrain';
 import {
   territoryIdV2,
-  type IntegrationProgramStateV2,
   type PlayerId,
   type TerritoryId,
-  type TerritoryStateV2,
   type WarAccessV2,
   type WorldStateV2,
 } from './types';
@@ -41,180 +44,25 @@ interface SizeAxesV2 {
 
 const sizeBoundsCache = new WeakMap<WorldContentV2, { min: SizeAxesV2; max: SizeAxesV2 }>();
 
-const SMALL_COUNTRY_INTEGRATION_YEARS = 12.5;
-const INTEGRATION_LINEAR_YEARS = 25;
-const INTEGRATION_QUADRATIC_YEARS = 50;
-const INTEGRATION_LARGE_COUNTRY_YEARS = 100;
-/** New captures use a calendar about 20% shorter than the v2.65 release. */
+/**
+ * Signal Purge is now a campaign-paced liberation project rather than a
+ * multi-generation occupation. The immutable size curve runs from one year
+ * for the smallest countries to six years for the single largest country.
+ * Physical APEX presence then compresses that work to roughly four months up
+ * to two years, while a remote relay remains deliberately slower.
+ */
+const SMALL_COUNTRY_INTEGRATION_YEARS = 1;
+const INTEGRATION_LINEAR_YEARS = 2;
+const INTEGRATION_QUADRATIC_YEARS = 1.5;
+const INTEGRATION_LARGE_COUNTRY_YEARS = 1.5;
+/**
+ * Compatibility ratio used only to authenticate and exercise schema-18 save
+ * migration. New Signal Purge quotes use the direct curve above, not this
+ * retired release multiplier.
+ */
 export const INTEGRATION_DURATION_MULTIPLIER_V2 = 0.82;
 /** Voluntary defensive unions complete four times faster than conquest. */
 export const FEDERATION_INTEGRATION_DURATION_FACTOR_V2 = 0.25;
-/** Exactly one keyed roll is made for each frozen integration program. */
-export const TERRITORY_INTEGRATION_REVOLUTION_CHANCE_V2 = 0.02;
-/** A destined revolution occurs away from both capture and completion edges. */
-export const TERRITORY_INTEGRATION_REVOLUTION_WINDOW_START_V2 = 0.20;
-export const TERRITORY_INTEGRATION_REVOLUTION_WINDOW_END_V2 = 0.80;
-/** Critical overreach adds one bounded, deterministic chance per conquest. */
-export const TERRITORY_INTEGRATION_PRESSURE_REVOLUTION_MIN_CHANCE_V2 = 0.10;
-export const TERRITORY_INTEGRATION_PRESSURE_REVOLUTION_MAX_CHANCE_V2 = 0.35;
-export const TERRITORY_INTEGRATION_PRESSURE_REVOLUTION_MIN_SCORE_V2 = 75;
-
-export type TerritoryIntegrationRevolutionRiskLevelV2
-  = 'none' | 'elevated' | 'high' | 'critical';
-
-export interface TerritoryIntegrationWarPressureRevolutionRiskV2 {
-  exposedTerritories: number;
-  bonusChance: number;
-  level: TerritoryIntegrationRevolutionRiskLevelV2;
-  label: string;
-}
-
-function integrationRevolutionHashV2(seed: number, key: string, salt: number): number {
-  let value = (seed ^ Math.imul(salt + 1, 0x9e3779b1)) >>> 0;
-  for (let index = 0; index < key.length; index += 1) {
-    value = Math.imul(value ^ key.charCodeAt(index), 0x85ebca6b) >>> 0;
-    value ^= value >>> 13;
-  }
-  value = Math.imul(value ^ (value >>> 16), 0xc2b2ae35) >>> 0;
-  return value >>> 0;
-}
-
-function integrationRevolutionKeyV2(
-  territoryId: TerritoryId,
-  program: IntegrationProgramStateV2,
-): string {
-  return [
-    territoryId,
-    program.fromOwnerId,
-    program.fromCoreOwnerId,
-    program.toOwnerId,
-    program.startedTick,
-    program.completesTick,
-  ].join('|');
-}
-
-function integrationRevolutionWindowV2(program: IntegrationProgramStateV2): {
-  firstTick: number;
-  lastTick: number;
-} | undefined {
-  const duration = program.completesTick - program.startedTick;
-  if (!Number.isInteger(duration) || duration < 2) return undefined;
-  const firstTick = Math.max(
-    program.startedTick + 1,
-    program.startedTick + Math.ceil(
-      duration * TERRITORY_INTEGRATION_REVOLUTION_WINDOW_START_V2,
-    ),
-  );
-  const lastTick = Math.min(
-    program.completesTick - 1,
-    program.startedTick + Math.floor(
-      duration * TERRITORY_INTEGRATION_REVOLUTION_WINDOW_END_V2,
-    ),
-  );
-  return lastTick >= firstTick ? { firstTick, lastTick } : undefined;
-}
-
-export function territoryIntegrationWarPressureRevolutionBonusChanceV2(
-  score: number,
-): number {
-  if (!Number.isFinite(score) || score < TERRITORY_INTEGRATION_PRESSURE_REVOLUTION_MIN_SCORE_V2) {
-    return 0;
-  }
-  const progress = clamp(
-    (score - TERRITORY_INTEGRATION_PRESSURE_REVOLUTION_MIN_SCORE_V2)
-      / (100 - TERRITORY_INTEGRATION_PRESSURE_REVOLUTION_MIN_SCORE_V2),
-    0,
-    1,
-  );
-  return round(
-    TERRITORY_INTEGRATION_PRESSURE_REVOLUTION_MIN_CHANCE_V2
-      + (TERRITORY_INTEGRATION_PRESSURE_REVOLUTION_MAX_CHANCE_V2
-        - TERRITORY_INTEGRATION_PRESSURE_REVOLUTION_MIN_CHANCE_V2) * progress,
-    9,
-  );
-}
-
-/** Canonical pressure exposure shared by simulation and presentation. */
-export function territoryIntegrationWarPressureRevolutionRiskV2(
-  state: WorldStateV2,
-  content: WorldContentV2,
-  playerId: PlayerId,
-): TerritoryIntegrationWarPressureRevolutionRiskV2 {
-  const exposedTerritories = content.territoryIds.filter((territoryId) => {
-    const territory = state.territories[territoryId];
-    const program = territory?.integrationProgram;
-    return territory?.owner === playerId
-      && program?.toOwnerId === playerId
-      && program.cause !== 'federation'
-      && state.tick < program.completesTick;
-  }).length;
-  if (exposedTerritories === 0) return {
-    exposedTerritories: 0,
-    bonusChance: 0,
-    level: 'none',
-    label: 'NO OCCUPIED TERRITORIES',
-  };
-  const score = selectWarStrainSummaryV2(state, content, playerId).score;
-  const bonusChance = territoryIntegrationWarPressureRevolutionBonusChanceV2(score);
-  const level: TerritoryIntegrationRevolutionRiskLevelV2 = bonusChance <= 0
-    ? 'none' : score >= 95 ? 'critical' : score >= 85 ? 'high' : 'elevated';
-  return {
-    exposedTerritories,
-    bonusChance,
-    level,
-    label: level === 'critical' ? 'CRITICAL REVOLUTION RISK'
-      : level === 'high' ? 'HIGH REVOLUTION RISK'
-        : level === 'elevated' ? 'ELEVATED REVOLUTION RISK'
-          : 'LOW REVOLUTION RISK',
-  };
-}
-
-/**
- * Derives a single optional revolution tick without consuming the campaign RNG.
- * Saving, loading and iteration order therefore cannot change either the event
- * or any unrelated future battle, research or AI draw.
- */
-export function territoryIntegrationRevolutionTickV2(
-  state: Pick<WorldStateV2, 'seed'>,
-  territoryId: TerritoryId,
-  program: IntegrationProgramStateV2,
-): number | undefined {
-  const window = integrationRevolutionWindowV2(program);
-  if (!window) return undefined;
-  const key = integrationRevolutionKeyV2(territoryId, program);
-  const chanceRoll = integrationRevolutionHashV2(state.seed, key, 0)
-    / 4_294_967_296;
-  if (chanceRoll >= TERRITORY_INTEGRATION_REVOLUTION_CHANCE_V2) return undefined;
-  const windowTicks = window.lastTick - window.firstTick + 1;
-  return window.firstTick
-    + integrationRevolutionHashV2(state.seed, key, 1) % windowTicks;
-}
-
-/**
- * One independent pressure roll and one earliest trigger week are frozen from
- * the program key. The current score is checked weekly after that gate. This
- * reacts to later overreach without compounding a long integration into near
- * certainty: sustained pressure can never exceed the advertised per-program
- * bonus chance.
- */
-export function territoryIntegrationPressureRevolutionDueV2(
-  state: Pick<WorldStateV2, 'seed' | 'tick'>,
-  territoryId: TerritoryId,
-  program: IntegrationProgramStateV2,
-  bonusChance: number,
-): boolean {
-  if (program.cause === 'federation' || bonusChance <= 0) return false;
-  const window = integrationRevolutionWindowV2(program);
-  if (!window || state.tick < window.firstTick || state.tick > window.lastTick) return false;
-  const key = integrationRevolutionKeyV2(territoryId, program);
-  const chanceRoll = integrationRevolutionHashV2(state.seed, key, 2)
-    / 4_294_967_296;
-  if (chanceRoll >= bonusChance) return false;
-  const windowTicks = window.lastTick - window.firstTick + 1;
-  const gateTick = window.firstTick
-    + integrationRevolutionHashV2(state.seed, key, 3) % windowTicks;
-  return state.tick >= gateTick;
-}
 
 /**
  * Administration price frozen from the territory's live output at conquest.
@@ -290,10 +138,9 @@ export function territoryIntegrationDurationWeeksV2(
   content: WorldContentV2,
   territoryId: TerritoryId,
 ): number {
-  // The underlying size curve remains unchanged; new captures receive the
-  // universal 0.82x calendar after its old whole-week promise is calculated.
-  // This makes the current speed-up consistent for every territory and avoids changing
-  // the relative ordering through fractional-week rounding.
+  // Quote directly from immutable baseline size. Once this whole-week value is
+  // copied into an integration program, later balance changes, war damage and
+  // save round-trips cannot move that program's promised completion week.
   const luxembourgId = territoryIdV2('lux');
   const luxembourgSize = content.territories[luxembourgId]
     ? territoryIntegrationSizeV2(content, luxembourgId) : 0;
@@ -307,8 +154,7 @@ export function territoryIntegrationDurationWeeksV2(
     + INTEGRATION_LINEAR_YEARS * relativeSize
     + INTEGRATION_QUADRATIC_YEARS * relativeSize ** 2
     + INTEGRATION_LARGE_COUNTRY_YEARS * relativeSize ** 4;
-  const previousCalendarWeeks = Math.round(years * WEEKS_PER_YEAR);
-  return Math.round(previousCalendarWeeks * INTEGRATION_DURATION_MULTIPLIER_V2);
+  return Math.round(years * WEEKS_PER_YEAR);
 }
 
 export function territoryIntegrationGainPerWeekV2(
@@ -337,6 +183,329 @@ export interface IntegrationCompletionV2 {
   territoryId: TerritoryId;
   formerCoreOwnerId: PlayerId;
   ownerId: PlayerId;
+}
+
+/** Remote neural relays continue every purge without pretending APEX is physically present. */
+export const APEX_SIGNAL_PURGE_RELAY_PERCENT_V2 = 50;
+/** Physical APEX presence turns one calendar week into three weeks of purge work. */
+export const APEX_SIGNAL_PURGE_ON_SITE_SPEED_V2 = 3;
+/** A supplied live front contributes exactly one third of APEX's on-site work rate. */
+export const APEX_SIGNAL_PURGE_FRONT_SPEED_V2 = 1;
+const APEX_SIGNAL_PURGE_RELAY_WINDOW_TICKS_V2 = 10;
+const APEX_SIGNAL_PURGE_RELAY_PRODUCTIVE_TICKS_V2 = Math.round(
+  APEX_SIGNAL_PURGE_RELAY_WINDOW_TICKS_V2
+    * APEX_SIGNAL_PURGE_RELAY_PERCENT_V2 / 100,
+);
+
+export type ApexSignalPurgeModeV2 =
+  | 'on-site'
+  | 'en-route'
+  | 'relay'
+  | 'front'
+  | 'paused-front'
+  | 'standard';
+
+export interface ApexSignalPurgeStatusV2 {
+  territoryId: TerritoryId;
+  ownerId: PlayerId;
+  mode: ApexSignalPurgeModeV2;
+  label: string;
+  focused: boolean;
+  /** Calendar ETA under the present physical/front state; absent only while front supply is lost. */
+  projectedCompletesTick?: number;
+  remainingWeeks?: number;
+}
+
+function apexSignalPurgeRelayOffsetV2(territoryId: TerritoryId): number {
+  let hash = 2_166_136_261;
+  for (let index = 0; index < territoryId.length; index += 1) {
+    hash = Math.imul(hash ^ territoryId.charCodeAt(index), 16_777_619) >>> 0;
+  }
+  return hash % APEX_SIGNAL_PURGE_RELAY_WINDOW_TICKS_V2;
+}
+
+/** Exactly 50 productive relay weeks in every 100-week span, with no RNG or save field. */
+export function apexSignalPurgeRelayActiveV2(
+  territoryId: TerritoryId,
+  tick: number,
+): boolean {
+  const phase = ((Math.trunc(tick) + apexSignalPurgeRelayOffsetV2(territoryId))
+    % APEX_SIGNAL_PURGE_RELAY_WINDOW_TICKS_V2
+    + APEX_SIGNAL_PURGE_RELAY_WINDOW_TICKS_V2)
+    % APEX_SIGNAL_PURGE_RELAY_WINDOW_TICKS_V2;
+  return phase < APEX_SIGNAL_PURGE_RELAY_PRODUCTIVE_TICKS_V2;
+}
+
+function apexSignalPurgePhysicalStateV2(
+  state: WorldStateV2,
+  ownerId: PlayerId,
+  focusId: TerritoryId,
+): {
+  onSite: boolean;
+  enRoute: boolean;
+  travelRemaining: number;
+  legacyWithoutForce: boolean;
+} {
+  const force = state.commanderForces?.[ownerId];
+  const operational = Boolean(force
+    && force.army.manpower > 0.000000001
+    && force.economy.supplyStock > 0.000000001);
+  const recovering = force?.mission === 'evacuate' || force?.mission === 'hq-training';
+  const destinationId = force?.transit?.path.at(-1);
+  const enRoute = Boolean(operational
+    && !recovering
+    && force?.transit
+    && destinationId === focusId
+    && !force.front);
+  const onSite = Boolean(operational
+    && !recovering
+    && !force?.transit
+    && !force?.front
+    && force?.mission === 'standby'
+    && force.locationId === focusId);
+  return {
+    onSite,
+    enRoute,
+    travelRemaining: enRoute && force?.transit
+      ? Math.max(0, force.transit.arriveTick - state.tick)
+      : 0,
+    // Pre-APEX authenticated saves and focused simulation fixtures never had
+    // a physical force. Keep their already-promised calendar unchanged; every
+    // new account campaign installs APEX at week zero and uses the physical
+    // on-site/relay rules below.
+    legacyWithoutForce: !force,
+  };
+}
+
+interface ApexSignalPurgeFrontStateV2 {
+  active: boolean;
+  supplied: boolean;
+}
+
+/**
+ * A front relay is earned only by a canonical operation that actually touches
+ * this owner's territory, has local troops and belongs to a fed national
+ * logistics network. Rear territory and unrelated AI operations never qualify.
+ */
+function apexSignalPurgeFrontStateV2(
+  state: WorldStateV2,
+  ownerId: PlayerId,
+  territoryId: TerritoryId,
+): ApexSignalPurgeFrontStateV2 {
+  const territory = state.territories[territoryId];
+  const owner = state.players[ownerId];
+  if (!territory || territory.owner !== ownerId || !owner) {
+    return { active: false, supplied: false };
+  }
+  let active = false;
+  for (const war of state.wars) {
+    const enemyId = war.attackerId === ownerId
+      ? war.defenderId
+      : war.defenderId === ownerId ? war.attackerId : undefined;
+    if (!enemyId) continue;
+    for (const operation of [...war.attackerOperations, ...war.defenderOperations]) {
+      const sourceOwner = state.territories[operation.sourceId]?.owner;
+      const targetOwner = state.territories[operation.targetId]?.owner;
+      const friendlyTerritoryId = sourceOwner === ownerId && targetOwner === enemyId
+        ? operation.sourceId
+        : targetOwner === ownerId && sourceOwner === enemyId
+          ? operation.targetId
+          : undefined;
+      if (friendlyTerritoryId !== territoryId) continue;
+      active = true;
+      if (territory.army.manpower > 0.000000001) {
+        return { active: true, supplied: true };
+      }
+    }
+  }
+  return { active, supplied: false };
+}
+
+export { selectApexSignalPurgeFocusV2 } from './apexSignalPurgeFocus';
+
+function relayCompletionTickV2(
+  territoryId: TerritoryId,
+  afterTick: number,
+  productiveWeeks: number,
+): number {
+  if (productiveWeeks <= 0) return afterTick;
+  // Whole relay windows are phase invariant and contain a fixed amount of
+  // weeks. Skip them arithmetically so even a very large purge queue remains
+  // cheap to project in the HUD.
+  const wholeWindows = Math.floor(
+    (productiveWeeks - 1) / APEX_SIGNAL_PURGE_RELAY_PRODUCTIVE_TICKS_V2,
+  );
+  let tick = afterTick + wholeWindows * APEX_SIGNAL_PURGE_RELAY_WINDOW_TICKS_V2;
+  let completed = wholeWindows * APEX_SIGNAL_PURGE_RELAY_PRODUCTIVE_TICKS_V2;
+  while (completed < productiveWeeks) {
+    tick += 1;
+    if (apexSignalPurgeRelayActiveV2(territoryId, tick)) completed += 1;
+  }
+  return tick;
+}
+
+function relayProductiveWeeksV2(
+  territoryId: TerritoryId,
+  afterTick: number,
+  calendarWeeks: number,
+): number {
+  if (calendarWeeks <= 0) return 0;
+  const wholeWindows = Math.floor(calendarWeeks / APEX_SIGNAL_PURGE_RELAY_WINDOW_TICKS_V2);
+  let productiveWeeks = wholeWindows * APEX_SIGNAL_PURGE_RELAY_PRODUCTIVE_TICKS_V2;
+  const remainderStart = afterTick
+    + wholeWindows * APEX_SIGNAL_PURGE_RELAY_WINDOW_TICKS_V2;
+  for (let offset = 1;
+    offset <= calendarWeeks % APEX_SIGNAL_PURGE_RELAY_WINDOW_TICKS_V2;
+    offset += 1) {
+    if (apexSignalPurgeRelayActiveV2(territoryId, remainderStart + offset)) {
+      productiveWeeks += 1;
+    }
+  }
+  return productiveWeeks;
+}
+
+/**
+ * Compact, truthful presentation model. The same work rates drive both the
+ * live simulation and these ETAs: on-site APEX 3×, supplied fronts 1× and
+ * remote neural relay 50%. Only a genuinely unsupplied live front has no ETA.
+ */
+export function selectApexSignalPurgeStatusesV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  ownerId: PlayerId,
+): readonly ApexSignalPurgeStatusV2[] {
+  const humanQueue = selectApexSignalPurgeQueueV2(state, content, ownerId);
+  if (humanQueue.length === 0) {
+    return content.territoryIds.flatMap((territoryId) => {
+      const territory = state.territories[territoryId];
+      const program = territory?.integrationProgram;
+      if (!territory || !program || territory.owner !== ownerId || program.toOwnerId !== ownerId) {
+        return [];
+      }
+      const projectedCompletesTick = Math.max(state.tick, program.completesTick);
+      return [{
+        territoryId,
+        ownerId,
+        mode: 'standard' as const,
+        label: 'INTEGRATING',
+        focused: false,
+        projectedCompletesTick,
+        remainingWeeks: Math.max(0, projectedCompletesTick - state.tick),
+      }];
+    });
+  }
+
+  return humanQueue.map((territoryId, index) => {
+    const territory = state.territories[territoryId]!;
+    const program = territory.integrationProgram!;
+    const front = apexSignalPurgeFrontStateV2(state, ownerId, territoryId);
+    // Old authenticated saves may contain a frozen 12-year promise. Cap its
+    // remaining work to today's authored curve; the authoritative advance path
+    // applies the same cap on its next tick.
+    const productiveWeeks = Math.max(0, Math.min(
+      program.completesTick - state.tick,
+      territoryIntegrationDurationWeeksV2(content, territoryId),
+    ));
+    const focused = index === 0;
+    const physical = focused
+      ? apexSignalPurgePhysicalStateV2(state, ownerId, territoryId)
+      : { onSite: false, enRoute: false, travelRemaining: 0, legacyWithoutForce: false };
+    let mode: ApexSignalPurgeModeV2;
+    let label: string;
+    if (focused && physical.onSite) {
+      mode = 'on-site';
+      label = `ON-SITE PURGE · ${APEX_SIGNAL_PURGE_ON_SITE_SPEED_V2}×`;
+    } else if (front.supplied) {
+      mode = 'front';
+      label = `FRONT PURGE · ${APEX_SIGNAL_PURGE_FRONT_SPEED_V2}×`;
+    } else if (front.active) {
+      mode = 'paused-front';
+      label = 'WAITING FOR FRONT SUPPLY';
+    } else if (focused && physical.legacyWithoutForce) {
+      mode = 'standard';
+      label = 'INTEGRATING';
+    } else if (focused && physical.enRoute) {
+      mode = 'en-route';
+      label = 'APEX EN ROUTE';
+    } else {
+      mode = 'relay';
+      label = `REMOTE RELAY ${APEX_SIGNAL_PURGE_RELAY_PERCENT_V2}%`;
+    }
+
+    let projectedCompletesTick: number | undefined;
+    if (mode !== 'paused-front') {
+      if (mode === 'on-site') {
+        projectedCompletesTick = state.tick
+          + Math.ceil(productiveWeeks / APEX_SIGNAL_PURGE_ON_SITE_SPEED_V2);
+      } else if (mode === 'standard' || mode === 'front') {
+        projectedCompletesTick = state.tick + productiveWeeks;
+      } else if (mode === 'en-route') {
+        const arrivalTick = state.tick + physical.travelRemaining;
+        const relayCompletesTick = relayCompletionTickV2(
+          territoryId,
+          state.tick,
+          productiveWeeks,
+        );
+        if (relayCompletesTick <= arrivalTick) {
+          // Integration advances before APEX travel on each authoritative
+          // tick. A nearly complete purge can therefore finish through the
+          // relay while the dome is still moving; never hold its HUD ETA at
+          // the later arrival tick.
+          projectedCompletesTick = relayCompletesTick;
+        } else {
+          const remoteProgress = relayProductiveWeeksV2(
+            territoryId,
+            state.tick,
+            physical.travelRemaining,
+          );
+          projectedCompletesTick = arrivalTick
+            + Math.ceil((productiveWeeks - remoteProgress)
+              / APEX_SIGNAL_PURGE_ON_SITE_SPEED_V2);
+        }
+      } else {
+        projectedCompletesTick = relayCompletionTickV2(
+          territoryId,
+          state.tick,
+          productiveWeeks,
+        );
+      }
+    }
+    return {
+      territoryId,
+      ownerId,
+      mode,
+      label,
+      focused,
+      projectedCompletesTick,
+      remainingWeeks: projectedCompletesTick === undefined
+        ? undefined : Math.max(0, projectedCompletesTick - state.tick),
+    };
+  });
+}
+
+/**
+ * Narrative hand-off: callers key their exactly-once transmission to the
+ * returned territory id. A result exists only after the projected APEX dome and
+ * its neural dome have arrived and the full-speed purge is genuinely active.
+ */
+export function selectApexSignalPurgeArrivalV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  ownerId: PlayerId,
+): ApexSignalPurgeStatusV2 | undefined {
+  return selectApexSignalPurgeStatusesV2(state, content, ownerId)
+    .find((status) => status.focused && status.mode === 'on-site');
+}
+
+export function selectApexSignalPurgeStatusV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  territoryId: TerritoryId,
+): ApexSignalPurgeStatusV2 | undefined {
+  const ownerId = state.territories[territoryId]?.owner;
+  if (!ownerId) return undefined;
+  return selectApexSignalPurgeStatusesV2(state, content, ownerId)
+    .find((status) => status.territoryId === territoryId);
 }
 
 export type TerritoryIntegrationCauseV2 = 'conquest' | 'federation';
@@ -434,7 +603,6 @@ export function quoteTerritoryIntegrationV2(
     atWar,
     treasury: leader?.treasury,
     foodSecurity: leader?.foodSecurity,
-    condition: territory?.condition,
     },
   );
   const federationFactor = options.cause === 'federation'
@@ -450,6 +618,13 @@ export function quoteTerritoryIntegrationV2(
     'integration-cost',
     context,
   );
+  // Cognitive Firewall is a run-local investigation benefit. Apply it while
+  // quoting so the immutable completion tick records the exact calendar once;
+  // later research or ownership changes cannot retroactively move that date.
+  const signalPurgeDurationFactor = selectNorthPoleModifiersV2(
+    state,
+    newOwnerId,
+  ).signalPurgeDurationMultiplier;
   return {
     territoryId,
     newOwnerId,
@@ -460,7 +635,8 @@ export function quoteTerritoryIntegrationV2(
     durationWeeks: Math.max(1, Math.round(
       territoryIntegrationDurationWeeksV2(content, territoryId)
         * federationFactor
-        * durationFactor,
+        * durationFactor
+        * signalPurgeDurationFactor,
     )),
     annualCost: round(
       territoryIntegrationAnnualCostV2(territory?.economy ?? 0)
@@ -486,6 +662,20 @@ function beginTerritoryIntegrationWithCauseV2(
   const territory = state.territories[territoryId];
   if (!territory) return;
   const formerOwnerId = territory.owner;
+  const survivalSupplyCorridor = cause === 'conquest'
+    && content.metadata?.scenarioId === 'survival'
+    && !ANTARCTIC_TERRITORY_IDS_V2.includes(territoryId);
+  if (survivalSupplyCorridor) {
+    // In the terminal timeline a world conquest changes route control only.
+    // No global capacity rebuild or multi-year program is needed here; the
+    // battle commit sets this one territory's new local cap after damage.
+    territory.owner = newOwnerId;
+    territory.coreOwner = newOwnerId;
+    territory.integration = 0;
+    delete territory.integrationProgram;
+    invalidateTerritoryIndexV2(state);
+    return;
+  }
   if (territory.coreOwner === newOwnerId) {
     territory.owner = newOwnerId;
     territory.integration = 1;
@@ -560,224 +750,6 @@ export function beginFederationTerritoryIntegrationV2(
   );
 }
 
-export interface IntegrationRevolutionV2 {
-  territoryId: TerritoryId;
-  displacedOwnerId: PlayerId;
-  restoredOwnerId: PlayerId;
-}
-
-/** A revolt fields part of its own live local cap, never a national free army. */
-export const TERRITORY_REVOLUTION_LOCAL_ARMY_MIN_CAP_SHARE_V2 = 0.28;
-export const TERRITORY_REVOLUTION_LOCAL_ARMY_MAX_CAP_SHARE_V2 = 0.50;
-
-/**
- * Recreates only the canonical shell of an absorbed opening nation. Its old
- * inventories and knowledge were already transferred during permanent fusion,
- * so a revolution must not mint those national resources a second time.
- */
-function restoreAbsorbedOpeningNationV2(
-  state: WorldStateV2,
-  content: WorldContentV2,
-  playerId: PlayerId,
-  capitalId: TerritoryId,
-): void {
-  if (state.players[playerId]) return;
-  const restored = createNationStateV2(playerId, content);
-  restored.treasury = 0;
-  restored.foodStock = 0;
-  restored.domesticFoodCapacity = 0;
-  restored.trainedReserves = 0;
-  restored.capitalId = capitalId;
-  state.players[playerId] = restored;
-  invalidateNationIndexV2(state);
-}
-
-function relocateLostCapitalsV2(
-  state: WorldStateV2,
-  playerIds: ReadonlySet<PlayerId>,
-): void {
-  for (const playerId of [...playerIds].sort((left, right) => left.localeCompare(right))) {
-    const nation = state.players[playerId];
-    if (!nation || state.territories[nation.capitalId]?.owner === playerId) continue;
-    const replacement = (Object.entries(state.territories) as Array<[
-      TerritoryId,
-      TerritoryStateV2,
-    ]>)
-      .filter(([, territory]) => territory.owner === playerId)
-      .sort((left, right) => right[1].economy - left[1].economy
-        || left[0].localeCompare(right[0]))[0]?.[0];
-    if (replacement) nation.capitalId = replacement;
-  }
-}
-
-/** Ownership changes can invalidate either end of a stored operation. */
-function pruneRevolutionWarOperationsV2(state: WorldStateV2): void {
-  for (const war of state.wars) {
-    war.attackerOperations = war.attackerOperations.filter((operation) => (
-      state.territories[operation.sourceId]?.owner === war.attackerId
-        && state.territories[operation.targetId]?.owner === war.defenderId
-    ));
-    war.defenderOperations = war.defenderOperations.filter((operation) => (
-      state.territories[operation.sourceId]?.owner === war.defenderId
-        && state.territories[operation.targetId]?.owner === war.attackerId
-    ));
-  }
-}
-
-function replaceOccupationWithLocalRebelArmyV2(
-  state: WorldStateV2,
-  content: WorldContentV2,
-  territoryId: TerritoryId,
-  restoredOwnerId: PlayerId,
-  pressureBonusChance: number,
-): void {
-  const territory = state.territories[territoryId];
-  const originalNation = content.nations[restoredOwnerId];
-  if (!territory || !originalNation) return;
-  const localCapacity = stateTerritoryArmyCapacityTargetV2(
-    state,
-    content,
-    territoryId,
-    restoredOwnerId,
-  );
-  const pressureShare = clamp(
-    pressureBonusChance / TERRITORY_INTEGRATION_PRESSURE_REVOLUTION_MAX_CHANCE_V2,
-    0,
-    1,
-  );
-  const localForceShare = TERRITORY_REVOLUTION_LOCAL_ARMY_MIN_CAP_SHARE_V2
-    + (TERRITORY_REVOLUTION_LOCAL_ARMY_MAX_CAP_SHARE_V2
-      - TERRITORY_REVOLUTION_LOCAL_ARMY_MIN_CAP_SHARE_V2) * pressureShare;
-  territory.army = {
-    manpower: round(Math.min(localCapacity, localCapacity * localForceShare), 9),
-    capacity: round(localCapacity, 9),
-    baseAttack: originalNation.militaryAttackRating
-      ?? originalNation.militaryQuality ?? 1,
-    baseDefense: originalNation.militaryDefenseRating
-      ?? originalNation.militaryQuality ?? 1,
-  };
-}
-
-/**
- * Resolves rare, seed-stable revolutions before weekly finance is projected.
- * The immutable 2026 opening owner is the sole restoration source; live owner,
- * mutable core identity and fusion leader are deliberately ignored.
- */
-export function processTerritoryIntegrationRevolutionsV2(
-  state: WorldStateV2,
-  content: WorldContentV2,
-): IntegrationRevolutionV2[] {
-  if (polarEarthUnityActiveV2(state)) return [];
-  const revolutions: IntegrationRevolutionV2[] = [];
-  const displacedOwners = new Map<PlayerId, PlayerId>();
-  // Freeze every risk and trigger before changing any ownership. Simultaneous
-  // revolutions therefore do not depend on territory iteration order.
-  const pressureRiskByOwner = new Map<PlayerId, TerritoryIntegrationWarPressureRevolutionRiskV2>();
-  for (const territoryId of content.territoryIds) {
-    const territory = state.territories[territoryId];
-    const ownerId = territory?.owner;
-    const program = territory?.integrationProgram;
-    if (ownerId && program && program.cause !== 'federation'
-      && program.toOwnerId === ownerId && state.tick < program.completesTick
-      && !pressureRiskByOwner.has(ownerId)) {
-      pressureRiskByOwner.set(
-        ownerId,
-        territoryIntegrationWarPressureRevolutionRiskV2(state, content, ownerId),
-      );
-    }
-  }
-  const triggered = [...content.territoryIds]
-    .sort((left, right) => left.localeCompare(right))
-    .filter((territoryId) => {
-      const territory = state.territories[territoryId];
-      const program = territory?.integrationProgram;
-      const restoredOwnerId = content.territories[territoryId]?.initialOwnerId;
-      if (!territory || !program || !restoredOwnerId
-        || program.toOwnerId !== territory.owner
-        || restoredOwnerId === territory.owner
-        || state.tick <= program.startedTick
-        || state.tick >= program.completesTick) return false;
-      const ordinaryTick = territoryIntegrationRevolutionTickV2(
-        state,
-        territoryId,
-        program,
-      );
-      const pressureBonusChance = pressureRiskByOwner.get(territory.owner)?.bonusChance ?? 0;
-      return ordinaryTick === state.tick
-        || territoryIntegrationPressureRevolutionDueV2(
-          state,
-          territoryId,
-          program,
-          pressureBonusChance,
-        );
-    });
-  for (const territoryId of triggered) {
-    const territory = state.territories[territoryId];
-    const program = territory?.integrationProgram;
-    const restoredOwnerId = content.territories[territoryId]?.initialOwnerId;
-    if (!territory || !program || !restoredOwnerId
-      || program.toOwnerId !== territory.owner
-      || restoredOwnerId === territory.owner
-      || state.tick <= program.startedTick
-      || state.tick >= program.completesTick) {
-      continue;
-    }
-    const displacedOwnerId = territory.owner;
-    const pressureBonusChance = pressureRiskByOwner.get(displacedOwnerId)?.bonusChance ?? 0;
-    const displacedName = state.players[displacedOwnerId]?.empireName
-      || content.nations[displacedOwnerId]?.shortName || displacedOwnerId;
-    const restoredName = content.nations[restoredOwnerId]?.shortName || restoredOwnerId;
-    const territoryName = content.territories[territoryId]?.name || territoryId;
-    restoreAbsorbedOpeningNationV2(
-      state,
-      content,
-      restoredOwnerId,
-      territoryId,
-    );
-    territory.owner = restoredOwnerId;
-    territory.coreOwner = restoredOwnerId;
-    territory.integration = 1;
-    delete territory.integrationProgram;
-    replaceOccupationWithLocalRebelArmyV2(
-      state,
-      content,
-      territoryId,
-      restoredOwnerId,
-      pressureBonusChance,
-    );
-    displacedOwners.set(displacedOwnerId, restoredOwnerId);
-    revolutions.push({ territoryId, displacedOwnerId, restoredOwnerId });
-    addWorldEventV2(
-      state,
-      'critical',
-      'critical',
-      `${restoredName} rose in revolution with a local rebel army and restored its sovereignty in ${territoryName}, ending integration into ${displacedName}.`,
-      territoryId,
-      restoredOwnerId,
-    );
-  }
-  if (revolutions.length === 0) return revolutions;
-  invalidateTerritoryIndexV2(state);
-  relocateLostCapitalsV2(state, new Set([
-    ...displacedOwners.keys(),
-    ...revolutions.map((revolution) => revolution.restoredOwnerId),
-  ]));
-  pruneRevolutionWarOperationsV2(state);
-  // Resolve a landless occupier only after every simultaneous revolution has
-  // changed ownership, so canonical successor selection is order-independent.
-  for (const [displacedOwnerId, fallbackOwnerId] of [...displacedOwners]
-    .sort(([left], [right]) => left.localeCompare(right))) {
-    retireAbsorbedNationV2(
-      state,
-      content,
-      displacedOwnerId,
-      fallbackOwnerId,
-    );
-  }
-  synchronizeArmyCapacityV2(state, content);
-  return revolutions;
-}
-
 function nationStillHasBackendIdentityV2(
   state: WorldStateV2,
   playerId: PlayerId,
@@ -820,15 +792,23 @@ export function retireAbsorbedNationV2(
   if (returningPolarManpower > 0) {
     former.trainedReserves = round(former.trainedReserves + returningPolarManpower);
   }
-  // The final disappearance transfers national stores exactly once. An
-  // over-cap reserve pool is preserved under the ordinary reserve rules.
-  owner.treasury = round(owner.treasury + former.treasury);
-  owner.foodStock = round(owner.foodStock + former.foodStock);
-  owner.trainedReserves = round(owner.trainedReserves + former.trainedReserves);
+  const terminalCorridorRetirement = content.metadata?.scenarioId === 'survival'
+    && content.territoryIds.filter((territoryId) => (
+      content.territories[territoryId]?.initialOwnerId === formerNationId
+    )).every((territoryId) => (
+      state.runProgression.scorchedWorldTerritoryIds.includes(territoryId)
+        && state.territories[territoryId]?.owner !== formerNationId
+    ));
+  // Ordinary absorption transfers stores exactly once. A terminal-timeline
+  // corridor country has no recoverable treasury, reserves or research cache;
+  // retiring its backend identity must never become a hidden conquest reward.
+  if (!terminalCorridorRetirement) {
+    owner.treasury = round(owner.treasury + former.treasury);
+    owner.trainedReserves = round(owner.trainedReserves + former.trainedReserves);
+  }
   former.treasury = 0;
-  former.foodStock = 0;
   former.trainedReserves = 0;
-  if (mergeKnowledge) {
+  if (mergeKnowledge && !terminalCorridorRetirement) {
     for (const branch of RESEARCH_BRANCHES) {
       owner.research.progress[branch] = round(Math.max(
         owner.research.progress[branch],
@@ -882,6 +862,21 @@ export function retireAbsorbedNationV2(
       state.speed = 0;
     }
   }
+  const persistentHumanApex = isHumanPlayerV2(state, formerNationId)
+    ? state.commanderForces[formerNationId]
+    : undefined;
+  if (persistentHumanApex) {
+    // APEX survives its country's terminal timeline as an inert narrator. It
+    // owns no territory, contributes no front power and does not prevent the
+    // ordinary national backend from retiring or the campaign from ending.
+    persistentHumanApex.mission = 'standby';
+    persistentHumanApex.orderSource = 'autonomous';
+    persistentHumanApex.manualHoldUntilTick = 0;
+    persistentHumanApex.front = null;
+    persistentHumanApex.transit = null;
+  } else {
+    delete state.commanderForces[formerNationId];
+  }
   delete state.players[formerNationId];
   invalidateNationIndexV2(state);
   return true;
@@ -933,10 +928,75 @@ export function advanceTerritoryIntegrationProgramsV2(
   content: WorldContentV2,
 ): IntegrationCompletionV2[] {
   const completions: IntegrationCompletionV2[] = [];
+  // Terminal-timeline corridors are route ownership only. Remove any stale
+  // pre-rule program before selecting a human APEX focus so it cannot consume
+  // that empire's one autonomous purge slot for even a single week.
+  for (const territoryId of content.territoryIds) {
+    const territory = state.territories[territoryId];
+    if (territory
+      && content.metadata?.scenarioId === 'survival'
+      && state.runProgression.scorchedWorldTerritoryIds.includes(territoryId)) {
+      territory.integration = 0;
+      delete territory.integrationProgram;
+    }
+  }
+  const humanFocusByOwner = new Map<PlayerId, TerritoryId>();
+  for (const ownerId of selectHumanPlayerIdsV2(state)) {
+    const focusId = selectApexSignalPurgeFocusV2(state, content, ownerId);
+    if (focusId) humanFocusByOwner.set(ownerId, focusId);
+  }
+
   for (const territoryId of content.territoryIds) {
     const territory = state.territories[territoryId];
     const program = territory?.integrationProgram;
     if (!territory || !program || state.tick <= program.startedTick) continue;
+    if (isHumanPlayerV2(state, territory.owner) && program.toOwnerId === territory.owner) {
+      const focused = humanFocusByOwner.get(territory.owner) === territoryId;
+      const front = apexSignalPurgeFrontStateV2(
+        state,
+        territory.owner,
+        territoryId,
+      );
+      // A same-schema save can carry the old multi-decade frozen endpoint.
+      // Bound remaining work once, using the exact curve also used by the HUD,
+      // without touching already-earned integration progress.
+      program.completesTick = Math.min(
+        program.completesTick,
+        state.tick + territoryIntegrationDurationWeeksV2(content, territoryId),
+      );
+      const physical = focused
+        ? apexSignalPurgePhysicalStateV2(state, territory.owner, territoryId)
+        : { onSite: false, enRoute: false, travelRemaining: 0, legacyWithoutForce: false };
+      const apexOnSiteBoost = focused && physical.onSite;
+      const frontWork = !apexOnSiteBoost && front.supplied;
+      const standardLegacyWork = focused
+        && physical.legacyWithoutForce
+        && !front.active;
+      const remoteRelayWork = !apexOnSiteBoost
+        && !frontWork
+        && !standardLegacyWork
+        && !front.active
+        && apexSignalPurgeRelayActiveV2(territoryId, state.tick);
+      const workRate = apexOnSiteBoost
+        ? APEX_SIGNAL_PURGE_ON_SITE_SPEED_V2
+        : frontWork ? APEX_SIGNAL_PURGE_FRONT_SPEED_V2
+          : standardLegacyWork || remoteRelayWork ? 1 : 0;
+      if (workRate <= 0) {
+        // A remote relay's inactive cadence week or an unsupplied live front
+        // preserves remaining work. Other valid fronts continue independently.
+        program.completesTick += 1;
+        continue;
+      }
+      if (workRate > 1) {
+        // The ordinary calendar step below supplies one unit of work. Pulling
+        // the immutable endpoint forward supplies the remaining rate units
+        // while preserving already-earned progress across travel, war and save.
+        program.completesTick = Math.max(
+          state.tick,
+          program.completesTick - (workRate - 1),
+        );
+      }
+    }
     if (state.tick < program.completesTick) {
       // This remaining-distance step preserves migrated progress while still
       // landing on the immutable endpoint without accumulated rounding drift.
@@ -965,7 +1025,9 @@ export function advanceTerritoryIntegrationProgramsV2(
       state,
       'conquest',
       isHumanPlayerV2(state, ownerId) ? 'action' : 'info',
-      `${formerName} completed integration into ${ownerName} and is now permanent core territory.`,
+      isHumanPlayerV2(state, ownerId)
+        ? `APEX completed the Signal Purge in ${formerName}; it is now permanent core territory in liberated ${ownerName}.`
+        : `${formerName} completed integration into ${ownerName} and is now permanent core territory.`,
       territoryId,
       ownerId,
     );

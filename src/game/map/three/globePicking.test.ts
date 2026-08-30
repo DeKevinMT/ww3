@@ -110,7 +110,9 @@ describe('bounded globe microstate picking', () => {
     );
     expect(exactThenFallback.indexOf('this.globeTexture.pick(uv.x, uv.y)'))
       .toBeLessThan(exactThenFallback.indexOf('this.nearestMicrostateCountryPick(event)'));
-    expect(exactThenFallback).toContain('if (exactPick || !allowMicrostateHitProxy) return exactPick');
+    expect(exactThenFallback).toContain('if (exactPick || !allowMicrostateHitProxy) {');
+    expect(exactThenFallback).toContain('return this.intelligenceFilteredPick(exactPick, intelligenceMode);');
+    expect(exactThenFallback).toContain('this.intelligenceFilteredPick(this.nearestMicrostateCountryPick(event), intelligenceMode)');
 
     const projectionCache = globeSceneSource.slice(
       globeSceneSource.indexOf('private projectedMicrostatePickAnchors'),

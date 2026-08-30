@@ -3,11 +3,9 @@ import { aiHumanAttackSuspicionFactorV2, planAiCommandsV2 } from './ai';
 import { createWorldStateV2 } from './bootstrap';
 import { WORLD_CONTENT_V2 } from './content';
 import { invalidateTerritoryIndexV2 } from './selectors';
+import { enterPostBlackoutCampaignForTestV2 } from './testSupport';
 import { nationIdV2, territoryIdV2, type WarStateV2 } from './types';
-import {
-  selectExpansionThreatSummaryV2,
-  selectWarStrainSummaryV2,
-} from './warStrain';
+import { selectExpansionThreatSummaryV2 } from './expansionThreat';
 
 const belgium = nationIdV2('bel');
 const recentConquests = [nationIdV2('nld'), nationIdV2('lux')];
@@ -35,6 +33,7 @@ function rapidExpansionState(seed: number, suspicion: number) {
   state.tick = 264;
   state.humanPlayerId = belgium;
   state.humanPlayerIds = [belgium];
+  enterPostBlackoutCampaignForTestV2(state);
   state.wars = [offensiveWar(0, state.tick), offensiveWar(1, state.tick)];
   state.offers = [];
   state.truces = [];
@@ -85,7 +84,7 @@ describe('live rapid-expansion response', () => {
       .toBeGreaterThan(aiHumanAttackSuspicionFactorV2(75) * 1.25);
   });
 
-  it('blocks every autonomous human-target declaration at zero Suspicion but permits bounded reactions when high', () => {
+  it('uses bounded local reactions and ignores the retired global Suspicion field', () => {
     let zeroSuspicionAttacks = 0;
     let highSuspicionAttacks = 0;
     let extremeSuspicionAttacks = 0;
@@ -98,8 +97,6 @@ describe('live rapid-expansion response', () => {
         recentConquestCountries: 2,
       });
       expect(expansion.score).toBeGreaterThanOrEqual(80);
-      expect(selectWarStrainSummaryV2(safe, WORLD_CONTENT_V2, belgium).score)
-        .toBeLessThan(75);
       zeroSuspicionAttacks += planAiCommandsV2(safe, WORLD_CONTENT_V2)
         .filter((command) => command.type === 'declare-war'
           && command.defenderId === belgium).length;
@@ -117,9 +114,10 @@ describe('live rapid-expansion response', () => {
           && command.defenderId === belgium).length;
     }
 
-    expect(zeroSuspicionAttacks).toBe(0);
-    expect(highSuspicionAttacks).toBeGreaterThan(0);
+    expect(zeroSuspicionAttacks).toBeGreaterThan(0);
+    expect(zeroSuspicionAttacks).toBeLessThan(samples);
+    expect(highSuspicionAttacks).toBe(zeroSuspicionAttacks);
     expect(highSuspicionAttacks).toBeLessThan(samples);
-    expect(extremeSuspicionAttacks).toBeGreaterThanOrEqual(highSuspicionAttacks);
+    expect(extremeSuspicionAttacks).toBe(highSuspicionAttacks);
   }, 30_000);
 });

@@ -1,13 +1,18 @@
 import type { SaveGameV2 } from '../sim/v2/persistence';
 import { normalizeScenarioConfigV2, type ScenarioConfigV2 } from '../sim/v2/scenarios';
+import { APEX_TRANSMISSION_IDS_V2 } from '../sim/v2/types';
 import type {
+  CommanderForceInitializationV2,
   PlayerId,
   ResearchBranchV2,
   WorldCommandV2,
   WorldSpeedV2,
 } from '../sim/v2/types';
+import type { CountryMasteryRuntimeModifiersV2 } from '../sim/v2/countryMasteryRuntime';
+import { APEX_EMPIRE_ANNUAL_FOOD_OUTPUT_CAP_V2 } from '../sim/v2/commanderForce';
 
-export const MULTIPLAYER_PROTOCOL_VERSION = 2 as const;
+export const MULTIPLAYER_PROTOCOL_VERSION = 6 as const;
+export const MULTIPLAYER_DEPLOYMENT_SCHEMA_VERSION = 1 as const;
 export const MIN_MULTIPLAYER_PLAYERS = 2;
 export const MAX_MULTIPLAYER_PLAYERS = 8;
 export const MAX_PROTOCOL_MESSAGE_BYTES = 4 * 1024 * 1024;
@@ -39,12 +44,16 @@ const RESEARCH_BRANCHES = [
 
 const RESEARCH_BRANCH_SET = new Set<string>(RESEARCH_BRANCHES);
 const ARCTIC_PROJECT_SET = new Set([
-  'polar-demography', 'cryogenic-logistics', 'strategic-mobilisation', 'deep-ice-signals',
+  'polar-demography', 'baseline-calibration', 'polar-relay-mesh', 'anomaly-filtering',
+  'neural-signature-map', 'command-verification', 'recovery-routing', 'cryogenic-logistics',
+  'rogue-ballistics', 'predictive-defense', 'strategic-mobilisation', 'polar-supply-model',
+  'ice-theatre-simulation', 'deep-ice-signals',
 ]);
 const ANTARCTIC_SECTOR_SET = new Set([
   'drake-entry', 'maud-entry', 'ross-entry', 'weddell-forge', 'queen-maud-grid',
   'ross-array', 'sentinel-labyrinth', 'transantarctic-vault', 'zero-point-core',
 ]);
+const APEX_TRANSMISSION_ID_SET = new Set<string>(APEX_TRANSMISSION_IDS_V2);
 
 export type ProtocolErrorCode =
   | 'invalid-message'
@@ -68,14 +77,37 @@ export interface LobbyPlayer {
   peerId: string;
   displayName: string;
   countryId: PlayerId | null;
+  /** Account effects frozen when this seat claims its country. */
+  deployment: MultiplayerDeploymentSnapshotV1 | null;
   ready: boolean;
   connected: boolean;
+}
+
+/**
+ * Compact account boundary shared before week zero. It carries resolved
+ * numbers only: no credits, unlock roster, XP ledger or editable profile.
+ */
+export interface MultiplayerDeploymentSnapshotV1 {
+  schemaVersion: typeof MULTIPLAYER_DEPLOYMENT_SCHEMA_VERSION;
+  countryId: PlayerId;
+  countryMastery: CountryMasteryRuntimeModifiersV2 & {
+    /** Free mastery-level opening cadre, separate from Force capacity. */
+    openingArmyMultiplier: number;
+  };
+  /** Kept explicit for the lobby/reconnect audit; effects are resolved in apex. */
+  activeDoctrine: 'vanguard' | 'bastion' | 'rapid-response' | null;
+  apex: CommanderForceInitializationV2;
 }
 
 export type LobbyAction =
   | { type: 'set-name'; displayName: string }
   | { type: 'set-scenario'; scenario: ScenarioConfigV2 }
-  | { type: 'select-country'; countryId: PlayerId }
+  | {
+      type: 'select-country';
+      countryId: PlayerId;
+      /** Filled by the local lobby before it is accepted or sent on wire. */
+      deployment?: MultiplayerDeploymentSnapshotV1;
+    }
   | { type: 'clear-country' }
   | { type: 'set-ready'; ready: boolean }
   | { type: 'start' };
@@ -95,6 +127,9 @@ export interface HelloMessage {
   peerId: string;
   displayName: string;
   role: 'guest';
+  /** Present only when reclaiming a previously authenticated campaign seat. */
+  sessionId?: string;
+  rejoinToken?: string;
 }
 
 export interface HelloAckMessage {
@@ -106,6 +141,10 @@ export interface HelloAckMessage {
   hostPeerId: string;
   acceptedPeerId: string;
   maxPlayers: number;
+  /** Stable campaign identity; kept locally by the accepted guest. */
+  sessionId?: string;
+  rejoinToken?: string;
+  rejoined?: boolean;
 }
 
 export interface RejectMessage {
@@ -168,6 +207,8 @@ export interface SnapshotMessage {
   reason: 'join' | 'resync' | 'reconnect';
   tick: number;
   hash: string;
+  /** Per-seat transport ordering cursor; independent from the global action sequence. */
+  nextClientSequence: number;
   save: SaveGameV2;
 }
 
@@ -260,6 +301,173 @@ function requireBoolean(value: unknown, label: string): boolean {
   return value;
 }
 
+function requireExactKeys(
+  value: UnknownRecord,
+  expected: readonly string[],
+  label: string,
+): void {
+  const actual = Object.keys(value).sort((left, right) => left.localeCompare(right, 'en'));
+  const canonical = [...expected].sort((left, right) => left.localeCompare(right, 'en'));
+  if (actual.length !== canonical.length
+    || actual.some((key, index) => key !== canonical[index])) {
+    fail(`${label} must contain exactly ${canonical.join(', ')}.`);
+  }
+}
+
+function requireBoundedNumber(
+  value: unknown,
+  label: string,
+  minimum: number,
+  maximum: number,
+): number {
+  const number = requireFiniteNumber(value, label);
+  if (number < minimum || number > maximum) {
+    fail(`${label} must be from ${minimum} through ${maximum}.`);
+  }
+  return number;
+}
+
+/** Strictly canonicalizes the only account data allowed into a lobby. */
+export function validateMultiplayerDeploymentSnapshotV1(
+  value: unknown,
+  label = 'deployment',
+): MultiplayerDeploymentSnapshotV1 {
+  const deployment = requireRecord(value, label);
+  requireExactKeys(deployment, [
+    'schemaVersion', 'countryId', 'countryMastery', 'activeDoctrine', 'apex',
+  ], label);
+  if (deployment.schemaVersion !== MULTIPLAYER_DEPLOYMENT_SCHEMA_VERSION) {
+    fail(`${label}.schemaVersion must be ${MULTIPLAYER_DEPLOYMENT_SCHEMA_VERSION}.`);
+  }
+
+  const masteryLabel = `${label}.countryMastery`;
+  const mastery = requireRecord(deployment.countryMastery, masteryLabel);
+  requireExactKeys(mastery, [
+    'openingArmyMultiplier',
+    'armyCapacityMultiplier', 'attackMultiplier', 'defenseMultiplier',
+    'recruitmentMultiplier', 'reserveTrainingMultiplier',
+    'landSupplyMultiplier', 'landTransferThroughputMultiplier',
+    'navalSupplyMultiplier', 'navalTransferThroughputMultiplier',
+    'navalTransferCostMultiplier', 'recruitmentCostMultiplier',
+    'standingOperatingCostMultiplier', 'casualtyMultiplier',
+  ], masteryLabel);
+  const growth = (key: keyof CountryMasteryRuntimeModifiersV2 | 'openingArmyMultiplier') => (
+    requireBoundedNumber(mastery[key], `${masteryLabel}.${key}`, 1, 100)
+  );
+  const reduction = (
+    key: 'navalTransferCostMultiplier' | 'recruitmentCostMultiplier'
+      | 'standingOperatingCostMultiplier' | 'casualtyMultiplier',
+  ) => requireBoundedNumber(mastery[key], `${masteryLabel}.${key}`, 0.01, 1);
+
+  const apexLabel = `${label}.apex`;
+  const apex = requireRecord(deployment.apex, apexLabel);
+  requireExactKeys(apex, [
+    'manpower', 'capacity', 'trainedReserves', 'baseAttack', 'baseDefense',
+    'treasury', 'annualOutput', 'supplyStock', 'countryTraitScale',
+    'capabilities', 'empireSupport',
+  ], apexLabel);
+  const capabilitiesLabel = `${apexLabel}.capabilities`;
+  const capabilities = requireRecord(apex.capabilities, capabilitiesLabel);
+  requireExactKeys(capabilities, [
+    'mobileHeadquarters', 'fieldHospital', 'rapidResponse',
+    'assaultSpecialist', 'defenseSpecialist', 'emergencyExtractionCharges',
+  ], capabilitiesLabel);
+  const supportLabel = `${apexLabel}.empireSupport`;
+  const support = requireRecord(apex.empireSupport, supportLabel);
+  requireExactKeys(support, [
+    'recruitmentMultiplier', 'reserveTrainingMultiplier', 'annualFoodOutput',
+    'foodProductionMultiplier', 'foodStorageMultiplier', 'foodImportCostMultiplier',
+  ], supportLabel);
+
+  const countryId = requirePlayerId(deployment.countryId, `${label}.countryId`);
+  const activeDoctrine = deployment.activeDoctrine === null
+    || deployment.activeDoctrine === 'vanguard'
+    || deployment.activeDoctrine === 'bastion'
+    || deployment.activeDoctrine === 'rapid-response'
+    ? deployment.activeDoctrine : fail(`${label}.activeDoctrine is invalid.`);
+  const manpower = requireBoundedNumber(apex.manpower, `${apexLabel}.manpower`, 0, 10_000);
+  const capacity = requireBoundedNumber(apex.capacity, `${apexLabel}.capacity`, 0.000001, 10_000);
+  const trainedReserves = requireBoundedNumber(
+    apex.trainedReserves,
+    `${apexLabel}.trainedReserves`,
+    0,
+    10_000,
+  );
+  if (manpower > capacity || trainedReserves > capacity) {
+    fail(`${apexLabel} integrity and recharge buffer must fit inside max integrity.`);
+  }
+  const assaultSpecialist = requireBoolean(
+    capabilities.assaultSpecialist,
+    `${capabilitiesLabel}.assaultSpecialist`,
+  );
+  const defenseSpecialist = requireBoolean(
+    capabilities.defenseSpecialist,
+    `${capabilitiesLabel}.defenseSpecialist`,
+  );
+  const rapidResponse = requireBoolean(
+    capabilities.rapidResponse,
+    `${capabilitiesLabel}.rapidResponse`,
+  );
+  if (assaultSpecialist !== (activeDoctrine === 'vanguard')
+    || defenseSpecialist !== (activeDoctrine === 'bastion')
+    || rapidResponse !== (activeDoctrine === 'rapid-response')) {
+    fail(`${label}.activeDoctrine must match its one resolved APEX specialist capability.`);
+  }
+  return {
+    schemaVersion: MULTIPLAYER_DEPLOYMENT_SCHEMA_VERSION,
+    countryId,
+    activeDoctrine,
+    countryMastery: {
+      openingArmyMultiplier: growth('openingArmyMultiplier'),
+      armyCapacityMultiplier: growth('armyCapacityMultiplier'),
+      attackMultiplier: growth('attackMultiplier'),
+      defenseMultiplier: growth('defenseMultiplier'),
+      recruitmentMultiplier: growth('recruitmentMultiplier'),
+      reserveTrainingMultiplier: growth('reserveTrainingMultiplier'),
+      landSupplyMultiplier: growth('landSupplyMultiplier'),
+      landTransferThroughputMultiplier: growth('landTransferThroughputMultiplier'),
+      navalSupplyMultiplier: growth('navalSupplyMultiplier'),
+      navalTransferThroughputMultiplier: growth('navalTransferThroughputMultiplier'),
+      navalTransferCostMultiplier: reduction('navalTransferCostMultiplier'),
+      recruitmentCostMultiplier: reduction('recruitmentCostMultiplier'),
+      standingOperatingCostMultiplier: reduction('standingOperatingCostMultiplier'),
+      casualtyMultiplier: reduction('casualtyMultiplier'),
+    },
+    apex: {
+      manpower,
+      capacity,
+      trainedReserves,
+      baseAttack: requireBoundedNumber(apex.baseAttack, `${apexLabel}.baseAttack`, 1, 160),
+      baseDefense: requireBoundedNumber(apex.baseDefense, `${apexLabel}.baseDefense`, 1, 160),
+      treasury: requireBoundedNumber(apex.treasury, `${apexLabel}.treasury`, 0, 1_000_000_000),
+      annualOutput: requireBoundedNumber(apex.annualOutput, `${apexLabel}.annualOutput`, 0, 1_000_000_000),
+      supplyStock: requireBoundedNumber(apex.supplyStock, `${apexLabel}.supplyStock`, 0, 1_000_000_000),
+      countryTraitScale: requireBoundedNumber(apex.countryTraitScale, `${apexLabel}.countryTraitScale`, 0, 1),
+      capabilities: {
+        mobileHeadquarters: requireBoolean(capabilities.mobileHeadquarters, `${capabilitiesLabel}.mobileHeadquarters`),
+        fieldHospital: requireBoolean(capabilities.fieldHospital, `${capabilitiesLabel}.fieldHospital`),
+        rapidResponse,
+        assaultSpecialist,
+        defenseSpecialist,
+        emergencyExtractionCharges: requireInteger(
+          capabilities.emergencyExtractionCharges,
+          `${capabilitiesLabel}.emergencyExtractionCharges`,
+          0,
+          2,
+        ),
+      },
+      empireSupport: {
+        recruitmentMultiplier: requireBoundedNumber(support.recruitmentMultiplier, `${supportLabel}.recruitmentMultiplier`, 1, 1.50),
+        reserveTrainingMultiplier: requireBoundedNumber(support.reserveTrainingMultiplier, `${supportLabel}.reserveTrainingMultiplier`, 1, 1.75),
+        annualFoodOutput: requireBoundedNumber(support.annualFoodOutput, `${supportLabel}.annualFoodOutput`, 0, APEX_EMPIRE_ANNUAL_FOOD_OUTPUT_CAP_V2),
+        foodProductionMultiplier: requireBoundedNumber(support.foodProductionMultiplier, `${supportLabel}.foodProductionMultiplier`, 1, 1.50),
+        foodStorageMultiplier: requireBoundedNumber(support.foodStorageMultiplier, `${supportLabel}.foodStorageMultiplier`, 1, 1.75),
+        foodImportCostMultiplier: requireBoundedNumber(support.foodImportCostMultiplier, `${supportLabel}.foodImportCostMultiplier`, 0.75, 1),
+      },
+    },
+  };
+}
+
 function requireScenarioConfig(value: unknown, label: string): ScenarioConfigV2 {
   const scenario = requireRecord(value, label);
   const expectedKeys = ['mode', 'seed', 'version'];
@@ -267,7 +475,9 @@ function requireScenarioConfig(value: unknown, label: string): ScenarioConfigV2 
   if (keys.length !== expectedKeys.length || keys.some((key, index) => key !== expectedKeys[index])) {
     fail(`${label} must contain exactly mode, seed and version.`);
   }
-  if (scenario.mode !== 'standard-2026' && scenario.mode !== 'random-world') {
+  if (scenario.mode !== 'standard-2026'
+    && scenario.mode !== 'random-world'
+    && scenario.mode !== 'survival') {
     fail(`${label}.mode is not supported.`);
   }
   const version = requireInteger(scenario.version, `${label}.version`, 1, 1_000);
@@ -327,9 +537,69 @@ function validateWorldCommand(value: unknown): WorldCommandV2 {
     case 'choose-country':
       requirePlayerId(command.countryId, 'command.countryId');
       break;
+    case 'form-survival-empire': {
+      requirePlayerId(command.flagshipId, 'command.flagshipId');
+      if (!Array.isArray(command.memberIds)
+        || command.memberIds.length < 1 || command.memberIds.length > 256) {
+        fail('command.memberIds must be an array of 1 through 256 country IDs.');
+      }
+      const memberIds = command.memberIds.map((memberId, index) => (
+        requirePlayerId(memberId, `command.memberIds[${index}]`)
+      ));
+      if (new Set(memberIds).size !== memberIds.length) {
+        fail('command.memberIds must not contain duplicate country IDs.');
+      }
+      break;
+    }
     case 'set-speed':
       if (command.speed !== 0 && command.speed !== 1 && command.speed !== 2) fail('command.speed must be 0, 1 or 2.');
       break;
+    case 'set-commander-priorities': {
+      const commandKeys = Object.keys(command).sort();
+      const expectedCommandKeys = ['playerId', 'priorities', 'type'];
+      if (commandKeys.length !== expectedCommandKeys.length
+        || commandKeys.some((key, index) => key !== expectedCommandKeys[index])) {
+        fail('Commander priority commands must contain exactly playerId, priorities and type.');
+      }
+      requirePlayerId(command.playerId, 'command.playerId');
+      const priorities = requireRecord(command.priorities, 'command.priorities');
+      const keys = Object.keys(priorities).sort();
+      const expected = ['development', 'logistics', 'training'];
+      if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index])) {
+        fail('command.priorities must contain exactly development, logistics and training.');
+      }
+      const values = expected.map((key) => requireInteger(
+        priorities[key], `command.priorities.${key}`, 0, 100,
+      ));
+      if (values.reduce((sum, value) => sum + value, 0) !== 100) {
+        fail('command.priorities must total exactly 100.');
+      }
+      break;
+    }
+    case 'issue-commander-order': {
+      const commandKeys = Object.keys(command).sort();
+      const expectedCommandKeys = ['destinationId', 'front', 'mission', 'playerId', 'type'];
+      if (commandKeys.length !== expectedCommandKeys.length
+        || commandKeys.some((key, index) => key !== expectedCommandKeys[index])) {
+        fail('Commander orders must contain exactly destinationId, front, mission, playerId and type.');
+      }
+      requirePlayerId(command.playerId, 'command.playerId');
+      requireString(command.destinationId, 'command.destinationId');
+      if (!['standby', 'assault-support', 'defense', 'logistics-relief', 'evacuate', 'hq-training']
+        .includes(String(command.mission))) fail('command.mission is invalid.');
+      if (command.front !== null) {
+        const front = requireRecord(command.front, 'command.front');
+        const keys = Object.keys(front).sort();
+        const expected = ['sourceId', 'targetId', 'warId'];
+        if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index])) {
+          fail('command.front must contain exactly sourceId, targetId and warId.');
+        }
+        requireString(front.warId, 'command.front.warId');
+        requireString(front.sourceId, 'command.front.sourceId');
+        requireString(front.targetId, 'command.front.targetId');
+      }
+      break;
+    }
     case 'set-research-allocations':
       requirePlayerId(command.playerId, 'command.playerId');
       validateResearchAllocations(command.allocations);
@@ -350,6 +620,33 @@ function validateWorldCommand(value: unknown): WorldCommandV2 {
     case 'acknowledge-polar-warning':
       requirePlayerId(command.playerId, 'command.playerId');
       break;
+    case 'choose-run-upgrade': {
+      fail('Timeline adaptation card commands are retired.');
+    }
+    case 'respond-apex-transmission': {
+      const expectedKeys = ['choice', 'playerId', 'transmissionId', 'type'];
+      const keys = Object.keys(command).sort((left, right) => left.localeCompare(right, 'en'));
+      if (keys.length !== expectedKeys.length || keys.some((key, index) => key !== expectedKeys[index])) {
+        fail('APEX transmission responses must contain exactly playerId, transmissionId and choice.');
+      }
+      requirePlayerId(command.playerId, 'command.playerId');
+      if (typeof command.transmissionId !== 'string'
+        || !APEX_TRANSMISSION_ID_SET.has(command.transmissionId)) {
+        fail('command.transmissionId is invalid.');
+      }
+      if (command.choice !== 'accept' && command.choice !== 'acknowledge'
+        && command.choice !== 'later') {
+        fail('command.choice must be accept or acknowledge.');
+      }
+      if (command.transmissionId === 'campaign-signal-anomaly' && command.choice !== 'accept') {
+        fail('campaign-signal-anomaly is mandatory and only accepts accept.');
+      }
+      if (command.transmissionId !== 'campaign-signal-anomaly'
+        && command.choice !== 'acknowledge') {
+        fail('informational APEX transmissions only accept acknowledge.');
+      }
+      break;
+    }
     case 'start-arctic-project':
       requirePlayerId(command.playerId, 'command.playerId');
       if (typeof command.projectId !== 'string' || !ARCTIC_PROJECT_SET.has(command.projectId)) {
@@ -385,19 +682,6 @@ function validateWorldCommand(value: unknown): WorldCommandV2 {
         requireString(command.escalatedFromWarId, 'command.escalatedFromWarId');
       }
       break;
-    case 'request-ceasefire':
-      requireString(command.warId, 'command.warId');
-      requirePlayerId(command.requesterId, 'command.requesterId');
-      break;
-    case 'propose-peace':
-      requirePlayerId(command.fromId, 'command.fromId');
-      requirePlayerId(command.targetId, 'command.targetId');
-      if (command.settlement !== 'reparations' && command.settlement !== 'ceasefire') fail('command.settlement is invalid.');
-      break;
-    case 'respond-to-offer':
-      requireString(command.offerId, 'command.offerId');
-      requireBoolean(command.accept, 'command.accept');
-      break;
     case 'propose-alliance':
       requirePlayerId(command.fromId, 'command.fromId');
       requirePlayerId(command.targetId, 'command.targetId');
@@ -416,10 +700,25 @@ function validateWorldCommand(value: unknown): WorldCommandV2 {
 
 function validateLobbyPlayer(value: unknown, index: number): LobbyPlayer {
   const player = requireRecord(value, `players[${index}]`);
+  const countryId = player.countryId === null
+    ? null : requirePlayerId(player.countryId, `players[${index}].countryId`);
+  const deployment = player.deployment === null
+    || (player.deployment === undefined && countryId === null)
+    ? null : validateMultiplayerDeploymentSnapshotV1(
+      player.deployment,
+      `players[${index}].deployment`,
+    );
+  if ((countryId === null) !== (deployment === null)) {
+    fail(`players[${index}].countryId and deployment must be selected together.`);
+  }
+  if (countryId !== null && deployment?.countryId !== countryId) {
+    fail(`players[${index}].deployment.countryId must match countryId.`);
+  }
   return {
     peerId: requireString(player.peerId, `players[${index}].peerId`),
     displayName: requireString(player.displayName, `players[${index}].displayName`, MAX_NAME_LENGTH),
-    countryId: player.countryId === null ? null : requirePlayerId(player.countryId, `players[${index}].countryId`),
+    countryId,
+    deployment,
     ready: requireBoolean(player.ready, `players[${index}].ready`),
     connected: requireBoolean(player.connected, `players[${index}].connected`),
   };
@@ -433,8 +732,14 @@ function validateLobbyAction(value: unknown): LobbyAction {
       return { type, displayName: requireString(action.displayName, 'action.displayName', MAX_NAME_LENGTH) };
     case 'set-scenario':
       return { type, scenario: requireScenarioConfig(action.scenario, 'action.scenario') };
-    case 'select-country':
-      return { type, countryId: requirePlayerId(action.countryId, 'action.countryId') };
+    case 'select-country': {
+      const countryId = requirePlayerId(action.countryId, 'action.countryId');
+      const deployment = validateMultiplayerDeploymentSnapshotV1(action.deployment, 'action.deployment');
+      if (deployment.countryId !== countryId) {
+        fail('action.deployment.countryId must match action.countryId.');
+      }
+      return { type, countryId, deployment };
+    }
     case 'clear-country':
       return { type };
     case 'set-ready':
@@ -472,6 +777,9 @@ export function validateProtocolMessage(value: unknown): MultiplayerProtocolMess
     case 'hello':
       requireProtocolVersion(message.protocolVersion);
       if (message.role !== 'guest') fail('hello.role must be guest.');
+      if ((message.sessionId === undefined) !== (message.rejoinToken === undefined)) {
+        fail('hello.sessionId and hello.rejoinToken must be supplied together.');
+      }
       return {
         type,
         protocolVersion: MULTIPLAYER_PROTOCOL_VERSION,
@@ -481,6 +789,10 @@ export function validateProtocolMessage(value: unknown): MultiplayerProtocolMess
         peerId: requireString(message.peerId, 'message.peerId'),
         displayName: requireString(message.displayName, 'message.displayName', MAX_NAME_LENGTH),
         role: 'guest',
+        ...(message.sessionId === undefined ? {} : {
+          sessionId: requireString(message.sessionId, 'message.sessionId'),
+          rejoinToken: requireString(message.rejoinToken, 'message.rejoinToken'),
+        }),
       };
     case 'hello-ack':
       requireProtocolVersion(message.protocolVersion);
@@ -493,6 +805,15 @@ export function validateProtocolMessage(value: unknown): MultiplayerProtocolMess
         hostPeerId: requireString(message.hostPeerId, 'message.hostPeerId'),
         acceptedPeerId: requireString(message.acceptedPeerId, 'message.acceptedPeerId'),
         maxPlayers: requireInteger(message.maxPlayers, 'message.maxPlayers', MIN_MULTIPLAYER_PLAYERS, MAX_MULTIPLAYER_PLAYERS),
+        ...(message.sessionId === undefined ? {} : {
+          sessionId: requireString(message.sessionId, 'message.sessionId'),
+        }),
+        ...(message.rejoinToken === undefined ? {} : {
+          rejoinToken: requireString(message.rejoinToken, 'message.rejoinToken'),
+        }),
+        ...(message.rejoined === undefined ? {} : {
+          rejoined: requireBoolean(message.rejoined, 'message.rejoined'),
+        }),
       };
     case 'reject':
       requireProtocolVersion(message.protocolVersion);
@@ -577,6 +898,11 @@ export function validateProtocolMessage(value: unknown): MultiplayerProtocolMess
         reason: message.reason,
         tick,
         hash: requireHash(message.hash, 'message.hash'),
+        nextClientSequence: requireInteger(
+          message.nextClientSequence,
+          'message.nextClientSequence',
+          1,
+        ),
         save: validateSnapshotSave(message.save, tick),
       };
     }

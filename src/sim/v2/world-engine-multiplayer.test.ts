@@ -147,7 +147,7 @@ describe('V2 authoritative host and replica engine hooks', () => {
     }
   });
 
-  it('tracks war outcomes for the local viewer instead of only the primary human', () => {
+  it('tracks concluded war outcomes for the local viewer instead of only the primary human', () => {
     const state = createWorldStateV2(71_004, WORLD_CONTENT_V2) as WorldStateV2 & {
       humanPlayerIds: PlayerId[];
     };
@@ -170,22 +170,17 @@ describe('V2 authoritative host and replica engine hooks', () => {
       defenderLosses: 0.021,
       attackerCivilianLosses: 0.004,
       defenderCivilianLosses: 0.009,
-      lastPeaceOfferTick: 79,
+      lastPeaceOfferTick: -1_000_000,
       attackerOperations: [],
       defenderOperations: [],
     }];
-    state.players[opponent].treasury = 20;
-    state.offers = [{
-      id: 'offer-viewer-outcome',
-      fromId: opponent,
-      toId: viewer,
-      warId: 'war-viewer-outcome',
-      settlement: 'reparations',
-      createdTick: 79,
-      expiresTick: 100,
-      status: 'pending',
-      cashAmount: 4,
-    }];
+    state.players[viewer].trainedReserves = 0;
+    state.players[opponent].trainedReserves = 0;
+    for (const territory of Object.values(state.territories)) {
+      if (territory.owner === viewer || territory.owner === opponent) {
+        territory.army.manpower = 0;
+      }
+    }
     const engine = new WorldEngineV2(1, WORLD_CONTENT_V2, state);
     const outcomes: WarOutcomeV2[] = [];
     engine.subscribe((_next, change) => {
@@ -195,7 +190,6 @@ describe('V2 authoritative host and replica engine hooks', () => {
     expect(engine.viewerPlayerId).toBe(primary);
     expect(engine.setViewerPlayerId(viewer)).toEqual({ accepted: true });
     expect(engine.viewerPlayerId).toBe(viewer);
-    expect(engine.respondToOffer('offer-viewer-outcome', true)).toEqual({ accepted: true });
     engine.step();
 
     expect(outcomes).toHaveLength(1);

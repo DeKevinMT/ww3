@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   globeTerritoryReadinessPresentation,
+  globeRogueTerritoryPresentation,
   globeTerritorySupplyNodePresentation,
 } from './globeTerritoryPresentation';
 
@@ -38,6 +39,48 @@ describe('globe territory readiness presentation', () => {
       capacity: 0,
       deploymentCapacity: 0,
     }).tone).toBe('critical');
+  });
+});
+
+describe('Rogue AI territory map presentation', () => {
+  it('renders rear occupation as one persistent compact readiness bar', () => {
+    expect(globeRogueTerritoryPresentation('rai', 'bel', ['rai', 'fra'], false)).toEqual({
+      rogue: true,
+      compact: true,
+      persistent: true,
+      showPower: false,
+      humanBorder: false,
+      activeFront: false,
+    });
+  });
+
+  it('expands a human border or active front to local Combat Power', () => {
+    expect(globeRogueTerritoryPresentation('rai', 'bel', ['bel'], false)).toMatchObject({
+      compact: false,
+      showPower: true,
+      humanBorder: true,
+    });
+    expect(globeRogueTerritoryPresentation('rai', 'bel', [], true)).toMatchObject({
+      compact: false,
+      showPower: true,
+      activeFront: true,
+    });
+    expect(globeRogueTerritoryPresentation('rai', ['bel', 'nld'], ['nld'], false)).toMatchObject({
+      compact: false,
+      showPower: true,
+      humanBorder: true,
+    });
+  });
+
+  it('does not alter ordinary human or neutral territory labels', () => {
+    expect(globeRogueTerritoryPresentation('fra', 'bel', ['bel'], true)).toEqual({
+      rogue: false,
+      compact: false,
+      persistent: false,
+      showPower: false,
+      humanBorder: false,
+      activeFront: false,
+    });
   });
 });
 

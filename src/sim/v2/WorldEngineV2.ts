@@ -7,7 +7,12 @@ import {
   copyResearchAllocationsV2,
   validResearchAllocationsV2,
 } from './balance';
-import { planAiCommandsV2 } from './ai';
+import { planRuntimeAiCommandsV2 } from './ai';
+import {
+  CAMPAIGN_FIRST_GATEWAY_BREACH_TICKS_V2,
+  SURVIVAL_FIRST_GATEWAY_BREACH_TICKS_V2,
+  initializeAntarcticGatewayBreachesV2,
+} from './antarcticGateways';
 import {
   allianceProposalStatusV2,
   areAlliedV2,
@@ -16,17 +21,35 @@ import {
   respondToAllianceV2,
 } from './alliances';
 import { addArmyManpowerWithQualityV2, localArmyBaseQualityV2 } from './armyQuality';
+import {
+  respondToApexTransmissionV2,
+  selectApexTransmissionsV2,
+} from './apexNarrative';
 import { createWorldStateV2, processOpeningConflictsV2 } from './bootstrap';
 import { synchronizeArmyCapacityV2 } from './capacity';
-import { WORLD_CONTENT_V2, type WorldContentV2 } from './content';
+import {
+  initializeCommanderForceV2,
+  issueCommanderOrderV2,
+  processCommanderForcesV2,
+  quoteCommanderOrderV2,
+  reconcileCommanderForcesV2,
+  setCommanderPrioritiesV2,
+} from './commanderForce';
+import {
+  WORLD_CONTENT_V2,
+  isHumanSelectableNationV2,
+  isRogueAiNationV2,
+  type WorldContentV2,
+} from './content';
 import { createFinancePlansV2, processDevelopmentPhaseV2, processFinanceMilitaryV2 } from './economy';
 import { pruneWorldHistoryV2 } from './events';
-import {
-  processTerritoryIntegrationRevolutionsV2,
-  retireAbsorbedNationV2,
-} from './integration';
+import { retireAbsorbedNationV2 } from './integration';
 import { assertInvariantsV2 } from './invariants';
-import { isHumanPlayerV2, selectHumanPlayerIdsV2 } from './humanPlayers';
+import {
+  isHumanPlayerV2,
+  selectHumanPlayerIdsV2,
+  selectHumanEmpireDefeatWinnerV2,
+} from './humanPlayers';
 import { processOpeningArmyBonusDecayV2 } from './openingArmyBonus';
 import {
   synchronizeOpeningArmyHumanRosterV2,
@@ -50,7 +73,21 @@ import {
   type ArcticProjectTermsV2,
 } from './polarEndgame';
 import { processResearchV2 } from './research';
+import { processRoguePrimeV2, reconcileRoguePrimeV2 } from './roguePrime';
+import {
+  chooseRunUpgradeV2,
+  createInitialRunProgressionV2,
+  resetRunProgressionRosterV2,
+  selectRunBuildSummaryV2,
+  selectRunDraftV2,
+  synchronizeRunProgressionRosterV2,
+  type RunBuildSummaryV2,
+  type RunDraftViewV2,
+} from './runProgression';
 import { resolveScenarioV2, scenarioConfigFromSaveHeaderV2 } from './scenarios';
+import { initializeSurvivalScenarioV2, rogueAiSurvivalActiveV2 } from './survival';
+import { formSurvivalEmpireV2 } from './survivalEmpire';
+import { reconcileSurvivalRogueFocusWarsV2 } from './survivalRogueFocus';
 import {
   createMilitaryBaseSnapshotV2,
   createPowerSnapshotV2,
@@ -68,6 +105,7 @@ import {
   selectEffectiveRecoveryV2,
   selectGlobalRankingV2,
   selectIsEliminatedV2,
+  isSurvivalScorchedTransitTerritoryV2,
   selectNationViewV2,
   selectNationalAggressivenessV2,
   selectNationalAiPlanV2,
@@ -95,29 +133,31 @@ import {
 } from './selectors';
 import { selectGlobalResistanceV2, updateGlobalResistanceV2 } from './resistance';
 import {
-  beginIndependenceWarV2,
   canDeclareWarV2,
-  ceasefireTermsV2,
   declareWarV2,
   estimateLiveWarV2,
   forecastWarV2,
-  peaceProposalTermsV2,
   processWarsV2,
-  proposePeaceSettlementV2,
-  respondToOfferV2,
-  requestCeasefireV2,
+  synchronizeWarFrontsV2,
   warDeclarationStatusV2,
   type WarConclusionV2,
 } from './war';
 import type {
   AllianceProposalStatusV2,
+  ApexTransmissionChoiceV2,
+  ApexTransmissionIdV2,
+  ApexTransmissionV2,
   AntarcticSectorIdV2,
   ArcticProjectIdV2,
   BattleEventV2,
   BudgetDomainV2,
   BudgetPolicyV2,
-  CeasefireTermsV2,
   CommandResultV2,
+  CommanderEconomyPrioritiesV2,
+  CommanderForceInitializationV2,
+  CommanderFrontAssignmentV2,
+  CommanderMissionV2,
+  CommanderOrderTermsV2,
   ConquestForecastV2,
   ArmyStateV2,
   ArmyStrengthV2,
@@ -130,8 +170,6 @@ import type {
   PopulationDynamicsV2,
   PropagandaTermsV2,
   RapidRecruitmentTermsV2,
-  PeaceProposalTermsV2,
-  PeaceSettlementV2,
   PlayerId,
   RankingEntryV2,
   GlobalResistanceV2,
@@ -139,6 +177,7 @@ import type {
   ResearchBranchV2,
   ResearchPortfolioV2,
   ResearchSurgeTermsV2,
+  RunUpgradeIdV2,
   TerritoryId,
   TerritoryViewV2,
   TotalManpowerV2,
@@ -146,6 +185,7 @@ import type {
   WarDeclarationStatusV2,
   WarForecastV2,
   WarOutcomeV2,
+  WarReportBaselineV2,
   LiveWarEstimateV2,
   WarStateV2,
   WeeklyFinanceBreakdownV2,
@@ -184,7 +224,8 @@ export function createOpeningCandidatePreviewSnapshotV2(
   content: WorldContentV2,
 ): OpeningCandidatePreviewSnapshotV2 {
   const candidateIds = content.nationIds.filter((id) => (
-    Boolean(state.players[id]) && !selectIsEliminatedV2(state, id)
+    isHumanSelectableNationV2(content, id)
+      && Boolean(state.players[id]) && !selectIsEliminatedV2(state, id)
   ));
 
   const ordinaryState = structuredClone(state);
@@ -246,21 +287,6 @@ export function createOpeningCandidatePreviewSnapshotV2(
 export type ClientCommandSinkV2 = (command: WorldCommandV2) => CommandResultV2;
 type QueuedWorldActionListenerV2 = (action: QueuedWorldActionV2) => void;
 
-interface HumanWarBaselineV2 {
-  humanId: PlayerId;
-  opponentId: PlayerId;
-  humanRole: 'attacker' | 'defender';
-  ownedTerritories: Set<TerritoryId>;
-  touchedTerritories: Set<TerritoryId>;
-  treasuryBefore: number;
-  treasurySeized: number;
-  treasuryLost: number;
-  effectiveAttackBefore: number;
-  effectiveDefenseBefore: number;
-  combatPowerBefore: number;
-  capacityBefore: number;
-}
-
 interface HumanNationBaselineV2 {
   humanId: PlayerId;
   ownedTerritories: Set<TerritoryId>;
@@ -295,17 +321,45 @@ export class WorldEngineV2 {
   private applyingCommand = false;
   private sequenceAlreadyAssigned = false;
   private logisticsMovements: LogisticsMovementV2[] = [];
-  private readonly humanWarBaselines = new Map<string, HumanWarBaselineV2>();
 
   constructor(seed = 1, content: WorldContentV2 = WORLD_CONTENT_V2, initialState?: WorldStateV2) {
     this.content = content;
     this.state = initialState ?? createWorldStateV2(seed, content);
     this.state.humanPlayerIds = [...selectHumanPlayerIdsV2(this.state)];
+    this.state.commanderForces ??= {};
+    this.state.runProgression ??= createInitialRunProgressionV2(content);
+    synchronizeRunProgressionRosterV2(this.state);
     this.state.alliances ??= [];
     this.state.allianceOffers ??= [];
+    this.state.polarEndgame.gatewayBreachOrder ??= [];
+    this.state.polarEndgame.gatewayBreaches ??= {};
+    this.state.polarEndgame.rogueAttention ??= {
+      stage: rogueAiSurvivalActiveV2(this.state) ? 'active' : 'dormant',
+      liberatedWorldShare: 0,
+      benchmarkMetTick: null,
+      nextStageTick: null,
+      activatedTick: rogueAiSurvivalActiveV2(this.state)
+        ? this.state.polarEndgame.contactTick ?? this.state.tick
+        : null,
+    };
+    if (rogueAiSurvivalActiveV2(this.state)
+      && this.state.polarEndgame.gatewayBreachOrder.length === 0) {
+      initializeAntarcticGatewayBreachesV2(
+        this.state,
+        content.metadata?.scenarioId === 'survival'
+          ? SURVIVAL_FIRST_GATEWAY_BREACH_TICKS_V2
+          : CAMPAIGN_FIRST_GATEWAY_BREACH_TICKS_V2,
+      );
+    }
     pruneAllianceStateV2(this.state);
     this._viewerPlayerId = this.state.humanPlayerId;
-    this.trackHumanWars();
+    // An authenticated snapshot may canonically contain an explicit empty
+    // report ledger (including saves produced from state-level test/tooling
+    // setup). Hydrating it in the constructor changes the state immediately
+    // after load, so the snapshot's own hash can no longer validate. Normal
+    // declarations capture the pre-war baseline explicitly; legacy/empty
+    // ledgers are initialized at the next simulation boundary before finance
+    // or combat can change any report input.
   }
 
   static fromSave(input: string | SaveGameV2, content?: WorldContentV2): WorldEngineV2 {
@@ -359,7 +413,6 @@ export class WorldEngineV2 {
     }
     if (this._viewerPlayerId === id) return { accepted: true };
     this._viewerPlayerId = id;
-    this.humanWarBaselines.clear();
     this.trackHumanWars();
     this.emit({ reason: 'viewer-changed' });
     return { accepted: true };
@@ -439,8 +492,7 @@ export class WorldEngineV2 {
     };
   }
 
-  private captureHumanNationBaseline(): HumanNationBaselineV2 {
-    const humanId = this._viewerPlayerId;
+  private captureHumanNationBaseline(humanId = this._viewerPlayerId): HumanNationBaselineV2 {
     const ratings = this.effectiveNationalRatings(humanId);
     const manpower = selectTotalManpowerV2(this.state, humanId);
     return {
@@ -454,85 +506,102 @@ export class WorldEngineV2 {
     };
   }
 
+  private createWarReportBaseline(source: HumanNationBaselineV2): WarReportBaselineV2 {
+    return {
+      ownedTerritoryIds: [...source.ownedTerritories]
+        .sort((left, right) => left.localeCompare(right)),
+      touchedTerritoryIds: [],
+      treasuryBefore: source.treasuryBefore,
+      treasurySeized: 0,
+      treasuryLost: 0,
+      allySupportedBattles: 0,
+      allyPeakPower: 0,
+      allyLosses: 0,
+      allyContributorIds: [],
+      effectiveAttackBefore: source.effectiveAttackBefore,
+      effectiveDefenseBefore: source.effectiveDefenseBefore,
+      combatPowerBefore: source.combatPowerBefore,
+      capacityBefore: source.capacityBefore,
+    };
+  }
+
   private trackHumanWars(baseline?: HumanNationBaselineV2): void {
-    const humanId = this._viewerPlayerId;
-    let source = baseline?.humanId === humanId ? baseline : undefined;
     for (const war of this.state.wars) {
-      if (war.attackerId !== humanId && war.defenderId !== humanId) continue;
-      if (this.humanWarBaselines.has(war.id)) continue;
-      source ??= this.captureHumanNationBaseline();
-      this.humanWarBaselines.set(war.id, {
-        humanId,
-        opponentId: war.attackerId === humanId ? war.defenderId : war.attackerId,
-        humanRole: war.attackerId === humanId ? 'attacker' : 'defender',
-        ownedTerritories: new Set(source.ownedTerritories),
-        touchedTerritories: new Set(),
-        treasuryBefore: source.treasuryBefore,
-        treasurySeized: 0,
-        treasuryLost: 0,
-        effectiveAttackBefore: source.effectiveAttackBefore,
-        effectiveDefenseBefore: source.effectiveDefenseBefore,
-        combatPowerBefore: source.combatPowerBefore,
-        capacityBefore: source.capacityBefore,
-      });
+      const ledgers = war.reportBaselineByPlayer ??= {};
+      for (const humanId of [war.attackerId, war.defenderId]
+        .filter((playerId) => isHumanPlayerV2(this.state, playerId))) {
+        if (ledgers[humanId]) continue;
+        const source = baseline?.humanId === humanId
+          ? baseline : this.captureHumanNationBaseline(humanId);
+        ledgers[humanId] = this.createWarReportBaseline(source);
+      }
     }
   }
 
-  private recordHumanWarBattle(battle: BattleEventV2): void {
-    const baseline = this.humanWarBaselines.get(battle.warId);
-    if (!baseline) return;
-    if (battle.conquered) baseline.touchedTerritories.add(battle.targetId);
-    if (battle.treasurySeized <= 0) return;
-    if (battle.attackerId === baseline.humanId) baseline.treasurySeized = round(
-      baseline.treasurySeized + battle.treasurySeized,
-    );
-    if (battle.defenderId === baseline.humanId) baseline.treasuryLost = round(
-      baseline.treasuryLost + battle.treasurySeized,
-    );
+  private recordHumanWarBattle(battle: BattleEventV2, resolvedWar?: WarStateV2): void {
+    const war = resolvedWar
+      ?? this.state.wars.find((candidate) => candidate.id === battle.warId);
+    if (!war) return;
+    for (const humanId of [war.attackerId, war.defenderId]
+      .filter((playerId) => isHumanPlayerV2(this.state, playerId))) {
+      const ledgers = war.reportBaselineByPlayer ??= {};
+      let baseline = ledgers[humanId];
+      if (!baseline) {
+        baseline = this.createWarReportBaseline(
+          this.captureHumanNationBaseline(humanId),
+        );
+        ledgers[humanId] = baseline;
+      }
+      if (battle.conquered && !baseline.touchedTerritoryIds.includes(battle.targetId)) {
+        baseline.touchedTerritoryIds.push(battle.targetId);
+        baseline.touchedTerritoryIds.sort((left, right) => left.localeCompare(right));
+      }
+      const allySupport = war.attackerId === humanId
+        ? battle.allyAttackerSupport : battle.allyDefenderSupport;
+      if (allySupport) {
+        baseline.allySupportedBattles += 1;
+        baseline.allyPeakPower = Math.max(baseline.allyPeakPower, allySupport.power);
+        baseline.allyLosses = round(baseline.allyLosses + allySupport.losses, 9);
+        if (!baseline.allyContributorIds.includes(allySupport.contributorId)) {
+          baseline.allyContributorIds.push(allySupport.contributorId);
+          baseline.allyContributorIds.sort((left, right) => left.localeCompare(right));
+        }
+      }
+      if (battle.treasurySeized <= 0) continue;
+      if (battle.attackerId === humanId) baseline.treasurySeized = round(
+        baseline.treasurySeized + battle.treasurySeized,
+      );
+      if (battle.defenderId === humanId) baseline.treasuryLost = round(
+        baseline.treasuryLost + battle.treasurySeized,
+      );
+    }
   }
 
   private emitWarConclusions(conclusions: readonly WarConclusionV2[]): void {
     for (const conclusion of conclusions) {
-      const { war, settlement } = conclusion;
+      const { war } = conclusion;
       const humanId = this._viewerPlayerId;
       if (war.attackerId !== humanId && war.defenderId !== humanId) continue;
-      const fallback = this.captureHumanNationBaseline();
-      const baseline = this.humanWarBaselines.get(war.id) ?? {
-        humanId,
-        opponentId: war.attackerId === humanId ? war.defenderId : war.attackerId,
-        humanRole: war.attackerId === humanId ? 'attacker' as const : 'defender' as const,
-        ownedTerritories: fallback.ownedTerritories,
-        touchedTerritories: new Set<TerritoryId>(),
-        treasuryBefore: fallback.treasuryBefore,
-        treasurySeized: 0,
-        treasuryLost: 0,
-        effectiveAttackBefore: fallback.effectiveAttackBefore,
-        effectiveDefenseBefore: fallback.effectiveDefenseBefore,
-        combatPowerBefore: fallback.combatPowerBefore,
-        capacityBefore: fallback.capacityBefore,
-      };
-      const gained = [...baseline.touchedTerritories].filter((territoryId) => (
-        !baseline.ownedTerritories.has(territoryId)
+      const baseline = war.reportBaselineByPlayer?.[humanId]
+        ?? this.createWarReportBaseline(this.captureHumanNationBaseline(humanId));
+      const opponentId = war.attackerId === humanId ? war.defenderId : war.attackerId;
+      const humanRole = war.attackerId === humanId ? 'attacker' as const : 'defender' as const;
+      const ownedTerritories = new Set(baseline.ownedTerritoryIds);
+      const apexTelemetry = war.apexTelemetryByPlayer?.[humanId];
+      const gained = baseline.touchedTerritoryIds.filter((territoryId) => (
+        !ownedTerritories.has(territoryId)
           && this.state.territories[territoryId]?.owner === humanId
       )).sort((left, right) => left.localeCompare(right));
-      const lost = [...baseline.touchedTerritories].filter((territoryId) => (
-        baseline.ownedTerritories.has(territoryId)
+      const lost = baseline.touchedTerritoryIds.filter((territoryId) => (
+        ownedTerritories.has(territoryId)
           && this.state.territories[territoryId]?.owner !== humanId
       )).sort((left, right) => left.localeCompare(right));
       const sumTerritories = (territoryIds: readonly TerritoryId[], field: 'population' | 'economy'): number => round(
         territoryIds.reduce((sum, territoryId) => sum + (this.state.territories[territoryId]?.[field] ?? 0), 0),
       );
       const ratingsAfter = this.effectiveNationalRatings(humanId);
-      const reparationsReceived = settlement?.kind === 'reparations' && settlement.payeeId === humanId
-        ? settlement.amount ?? 0 : 0;
-      const reparationsPaid = settlement?.kind === 'reparations' && settlement.payerId === humanId
-        ? settlement.amount ?? 0 : 0;
-      const treatyWeeklyPayment = settlement?.kind === 'ceasefire'
-        ? (settlement.payeeId === humanId ? settlement.weeklyCost ?? 0
-          : settlement.payerId === humanId ? -(settlement.weeklyCost ?? 0) : 0)
-        : 0;
       const humanEliminated = selectTerritoriesOfV2(this.state, humanId).length === 0;
-      const opponentEliminated = selectTerritoriesOfV2(this.state, baseline.opponentId).length === 0;
+      const opponentEliminated = selectTerritoriesOfV2(this.state, opponentId).length === 0;
       const result: WarOutcomeV2['result'] = humanEliminated
         ? 'defeat'
         : opponentEliminated && gained.length > 0
@@ -541,26 +610,38 @@ export class WorldEngineV2 {
             ? 'territorial-gain'
             : lost.length > gained.length
               ? 'territorial-loss'
-              : settlement
-                ? 'treaty'
-                : 'stalemate';
+              : 'stalemate';
       const outcome: WarOutcomeV2 = {
         warId: war.id,
         startedTick: war.startedTick,
         endedTick: conclusion.endedTick,
         humanId,
-        opponentId: baseline.opponentId,
-        humanRole: baseline.humanRole,
+        opponentId,
+        humanRole,
         result,
         reason: conclusion.reason,
         battles: war.battles,
-        warScore: round(baseline.humanRole === 'attacker' ? war.warScore : -war.warScore),
-        ownLosses: baseline.humanRole === 'attacker' ? war.attackerLosses : war.defenderLosses,
-        enemyLosses: baseline.humanRole === 'attacker' ? war.defenderLosses : war.attackerLosses,
-        ownCivilianLosses: baseline.humanRole === 'attacker'
+        warScore: round(humanRole === 'attacker' ? war.warScore : -war.warScore),
+        ownLosses: humanRole === 'attacker' ? war.attackerLosses : war.defenderLosses,
+        enemyLosses: humanRole === 'attacker' ? war.defenderLosses : war.attackerLosses,
+        ownCivilianLosses: humanRole === 'attacker'
           ? war.attackerCivilianLosses ?? 0 : war.defenderCivilianLosses ?? 0,
-        enemyCivilianLosses: baseline.humanRole === 'attacker'
+        enemyCivilianLosses: humanRole === 'attacker'
           ? war.defenderCivilianLosses ?? 0 : war.attackerCivilianLosses ?? 0,
+        apexSupportedBattles: apexTelemetry?.supportedBattles ?? 0,
+        apexPeakPower: round(apexTelemetry?.peakPower ?? 0),
+        apexMaxIntegrity: apexTelemetry?.maxIntegrity
+          ?? this.state.commanderForces?.[humanId]?.army.capacity ?? 0,
+        apexLosses: apexTelemetry?.integrityLosses ?? 0,
+        apexSupplyDelivered: apexTelemetry?.supplyDelivered ?? 0,
+        apexSupplySpent: apexTelemetry?.supplySpent ?? 0,
+        apexSingularityPulses: apexTelemetry?.singularityPulses ?? 0,
+        apexMirrorCounterpulseDamage: apexTelemetry?.mirrorCounterpulseDamage ?? 0,
+        apexTwinProjectionBattles: apexTelemetry?.twinProjectionBattles ?? 0,
+        allySupportedBattles: baseline.allySupportedBattles,
+        allyPeakPower: round(baseline.allyPeakPower),
+        allyLosses: baseline.allyLosses,
+        allyContributorIds: [...baseline.allyContributorIds],
         survivingManpower: selectTotalManpowerV2(this.state, humanId).deployed,
         territoriesGained: gained,
         territoriesLost: lost,
@@ -572,10 +653,6 @@ export class WorldEngineV2 {
         treasuryAfter: this.state.players[humanId]?.treasury ?? 0,
         treasurySeized: baseline.treasurySeized,
         treasuryLost: baseline.treasuryLost,
-        reparationsReceived,
-        reparationsPaid,
-        treatyWeeklyPayment,
-        treatyPaymentWeeks: settlement?.kind === 'ceasefire' ? settlement.paymentWeeks ?? 0 : 0,
         effectiveAttackBefore: baseline.effectiveAttackBefore,
         effectiveAttackAfter: ratingsAfter.attack,
         effectiveDefenseBefore: baseline.effectiveDefenseBefore,
@@ -585,7 +662,6 @@ export class WorldEngineV2 {
         capacityBefore: baseline.capacityBefore,
         capacityAfter: selectTotalManpowerV2(this.state, humanId).capacity,
       };
-      this.humanWarBaselines.delete(war.id);
       this.emit({ reason: 'war-outcome', warOutcome: outcome, critical: true });
     }
   }
@@ -598,15 +674,92 @@ export class WorldEngineV2 {
     return selectTerritoriesOfV2(this.state, nationIdV2(playerId));
   }
 
+  /** Installs one immutable account snapshot before the first campaign week. */
+  initializeCommanderForce(
+    playerId: string,
+    initialization: CommanderForceInitializationV2,
+  ): CommandResultV2 {
+    const result = initializeCommanderForceV2(
+      this.state,
+      this.content,
+      nationIdV2(playerId),
+      initialization,
+    );
+    if (result.accepted) {
+      this.assertStateIntegrity(true);
+      this.emit({ reason: 'commander-force-initialized', critical: true });
+    }
+    return result;
+  }
+
+  commanderOrderTerms(
+    playerId: string,
+    destinationId: string,
+    mission: CommanderMissionV2,
+    front: CommanderFrontAssignmentV2 | null,
+  ): CommanderOrderTermsV2 {
+    return quoteCommanderOrderV2(
+      this.state,
+      this.content,
+      nationIdV2(playerId),
+      territoryIdV2(destinationId),
+      mission,
+      front,
+    );
+  }
+
+  setCommanderPriorities(
+    playerId: string,
+    priorities: CommanderEconomyPrioritiesV2,
+  ): CommandResultV2 {
+    const id = nationIdV2(playerId);
+    return setCommanderPrioritiesV2(this.state, id, priorities);
+  }
+
+  issueCommanderOrder(
+    playerId: string,
+    destinationId: string,
+    mission: CommanderMissionV2,
+    front: CommanderFrontAssignmentV2 | null,
+  ): CommandResultV2 {
+    const id = nationIdV2(playerId);
+    const destination = territoryIdV2(destinationId);
+    return issueCommanderOrderV2(
+      this.state, this.content, id, destination, mission, front,
+    );
+  }
+
+  /** Concise UI model: at most one deterministic three-card choice for this human. */
+  runDraft(playerId: string): RunDraftViewV2 | null {
+    return selectRunDraftV2(this.state, nationIdV2(playerId));
+  }
+
+  /** Run-only history and exact live modifiers; never copied into account meta. */
+  runBuildSummary(playerId: string): RunBuildSummaryV2 {
+    return selectRunBuildSummaryV2(this.state, nationIdV2(playerId));
+  }
+
+  chooseRunUpgrade(
+    _playerId: string,
+    _offerId: string,
+    _upgradeId: RunUpgradeIdV2,
+  ): CommandResultV2 {
+    return { accepted: false, reason: 'Timeline adaptation cards were retired; use APEX talents and nation mastery.' };
+  }
+
   /** Configures the immutable multiplayer seats before the first shared tick. */
   configureHumanPlayers(playerIds: readonly string[], viewerPlayerId: string): CommandResultV2 {
     if (this.state.tick > 0) return { accepted: false, reason: 'Human seats are locked after the campaign begins.' };
+    if (Object.keys(this.state.commanderForces).length > 0) {
+      return { accepted: false, reason: 'Human seats are locked after APEX shield initialisation.' };
+    }
     const ids = [...new Set(playerIds.map(nationIdV2))]
       .sort((left, right) => left.localeCompare(right));
     const viewerId = nationIdV2(viewerPlayerId);
     if (ids.length < 1 || ids.length > 8) return { accepted: false, reason: 'A campaign supports 1–8 human countries.' };
     if (!ids.includes(viewerId)) return { accepted: false, reason: 'The viewer needs an assigned human country.' };
-    if (ids.some((id) => !this.state.players[id] || this.territoriesOf(id).length === 0)) {
+    if (ids.some((id) => !isHumanSelectableNationV2(this.content, id)
+      || !this.state.players[id] || this.territoriesOf(id).length === 0)) {
       return { accepted: false, reason: 'Every human seat needs a living country.' };
     }
     const primaryId = ids.includes(this.state.humanPlayerId)
@@ -620,6 +773,7 @@ export class WorldEngineV2 {
     this.state.humanPlayerId = primaryId;
     this.state.humanPlayerIds = ids;
     this.state.firstIntegrationDiscountUsedBy = [];
+    this.state.commanderForces = {};
     synchronizeOpeningTreasuryHumanRosterV2(
       this.state,
       this.content,
@@ -639,6 +793,7 @@ export class WorldEngineV2 {
     this.state.speed = 1;
     this.state.aiEscalation = {
       lastWarStartTick: -1_000_000,
+      openingConflictsStarted: 0,
       lastFederationTick: -1_000_000,
       resistanceLevel: 0,
       globalThreat: 0,
@@ -647,7 +802,8 @@ export class WorldEngineV2 {
       lastHumanPower: selectCurrentPowerV2(this.state, this.content, primaryId),
     };
     this.state.polarEndgame = createInitialPolarEndgameV2();
-    this.humanWarBaselines.clear();
+    initializeSurvivalScenarioV2(this.state, this.content);
+    resetRunProgressionRosterV2(this.state, this.content);
     this.trackHumanWars();
     this.emit({ reason: 'human-players-configured' });
     return { accepted: true };
@@ -656,6 +812,12 @@ export class WorldEngineV2 {
   chooseCountry(countryId: string): CommandResultV2 {
     const id = nationIdV2(countryId);
     if (this.state.tick > 0) return { accepted: false, reason: 'Country selection is locked after the campaign begins.' };
+    if (Object.keys(this.state.commanderForces).length > 0) {
+      return { accepted: false, reason: 'Country selection is locked after APEX shield initialisation.' };
+    }
+    if (!isHumanSelectableNationV2(this.content, id)) {
+      return { accepted: false, reason: 'The Rogue AI is an enemy empire and cannot be selected.' };
+    }
     if (!this.state.players[id] || this.territoriesOf(id).length === 0) return { accepted: false, reason: 'Unknown or eliminated country.' };
     const command: WorldCommandV2 = { type: 'choose-country', countryId: id };
     const forwarded = this.forwardClientCommand(command);
@@ -670,6 +832,7 @@ export class WorldEngineV2 {
     this.state.humanPlayerId = id;
     this.state.humanPlayerIds = [id];
     this.state.firstIntegrationDiscountUsedBy = [];
+    this.state.commanderForces = {};
     synchronizeOpeningTreasuryHumanRosterV2(
       this.state,
       this.content,
@@ -686,10 +849,10 @@ export class WorldEngineV2 {
     this.state.alliances = [];
     this.state.allianceOffers = [];
     this._viewerPlayerId = id;
-    this.humanWarBaselines.clear();
     this.trackHumanWars();
     this.state.aiEscalation = {
       lastWarStartTick: -1_000_000,
+      openingConflictsStarted: 0,
       lastFederationTick: -1_000_000,
       resistanceLevel: 0,
       globalThreat: 0,
@@ -698,6 +861,8 @@ export class WorldEngineV2 {
       lastHumanPower: selectCurrentPowerV2(this.state, this.content, id),
     };
     this.state.polarEndgame = createInitialPolarEndgameV2();
+    initializeSurvivalScenarioV2(this.state, this.content);
+    resetRunProgressionRosterV2(this.state, this.content);
     this.state.speed = 1;
     this.recordAppliedAction();
     if (publishAction) this.emitQueuedAction({ sequence: this.state.actionSequence, command });
@@ -705,10 +870,57 @@ export class WorldEngineV2 {
     return { accepted: true };
   }
 
+  /** Forms the account-authorized tick-zero Survival roster under one flagship. */
+  formSurvivalEmpire(flagshipId: string, memberIds: readonly string[]): CommandResultV2 {
+    const flagship = nationIdV2(flagshipId);
+    const members = [...new Set(memberIds.map(nationIdV2))]
+      .sort((left, right) => left.localeCompare(right));
+    const command: WorldCommandV2 = {
+      type: 'form-survival-empire',
+      flagshipId: flagship,
+      memberIds: members,
+    };
+    const forwarded = this.forwardClientCommand(command);
+    if (forwarded) return forwarded;
+    const publishAction = !this.applyingCommand;
+    const result = formSurvivalEmpireV2(this.state, this.content, flagship, members);
+    if (!result.accepted) return { accepted: false, reason: result.reason };
+    this.state.commanderForces = this.state.commanderForces[flagship]
+      ? { [flagship]: this.state.commanderForces[flagship] }
+      : {};
+    this._viewerPlayerId = flagship;
+    this.trackHumanWars();
+    this.state.aiEscalation.lastHumanPower = selectCurrentPowerV2(
+      this.state,
+      this.content,
+      flagship,
+    );
+    this.recordAppliedAction();
+    if (publishAction) this.emitQueuedAction({ sequence: this.state.actionSequence, command });
+    this.assertStateIntegrity(true);
+    this.emit({ reason: 'survival-empire-formed', critical: true });
+    return { accepted: true };
+  }
+
   startClock(): void {
     this.stopClock();
     if (!this.hasClockAuthority || this.state.speed === 0) return;
     this.clock = setInterval(() => this.step(), V2_TICK_DURATION_MS / this.state.speed);
+  }
+
+  /**
+   * Explicitly resumes an interactive world. Authenticated saves hydrate in a
+   * paused state so previews, reports and settlement cannot advance them by
+   * accident; the Continue Campaign boundary is the one place that opts back
+   * into a running clock.
+   */
+  resumeClock(defaultSpeed: 1 | 2 = 1): CommandResultV2 {
+    if (this.state.gameOver) {
+      return { accepted: false, reason: 'A completed campaign cannot resume.' };
+    }
+    if (this.state.speed === 0) return this.setSpeed(defaultSpeed);
+    this.startClock();
+    return { accepted: true };
   }
 
   stopClock(): void {
@@ -809,6 +1021,7 @@ export class WorldEngineV2 {
     const nation = this.state.players[id]!;
     const owned = this.territoriesOf(id);
     const territories = owned
+      .filter((view) => !isSurvivalScorchedTransitTerritoryV2(this.state, view.id))
       .map((view) => ({
         id: view.id,
         gap: Math.max(0, this.state.territories[view.id]!.army.capacity - this.state.territories[view.id]!.army.manpower),
@@ -887,7 +1100,7 @@ export class WorldEngineV2 {
   }
 
   globalResistance(): GlobalResistanceV2 {
-    return selectGlobalResistanceV2(this.state);
+    return selectGlobalResistanceV2(this.state, this.content);
   }
 
   globalRanking(powerSnapshot?: PowerSnapshotV2): RankingEntryV2[] {
@@ -1046,6 +1259,88 @@ export class WorldEngineV2 {
     return result;
   }
 
+  apexTransmissions(playerId: string): readonly ApexTransmissionV2[] {
+    return selectApexTransmissionsV2(this.state, nationIdV2(playerId));
+  }
+
+  respondApexTransmission(
+    playerId: string,
+    transmissionId: ApexTransmissionIdV2,
+    choice: ApexTransmissionChoiceV2,
+  ): CommandResultV2 {
+    const id = nationIdV2(playerId);
+    const command: WorldCommandV2 = {
+      type: 'respond-apex-transmission',
+      playerId: id,
+      transmissionId,
+      choice,
+    };
+    const forwarded = this.forwardClientCommand(command);
+    if (forwarded) return forwarded;
+    if (transmissionId === 'campaign-signal-anomaly' && choice !== 'accept') {
+      return { accepted: false, reason: 'Signal Triangulation is mandatory before strategic operations.' };
+    }
+    if (!this.applyingCommand) {
+      const transmission = selectApexTransmissionsV2(this.state, id)
+        .find((item) => item.id === transmissionId);
+      if (!transmission) return { accepted: false, reason: 'That APEX transmission is stale.' };
+      if (transmission.action === null && choice !== 'acknowledge') {
+        return { accepted: false, reason: 'This APEX briefing only requires acknowledgement.' };
+      }
+      if (transmission.action === 'north-pole-investigation' && choice !== 'accept') {
+        return { accepted: false, reason: 'Signal Triangulation is mandatory before strategic operations.' };
+      }
+      if (transmission.action === 'north-pole-investigation') {
+        const terms = this.arcticProjectTerms(id, 'polar-demography');
+        if (!terms.allowed) return { accepted: false, reason: terms.reason };
+      }
+      if (transmission.action === 'first-strike-guidance' && choice !== 'acknowledge') {
+        return { accepted: false, reason: 'First-strike guidance only requires acknowledgement.' };
+      }
+      const queued = this.queue(command);
+      // Single-player APEX briefings pause the world while they are on screen.
+      // Waiting for the next simulation step would deadlock every informational
+      // acknowledgement (and therefore the first proof war), because a paused
+      // clock can never reach the boundary that normally flushes this queue.
+      // Commit the prevalidated response now without advancing a week.
+      // Multiplayer clients still forward it to the host in normal order.
+      if (queued.accepted
+        && this.hasClockAuthority
+        && this.state.speed === 0) {
+        this.flushQueuedActions();
+      }
+      return queued;
+    }
+    // The first CTA is one authoritative transaction: start the paid Stage-I
+    // project and let that canonical start record authorization/choice. There
+    // is no second UI command and a duplicate cannot charge twice because an
+    // active project makes the terms unavailable.
+    if (transmissionId === 'campaign-signal-anomaly') {
+      const result = startArcticProjectV2(
+        this.state,
+        this.content,
+        id,
+        'polar-demography',
+      );
+      if (result.accepted) {
+        this.recordAppliedAction();
+        this.emit({ reason: 'apex-signal-triangulation-started', critical: true });
+      }
+      return result;
+    }
+    const result = respondToApexTransmissionV2(
+      this.state,
+      id,
+      transmissionId,
+      choice,
+    );
+    if (result.accepted) {
+      this.recordAppliedAction();
+      this.emit({ reason: 'apex-transmission-response', critical: choice === 'accept' });
+    }
+    return result;
+  }
+
   antarcticExpeditionTerms(playerId: string, sectorId: AntarcticSectorIdV2): AntarcticExpeditionTermsV2 {
     return selectAntarcticExpeditionTermsV2(this.state, this.content, nationIdV2(playerId), sectorId);
   }
@@ -1151,10 +1446,21 @@ export class WorldEngineV2 {
 
   canDeclareWar(attackerId: string, defenderId: string): boolean {
     if (polarEarthUnityActiveV2(this.state)) return false;
+    if (!rogueAiSurvivalActiveV2(this.state)
+      && (isRogueAiNationV2(this.content, attackerId)
+        || isRogueAiNationV2(this.content, defenderId))) return false;
     return canDeclareWarV2(this.state, this.content, nationIdV2(attackerId), nationIdV2(defenderId));
   }
 
   warDeclarationStatus(attackerId: string, defenderId: string): WarDeclarationStatusV2 {
+    if (!rogueAiSurvivalActiveV2(this.state)
+      && (isRogueAiNationV2(this.content, attackerId)
+        || isRogueAiNationV2(this.content, defenderId))) return {
+      allowed: false,
+      reason: 'No Antarctic contact has been established.',
+      access: 'none',
+      mobilizationCost: 0,
+    };
     if (polarEarthUnityActiveV2(this.state)) return {
       allowed: false,
       reason: 'Earth defense protocols prohibit terrestrial wars during the Antarctic counteroffensive.',
@@ -1175,6 +1481,11 @@ export class WorldEngineV2 {
   declareWar(attackerId: string, defenderId: string, escalatedFromWarId?: string): CommandResultV2 {
     const attacker = nationIdV2(attackerId);
     const defender = nationIdV2(defenderId);
+    if (!rogueAiSurvivalActiveV2(this.state)
+      && (isRogueAiNationV2(this.content, attacker)
+        || isRogueAiNationV2(this.content, defender))) {
+      return { accepted: false, reason: 'No Antarctic contact has been established.' };
+    }
     if (polarEarthUnityActiveV2(this.state)) {
       return { accepted: false, reason: 'Earth defense protocols prohibit terrestrial wars during the Antarctic counteroffensive.' };
     }
@@ -1192,7 +1503,10 @@ export class WorldEngineV2 {
       };
       return this.queue({ type: 'declare-war', attackerId: attacker, defenderId: defender, escalatedFromWarId });
     }
-    const humanBaseline = this.captureHumanNationBaseline();
+    const humanBelligerent = [attacker, defender]
+      .find((playerId) => isHumanPlayerV2(this.state, playerId));
+    const humanBaseline = humanBelligerent
+      ? this.captureHumanNationBaseline(humanBelligerent) : undefined;
     const result = declareWarV2(this.state, this.content, attacker, defender, escalatedFromWarId);
     if (result.accepted) {
       this.trackHumanWars(humanBaseline);
@@ -1202,72 +1516,33 @@ export class WorldEngineV2 {
     return result;
   }
 
-  ceasefireTerms(warId: string, requesterId: string): CeasefireTermsV2 {
-    return ceasefireTermsV2(this.state, this.content, warId, nationIdV2(requesterId));
-  }
-
-  requestCeasefire(warId: string, requesterId: string): CommandResultV2 {
-    const requester = nationIdV2(requesterId);
-    if (!this.applyingCommand) {
-      const terms = ceasefireTermsV2(this.state, this.content, warId, requester);
-      if (!terms.allowed) return { accepted: false, reason: terms.reason };
-      return this.queue({ type: 'request-ceasefire', warId, requesterId: requester });
-    }
-    const result = requestCeasefireV2(this.state, this.content, warId, requester);
-    if (result.accepted) {
-      this.recordAppliedAction();
-      this.emit({ reason: 'ceasefire-requested' });
-    }
-    return result;
-  }
-
-  peaceProposalTerms(warId: string, playerId: string): PeaceProposalTermsV2 {
-    return peaceProposalTermsV2(this.state, this.content, warId, nationIdV2(playerId));
-  }
-
-  proposePeaceSettlement(fromId: string, targetId: string, settlement: PeaceSettlementV2): CommandResultV2 {
-    const from = nationIdV2(fromId);
-    const target = nationIdV2(targetId);
-    if (!this.applyingCommand) {
-      const war = selectActiveWarBetweenV2(this.state, from, target);
-      if (!war || !peaceProposalTermsV2(this.state, this.content, war.id, from).allowed) return { accepted: false, reason: 'Peace terms are not available.' };
-      return this.queue({ type: 'propose-peace', fromId: from, targetId: target, settlement });
-    }
-    const result = proposePeaceSettlementV2(this.state, this.content, from, target, settlement);
-    if (result.accepted) this.recordAppliedAction();
-    return result;
-  }
-
-  respondToOffer(offerId: string, accept: boolean): CommandResultV2 {
-    if (!this.applyingCommand) {
-      if (!this.state.offers.some((offer) => (
-        offer.id === offerId && offer.status === 'pending' && offer.expiresTick > this.state.tick
-      ))) return { accepted: false, reason: 'Offer is unavailable.' };
-      return this.queue({ type: 'respond-to-offer', offerId, accept });
-    }
-    const conclusions: WarConclusionV2[] = [];
-    const result = respondToOfferV2(this.state, this.content, offerId, accept, conclusions);
-    if (result.accepted) {
-      this.recordAppliedAction();
-      this.emit({ reason: accept ? 'peace-accepted' : 'peace-declined' });
-      if (accept) this.emitWarConclusions(conclusions);
-    }
-    return result;
-  }
-
   areAllied(leftId: string, rightId: string): boolean {
     return areAlliedV2(this.state, nationIdV2(leftId), nationIdV2(rightId));
   }
 
   allianceProposalStatus(fromId: string, targetId: string): AllianceProposalStatusV2 {
-    return allianceProposalStatusV2(this.state, nationIdV2(fromId), nationIdV2(targetId));
+    const from = nationIdV2(fromId);
+    const target = nationIdV2(targetId);
+    if (isRogueAiNationV2(this.content, from) || isRogueAiNationV2(this.content, target)) {
+      return { allowed: false, reason: 'The Rogue AI cannot join human alliances.' };
+    }
+    if (this.content.metadata?.scenarioId === 'standard-2026'
+      || this.content.metadata?.scenarioId === 'survival') {
+      return { allowed: false, reason: 'The Rogue Signal has shattered alliances; every country fights independently.' };
+    }
+    return allianceProposalStatusV2(this.state, from, target);
   }
 
   proposeAlliance(fromId: string, targetId: string): CommandResultV2 {
     const from = nationIdV2(fromId);
     const target = nationIdV2(targetId);
+    if (isRogueAiNationV2(this.content, from) || isRogueAiNationV2(this.content, target)) {
+      return { accepted: false, reason: 'The Rogue AI cannot join human alliances.' };
+    }
+    const allianceStatus = this.allianceProposalStatus(from, target);
+    if (!allianceStatus.allowed) return { accepted: false, reason: allianceStatus.reason };
     if (!this.applyingCommand) {
-      const status = allianceProposalStatusV2(this.state, from, target);
+      const status = allianceStatus;
       if (!status.allowed) return { accepted: false, reason: status.reason };
       return this.queue({ type: 'propose-alliance', fromId: from, targetId: target });
     }
@@ -1282,6 +1557,9 @@ export class WorldEngineV2 {
   respondToAlliance(fromId: string, toId: string, accept: boolean): CommandResultV2 {
     const from = nationIdV2(fromId);
     const to = nationIdV2(toId);
+    if (isRogueAiNationV2(this.content, from) || isRogueAiNationV2(this.content, to)) {
+      return { accepted: false, reason: 'The Rogue AI cannot join human alliances.' };
+    }
     if (!this.applyingCommand) {
       if (!this.state.allianceOffers.some((offer) => (
         offer.fromId === from && offer.toId === to && offer.expiresTick > this.state.tick
@@ -1304,9 +1582,23 @@ export class WorldEngineV2 {
   submitCommand(command: WorldCommandV2): CommandResultV2 {
     switch (command.type) {
       case 'choose-country': return this.chooseCountry(command.countryId);
+      case 'form-survival-empire': return this.formSurvivalEmpire(
+        command.flagshipId,
+        command.memberIds,
+      );
       case 'set-speed': return this.applyingCommand
         ? this.setAuthoritativeSpeed(command.speed)
         : this.setSpeed(command.speed);
+      case 'set-commander-priorities': return this.setCommanderPriorities(
+        command.playerId,
+        command.priorities,
+      );
+      case 'issue-commander-order': return this.issueCommanderOrder(
+        command.playerId,
+        command.destinationId,
+        command.mission,
+        command.front,
+      );
       case 'set-research-allocations': return this.setResearchAllocations(command.playerId, command.allocations);
       case 'adjust-budget': return this.adjustBudget(command.playerId, command.domain, command.delta);
       case 'set-budget-policy': return this.setBudgetPolicy(command.playerId, command.budget);
@@ -1315,6 +1607,16 @@ export class WorldEngineV2 {
       case 'launch-propaganda': return this.launchPropaganda(command.playerId);
       case 'start-arctic-project': return this.startArcticProject(command.playerId, command.projectId);
       case 'acknowledge-polar-warning': return this.acknowledgePolarWarning(command.playerId);
+      case 'respond-apex-transmission': return this.respondApexTransmission(
+        command.playerId,
+        command.transmissionId,
+        command.choice,
+      );
+      case 'choose-run-upgrade': return this.chooseRunUpgrade(
+        command.playerId,
+        command.offerId,
+        command.upgradeId,
+      );
       case 'deploy-antarctic-expedition': return this.deployAntarcticExpedition(
         command.playerId,
         command.sectorId,
@@ -1322,9 +1624,6 @@ export class WorldEngineV2 {
       );
       case 'set-empire-name': return this.setEmpireName(command.playerId, command.name);
       case 'declare-war': return this.declareWar(command.attackerId, command.defenderId, command.escalatedFromWarId);
-      case 'request-ceasefire': return this.requestCeasefire(command.warId, command.requesterId);
-      case 'propose-peace': return this.proposePeaceSettlement(command.fromId, command.targetId, command.settlement);
-      case 'respond-to-offer': return this.respondToOffer(command.offerId, command.accept);
       case 'propose-alliance': return this.proposeAlliance(command.fromId, command.targetId);
       case 'respond-to-alliance': return this.respondToAlliance(
         command.fromId,
@@ -1368,6 +1667,13 @@ export class WorldEngineV2 {
       this.state.speed = 0;
       return;
     }
+    const humanDefeatWinner = selectHumanEmpireDefeatWinnerV2(this.state);
+    if (humanDefeatWinner) {
+      this.state.winnerId = humanDefeatWinner;
+      this.state.gameOver = true;
+      this.state.speed = 0;
+      return;
+    }
     // Full integration may retire the selected country's backend record before
     // global conquest. Preserve that terminal defeat while other AI owners
     // continue to exist on the map.
@@ -1405,28 +1711,12 @@ export class WorldEngineV2 {
       if (this.state.gameOver) return;
       this.flushQueuedActions();
       this.state.tick += 1;
+      reconcileSurvivalRogueFocusWarsV2(this.state, this.content);
       pruneAllianceStateV2(this.state);
       const earthUnityActive = polarEarthUnityActiveV2(this.state);
-      if (!earthUnityActive) processOpeningConflictsV2(this.state, this.content);
-      const integrationRevolutions = earthUnityActive
-        ? []
-        : processTerritoryIntegrationRevolutionsV2(this.state, this.content);
-      for (const revolution of integrationRevolutions) {
-        beginIndependenceWarV2(
-          this.state,
-          this.content,
-          revolution.restoredOwnerId,
-          revolution.displacedOwnerId,
-        );
+      if (!earthUnityActive && processOpeningConflictsV2(this.state, this.content)) {
+        this.emit({ reason: 'war-declared', critical: true });
       }
-      if (integrationRevolutions.length > 0) pruneAllianceStateV2(this.state);
-      for (const revolution of integrationRevolutions) this.emit({
-        reason: 'revolution',
-        victorId: revolution.restoredOwnerId,
-        defeatedId: revolution.displacedOwnerId,
-        critical: revolution.restoredOwnerId === this._viewerPlayerId
-          || revolution.displacedOwnerId === this._viewerPlayerId,
-      });
       processOpeningArmyBonusDecayV2(this.state, this.content);
       // The temporary player capacity follows the same thirty-year curve as the
       // opening roster. Refresh it before finance, recruitment and combat use
@@ -1435,11 +1725,11 @@ export class WorldEngineV2 {
       const arcticChanges = processArcticResearchV2(this.state, this.content);
       if (arcticChanges.length > 0) synchronizeArmyCapacityV2(this.state, this.content);
       for (const change of arcticChanges) this.emit({
-        reason: change.kind === 'warning' ? 'antarctic-warning' : 'arctic-project-complete',
-        critical: change.kind === 'warning',
+        reason: change.kind === 'contact' ? 'antarctic-first-contact' : 'arctic-project-complete',
+        critical: change.kind === 'contact',
         polar: {
           kind: change.kind,
-          region: change.kind === 'warning' ? 'antarctica' : 'arctic',
+          region: change.kind === 'contact' ? 'antarctica' : 'arctic',
           ...(change.playerId ? { playerId: change.playerId } : {}),
           ...(change.projectId ? { projectId: change.projectId } : {}),
         },
@@ -1454,6 +1744,8 @@ export class WorldEngineV2 {
       const financePowers = createPowerSnapshotV2(this.state, this.content);
       const finance = createFinancePlansV2(this.state, this.content, financePowers);
       const integrationCompletions = processFinanceMilitaryV2(this.state, this.content, finance);
+      synchronizeWarFrontsV2(this.state, this.content);
+      processCommanderForcesV2(this.state, this.content);
       pruneAllianceStateV2(this.state);
       for (const completion of integrationCompletions) this.emit({
         reason: 'integration-complete',
@@ -1470,6 +1762,7 @@ export class WorldEngineV2 {
       const researchPowers = createPowerSnapshotV2(this.state, this.content);
       processResearchV2(this.state, this.content, finance, researchPowers);
       processDevelopmentPhaseV2(this.state, this.content, finance);
+      processRoguePrimeV2(this.state, this.content);
       const ownersBeforeWar = this.state.wars.length > 0
         ? new Map(this.content.territoryIds.map((territoryId) => [
             territoryId,
@@ -1479,9 +1772,15 @@ export class WorldEngineV2 {
       this.logisticsMovements = [];
       const conclusions: WarConclusionV2[] = [];
       const battles = processWarsV2(this.state, this.content, this.logisticsMovements, conclusions);
+      reconcileCommanderForcesV2(this.state, this.content);
+      reconcileRoguePrimeV2(this.state);
       synchronizeArmyCapacityV2(this.state, this.content);
       for (const battle of battles) {
-        this.recordHumanWarBattle(battle);
+        this.recordHumanWarBattle(
+          battle,
+          this.state.wars.find((war) => war.id === battle.warId)
+            ?? conclusions.find((conclusion) => conclusion.war.id === battle.warId)?.war,
+        );
         this.emit({ reason: battle.conquered ? 'conquest' : 'battle', battle, critical: battle.conquered });
       }
       this.emitWarConclusions(conclusions);
@@ -1518,6 +1817,10 @@ export class WorldEngineV2 {
         }
       }
       pruneAllianceStateV2(this.state);
+      // APEX is support, never a replacement sovereign army. Resolve a human
+      // empire whose final ordinary soldiers fell in this battle before any
+      // later AI or polar phase can keep the empty campaign ticking.
+      this.deriveVictory();
       if (this.state.gameOver) {
         pruneWorldHistoryV2(this.state);
         this.assertStateIntegrity(true);
@@ -1542,7 +1845,7 @@ export class WorldEngineV2 {
         },
       });
       if (resistanceLevel) this.emit({ reason: 'resistance-formed', critical: true });
-      for (const command of planAiCommandsV2(this.state, this.content)) this.applyAiCommand(command);
+      for (const command of planRuntimeAiCommandsV2(this.state, this.content)) this.applyAiCommand(command);
       this.deriveVictory();
       pruneWorldHistoryV2(this.state);
       this.assertStateIntegrity();

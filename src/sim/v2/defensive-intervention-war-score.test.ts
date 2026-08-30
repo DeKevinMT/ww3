@@ -6,6 +6,7 @@ import {
 import { createWorldStateV2 } from './bootstrap';
 import { WORLD_CONTENT_V2, type WorldContentV2 } from './content';
 import type { PowerSnapshotV2 } from './selectors';
+import { enterPostBlackoutCampaignForTestV2 } from './testSupport';
 import {
   nationIdV2,
   territoryIdV2,
@@ -105,6 +106,7 @@ describe('independent defensive interventions', () => {
     const { state } = interventionState();
     state.humanPlayerId = supporter;
     state.humanPlayerIds = [supporter];
+    enterPostBlackoutCampaignForTestV2(state);
 
     const preview = warDeclarationStatusV2(
       state,
@@ -130,7 +132,7 @@ describe('independent defensive interventions', () => {
       && /without entering a war against/i.test(event.message))).toBe(true);
   });
 
-  it('keeps an AI-linked intervention bilateral and still honours its target truce', () => {
+  it('ignores the linked-war hint in Campaign, stays bilateral, and honours its target truce', () => {
     const { state, war } = interventionState(51_002);
     expect(declareWarV2(
       state,

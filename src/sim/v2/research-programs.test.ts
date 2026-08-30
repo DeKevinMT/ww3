@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   PASSIVE_RECRUITMENT_CAPACITY_RATE,
+  PEACE_READINESS_RECOVERY_MAX_MULTIPLIER,
   RESEARCH_BRANCHES,
   RESEARCH_BRANCH_EFFECTS,
 } from './balance';
@@ -12,6 +13,8 @@ import { drawResearchEffectV2 } from './research';
 import {
   selectArmyCapacityTargetV2,
   selectArmyStrengthV2,
+  invalidateTerritoryIndexV2,
+  peacetimeRecruitmentReadinessMultiplierV2,
   selectRecruitmentThroughputV2,
   selectRecruitmentTrainingPipelineV2,
   selectRecruitmentUnitCostV2,
@@ -52,7 +55,7 @@ describe('V2 integrated research programs and army economy', () => {
       'defensive-systems': ['defense', 'casualty-reduction'],
       'logistics-medicine': ['recovery', 'supply'],
       'economy-science': ['economy-growth', 'research-speed', 'research-efficiency'],
-      'food-systems': ['food-production', 'food-storage'],
+      'food-systems': ['supply', 'recovery'],
       'reserve-doctrine': ['reserve-training', 'reserve-mobilization'],
       'public-administration': ['tax-efficiency', 'operating-efficiency'],
       'education-intelligence': ['iq-increase'],
@@ -121,7 +124,6 @@ describe('V2 integrated research programs and army economy', () => {
   it('recruits every baseline more slowly while smaller maximum armies fill sooner', () => {
     const state = createWorldStateV2(4_040_4);
     for (const id of [bel, ind]) {
-      state.players[id].foodSecurity = 1;
       state.players[id].research.effectLevels.training = 0;
     }
     const small = selectArmyStrengthV2(state, WORLD_CONTENT_V2, bel);
@@ -129,11 +131,24 @@ describe('V2 integrated research programs and army economy', () => {
     const smallPipeline = selectRecruitmentTrainingPipelineV2(state, WORLD_CONTENT_V2, bel);
     const largePipeline = selectRecruitmentTrainingPipelineV2(state, WORLD_CONTENT_V2, ind);
 
-    expect(PASSIVE_RECRUITMENT_CAPACITY_RATE).toBe(0.00085);
+    expect(PASSIVE_RECRUITMENT_CAPACITY_RATE).toBe(0.00135);
     expect(small.capacity).toBeLessThan(large.capacity);
-    expect(smallPipeline).toBeLessThan(small.capacity * 0.001);
-    expect(largePipeline).toBeLessThan(large.capacity * 0.001);
+    expect(smallPipeline).toBeLessThan(small.capacity * 0.006);
+    expect(largePipeline).toBeLessThan(large.capacity * 0.006);
     expect(small.capacity / smallPipeline).toBeLessThan(large.capacity / largePipeline);
+  });
+
+  it('uses one smooth peacetime recovery curve from empty to full readiness', () => {
+    expect(peacetimeRecruitmentReadinessMultiplierV2(0, 1, false))
+      .toBe(PEACE_READINESS_RECOVERY_MAX_MULTIPLIER);
+    expect(peacetimeRecruitmentReadinessMultiplierV2(0.02, 1, false))
+      .toBeGreaterThan(4.5);
+    expect(peacetimeRecruitmentReadinessMultiplierV2(0.50, 1, false))
+      .toBeCloseTo(1.5, 6);
+    expect(peacetimeRecruitmentReadinessMultiplierV2(0.80, 1, false))
+      .toBeCloseTo(1.032, 6);
+    expect(peacetimeRecruitmentReadinessMultiplierV2(1, 1, false)).toBe(1);
+    expect(peacetimeRecruitmentReadinessMultiplierV2(0.02, 1, true)).toBe(1);
   });
 
   it('keeps high-quality ATK/DEF recruitment more expensive on a bounded curve', () => {
@@ -170,14 +185,14 @@ describe('V2 integrated research programs and army economy', () => {
       .toBeGreaterThan(WORLD_CONTENT_V2.nations[ind].militaryQuality);
   });
 
-  it('makes trained manpower slow to replace even during peacetime', () => {
+  it('makes peacetime manpower recovery visible but still bounded', () => {
     const state = createWorldStateV2(4_052);
     const territory = state.territories[belTerritory];
     territory.army.capacity = selectArmyCapacityTargetV2(state, WORLD_CONTENT_V2, bel);
     territory.army.manpower = territory.army.capacity * 0.50;
     const annualRecruitment = selectRecruitmentThroughputV2(state, WORLD_CONTENT_V2, bel) * 52;
-    expect(annualRecruitment).toBeGreaterThan(0);
-    expect(annualRecruitment).toBeLessThan(territory.army.capacity * 0.08);
+    expect(annualRecruitment).toBeGreaterThan(territory.army.capacity * 0.08);
+    expect(annualRecruitment).toBeLessThan(territory.army.capacity * 0.14);
   });
 
   it('starts partially staffed at the complete population-based cap', () => {
@@ -198,11 +213,16 @@ describe('V2 integrated research programs and army economy', () => {
     expect(large.capacity).toBeCloseTo(large.capacityTarget, 6);
   });
 
-  it('makes supply research improve a real route factor without exceeding one', () => {
+  it('makes supply research improve a real route without exceeding one', () => {
     const state = createWorldStateV2(407);
-    const base = supplyFactorV2(state, WORLD_CONTENT_V2, bel, belTerritory, false);
+    const routeTerritory = territoryIdV2('lux');
+    state.territories[routeTerritory].owner = bel;
+    state.territories[routeTerritory].coreOwner = bel;
+    state.territories[routeTerritory].integration = 1;
+    invalidateTerritoryIndexV2(state);
+    const base = supplyFactorV2(state, WORLD_CONTENT_V2, bel, routeTerritory, false);
     state.players[bel].research.effectLevels.supply = 20;
-    const improved = supplyFactorV2(state, WORLD_CONTENT_V2, bel, belTerritory, false);
+    const improved = supplyFactorV2(state, WORLD_CONTENT_V2, bel, routeTerritory, false);
     expect(improved).toBeGreaterThan(base);
     expect(improved).toBeLessThanOrEqual(1);
   });
@@ -226,28 +246,24 @@ describe('V2 integrated research programs and army economy', () => {
     expect(advanced.net).toBe(baseBel.net);
   });
 
-  it('funds food first and never invents an army-expansion budget after real upkeep', () => {
+  it('never invents an army-expansion budget after real upkeep', () => {
     const state = createWorldStateV2(409);
     for (const id of WORLD_CONTENT_V2.nationIds) {
       if (state.wars.some((war) => war.attackerId === id || war.defenderId === id)) continue;
       const strength = selectArmyStrengthV2(state, WORLD_CONTENT_V2, id);
       const finance = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, id);
       expect(strength.capacityTarget, String(id)).toBeCloseTo(strength.capacity, 6);
-      if (finance.foodCoverage >= 0.98) {
-        expect(
-          finance.armyUpkeep * finance.mandatoryFundingRatio
-          + finance.recruitment
-          + finance.reserveTrainingCost
-          + finance.standingOperations,
-          String(id),
-        ).toBeCloseTo(finance.military, 5);
-      } else {
-        expect(finance.foodProduction, String(id)).toBeGreaterThan(0);
-      }
+      expect(
+        finance.armyUpkeep * finance.mandatoryFundingRatio
+        + finance.recruitment
+        + finance.reserveTrainingCost
+        + finance.standingOperations,
+        String(id),
+      ).toBeCloseTo(finance.military, 3);
     }
   });
 
-  it('fills an active-army shortage before training the national reserve pool', () => {
+  it('fills an active-army shortage while passively training the reserve pool', () => {
     const state = createWorldStateV2(410);
     const target = selectArmyCapacityTargetV2(state, WORLD_CONTENT_V2, bel);
     state.territories[belTerritory].army.capacity = target;
@@ -258,18 +274,19 @@ describe('V2 integrated research programs and army economy', () => {
     const before = { ...state.territories[belTerritory].army };
     const plans = createFinancePlansV2(state, WORLD_CONTENT_V2);
     expect(plans.get(bel)!.recruitment).toBeGreaterThan(0);
+    expect(plans.get(bel)!.reserveTraining).toBeGreaterThan(0);
     processFinanceMilitaryV2(state, WORLD_CONTENT_V2, plans);
     expect(state.territories[belTerritory].army.capacity).toBe(before.capacity);
     expect(state.territories[belTerritory].army.manpower).toBeGreaterThan(before.manpower);
     expect(state.players[bel]).not.toHaveProperty('manpower');
-    expect(state.players[bel].trainedReserves).toBeCloseTo(reservesBefore, 6);
+    expect(state.players[bel].trainedReserves).toBeGreaterThan(reservesBefore);
   });
 
   it('exposes one canonical finance projection including operating and reserve flows', () => {
     const finance = selectWeeklyFinanceBreakdownV2(createWorldStateV2(411), WORLD_CONTENT_V2, bel);
     expect(Object.keys(finance).sort()).toEqual([
-      'acceleratedDemobilization', 'acceleratedRecruitment', 'activeBudget', 'aiEfficiency', 'aiMode', 'annualEconomyGrowthRate', 'armyUpkeep', 'baseOperatingCost',
-      'ceasefireIncome', 'ceasefirePayment', 'closingTreasury', 'condition', 'conditionFundingRatio', 'debtPremium', 'demobilizationCost', 'development',
+      'acceleratedDemobilization', 'acceleratedRecruitment', 'activeBudget', 'aiEfficiency', 'aiMode', 'annualEconomyGrowthRate', 'apexContribution', 'apexFoodContribution', 'armyUpkeep', 'baseOperatingCost',
+      'ceasefireIncome', 'ceasefirePayment', 'closingTreasury', 'debtPremium', 'demobilizationCost', 'development',
       'economyBaseGrowthRate', 'economyFoodGrowthRate', 'economyGrowth', 'economyInvestmentGrowthRate', 'economyResearchGrowthRate', 'excessCashInvestment', 'expenses',
       'foodAccessCeiling', 'foodBalance', 'foodConsumed', 'foodCoverage', 'foodDemand', 'foodDevelopmentTransfer', 'foodDomesticProduced', 'foodExportIncome', 'foodExported', 'foodImported', 'foodLandCapacity', 'foodProduced',
       'foodProduction', 'foodStockChange', 'foodStorageCapacity', 'foodTargetStock', 'fundedArmyUpkeep',

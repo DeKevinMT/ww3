@@ -1,5 +1,10 @@
 import type { PlayerId } from '../sim/v2/types';
-import { MAX_MULTIPLAYER_PLAYERS, MIN_MULTIPLAYER_PLAYERS, type LobbyStateMessage } from './protocol';
+import {
+  MAX_MULTIPLAYER_PLAYERS,
+  MIN_MULTIPLAYER_PLAYERS,
+  type LobbyStateMessage,
+  type MultiplayerDeploymentSnapshotV1,
+} from './protocol';
 
 export function multiplayerSeatsFromLobby(lobby: LobbyStateMessage): Map<string, PlayerId> {
   if (!lobby.started) throw new Error('The multiplayer lobby has not started.');
@@ -12,12 +17,32 @@ export function multiplayerSeatsFromLobby(lobby: LobbyStateMessage): Map<string,
   if (connected.length < MIN_MULTIPLAYER_PLAYERS || connected.length > MAX_MULTIPLAYER_PLAYERS) {
     throw new Error(`A campaign requires ${MIN_MULTIPLAYER_PLAYERS}-${MAX_MULTIPLAYER_PLAYERS} connected players.`);
   }
-  if (connected.some((player) => !player.countryId)) {
-    throw new Error('Every connected player must have a country seat.');
+  if (connected.some((player) => !player.countryId || !player.deployment)) {
+    throw new Error('Every connected player must have a frozen country deployment.');
   }
   const countries = connected.map((player) => player.countryId!);
   if (new Set(countries).size !== countries.length) throw new Error('Country seats must be unique.');
   return new Map(connected.map((player) => [player.peerId, player.countryId!]));
+}
+
+/** Country-keyed immutable account effects captured by the started room. */
+export function multiplayerDeploymentsFromLobby(
+  lobby: LobbyStateMessage,
+): Map<PlayerId, MultiplayerDeploymentSnapshotV1> {
+  const seats = multiplayerSeatsFromLobby(lobby);
+  const deployments = new Map<PlayerId, MultiplayerDeploymentSnapshotV1>();
+  for (const player of lobby.players) {
+    const countryId = seats.get(player.peerId);
+    if (!countryId) continue;
+    if (!player.deployment || player.deployment.countryId !== countryId) {
+      throw new Error(`The deployment for ${countryId} does not match its co-op seat.`);
+    }
+    deployments.set(countryId, structuredClone(player.deployment));
+  }
+  if (deployments.size !== seats.size) {
+    throw new Error('Every co-op seat needs exactly one deployment snapshot.');
+  }
+  return deployments;
 }
 
 export function localCountryFromLobby(lobby: LobbyStateMessage, peerId: string): PlayerId {

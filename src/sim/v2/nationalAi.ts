@@ -8,10 +8,6 @@ import type {
 } from './types';
 import {
   AI_HEALTHY_ARMY_TARGET,
-  FOOD_DEVELOPMENT_PAUSE_COVERAGE,
-  FOOD_DEVELOPMENT_PAUSE_CRITICAL_RESERVE_WEEKS,
-  FOOD_DEVELOPMENT_PAUSE_DRAIN_SHARE,
-  FOOD_DEVELOPMENT_PAUSE_RESERVE_WEEKS,
   NATIONAL_AI_ALLOCATION_STEP_MAX,
   NATIONAL_AI_ALLOCATION_STEP_MIN,
   NATIONAL_AI_EFFICIENCY_PER_IQ_POINT,
@@ -38,34 +34,12 @@ export interface NationalAiInputsV2 {
   intent: BudgetPolicyV2;
   activeWars: number;
   fillRatio: number;
-  averageCondition: number;
   researchGap: number;
   treasuryWeeks: number;
-  /** Last week's actually supplied share of national food demand. */
-  foodSecurity?: number;
-  /** Live annual population change after food, condition and war pressure. */
+  /** Live annual population change after development and war pressure. */
   populationGrowthRate?: number;
-  /** Current strategic food stock measured in weeks of national demand. */
-  foodReserveWeeks?: number;
   /** National IQ is the sole skill input for the shared country AI. */
   iqScore: number;
-}
-
-export interface FoodDevelopmentRedirectInputsV2 {
-  baseBudget: BudgetPolicyV2;
-  plannedDevelopment: number;
-  foodFundingGap: number;
-  foodCoverage: number;
-  foodReserveWeeks: number;
-  foodStockChange: number;
-  foodDemand: number;
-  iqScore: number;
-}
-
-export interface FoodDevelopmentRedirectV2 {
-  activeBudget: BudgetPolicyV2;
-  development: number;
-  transfer: number;
 }
 
 export interface NationalAiTreasuryPolicyV2 {
@@ -220,59 +194,6 @@ export function moveResearchTowardTargetV2(
 }
 
 /**
- * Last-resort food funding, shared by every country. This does not rewrite the
- * stored policy or take money from research: it can only pause Development to
- * cover an immediate food gap, with a modest IQ-scaled response.
- */
-export function redirectDevelopmentFundingToFoodV2(
-  inputs: FoodDevelopmentRedirectInputsV2,
-): FoodDevelopmentRedirectV2 {
-  const plannedDevelopment = Math.max(0, inputs.plannedDevelopment);
-  const fundingGap = Math.max(0, inputs.foodFundingGap);
-  // Emergency food support ramps with the depth of the shortage. The former
-  // boolean thresholds could move almost the entire Development line after a
-  // tiny one-week coverage change, producing a visible cost cliff.
-  const coverageStress = Math.max(0, Math.min(1,
-    (FOOD_DEVELOPMENT_PAUSE_COVERAGE - inputs.foodCoverage)
-      / Math.max(0.01, FOOD_DEVELOPMENT_PAUSE_COVERAGE - 0.40),
-  ));
-  const drainShare = Math.max(0, -inputs.foodStockChange)
-    / Math.max(0.000001, inputs.foodDemand);
-  const drainStress = Math.max(0, Math.min(1,
-    (drainShare - FOOD_DEVELOPMENT_PAUSE_DRAIN_SHARE) / 0.20,
-  ));
-  const reserveStress = Math.max(0, Math.min(1,
-    (FOOD_DEVELOPMENT_PAUSE_RESERVE_WEEKS - inputs.foodReserveWeeks)
-      / Math.max(
-        0.01,
-        FOOD_DEVELOPMENT_PAUSE_RESERVE_WEEKS
-          - FOOD_DEVELOPMENT_PAUSE_CRITICAL_RESERVE_WEEKS,
-      ),
-  )) * drainStress;
-  const criticalReserveStress = Math.max(0, Math.min(1,
-    (FOOD_DEVELOPMENT_PAUSE_CRITICAL_RESERVE_WEEKS - inputs.foodReserveWeeks)
-      / Math.max(0.01, FOOD_DEVELOPMENT_PAUSE_CRITICAL_RESERVE_WEEKS),
-  ));
-  const urgency = Math.max(coverageStress, reserveStress, criticalReserveStress);
-  const response = 0.75 + 0.25 * normalizedIqV2(inputs.iqScore);
-  const transfer = fundingGap > 0.0000001
-    ? Math.min(plannedDevelopment, fundingGap) * response * urgency
-    : 0;
-  const development = Math.max(0, plannedDevelopment - transfer);
-  const developmentShare = plannedDevelopment > 0
-    ? inputs.baseBudget.development * development / plannedDevelopment
-    : 0;
-  return {
-    activeBudget: {
-      ...inputs.baseBudget,
-      development: developmentShare,
-    },
-    development,
-    transfer,
-  };
-}
-
-/**
  * Turns national conditions into a target plan. Every country runs this exact
  * planner; national IQ only affects execution efficiency and how many points
  * it can move toward the target at an eight-week review.
@@ -281,12 +202,9 @@ export function optimizeNationalAiPlanV2(inputs: NationalAiInputsV2): NationalAi
   const activeBudget = normalizePolicy(inputs.intent);
   let mode: NationalAiModeV2 = 'growth';
   let explanation = 'Following the national priorities through the shared AI planner.';
-  const foodStress = Math.max(0, Math.min(1, (0.98 - (inputs.foodSecurity ?? 1)) / 0.58));
   const populationStress = Math.max(0, Math.min(1, -(inputs.populationGrowthRate ?? 0) / 0.02));
-  const reserveStress = Math.max(0, Math.min(1, (2 - (inputs.foodReserveWeeks ?? 6)) / 2));
-  const survivalStress = Math.max(foodStress, populationStress, reserveStress);
   const survivalEmergency = inputs.activeWars === 0
-    && (foodStress > 0.02 || populationStress > 0 || reserveStress > 0 || inputs.treasuryWeeks < 0);
+    && (populationStress > 0 || inputs.treasuryWeeks < 0);
 
   if (inputs.activeWars > 0) {
     mode = 'war';
@@ -306,19 +224,17 @@ export function optimizeNationalAiPlanV2(inputs: NationalAiInputsV2): NationalAi
       // countries to win a front and still bankrupt the nation.
       boost(activeBudget, 'development', 8 + 3 * inputs.activeWars, 50);
     }
-    if (foodStress > 0.05 || populationStress > 0) {
-      boost(activeBudget, 'development', 6 + 12 * survivalStress, 50);
-      explanation = 'War economy: the army comes first while essential food and population systems stay funded.';
+    if (populationStress > 0) {
+      boost(activeBudget, 'development', 6 + 12 * populationStress, 50);
+      explanation = 'War economy: the army comes first while population recovery stays funded.';
     }
   } else if (survivalEmergency) {
     mode = 'recovery';
-    explanation = foodStress > 0.15 || reserveStress > 0.35
-      ? 'Survival first: restoring food supply and reserves before expanding the army.'
-      : populationStress > 0
-        ? 'Population recovery: stabilizing food, health and living conditions before military growth.'
+    explanation = populationStress > 0
+        ? 'Population recovery: stabilizing health and living conditions before military growth.'
         : 'Debt recovery: protecting essential services and rebuilding a positive treasury.';
-    boost(activeBudget, 'development', 18 + 30 * survivalStress);
-    boost(activeBudget, 'research', 4 + 8 * Math.max(foodStress, populationStress));
+    boost(activeBudget, 'development', 18 + 30 * populationStress);
+    boost(activeBudget, 'research', 4 + 8 * populationStress);
     if (inputs.fillRatio < AI_HEALTHY_ARMY_TARGET - 0.005) {
       explanation += ' Existing forces stay mobilized; recruitment resumes as soon as the crisis permits.';
     }
@@ -326,10 +242,10 @@ export function optimizeNationalAiPlanV2(inputs: NationalAiInputsV2): NationalAi
     mode = 'rebuild';
     explanation = 'Training manpower gradually toward the full population-based army cap.';
     boost(activeBudget, 'military', 12 + 18 * (1 - inputs.fillRatio));
-  } else if (inputs.averageCondition < 0.72 || inputs.treasuryWeeks < 2) {
+  } else if (inputs.treasuryWeeks < 2) {
     mode = 'recovery';
-    explanation = 'Repairing territory and strengthening the revenue base.';
-    boost(activeBudget, 'development', 10 + 16 * (1 - inputs.averageCondition));
+    explanation = 'Strengthening the revenue base and rebuilding cash runway.';
+    boost(activeBudget, 'development', 10);
   } else if (inputs.researchGap >= 4) {
     mode = 'catch-up';
     explanation = 'Closing the technology gap without abandoning the chosen route.';
@@ -341,16 +257,7 @@ export function optimizeNationalAiPlanV2(inputs: NationalAiInputsV2): NationalAi
   if (!survivalEmergency && inputs.fillRatio < AI_HEALTHY_ARMY_TARGET - 0.005) {
     boost(activeBudget, 'military', 5);
   }
-  if (!survivalEmergency && inputs.averageCondition < 0.82) boost(activeBudget, 'development', 4);
   if (!survivalEmergency && inputs.researchGap >= 7) boost(activeBudget, 'research', 4);
-
-  // Food crises redirect real, finite appropriations instead of granting free
-  // supply. Development funds domestic capacity now; research funds the
-  // economy/logistics portfolio that raises access and efficiency over time.
-  if (foodStress > 0 && !survivalEmergency && inputs.activeWars === 0) {
-    boost(activeBudget, 'development', 6 + 18 * foodStress);
-    boost(activeBudget, 'research', 3 + 8 * foodStress);
-  }
 
   return {
     mode,

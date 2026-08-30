@@ -10,12 +10,18 @@ import {
   COMBAT_ROUTE_STRENGTH_RATIO,
   DEFENDER_COUNTERFIRE_MULTIPLIER,
   WAR_ACCESS_CASUALTY_MULTIPLIER,
+  WAR_CAMPAIGN_MAX_TICKS,
   WAR_MOBILIZATION_TICKS,
 } from './balance';
 import { createWorldStateV2 } from './bootstrap';
 import { synchronizeArmyCapacityV2 } from './capacity';
-import { WORLD_CONTENT_V2 } from './content';
+import {
+  APEX_FRONTLINE_SHIELD_INTERCEPT_SHARE_V2,
+  allocateApexFrontlineDamageV2,
+} from './commanderForce';
+import { ROGUE_AI_NATION_ID_V2, WORLD_CONTENT_V2 } from './content';
 import { invalidateTerritoryIndexV2 } from './selectors';
+import { enterPostBlackoutCampaignForTestV2 } from './testSupport';
 import { humanStartingArmyMultiplierV2 } from './traits';
 import { nationIdV2, territoryIdV2, type FrontOperationV2, type WarStateV2, type WorldStateV2 } from './types';
 import { WorldEngineV2 } from './WorldEngineV2';
@@ -77,8 +83,6 @@ function calibratedState(seed = 4_001): WorldStateV2 {
   const state = createWorldStateV2(seed);
   state.tick = 2;
   state.wars = [];
-  state.territories[belTerritory].condition = 1;
-  state.territories[nldTerritory].condition = 1;
   state.territories[belTerritory].army = {
     ...state.territories[belTerritory].army,
     manpower: 0.20, capacity: 0.20,
@@ -93,6 +97,9 @@ function calibratedState(seed = 4_001): WorldStateV2 {
 function isolatedEngine(seed: number, humanId: string): WorldEngineV2 {
   const engine = new WorldEngineV2(seed);
   expect(engine.chooseCountry(humanId).accepted).toBe(true);
+  // These fixtures calibrate post-prologue combat, not the peaceful opening.
+  // Unlock the fixture explicitly without weakening the production war gate.
+  enterPostBlackoutCampaignForTestV2(engine.state);
   engine.state.wars = [];
   engine.state.offers = [];
   engine.state.truces = [];
@@ -125,6 +132,146 @@ function simulateWar(seed: number, humanId: string, attackerId: string, defender
 }
 
 describe('V2 coherent combat and forecast calibration', () => {
+  it('lets a healthy APEX dome intercept most pressure through bounded elite durability', () => {
+    const allocation = allocateApexFrontlineDamageV2({
+      requestedDamage: 0.001,
+      nationalManpower: 0.1,
+      apex: {
+        shieldActive: true,
+        engagedManpower: 0.00048,
+        manpower: 0.00048,
+        capacity: 0.0009,
+        defense: 125,
+        nationalDefense: 1.2,
+        opposingAttack: 1.2,
+      },
+    });
+
+    expect(allocation.interceptedDamage).toBeCloseTo(
+      0.001 * APEX_FRONTLINE_SHIELD_INTERCEPT_SHARE_V2,
+      9,
+    );
+    expect(allocation.durabilityMultiplier).toBeGreaterThan(1);
+    expect(allocation.durabilityMultiplier).toBeLessThanOrEqual(4);
+    expect(allocation.apexLosses).toBeGreaterThan(0);
+    expect(allocation.nationalLosses).toBeCloseTo(0.0001, 9);
+    expect(allocation.apexLosses * allocation.durabilityMultiplier)
+      .toBeCloseTo(allocation.interceptedDamage, 9);
+    expect(allocation.nationalLosses + allocation.interceptedDamage)
+      .toBeCloseTo(0.001, 9);
+  });
+
+  it('spends the deployed dome to zero and spills all remaining damage into the army', () => {
+    const allocation = allocateApexFrontlineDamageV2({
+      requestedDamage: 0.01,
+      nationalManpower: 0.1,
+      apex: {
+        shieldActive: true,
+        engagedManpower: 0.00048,
+        manpower: 0.00048,
+        capacity: 0.0009,
+        defense: 125,
+        nationalDefense: 1.2,
+        opposingAttack: 1.2,
+      },
+    });
+
+    expect(allocation.apexLosses).toBeCloseTo(0.00048, 9);
+    expect(0.00048 - allocation.apexLosses).toBeCloseTo(0, 9);
+    expect(allocation.interceptedDamage).toBeCloseTo(
+      allocation.apexLosses * allocation.durabilityMultiplier,
+      9,
+    );
+    expect(allocation.nationalLosses).toBeCloseTo(
+      0.01 - allocation.interceptedDamage,
+      9,
+    );
+    expect(allocation.nationalLosses + allocation.interceptedDamage)
+      .toBeCloseTo(0.01, 9);
+  });
+
+  it('flows national overkill back into APEX instead of deleting damage', () => {
+    const allocation = allocateApexFrontlineDamageV2({
+      requestedDamage: 0.001,
+      nationalManpower: 0.000001,
+      apex: {
+        shieldActive: true,
+        engagedManpower: 0.00048,
+        manpower: 0.00048,
+        capacity: 0.0009,
+        defense: 125,
+        nationalDefense: 1.2,
+        opposingAttack: 1.2,
+      },
+    });
+
+    expect(allocation.nationalLosses).toBe(0.000001);
+    expect(allocation.interceptedDamage).toBeCloseTo(0.000999, 9);
+    expect(allocation.interceptedDamage)
+      .toBeGreaterThan(0.001 * APEX_FRONTLINE_SHIELD_INTERCEPT_SHARE_V2);
+    expect(allocation.nationalLosses + allocation.interceptedDamage)
+      .toBeCloseTo(0.001, 9);
+    expect(allocation.apexLosses).toBeLessThan(0.00048 - 0.000025);
+  });
+
+  it('spills interception shortfall into the army when APEX supply limits engagement', () => {
+    const allocation = allocateApexFrontlineDamageV2({
+      requestedDamage: 0.001,
+      nationalManpower: 0.1,
+      apex: {
+        shieldActive: true,
+        engagedManpower: 0.00005,
+        manpower: 0.00048,
+        capacity: 0.0009,
+        defense: 125,
+        nationalDefense: 1.2,
+        opposingAttack: 1.2,
+      },
+    });
+
+    expect(allocation.apexLosses).toBeCloseTo(0.00005, 9);
+    expect(allocation.interceptedDamage).toBeCloseTo(
+      allocation.apexLosses * allocation.durabilityMultiplier,
+      9,
+    );
+    expect(allocation.interceptedDamage)
+      .toBeLessThan(0.001 * APEX_FRONTLINE_SHIELD_INTERCEPT_SHARE_V2);
+    expect(allocation.nationalLosses + allocation.interceptedDamage)
+      .toBeCloseTo(0.001, 9);
+  });
+
+  it('keeps proportional casualties when a formation has no active neural dome', () => {
+    const allocation = allocateApexFrontlineDamageV2({
+      requestedDamage: 0.001,
+      nationalManpower: 0.1,
+      apex: {
+        shieldActive: false,
+        engagedManpower: 0.00048,
+        manpower: 0.00048,
+        capacity: 0.0009,
+        defense: 125,
+        nationalDefense: 1.2,
+        opposingAttack: 1.2,
+      },
+    });
+
+    expect(allocation.interceptedDamage).toBe(0);
+    expect(allocation.apexLosses).toBeGreaterThan(0);
+    expect(allocation.nationalLosses + allocation.apexLosses).toBeCloseTo(0.001, 9);
+  });
+
+  it('leaves the full hit with the national army when no APEX supports the front', () => {
+    expect(allocateApexFrontlineDamageV2({
+      requestedDamage: 0.001,
+      nationalManpower: 0.1,
+    })).toMatchObject({
+      nationalLosses: 0.001,
+      apexLosses: 0,
+      allyLosses: 0,
+      interceptedDamage: 0,
+    });
+  });
+
   it('uses the finite trained-reserve pool for strategic forecast readiness', () => {
     expect(strategicReserveReadinessMultiplierV2(0, 10)).toBeCloseTo(0.95, 9);
     expect(strategicReserveReadinessMultiplierV2(5, 10)).toBeCloseTo(0.975, 9);
@@ -183,7 +330,10 @@ describe('V2 coherent combat and forecast calibration', () => {
       Math.ceil(projected.attackerStrength / projected.attackerLosses),
       Math.ceil(projected.defenderStrength / projected.defenderLosses),
     );
-    const centralWeeks = Math.min(156, Math.max(4, BATTLE_INTERVAL_TICKS * decisivePulses));
+    const centralWeeks = Math.min(
+      WAR_CAMPAIGN_MAX_TICKS,
+      Math.max(4, BATTLE_INTERVAL_TICKS * decisivePulses),
+    );
     expect(forecast.estimatedWeeksMin).toBe(Math.max(2, Math.round(centralWeeks * 0.72)));
     expect(forecast.estimatedWeeksMax).toBe(Math.max(4, Math.round(centralWeeks * 1.35)));
 
@@ -196,6 +346,76 @@ describe('V2 coherent combat and forecast calibration', () => {
     const event = resolveBattlePulseV2(state, WORLD_CONTENT_V2, war(state), operation())!;
     expect(event.attackerLosses).toBeCloseTo(randomized.attackerLosses, 6);
     expect(event.defenderLosses).toBeCloseTo(randomized.defenderLosses, 6);
+  });
+
+  it('lets a slow forecast extend beyond the retired three-year ceiling', () => {
+    const state = calibratedState(4_001_001);
+    for (const territoryId of [belTerritory, nldTerritory]) {
+      state.territories[territoryId]!.army.baseAttack = 1;
+      state.territories[territoryId]!.army.baseDefense = 5;
+    }
+    const expectedOpeningDamage = battleDamageMeanV2(0);
+    const projection = projectCombatExchangeV2(
+      state, WORLD_CONTENT_V2, bel, nld, belTerritory, nldTerritory, 'land',
+      expectedOpeningDamage, expectedOpeningDamage,
+    )!;
+    const decisivePulses = Math.min(
+      Math.ceil(projection.attackerStrength / projection.attackerLosses),
+      Math.ceil(projection.defenderStrength / projection.defenderLosses),
+    );
+    const projectedWeeks = BATTLE_INTERVAL_TICKS * decisivePulses;
+    const retiredThreeYearCeiling = 3 * 52;
+    expect(projectedWeeks).toBeGreaterThan(retiredThreeYearCeiling);
+    expect(projectedWeeks).toBeLessThan(WAR_CAMPAIGN_MAX_TICKS);
+
+    const forecast = forecastWarV2(state, WORLD_CONTENT_V2, bel, nld);
+    expect(forecast.estimatedWeeksMax).toBe(Math.round(projectedWeeks * 1.35));
+    expect(forecast.estimatedWeeksMax)
+      .toBeGreaterThan(Math.round(retiredThreeYearCeiling * 1.35));
+  });
+
+  it('keeps extreme national and Rogue DEF finite so real attacks always make progress', () => {
+    const projectAgainstDefense = (
+      defenderId: typeof nld | typeof ROGUE_AI_NATION_ID_V2,
+      baseDefense: number,
+    ) => {
+      const state = calibratedState(4_001_002);
+      state.territories[belTerritory].army.baseAttack = 1;
+      state.territories[belTerritory].army.baseDefense = 1;
+      state.territories[nldTerritory].owner = defenderId;
+      state.territories[nldTerritory].army.baseAttack = 1;
+      state.territories[nldTerritory].army.baseDefense = baseDefense;
+      invalidateTerritoryIndexV2(state);
+      return projectCombatExchangeV2(
+        state,
+        WORLD_CONTENT_V2,
+        bel,
+        defenderId,
+        belTerritory,
+        nldTerritory,
+        'land',
+        1,
+        1,
+      )!;
+    };
+
+    const ordinaryBaseline = projectAgainstDefense(nld, 1);
+    const rogueBaseline = projectAgainstDefense(ROGUE_AI_NATION_ID_V2, 1);
+    const ordinary = projectAgainstDefense(nld, 1_000_000);
+    const rogue = projectAgainstDefense(ROGUE_AI_NATION_ID_V2, 1_000_000);
+
+    expect(ordinary.defenderDefense).toBeGreaterThan(100_000);
+    expect(rogue.defenderDefense).toBeGreaterThan(100_000);
+    expect(ordinary.defenderLossRate).toBeGreaterThan(0.001);
+    expect(rogue.defenderLossRate).toBeGreaterThan(0.001);
+    expect(ordinary.defenderLossRate).toBeGreaterThan(
+      ordinaryBaseline.defenderLossRate * 0.24,
+    );
+    expect(rogue.defenderLossRate).toBeGreaterThan(
+      rogueBaseline.defenderLossRate * 0.24,
+    );
+    expect(ordinary.attackRatio).toBeGreaterThan(0);
+    expect(rogue.attackRatio).toBeGreaterThan(0);
   });
 
   it('lets every additional front soldier add damage without a pulse ceiling', () => {
@@ -261,7 +481,7 @@ describe('V2 coherent combat and forecast calibration', () => {
     expect(state.wars[0]!.battles).toBe(2);
   });
 
-  it('resolves two owned source armies as real fronts in the same battle round', () => {
+  it('collapses multiple owned border armies into one bilateral front per battle round', () => {
     const state = createWorldStateV2(4_001_11);
     state.wars = [];
     state.tick = WAR_MOBILIZATION_TICKS;
@@ -284,14 +504,13 @@ describe('V2 coherent combat and forecast calibration', () => {
 
     const battles = processWarsV2(state, WORLD_CONTENT_V2);
 
-    expect(battles).toHaveLength(2);
-    expect(new Set(battles.map((battle) => battle.sourceId))).toEqual(
-      new Set([belTerritory, deuTerritory]),
-    );
+    expect(battles).toHaveLength(1);
+    expect([belTerritory, deuTerritory]).toContain(battles[0]!.sourceId);
     expect(battles.every((battle) => battle.tick === WAR_MOBILIZATION_TICKS)).toBe(true);
     expect(battles.every((battle) => battle.attackerLosses > 0)).toBe(true);
     expect(battles.every((battle) => battle.defenderLosses > 0)).toBe(true);
-    expect(active.battles).toBe(2);
+    expect(active.battles).toBe(1);
+    expect(active.attackerOperations.length + active.defenderOperations.length).toBe(1);
   });
 
   it('makes prepared defenders inflict extra attacker casualties and civilian harm remains defender-heavy', () => {
@@ -342,10 +561,10 @@ describe('V2 coherent combat and forecast calibration', () => {
       state, WORLD_CONTENT_V2, bel, nld, belTerritory, nldTerritory, 'land', 1, 1,
     )!;
     expect(projected.defenderLosses).toBeGreaterThan(projected.attackerLosses);
-    // The current terrain/trait calibration leaves bounded counterfire at
-    // roughly 10.6% of the tiny defending formation; it remains decisively
-    // one-sided without inventing route or wipe casualties.
-    expect(projected.attackerLosses).toBeLessThan(0.12 * projected.defenderStrength);
+    // The larger field-battle calibration leaves bounded counterfire below
+    // 18% of the tiny defending formation; it remains decisively one-sided
+    // without inventing route or wipe casualties.
+    expect(projected.attackerLosses).toBeLessThan(0.18 * projected.defenderStrength);
     const event = resolveBattlePulseV2(state, WORLD_CONTENT_V2, war(state), operation())!;
     expect(event.defenderLosses).toBeGreaterThan(event.attackerLosses);
     expect(event.defenderLosses).toBeGreaterThan(0);

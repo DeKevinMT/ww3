@@ -153,7 +153,6 @@ describe('V2 one-time human conquest integration discount', () => {
         atWar: false,
         treasury: state.players[netherlands]!.treasury,
         foodSecurity: state.players[netherlands]!.foodSecurity,
-        condition: target.condition,
       },
     );
     const ordinaryAnnualCost = territoryIntegrationAnnualCostV2(target.economy)
@@ -360,8 +359,10 @@ describe('V2 one-time human conquest integration discount', () => {
     const legacy = structuredClone(
       createSaveV2(state, WORLD_CONTENT_V2),
     ) as unknown as Record<string, unknown>;
+    delete legacy.commanderForces;
     delete legacy.firstIntegrationDiscountUsedBy;
     delete legacy.polarEndgame;
+    delete legacy.runProgression;
     legacy.rulesVersion = 'frontier-command-v2.62-temporary-opening-armies';
     legacy.canonicalStateHash = canonicalStateHashV2(legacy);
 

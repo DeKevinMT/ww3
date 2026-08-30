@@ -6,6 +6,7 @@ import {
   synchronizeArmyCapacityV2,
 } from './capacity';
 import { WORLD_CONTENT_V2 } from './content';
+import { initializeCommanderForceV2 } from './commanderForce';
 import { createFinancePlansV2 } from './economy';
 import {
   advanceTerritoryIntegrationProgramsV2,
@@ -54,7 +55,6 @@ describe('V2 permanent territory integration lifecycle', () => {
     const durableTerritoryStatsBefore = {
       population: territory.population,
       economy: territory.economy,
-      condition: territory.condition,
       manpower: territory.army.manpower,
       baseAttack: territory.army.baseAttack,
       baseDefense: territory.army.baseDefense,
@@ -112,7 +112,6 @@ describe('V2 permanent territory integration lifecycle', () => {
     expect({
       population: territory.population,
       economy: territory.economy,
-      condition: territory.condition,
       manpower: territory.army.manpower,
       baseAttack: territory.army.baseAttack,
       baseDefense: territory.army.baseDefense,
@@ -215,7 +214,10 @@ describe('V2 permanent territory integration lifecycle', () => {
     const state = createWorldStateV2(260823);
     const territory = state.territories[luxembourgTerritory];
     beginTerritoryIntegrationV2(state, WORLD_CONTENT_V2, luxembourgTerritory, belgium);
-    state.tick = 200;
+    // Recapture the still-sovereign homeland immediately before permanent
+    // Signal Purge completion. Once a country is fully absorbed it no longer
+    // exists as an independent recapturing actor.
+    state.tick = territory.integrationProgram!.completesTick - 1;
     advanceTerritoryIntegrationProgramsV2(state, WORLD_CONTENT_V2);
 
     beginTerritoryIntegrationV2(state, WORLD_CONTENT_V2, luxembourgTerritory, luxembourg);
@@ -231,7 +233,8 @@ describe('V2 permanent territory integration lifecycle', () => {
     const territory = state.territories[luxembourgTerritory];
     const duration = territoryIntegrationDurationWeeksV2(WORLD_CONTENT_V2, luxembourgTerritory);
     beginTerritoryIntegrationV2(state, WORLD_CONTENT_V2, luxembourgTerritory, belgium);
-    for (let week = 1; week <= 100; week += 1) {
+    const interruptionTick = territory.integrationProgram!.completesTick - 1;
+    for (let week = 1; week <= interruptionTick; week += 1) {
       state.tick = week;
       advanceTerritoryIntegrationProgramsV2(state, WORLD_CONTENT_V2);
     }
@@ -247,8 +250,8 @@ describe('V2 permanent territory integration lifecycle', () => {
       fromOwnerId: belgium,
       fromCoreOwnerId: luxembourg,
       toOwnerId: netherlands,
-      startedTick: 100,
-      completesTick: 100 + duration,
+      startedTick: interruptionTick,
+      completesTick: interruptionTick + duration,
       annualCost: territoryIntegrationAnnualCostV2(territory.economy),
     });
   });
@@ -303,6 +306,16 @@ describe('V2 permanent territory integration lifecycle', () => {
   it('fully retires an absorbed selected country and reconstructs its defeat after loading', () => {
     const state = createWorldStateV2(260827);
     state.humanPlayerId = luxembourg;
+    expect(initializeCommanderForceV2(state, WORLD_CONTENT_V2, luxembourg, {
+      manpower: 0.00048,
+      capacity: 0.0009,
+      trainedReserves: 0,
+      baseAttack: 125,
+      baseDefense: 125,
+      treasury: 0,
+      annualOutput: 0.015,
+      supplyStock: 0.006,
+    }).accepted).toBe(true);
     beginTerritoryIntegrationV2(state, WORLD_CONTENT_V2, luxembourgTerritory, belgium);
     state.tick = state.territories[luxembourgTerritory].integrationProgram!.completesTick;
 
@@ -312,12 +325,23 @@ describe('V2 permanent territory integration lifecycle', () => {
     expect(state.gameOver).toBe(true);
     expect(state.winnerId).toBe(belgium);
     expect(state.speed).toBe(0);
+    expect(state.commanderForces[luxembourg]).toMatchObject({
+      mission: 'standby',
+      front: null,
+      transit: null,
+    });
+    expect(state.commanderForces[luxembourg]!.army.manpower).toBeGreaterThan(0);
     expect(invariantErrorsV2(state, WORLD_CONTENT_V2)).toEqual([]);
 
     const reloaded = loadSaveV2(createSaveV2(state, WORLD_CONTENT_V2), WORLD_CONTENT_V2);
     expect(reloaded.players[luxembourg]).toBeUndefined();
     expect(reloaded.gameOver).toBe(true);
     expect(reloaded.winnerId).toBe(belgium);
+    expect(reloaded.commanderForces[luxembourg]).toMatchObject({
+      mission: 'standby',
+      front: null,
+      transit: null,
+    });
     expect(invariantErrorsV2(reloaded, WORLD_CONTENT_V2)).toEqual([]);
   });
 

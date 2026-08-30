@@ -10,10 +10,7 @@ import { createWorldStateV2 } from './bootstrap';
 import { WORLD_CONTENT_V2 } from './content';
 import { invariantErrorsV2 } from './invariants';
 import { canonicalStateHashV2, createSaveV2, loadSaveV2 } from './persistence';
-import {
-  selectNationalEconomyV2,
-  selectWeeklyFinanceBreakdownV2,
-} from './selectors';
+import { selectNationalEconomyV2 } from './selectors';
 import {
   nationIdV2,
   territoryIdV2,
@@ -42,8 +39,6 @@ function battleFixture(seed: number, forceScale = 1): {
   state.tick = WAR_MOBILIZATION_TICKS;
   state.wars = [];
   state.truces = [];
-  state.territories[belgiumTerritory].condition = 1;
-  state.territories[netherlandsTerritory].condition = 1;
   state.territories[belgiumTerritory].army = {
     ...state.territories[belgiumTerritory].army,
     manpower: 0.20 * forceScale,
@@ -86,7 +81,7 @@ function battleFixture(seed: number, forceScale = 1): {
 }
 
 describe('V2 battle collateral population damage', () => {
-  it('applies local civilian losses once and exposes them to live economy and finance selectors', () => {
+  it('applies local civilian losses once and exposes them to the live economy selector', () => {
     const { state, war, operation } = battleFixture(7_701);
     const sourceBefore = state.territories[belgiumTerritory].population;
     const targetBefore = state.territories[netherlandsTerritory].population;
@@ -94,11 +89,9 @@ describe('V2 battle collateral population damage', () => {
     const worldPopulationBefore = Object.values(state.territories)
       .reduce((sum, territory) => sum + territory.population, 0);
     const economyBefore = selectNationalEconomyV2(state, WORLD_CONTENT_V2, netherlands);
-    const financeBefore = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, netherlands);
 
     const event = resolveBattlePulseV2(state, WORLD_CONTENT_V2, war, operation)!;
     const economyAfter = selectNationalEconomyV2(state, WORLD_CONTENT_V2, netherlands);
-    const financeAfter = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, netherlands);
 
     expect(event.attackerPopulationLoss).toBeGreaterThan(0);
     expect(event.defenderPopulationLoss).toBeGreaterThan(0);
@@ -116,7 +109,6 @@ describe('V2 battle collateral population damage', () => {
     expect(war.attackerCivilianLosses).toBe(event.attackerPopulationLoss);
     expect(war.defenderCivilianLosses).toBe(event.defenderPopulationLoss);
     expect(economyAfter.population).toBeLessThan(economyBefore.population);
-    expect(financeAfter.foodDemand).toBeLessThan(financeBefore.foodDemand);
   });
 
   it('keeps deaths high on both sides while the defender remains only moderately worse hit', () => {

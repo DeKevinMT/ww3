@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { createWorldStateV2 } from './bootstrap';
-import { WORLD_CONTENT_V2 } from './content';
+import {
+  isHumanSelectableNationV2,
+  ROGUE_AI_NATION_ID_V2,
+  WORLD_CONTENT_V2,
+} from './content';
 import { OPENING_ARMY_BONUS_DURATION_TICKS_V2 } from './openingArmyBonus';
 import {
   FULL_STRENGTH_WEALTH_PER_PERSON_V2,
@@ -47,13 +51,17 @@ function expectedTaxRate(wealthPerPerson: number): number {
 
 describe('V2 fiscal identity and population-linked income', () => {
   it('retains official IMF tax observations only as reference metadata', () => {
-    const direct = WORLD_CONTENT_V2.nationIds.filter((id) => (
+    const ordinaryIds = WORLD_CONTENT_V2.nationIds.filter((id) => (
+      isHumanSelectableNationV2(WORLD_CONTENT_V2, id)
+    ));
+    const direct = ordinaryIds.filter((id) => (
       WORLD_CONTENT_V2.nations[id]!.real.taxRevenueSource === 'IMF_WORLD_G11_POGDP_PT_R'
     ));
-    const imputed = WORLD_CONTENT_V2.nationIds.filter((id) => WORLD_CONTENT_V2.nations[id]!.real.taxRevenueImputed);
+    const imputed = ordinaryIds.filter((id) => WORLD_CONTENT_V2.nations[id]!.real.taxRevenueImputed);
 
     expect(direct).toHaveLength(160);
     expect(imputed).toHaveLength(5);
+    expect(WORLD_CONTENT_V2.nations[ROGUE_AI_NATION_ID_V2]!.real.taxRevenueImputed).toBe(true);
     expect(WORLD_CONTENT_V2.nations[bel]!.real.taxRevenueShare).toBeCloseTo(0.29570690, 8);
     expect(WORLD_CONTENT_V2.nations[usa]!.real.taxRevenueShare).toBeCloseTo(0.19478716, 8);
     expect(WORLD_CONTENT_V2.nations[nga]!.real.taxRevenueShare).toBeCloseTo(0.03423527, 8);
@@ -204,6 +212,7 @@ describe('V2 fiscal identity and population-linked income', () => {
   it('uses canonical automatic income plus a diminishing small-rich-state buffer for starting treasury', () => {
     const state = createWorldStateV2(4_203, WORLD_CONTENT_V2);
     for (const id of WORLD_CONTENT_V2.nationIds) {
+      if (!isHumanSelectableNationV2(WORLD_CONTENT_V2, id)) continue;
       const real = WORLD_CONTENT_V2.nations[id]!.real;
       const fiscal = calculateBlendedFiscalCapacityV2(real.gdp, real.population, real.population);
       const weeklyRevenue = fiscal.weeklyTaxRevenue;
@@ -220,6 +229,7 @@ describe('V2 fiscal identity and population-linked income', () => {
       ) / 1_000;
       expect(state.players[id]!.treasury, String(id)).toBe(expected);
     }
+    expect(state.players[ROGUE_AI_NATION_ID_V2]!.treasury).toBe(8_000);
     const qatarWeeks = state.players[qat]!.treasury
       / calculateBlendedFiscalCapacityV2(
         WORLD_CONTENT_V2.nations[qat]!.real.gdp,
@@ -254,26 +264,19 @@ describe('V2 fiscal identity and population-linked income', () => {
     expect(enlarged.mandatoryFundingRatio).toBeLessThan(1);
   });
 
-  it('keeps food funded and lets true emergencies draw only from available cash', () => {
+  it('keeps retired commodity fields neutral while military spending uses real cash', () => {
     const state = createWorldStateV2(4_205, WORLD_CONTENT_V2);
     state.wars = [];
     for (const id of WORLD_CONTENT_V2.nationIds) {
       const finance = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, id);
-      expect(finance.foodProduction, String(id)).toBeLessThanOrEqual(
-        finance.revenue + Math.max(0, state.players[id]!.treasury) + 1e-6,
-      );
+      expect(finance.foodProduction, String(id)).toBe(0);
+      expect(finance.foodDemand, String(id)).toBe(0);
+      expect(finance.foodExportIncome, String(id)).toBe(0);
+      expect(finance.foodCoverage, String(id)).toBe(1);
       expect(Number.isFinite(finance.mandatoryFundingRatio), String(id)).toBe(true);
     }
 
-    const nigeria = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, nga);
-    const india = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, nationIdV2('ind'));
     const unitedStates = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, usa);
-    expect(nigeria.foodCoverage).toBe(1);
-    expect(india.foodCoverage).toBe(1);
-    expect(nigeria.foodProduction / nigeria.revenue)
-      .toBeGreaterThan(unitedStates.foodProduction / unitedStates.revenue);
-    expect(india.foodProduction / india.revenue)
-      .toBeGreaterThan(unitedStates.foodProduction / unitedStates.revenue);
     expect(unitedStates.armyUpkeep / unitedStates.revenue).toBeGreaterThan(0.14);
     // A healthy country now deliberately retains part of ordinary cashflow as
     // a war chest instead of spending almost every dollar each week.

@@ -30,17 +30,38 @@ describe('opening mobilisation on the map', () => {
     });
     expect(adapter.state.openingMobilisations[usa]).toBeUndefined();
 
-    engine.state.tick = OPENING_ARMY_BONUS_DURATION_TICKS_V2 / 2;
+    expect(engine.initializeCommanderForce(greenland, {
+      manpower: 0.001,
+      capacity: 0.01,
+      trainedReserves: 0,
+      baseAttack: 4.5,
+      baseDefense: 5,
+      treasury: 0.5,
+      annualOutput: 1,
+      supplyStock: 0.15,
+      countryTraitScale: 0,
+    }).accepted).toBe(true);
+    // Commander initialization is a tick-zero direct mutation, so the map
+    // adapter must notice its roster even when tick/actionSequence did not move.
     adapter.refreshSnapshot?.();
-    expect(adapter.state.openingMobilisations[greenland]).toMatchObject({
+    expect(adapter.state.openingMobilisations).toEqual({});
+
+    const legacyEngine = new WorldEngineV2(95_203, WORLD_CONTENT_V2);
+    expect(legacyEngine.configureHumanPlayers([greenland], greenland)).toEqual({ accepted: true });
+    const legacyAdapter = createMapEngineAdapter(legacyEngine, () => legacyEngine.globalRanking());
+    legacyAdapter.refreshSnapshot?.();
+
+    legacyEngine.state.tick = OPENING_ARMY_BONUS_DURATION_TICKS_V2 / 2;
+    legacyAdapter.refreshSnapshot?.();
+    expect(legacyAdapter.state.openingMobilisations[greenland]).toMatchObject({
       remainingRatio: 0.5,
       currentMultiplier: 25.5,
       remainingTicks: OPENING_ARMY_BONUS_DURATION_TICKS_V2 / 2,
     });
 
-    engine.state.tick = OPENING_ARMY_BONUS_DURATION_TICKS_V2;
-    adapter.refreshSnapshot?.();
-    expect(adapter.state.openingMobilisations).toEqual({});
+    legacyEngine.state.tick = OPENING_ARMY_BONUS_DURATION_TICKS_V2;
+    legacyAdapter.refreshSnapshot?.();
+    expect(legacyAdapter.state.openingMobilisations).toEqual({});
   });
 
   it('supports multiple human countries and distinguishes limits from boosts', () => {
@@ -70,7 +91,7 @@ describe('opening mobilisation on the map', () => {
     expect(mapSceneSource).toContain('owner.isHuman && empireCapital');
     expect(mapSceneSource).toContain("'OPENING BOOST' : 'OPENING LIMIT'");
     expect(mapSceneSource).toContain('${openingPercent}% LEFT');
-    expect(mapSceneSource).toContain("fontSize: '8px'");
+    expect(mapSceneSource).toContain("fontSize: '10px'");
     expect(mapSceneSource).toContain("openingPhase.direction === 'boost' ? 0x70dcc2 : 0xb5a7ff");
     expect(mapSceneSource).toContain('openingMobilisationBarBack');
     expect(mapSceneSource).toContain('openingMobilisationBarFill');

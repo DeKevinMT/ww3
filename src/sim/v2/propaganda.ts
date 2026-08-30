@@ -10,7 +10,7 @@ import {
   round,
 } from './balance';
 import type { WorldContentV2 } from './content';
-import { isHumanPlayerV2, selectHumanPlayerIdsV2 } from './humanPlayers';
+import { isHumanPlayerV2 } from './humanPlayers';
 import {
   initialManualActionCostV2,
   initialStructuralWeeklyRevenueV2,
@@ -20,6 +20,9 @@ import {
   selectIsEliminatedV2,
 } from './selectors';
 import type { PlayerId, PropagandaTermsV2, WorldStateV2 } from './types';
+
+export const PROPAGANDA_RETIRED_REASON_V2
+  = 'Propaganda was retired; hostility is now local to each opponent.';
 
 /**
  * Pure authoritative quote. Cost follows the empire's structural weekly tax
@@ -53,7 +56,7 @@ export function selectPropagandaTermsV2(
     )
     : 0;
   const terms: PropagandaTermsV2 = {
-    allowed: true,
+    allowed: false,
     playerId,
     cost,
     baseCost: openingQuote.baseCost,
@@ -69,6 +72,11 @@ export function selectPropagandaTermsV2(
     totalSuspicionReduction: PROPAGANDA_TOTAL_SUSPICION_REDUCTION,
     weeklySuspicionReduction: round(PROPAGANDA_TOTAL_SUSPICION_REDUCTION / PROPAGANDA_DURATION_TICKS),
   };
+  // Compatibility quote only. Old clients and queued commands receive one
+  // deterministic rejection; no treasury, cooldown or political state moves.
+  if (nation && !selectIsEliminatedV2(state, playerId) && isHumanPlayerV2(state, playerId)) {
+    return { ...terms, reason: PROPAGANDA_RETIRED_REASON_V2 };
+  }
   if (!nation || selectIsEliminatedV2(state, playerId)) {
     return { ...terms, allowed: false, reason: 'Nation has no gameplay agency.' };
   }
@@ -84,26 +92,10 @@ export function selectPropagandaTermsV2(
   if (!(nation.treasury > 0) || nation.treasury + 0.000_001 < cost) {
     return { ...terms, allowed: false, reason: `Requires ${cost.toFixed(2)}B positive cash.` };
   }
-  return terms;
+  return { ...terms, reason: PROPAGANDA_RETIRED_REASON_V2 };
 }
 
-/** Apply one of exactly 52 equal instalments after the normal suspicion update. */
+/** Normalize obsolete active campaigns without producing any political effect. */
 export function processPropagandaProgramsV2(state: WorldStateV2): void {
-  let totalReduction = 0;
-  for (const playerId of selectHumanPlayerIdsV2(state)) {
-    const nation = state.players[playerId];
-    const program = nation?.propagandaProgram;
-    if (!nation || !program || state.tick <= program.startedTick) continue;
-    totalReduction += state.tick >= program.endsTick
-      ? program.totalSuspicionReduction
-        - program.weeklySuspicionReduction * (PROPAGANDA_DURATION_TICKS - 1)
-      : program.weeklySuspicionReduction;
-    if (state.tick >= program.endsTick) nation.propagandaProgram = null;
-  }
-  if (totalReduction <= 0) return;
-  state.aiEscalation.globalThreat = round(clamp(
-    state.aiEscalation.globalThreat - totalReduction,
-    0,
-    100,
-  ));
+  for (const nation of Object.values(state.players)) nation.propagandaProgram = null;
 }

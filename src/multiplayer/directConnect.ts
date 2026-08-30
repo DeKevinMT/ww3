@@ -21,6 +21,7 @@ import {
 export const DIRECT_CONNECT_CHANNEL_LABEL = 'frontier-command-direct-v1';
 export const DEFAULT_ICE_GATHERING_TIMEOUT_MS = 30_000;
 export const DEFAULT_MAX_BUFFERED_AMOUNT_BYTES = 8 * 1024 * 1024;
+export const DEFAULT_REJOIN_GRACE_MS = 5 * 60_000;
 
 /** Public STUN only: no account, credential or game server is required. */
 export const DEFAULT_DIRECT_CONNECT_RTC_CONFIGURATION: RTCConfiguration = {
@@ -76,6 +77,12 @@ export interface DirectPeerInfo {
   state: DirectConnectState;
 }
 
+export interface DirectReconnectCredential {
+  readonly sessionId: string;
+  readonly peerId: string;
+  readonly rejoinToken: string;
+}
+
 export interface DirectConnectStateEvent {
   peer: DirectPeerInfo;
   error?: DirectConnectError;
@@ -110,12 +117,15 @@ export interface DirectConnectHostOptions extends DirectConnectCommonOptions, Di
   maxPlayers?: number;
   roomId?: string;
   hostPeerId?: string;
+  rejoinGraceMs?: number;
+  now?: () => number;
   onStateChange?: (event: DirectConnectStateEvent) => void;
   onMessage?: (event: DirectHostMessageEvent) => void;
 }
 
 export interface DirectConnectGuestOptions extends DirectConnectCommonOptions, DirectConnectGuestHandlers {
   peerId?: string;
+  resume?: DirectReconnectCredential;
   onStateChange?: (event: DirectConnectStateEvent) => void;
   onMessage?: (message: SessionMessage) => void;
 }
@@ -149,6 +159,13 @@ interface HostPeerRecord {
   assembler: WireMessageAssembler;
   handshakeComplete: boolean;
   disposed: boolean;
+  expectedPeerId: string | null;
+}
+
+interface DirectSeatReservation {
+  credential: DirectReconnectCredential;
+  connected: boolean;
+  expiresAt: number | null;
 }
 
 function safeCallback(callback: (() => void) | undefined): void {
@@ -200,6 +217,101 @@ function randomId(prefix: string): string {
   let suffix = '';
   for (const byte of random) suffix += byte.toString(16).padStart(2, '0');
   return `${prefix}_${suffix}`;
+}
+
+/**
+ * Host-owned authentication for stable campaign seats. Tokens never enter the
+ * lobby snapshot and are accepted exactly once per live transport.
+ */
+export class DirectReconnectSeatRegistry {
+  readonly sessionId: string;
+  readonly graceMs: number;
+
+  private readonly reservations = new Map<string, DirectSeatReservation>();
+  private readonly now: () => number;
+
+  constructor(options: { sessionId?: string; graceMs?: number; now?: () => number } = {}) {
+    this.sessionId = options.sessionId === undefined
+      ? randomId('session')
+      : requireId(options.sessionId, 'Session ID');
+    this.graceMs = requirePositiveInteger(
+      options.graceMs ?? DEFAULT_REJOIN_GRACE_MS,
+      'Rejoin grace period',
+      24 * 60 * 60_000,
+    );
+    this.now = options.now ?? Date.now;
+  }
+
+  get size(): number {
+    this.releaseExpired();
+    return this.reservations.size;
+  }
+
+  credential(peerId: string): DirectReconnectCredential | undefined {
+    this.releaseExpired();
+    const reservation = this.reservations.get(peerId);
+    return reservation ? { ...reservation.credential } : undefined;
+  }
+
+  canRejoin(peerId: string): boolean {
+    this.releaseExpired();
+    const reservation = this.reservations.get(peerId);
+    return Boolean(reservation && !reservation.connected);
+  }
+
+  accept(peerId: string, supplied?: DirectReconnectCredential): {
+    credential: DirectReconnectCredential;
+    rejoined: boolean;
+  } {
+    this.releaseExpired();
+    const existing = this.reservations.get(peerId);
+    if (!existing) {
+      if (supplied) {
+        throw new DirectConnectError('duplicate-peer', 'That campaign seat is no longer reserved.');
+      }
+      const credential = {
+        sessionId: this.sessionId,
+        peerId,
+        rejoinToken: randomId('rejoin'),
+      } satisfies DirectReconnectCredential;
+      this.reservations.set(peerId, { credential, connected: true, expiresAt: null });
+      return { credential: { ...credential }, rejoined: false };
+    }
+    if (existing.connected) {
+      throw new DirectConnectError('duplicate-peer', 'That campaign seat is already connected.');
+    }
+    if (!supplied
+      || supplied.sessionId !== this.sessionId
+      || supplied.peerId !== peerId
+      || supplied.rejoinToken !== existing.credential.rejoinToken) {
+      throw new DirectConnectError('duplicate-peer', 'The rejoin token does not match that reserved campaign seat.');
+    }
+    existing.connected = true;
+    existing.expiresAt = null;
+    return { credential: { ...existing.credential }, rejoined: true };
+  }
+
+  disconnect(peerId: string): void {
+    const reservation = this.reservations.get(peerId);
+    if (!reservation || !reservation.connected) return;
+    reservation.connected = false;
+    reservation.expiresAt = this.now() + this.graceMs;
+  }
+
+  releaseExpired(now = this.now()): string[] {
+    const released: string[] = [];
+    for (const [peerId, reservation] of this.reservations) {
+      if (!reservation.connected && reservation.expiresAt !== null && reservation.expiresAt <= now) {
+        this.reservations.delete(peerId);
+        released.push(peerId);
+      }
+    }
+    return released;
+  }
+
+  clear(): void {
+    this.reservations.clear();
+  }
 }
 
 function normalizeCommonOptions(options: DirectConnectCommonOptions): NormalizedCommonOptions {
@@ -327,6 +439,7 @@ export class DirectConnectHost {
   readonly rulesVersion: string;
   readonly displayName: string;
   readonly maxPlayers: number;
+  readonly reconnectSeats: DirectReconnectSeatRegistry;
 
   private readonly normalized: NormalizedCommonOptions;
   private readonly stateListeners = new Set<(event: DirectConnectStateEvent) => void>();
@@ -344,6 +457,10 @@ export class DirectConnectHost {
     }
     this.roomId = options.roomId === undefined ? randomId('room') : requireId(options.roomId, 'Room ID');
     this.hostPeerId = options.hostPeerId === undefined ? randomId('host') : requireId(options.hostPeerId, 'Host peer ID');
+    this.reconnectSeats = new DirectReconnectSeatRegistry({
+      graceMs: options.rejoinGraceMs,
+      now: options.now,
+    });
     if (options.onStateChange) this.stateListeners.add(options.onStateChange);
     if (options.onMessage) this.messageListeners.add(options.onMessage);
   }
@@ -363,8 +480,36 @@ export class DirectConnectHost {
   }
 
   async createInvite(): Promise<DirectInviteResult> {
+    return this.createInviteForPeer(null);
+  }
+
+  /** Creates a fresh route that may authenticate only as the reserved seat. */
+  async createReconnectInvite(peerId: string): Promise<DirectInviteResult> {
+    const normalizedPeerId = requireId(peerId, 'Guest peer ID');
+    if (!this.reconnectSeats.canRejoin(normalizedPeerId)) {
+      throw new DirectConnectError('unknown-invitation', 'That campaign seat is not waiting to reconnect.');
+    }
+    return this.createInviteForPeer(normalizedPeerId);
+  }
+
+  /** Ends a stale route while retaining its authenticated campaign seat. */
+  prepareReconnect(peerId: string): boolean {
+    const record = [...this.peerRecords.values()].find((candidate) => candidate.peerId === peerId);
+    if (!record) return this.reconnectSeats.canRejoin(peerId);
+    this.disposePeer(record, 'closed');
+    return true;
+  }
+
+  releaseExpiredReconnectSeats(now?: number): string[] {
+    return this.reconnectSeats.releaseExpired(now);
+  }
+
+  private async createInviteForPeer(expectedPeerId: string | null): Promise<DirectInviteResult> {
     this.assertOpen();
-    if (this.peerRecords.size >= this.maxPlayers - 1) {
+    const pendingOpenInvitations = [...this.peerRecords.values()]
+      .filter((record) => record.peerId === null).length;
+    if (expectedPeerId === null
+      && this.reconnectSeats.size + pendingOpenInvitations >= this.maxPlayers - 1) {
       throw new DirectConnectError('capacity-reached', `This room already has ${this.maxPlayers} reserved player slots.`);
     }
 
@@ -393,6 +538,7 @@ export class DirectConnectHost {
       assembler: new WireMessageAssembler(),
       handshakeComplete: false,
       disposed: false,
+      expectedPeerId,
     };
     this.peerRecords.set(invitationId, record);
     this.attachPeer(record);
@@ -441,6 +587,9 @@ export class DirectConnectHost {
     }
     if (record.state !== 'waiting-for-answer') {
       throw new DirectConnectError('invalid-code', 'This invitation already has an answer or is no longer active.');
+    }
+    if (record.expectedPeerId !== null && record.expectedPeerId !== signal.guestPeerId) {
+      throw new DirectConnectError('duplicate-peer', 'This reconnect route belongs to another campaign seat.');
     }
     if ([...this.peerRecords.values()].some((other) => other !== record && other.peerId === signal.guestPeerId)) {
       throw new DirectConnectError('duplicate-peer', 'That friend is already connected to this room.');
@@ -519,6 +668,7 @@ export class DirectConnectHost {
     if (this.closed) return;
     this.closed = true;
     for (const record of [...this.peerRecords.values()]) this.disposePeer(record, 'closed');
+    this.reconnectSeats.clear();
     this.stateListeners.clear();
     this.messageListeners.clear();
   }
@@ -633,12 +783,25 @@ export class DirectConnectHost {
       || message.roomId !== this.roomId
       || message.invitationId !== record.invitationId
       || (record.peerId !== null && message.peerId !== record.peerId)
+      || (record.expectedPeerId !== null && message.peerId !== record.expectedPeerId)
     ) {
       this.rejectPeer(record, 'incompatible-handshake', 'The player handshake does not match this room invitation.');
       return;
     }
     if ([...this.peerRecords.values()].some((other) => other !== record && other.handshakeComplete && other.peerId === message.peerId)) {
       this.rejectPeer(record, 'duplicate-peer', 'That player is already connected.');
+      return;
+    }
+    let seat;
+    try {
+      seat = this.reconnectSeats.accept(message.peerId, message.sessionId && message.rejoinToken ? {
+        sessionId: message.sessionId,
+        peerId: message.peerId,
+        rejoinToken: message.rejoinToken,
+      } : undefined);
+    } catch (error) {
+      const normalized = directError(error, 'duplicate-peer', 'That campaign seat could not be reclaimed.');
+      this.rejectPeer(record, normalized.code, normalized.message);
       return;
     }
     record.peerId = message.peerId;
@@ -652,12 +815,16 @@ export class DirectConnectHost {
       hostPeerId: this.hostPeerId,
       acceptedPeerId: message.peerId,
       maxPlayers: this.maxPlayers,
+      sessionId: seat.credential.sessionId,
+      rejoinToken: seat.credential.rejoinToken,
+      rejoined: seat.rejoined,
     };
     try {
       sendFrames(record.channel, channelFrames(acknowledgement), this.normalized.maxBufferedAmountBytes);
       record.handshakeComplete = true;
       this.setPeerState(record, 'connected');
     } catch (error) {
+      this.reconnectSeats.disconnect(message.peerId);
       this.disposePeer(record, 'failed', directError(error, 'send-failed', 'The handshake reply could not be sent.'));
     }
   }
@@ -688,6 +855,7 @@ export class DirectConnectHost {
   ): void {
     if (record.disposed) return;
     record.state = state;
+    if (record.handshakeComplete && record.peerId) this.reconnectSeats.disconnect(record.peerId);
     const event = { peer: this.peerInfo(record), ...(error ? { error } : {}) };
     for (const listener of this.stateListeners) safeCallback(() => listener(event));
     record.disposed = true;
@@ -719,6 +887,8 @@ export class DirectConnectGuest {
   readonly rulesVersion: string;
   readonly displayName: string;
 
+  private resumeCredential?: DirectReconnectCredential;
+
   private readonly normalized: NormalizedCommonOptions;
   private readonly pc: RTCPeerConnection;
   private readonly stateListeners = new Set<(event: DirectConnectStateEvent) => void>();
@@ -739,7 +909,19 @@ export class DirectConnectGuest {
     this.invitationId = invite.invitationId;
     this.hostPeerId = invite.hostPeerId;
     this.hostName = invite.hostName;
-    this.peerId = options.peerId === undefined ? randomId('guest') : requireId(options.peerId, 'Guest peer ID');
+    if (options.resume && options.peerId && options.resume.peerId !== options.peerId) {
+      throw new DirectConnectError('invalid-options', 'The guest peer ID does not match the reserved campaign seat.');
+    }
+    this.peerId = options.resume
+      ? requireId(options.resume.peerId, 'Guest peer ID')
+      : options.peerId === undefined ? randomId('guest') : requireId(options.peerId, 'Guest peer ID');
+    if (options.resume) {
+      this.resumeCredential = {
+        sessionId: requireId(options.resume.sessionId, 'Session ID'),
+        peerId: this.peerId,
+        rejoinToken: requireId(options.resume.rejoinToken, 'Rejoin token'),
+      };
+    }
     this.rulesVersion = normalized.rulesVersion;
     this.displayName = normalized.displayName;
     this.normalized = normalized;
@@ -806,6 +988,10 @@ export class DirectConnectGuest {
 
   get state(): DirectConnectState {
     return this.currentState;
+  }
+
+  get reconnectCredential(): DirectReconnectCredential | undefined {
+    return this.resumeCredential ? { ...this.resumeCredential } : undefined;
   }
 
   /** Lets the lobby hand the live peer connection to the game session without reconnecting. */
@@ -912,6 +1098,10 @@ export class DirectConnectGuest {
         peerId: this.peerId,
         displayName: this.displayName,
         role: 'guest',
+        ...(this.resumeCredential ? {
+          sessionId: this.resumeCredential.sessionId,
+          rejoinToken: this.resumeCredential.rejoinToken,
+        } : {}),
       };
       try {
         sendFrames(channel, channelFrames(hello), this.normalized.maxBufferedAmountBytes);
@@ -968,10 +1158,25 @@ export class DirectConnectGuest {
       || message.invitationId !== this.invitationId
       || message.hostPeerId !== this.hostPeerId
       || message.acceptedPeerId !== this.peerId
+      || !message.sessionId
+      || !message.rejoinToken
     ) {
       this.fail(new DirectConnectError('protocol-error', 'The host handshake does not match this invitation.'));
       return;
     }
+    if (this.resumeCredential && (
+      message.sessionId !== this.resumeCredential.sessionId
+      || message.rejoinToken !== this.resumeCredential.rejoinToken
+      || message.rejoined !== true
+    )) {
+      this.fail(new DirectConnectError('protocol-error', 'The host did not reclaim the reserved campaign seat.'));
+      return;
+    }
+    this.resumeCredential = {
+      sessionId: message.sessionId,
+      peerId: this.peerId,
+      rejoinToken: message.rejoinToken,
+    };
     this.handshakeComplete = true;
     this.setState('connected');
   }

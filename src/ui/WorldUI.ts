@@ -16,16 +16,13 @@ import {
   RESEARCH_PROJECTS,
 } from '../sim/data/research';
 import type {
-  DiplomaticOffer,
   BattleEvent,
   ManagementDomain,
   ManagementUpgradeId,
-  PeaceSettlementType,
   PlayerId,
   RelationState,
   SimTerritoryState,
   TerritoryId,
-  TreatyType,
   WorldChange,
   WorldSpeed,
 } from '../sim/types';
@@ -294,8 +291,6 @@ export class WorldUI {
     const state = this.engine.state;
     const human = this.engine.player(state.humanPlayerId)!;
     const unread = state.events.filter((event) => event.unread).length;
-    const pendingOffers = state.offers.filter((offer) => offer.toId === human.id && offer.status === 'pending');
-    const activeOffer = pendingOffers[0];
     const totalHp = coalitionHp(state, human.id);
     const hpRatio = totalHp.max > 0 ? totalHp.current / totalHp.max : 0;
     const humanWars = state.wars.filter((war) => war.attackerId === human.id || war.defenderId === human.id);
@@ -345,7 +340,6 @@ export class WorldUI {
       ${underAttack && this.latestBattle ? this.renderAttackVignette(this.latestBattle) : ''}
       ${this.contextPanelOpen ? this.renderContextPanel() : ''}
       ${this.renderEventTicker()}
-      ${activeOffer ? this.renderOfferBanner(activeOffer) : ''}
       ${this.introOpen ? this.renderIntro() : ''}
       ${this.helpOpen ? this.renderHelp() : ''}
       ${this.inboxOpen ? this.renderInbox() : ''}
@@ -519,8 +513,6 @@ export class WorldUI {
       ?? this.engine.state.players.find((player) => player.id !== human.id && !player.eliminated)!;
     const relation = this.engine.relation(human.id, target.id)!;
     const atWar = relation.status === 'war';
-    const activeWar = atWar ? this.engine.activeWarBetween(human.id, target.id) : undefined;
-    const peaceTerms = activeWar ? this.engine.peaceProposalTerms(activeWar.id, human.id) : undefined;
     const canDeclareWar = this.engine.canDeclareWar(human.id, target.id);
     const warActionLabel = relation.status === 'truce' ? 'Truce active' : 'Declare war';
     return `
@@ -539,10 +531,7 @@ export class WorldUI {
         <span class="section-label">ACTIONS · INFLUENCE ${format(human.influence)}</span>
         <div class="diplomacy-actions">
           <button data-action="improve-relations">Open dialogue <small>−8 influence</small></button>
-          ${atWar ? peaceTerms?.eligible ? `
-            <button class="is-peace" data-action="peace-settlement" data-player="${target.id}" data-settlement="reparations" ${peaceTerms.reparationsAvailable ? '' : 'disabled'}>Request peace · reparations <small>Pay $${format(peaceTerms.cashAmount, 1)}B</small></button>
-            <button class="is-peace" data-action="peace-settlement" data-player="${target.id}" data-settlement="territory" ${peaceTerms.territoryId ? '' : 'disabled'}>Request peace · concede land <small>${peaceTerms.territoryId ? `${format(peaceTerms.controlShare * 100)}% of ${escapeHtml(TERRITORY_BY_ID[peaceTerms.territoryId]?.name ?? 'border region')}` : 'No viable border region'}</small></button>
-          ` : `<button class="is-peace" disabled>Peace unavailable <small>${escapeHtml(peaceTerms?.reason ?? 'Full war continues')}</small></button>` : `
+          ${atWar ? '<button disabled>Military conflict active <small>Outcome is decided on the fronts</small></button>' : `
             <button class="is-danger" data-action="confirm-war" ${canDeclareWar ? '' : 'disabled'}>${warActionLabel}</button>
           `}
         </div>
@@ -644,7 +633,6 @@ export class WorldUI {
         const activeOperation = liveBattle?.attackerId === human.id ? ownOperation : liveBattle?.attackerId === enemyId ? enemyOperation : ownOperation;
         const operationSource = activeOperation ? TERRITORY_BY_ID[activeOperation.sourceId]?.name ?? activeOperation.sourceId : undefined;
         const operationTarget = activeOperation ? TERRITORY_BY_ID[activeOperation.targetId]?.name ?? activeOperation.targetId : undefined;
-        const peaceTerms = this.engine.peaceProposalTerms(war.id, human.id);
         const disputed = Object.values(this.engine.state.territories).filter((territory) => (
           territory.foreignControl
           && ((territory.ownerId === human.id && territory.foreignControl.controllerId === enemyId)
@@ -659,7 +647,7 @@ export class WorldUI {
           ${activeOperation ? `<div class="war-tracker__operation ${liveBattle?.attackerId === human.id ? 'is-ours' : 'is-enemy'}"><div><span>${liveBattle?.attackerId === human.id ? 'OUR OPERATION' : 'ENEMY OPERATION'} · ${activeOperation.doctrine.replaceAll('-', ' ').toUpperCase()}</span><strong>${escapeHtml(operationSource ?? '')} <i>→</i> ${escapeHtml(operationTarget ?? '')}</strong></div><div><span>SUPPLY <b>${format(activeOperation.supply * 100)}%</b></span><span>SUPPORT <b>${activeOperation.supportingForces}</b></span><span>MOMENTUM <b>${signed(Math.round(activeOperation.momentum))}</b></span></div></div>` : ''}
           <div class="war-tracker__health"><div><span>OUR HP</span><strong>${format(ownHp.current)} / ${format(ownHp.max)}</strong><i><b style="width:${ownRatio * 100}%;background:${human.cssColor}"></b></i></div><em>WAR SCORE</em><div><span>ENEMY HP</span><strong>${format(enemyHp.current)} / ${format(enemyHp.max)}</strong><i><b style="width:${enemyRatio * 100}%;background:${enemy.cssColor}"></b></i></div></div>
           ${disputed.length ? `<div class="war-tracker__control"><span>${phase}</span><strong>OUR CONTROL +${format(ownControl * 100)}% · ENEMY +${format(enemyControl * 100)}%</strong><i><b style="width:${Math.min(100, Math.max(3, ownControl * 100))}%"></b></i></div>` : `<div class="war-tracker__phase"><span>${phase}</span><strong>Front lines holding</strong></div>`}
-        </button>${peaceTerms.eligible ? `<div class="war-tracker__diplomacy"><div><span>LOSING-SIDE DECISION</span><strong>You are clearly behind. Continue the full war or request a negotiated exit.</strong></div><button data-action="peace-settlement" data-player="${enemy.id}" data-settlement="reparations" ${peaceTerms.reparationsAvailable ? '' : 'disabled'}>PAY $${format(peaceTerms.cashAmount, 1)}B</button><button data-action="peace-settlement" data-player="${enemy.id}" data-settlement="territory" ${peaceTerms.territoryId ? '' : 'disabled'}>CONCEDE LAND</button></div>` : ''}</article>`;
+        </button></article>`;
       }).join('')}</div>
     </aside>`;
   }
@@ -680,20 +668,6 @@ export class WorldUI {
         <button class="world-feed__head" data-action="toggle-feed"><span><b class="event-dot event-dot--${latest?.severity ?? 'info'}"></b> REPORT</span><strong>${latest ? escapeHtml(latest.message) : 'No reports'}</strong><i>${this.eventFeedOpen ? '×' : '↑'}</i></button>
         <div class="world-feed__list">${events.map((event) => `<button data-action="focus-event" data-territory="${event.territoryId ?? ''}"><span>W${event.tick}</span><b class="event-dot event-dot--${event.severity}"></b><p>${escapeHtml(event.message)}</p></button>`).join('')}</div>
       </aside>
-    `;
-  }
-
-  private renderOfferBanner(offer: DiplomaticOffer): string {
-    const from = this.engine.player(offer.fromId)!;
-    const terms = offer.settlement === 'territory'
-      ? `LAND OFFER · ${format((offer.controlShare ?? 0) * 100)}% OF ${escapeHtml(TERRITORY_BY_ID[offer.territoryId ?? '']?.name ?? 'BORDER REGION').toUpperCase()}`
-      : `REPARATIONS · $${format(offer.cashAmount ?? 0, 1)}B`;
-    return `
-      <div class="decision-banner glass-panel" style="--sender:${from.cssColor}">
-        <i>${from.sigil}</i><div><span>LOSING SIDE REQUESTS PEACE · ${terms}</span><strong>${escapeHtml(offer.note)}</strong></div>
-        <button class="ghost-button" data-action="respond-offer" data-offer="${offer.id}" data-accept="false">Continue full war</button>
-        <button class="primary-button" data-action="respond-offer" data-offer="${offer.id}" data-accept="true">Accept settlement</button>
-      </div>
     `;
   }
 
@@ -809,12 +783,12 @@ export class WorldUI {
           <div class="war-confirm__sigil">${target.sigil}</div>
           <div class="panel-kicker">WAR ROOM FORECAST · ESTIMATE, NOT A GUARANTEE</div>
           <h2>Declare war on ${escapeHtml(target.name)}?</h2>
-          <p>Opening control grows slowly while both armies remain operational. Destroying a region's defending force captures it immediately; a larger empire continues fighting from its surviving regions. The clearly weaker side may later request peace for reparations or land.</p>
+          <p>Opening control grows slowly while both armies remain operational. Destroying a region's defending force captures it immediately; a larger empire continues fighting from its surviving regions. Wars end through territorial defeat, mutual military exhaustion or loss of every legal battle front.</p>
           <div class="war-forecast"><div class="war-forecast__chance"><span>ESTIMATED CHANCE TO WIN</span><strong>${winChance}%</strong><i><b style="width:${winChance}%"></b></i><small>Your power ${format(ownPower)} · enemy ${format(enemyPower)} · relation ${signed(relation.score)}</small></div><div class="war-forecast__front"><span>OPENING FRONT${uniqueFronts.length > 1 ? 'S' : ''}</span><strong>${escapeHtml(uniqueFronts.join(' · ') || 'No direct front')}</strong><small>Forecast changes with production, research, HP and readiness.</small></div></div>
           <div class="mobilization-bill ${canFundMobilization ? 'is-funded' : 'is-unfunded'}"><div><span>${accessType === 'naval' ? 'NAVAL ' : ''}MOBILISATION COST</span><strong>−$${format(mobilizationCost, 1)}B</strong></div><div><span>NATIONAL ACCOUNT</span><strong>$${format(human.treasury, 1)}B</strong></div><p>${canFundMobilization ? accessType === 'naval' ? 'Affordable now. Cost scales with the defender’s current force, population, economy and territory, plus the +85% overseas logistics surcharge.' : 'Affordable now. Cost scales with the defender’s current force, population, economy and territory.' : 'Insufficient balance. Let the national account recover before this war begins; larger powers require a larger mobilisation bill.'}</p></div>
           <span class="section-label">IF ${escapeHtml(target.shortName).toUpperCase()} IS FULLY DEFEATED</span>
           <div class="war-spoils"><div><span>COUNTRIES</span><strong>+${targetTerritories.length}</strong></div><div><span>ECONOMY</span><strong>+${format(potentialEconomy, 1)}</strong></div><div><span>POPULATION</span><strong>+${format(potentialPopulation, 1)}M</strong></div><div><span>DEFENCE BASE</span><strong>$${format(potentialDefence, 1)}B</strong></div></div>
-          <div class="war-risk"><span>Defender receives +25% strength</span><span>Population and economy suffer</span><span>Only the loser can request mid-war peace</span><span>Naval wars cost +85% and lose 18% attack efficiency</span></div>
+          <div class="war-risk"><span>Defender receives +25% strength</span><span>Population and economy suffer</span><span>No negotiated mid-war exit</span><span>Naval wars cost +85% and lose 18% attack efficiency</span></div>
           <div class="panel-actions"><button class="ghost-button" data-action="cancel-war">Cancel</button><button class="danger-button" data-action="declare-war" ${canFundMobilization ? '' : 'disabled'}>Declare ${accessType === 'naval' ? 'naval ' : ''}war · $${format(mobilizationCost, 1)}B</button></div>
         </section>
       </div>
@@ -927,23 +901,12 @@ export class WorldUI {
           case 'improve-relations':
             if (!this.engine.improveRelations(this.engine.state.humanPlayerId, this.diplomacyTargetId)) this.toast('Insufficient influence or action unavailable.');
             break;
-          case 'treaty':
-            if (!this.engine.proposeTreaty(this.engine.state.humanPlayerId, this.diplomacyTargetId, element.dataset.treaty as TreatyType)) this.toast('This offer is not available now.');
-            else this.toast('Offer sent.');
-            break;
-          case 'peace-settlement':
-            if (!this.engine.proposePeaceSettlement(this.engine.state.humanPlayerId, element.dataset.player!, element.dataset.settlement as PeaceSettlementType)) this.toast('Only the clearly weaker side can request peace after sustained fighting.');
-            else this.toast('Peace terms sent by the losing side.');
-            break;
           case 'confirm-war': this.confirmWarTargetId = this.diplomacyTargetId; this.render(); break;
           case 'cancel-war': this.confirmWarTargetId = undefined; this.render(); break;
           case 'declare-war':
             if (this.confirmWarTargetId && !this.engine.declareWar(this.engine.state.humanPlayerId, this.confirmWarTargetId)) this.toast('War cannot be declared: check access, truce status and account balance.');
             this.confirmWarTargetId = undefined;
             this.render();
-            break;
-          case 'respond-offer':
-            this.engine.respondToOffer(element.dataset.offer!, element.dataset.accept === 'true');
             break;
           case 'new-game': window.location.reload(); break;
         }

@@ -57,7 +57,7 @@ describe('V2 human multiplayer alliances', () => {
     expect(state.allianceOffers).toEqual([]);
   });
 
-  it('replicates acceptance in both directions and preserves it through save/resync', () => {
+  it('replicates the serious-Campaign alliance rejection and preserves empty blocs through resync', () => {
     const host = new WorldEngineV2(72_002);
     const replica = new WorldEngineV2(72_002);
     const roster = [belgium, canada];
@@ -69,22 +69,21 @@ describe('V2 human multiplayer alliances', () => {
     });
     replica.setClientCommandSink((command) => host.submitCommand(command));
 
-    expect(host.proposeAlliance(belgium, canada)).toEqual({ accepted: true });
+    expect(host.proposeAlliance(belgium, canada)).toEqual({
+      accepted: false,
+      reason: 'The Rogue Signal has shattered alliances; every country fights independently.',
+    });
     host.step();
     replica.step();
-    expect(replica.state.allianceOffers).toEqual(host.state.allianceOffers);
-
-    expect(replica.respondToAlliance(belgium, canada, true)).toEqual({ accepted: true });
-    host.step();
-    replica.step();
-
-    expect(areAlliedV2(host.state, belgium, canada)).toBe(true);
-    expect(areAlliedV2(replica.state, canada, belgium)).toBe(true);
+    expect(host.state.allianceOffers).toEqual([]);
+    expect(replica.state.allianceOffers).toEqual([]);
+    expect(areAlliedV2(host.state, belgium, canada)).toBe(false);
+    expect(areAlliedV2(replica.state, canada, belgium)).toBe(false);
     expect(replica.canonicalHash()).toBe(host.canonicalHash());
-    expect(host.declareWar(belgium, canada).accepted).toBe(false);
 
     const resumed = WorldEngineV2.fromSave(host.save());
-    expect(resumed.areAllied(canada, belgium)).toBe(true);
+    expect(resumed.areAllied(canada, belgium)).toBe(false);
+    expect(resumed.state.alliances).toEqual([]);
     expect(resumed.canonicalHash()).toBe(host.canonicalHash());
   }, 20_000);
 });

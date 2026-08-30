@@ -24,7 +24,10 @@ import {
   type WorldStateV2,
 } from './types';
 import {
+  INTERNAL_NAVAL_TRANSFER_COST_PER_MILLION_PER_1K_KM_V2,
+  INTERNAL_NAVAL_TRANSFER_WEEKLY_TREASURY_SHARE_MAX_V2,
   internalArmyTransferLogisticsTermsV2,
+  internalNavalTransferWillingnessV2,
   logisticsThroughputShareV2,
   redistributeArmiesV2,
 } from './war';
@@ -145,7 +148,8 @@ describe('route-aware empire logistics', () => {
       .reduce((sum, territory) => sum + territory.army.manpower * territory.army.baseDefense, 0);
     const frontierBefore = frontier.army.manpower;
     const treasuryBefore = state.players[bel]!.treasury;
-    const firstWeek = redistributeArmiesV2(state, WORLD_CONTENT_V2);
+    const firstWeek = redistributeArmiesV2(state, WORLD_CONTENT_V2)
+      .filter((movement) => movement.playerId === bel);
     const firstWeekManpowerMoved = firstWeek.reduce((sum, move) => sum + move.manpower, 0);
     expect(firstWeek.some((move) => move.sourceId === capitalId && move.targetId === firstId)).toBe(true);
     expect(firstWeek.some((move) => move.sourceId === capitalId
@@ -193,7 +197,8 @@ describe('route-aware empire logistics', () => {
     frontier.army.manpower = legacyOvershoot;
     const overshootEmpireManpower = selectTerritoriesOfV2(state, bel)
       .reduce((sum, territory) => sum + territory.army.manpower, 0);
-    const normalizationMoves = redistributeArmiesV2(state, WORLD_CONTENT_V2);
+    const normalizationMoves = redistributeArmiesV2(state, WORLD_CONTENT_V2)
+      .filter((movement) => movement.playerId === bel);
     const normalizedThisWeek = legacyOvershoot - frontier.army.manpower;
     expect(normalizationMoves.some((move) => move.sourceId === secondId)).toBe(true);
     expect(normalizedThisWeek).toBeGreaterThan(0);
@@ -217,7 +222,8 @@ describe('route-aware empire logistics', () => {
       state, WORLD_CONTENT_V2, firstId, bel,
     );
     frontier.army.manpower = legacyOvershoot;
-    expect(redistributeArmiesV2(state, WORLD_CONTENT_V2)).toHaveLength(0);
+    expect(redistributeArmiesV2(state, WORLD_CONTENT_V2)
+      .filter((movement) => movement.playerId === bel)).toHaveLength(0);
     expect(frontier.army.manpower).toBe(legacyOvershoot);
     assertInvariantsV2(state, WORLD_CONTENT_V2);
   });
@@ -237,9 +243,12 @@ describe('route-aware empire logistics', () => {
     const shortTotal = manpowerBefore(short);
     const longTotal = manpowerBefore(long);
 
-    const landMoves = redistributeArmiesV2(land.state, land.content);
-    const shortMoves = redistributeArmiesV2(short.state, short.content);
-    const longMoves = redistributeArmiesV2(long.state, long.content);
+    const landMoves = redistributeArmiesV2(land.state, land.content)
+      .filter((movement) => movement.playerId === bel);
+    const shortMoves = redistributeArmiesV2(short.state, short.content)
+      .filter((movement) => movement.playerId === bel);
+    const longMoves = redistributeArmiesV2(long.state, long.content)
+      .filter((movement) => movement.playerId === bel);
     const landMoved = landMoves.reduce((sum, move) => sum + move.manpower, 0);
     const shortMoved = shortMoves.reduce((sum, move) => sum + move.manpower, 0);
     const longMoved = longMoves.reduce((sum, move) => sum + move.manpower, 0);
@@ -275,11 +284,17 @@ describe('route-aware empire logistics', () => {
   });
 
   it('skips nonurgent long-ocean balancing when cash-poor but funds rich or threatened transfers', () => {
+    expect(INTERNAL_NAVAL_TRANSFER_COST_PER_MILLION_PER_1K_KM_V2).toBe(0.005);
+    expect(INTERNAL_NAVAL_TRANSFER_WEEKLY_TREASURY_SHARE_MAX_V2).toBe(0.03);
+    expect(internalNavalTransferWillingnessV2(12_000, 0, false)).toBe(0);
+    expect(internalNavalTransferWillingnessV2(12_000, 0, false, true)).toBe(0.35);
+    expect(internalNavalTransferWillingnessV2(12_000, 0, true)).toBe(0.75);
     const poor = twoTerritoryLogisticsFixtureV2('sea', 12_000, 0.10);
     const rich = twoTerritoryLogisticsFixtureV2('sea', 12_000, 10_000);
-    expect(redistributeArmiesV2(poor.state, poor.content)).toHaveLength(0);
+    expect(redistributeArmiesV2(poor.state, poor.content)
+      .filter((movement) => movement.playerId === bel)).toHaveLength(0);
     expect(redistributeArmiesV2(rich.state, rich.content)
-      .some((move) => move.manpower > 0 && move.logisticsCost > 0)).toBe(true);
+      .some((move) => move.playerId === bel && move.manpower > 0 && move.logisticsCost > 0)).toBe(true);
 
     const urgent = twoTerritoryLogisticsFixtureV2('sea', 12_000, 0.10);
     const enemyId = nationIdV2('fra');
@@ -308,13 +323,94 @@ describe('route-aware empire logistics', () => {
       defenderOperations: [],
     }];
     const urgentTreasury = urgent.state.players[bel]!.treasury;
-    const urgentMoves = redistributeArmiesV2(urgent.state, urgent.content);
+    const urgentMoves = redistributeArmiesV2(urgent.state, urgent.content)
+      .filter((movement) => movement.playerId === bel);
     const urgentCost = urgentMoves.reduce((sum, move) => sum + move.logisticsCost, 0);
     expect(urgentMoves.some((move) => move.manpower > 0)).toBe(true);
     expect(urgentCost).toBeGreaterThan(0);
-    expect(urgentCost).toBeLessThanOrEqual(urgentTreasury * 0.05 + 1e-9);
+    expect(urgentCost).toBeLessThanOrEqual(
+      urgentTreasury * INTERNAL_NAVAL_TRANSFER_WEEKLY_TREASURY_SHARE_MAX_V2 + 1e-9,
+    );
     expect(urgent.state.players[bel]!.treasury).toBeGreaterThanOrEqual(0);
     expect(urgent.state.players[bel]!.treasury).toBeCloseTo(urgentTreasury - urgentCost, 8);
+  });
+
+  it('prioritizes a concrete naval operation over an unrelated hostile-connected coast', () => {
+    const state = createWorldStateV2(4_453);
+    state.wars = [];
+    state.players[bel]!.treasury = 10_000;
+    state.players[bel]!.openingArmyBonus = null;
+    const capitalId = state.players[bel]!.capitalId;
+    const operationSourceId = territoryIdV2('nld');
+    const unrelatedCoastId = territoryIdV2('deu');
+    const enemyTerritoryId = territoryIdV2('fra');
+    const enemyId = state.territories[enemyTerritoryId]!.owner;
+    const content = withTestConnectionsV2({
+      [capitalId]: [
+        { targetId: operationSourceId, kind: 'land' },
+        { targetId: unrelatedCoastId, kind: 'land' },
+      ],
+      [operationSourceId]: [
+        { targetId: capitalId, kind: 'land' },
+        { targetId: enemyTerritoryId, kind: 'sea', distanceKm: 12_000 },
+      ],
+      [unrelatedCoastId]: [
+        { targetId: capitalId, kind: 'land' },
+        { targetId: enemyTerritoryId, kind: 'sea', distanceKm: 2_000 },
+      ],
+      [enemyTerritoryId]: [
+        { targetId: operationSourceId, kind: 'sea', distanceKm: 12_000 },
+        { targetId: unrelatedCoastId, kind: 'sea', distanceKm: 2_000 },
+      ],
+    });
+    for (const id of [operationSourceId, unrelatedCoastId]) {
+      state.territories[id]!.owner = bel;
+      state.territories[id]!.coreOwner = bel;
+      state.territories[id]!.integration = 1;
+      delete state.territories[id]!.integrationProgram;
+    }
+    invalidateTerritoryIndexV2(state);
+    synchronizeArmyCapacityV2(state, content);
+    state.territories[capitalId]!.army.manpower = stateTerritoryArmySupportCeilingV2(
+      state,
+      content,
+      capitalId,
+      bel,
+    );
+    state.territories[operationSourceId]!.army.manpower = 0;
+    state.territories[unrelatedCoastId]!.army.manpower = 0;
+    const operation: FrontOperationV2 = {
+      commanderId: bel,
+      sourceId: operationSourceId,
+      targetId: enemyTerritoryId,
+      doctrine: 'pressure',
+      access: 'naval',
+      startedTick: 0,
+      lastBattleTick: 0,
+      holdUntilTick: 12,
+      momentum: 0,
+    };
+    state.wars = [{
+      id: 'operation-route-priority',
+      attackerId: bel,
+      defenderId: enemyId,
+      startedTick: 0,
+      lastBattleTick: 0,
+      warScore: 0,
+      battles: 0,
+      attackerLosses: 0,
+      defenderLosses: 0,
+      lastPeaceOfferTick: -1,
+      attackerOperations: [operation],
+      defenderOperations: [],
+    }];
+
+    for (let week = 0; week < 120; week += 1) redistributeArmiesV2(state, content);
+
+    const operationSource = state.territories[operationSourceId]!.army;
+    const unrelatedCoast = state.territories[unrelatedCoastId]!.army;
+    expect(operationSource.manpower).toBeGreaterThan(unrelatedCoast.manpower);
+    expect(unrelatedCoast.manpower).toBeLessThanOrEqual(unrelatedCoast.capacity * 0.05 + 1e-9);
   });
 
   it('prefers the closest land donor over an equally supplied naval donor', () => {
@@ -349,7 +445,8 @@ describe('route-aware empire logistics', () => {
     state.territories[landDonorId]!.army.manpower = equalDonorManpower;
     state.territories[navalDonorId]!.army.manpower = equalDonorManpower;
 
-    const movements = redistributeArmiesV2(state, content);
+    const movements = redistributeArmiesV2(state, content)
+      .filter((movement) => movement.playerId === bel);
     expect(movements.length).toBeGreaterThan(0);
     expect(movements[0]!.sourceId).toBe(landDonorId);
     expect(movements[0]!.targetId).toBe(targetId);
@@ -511,13 +608,15 @@ describe('route-aware empire logistics', () => {
 
     state.tick = startedTick + CONQUEST_CAPTURE_GUARD_TICKS - 1;
     synchronizeArmyCapacityV2(state, WORLD_CONTENT_V2);
-    const guardedMoves = redistributeArmiesV2(state, WORLD_CONTENT_V2);
+    const guardedMoves = redistributeArmiesV2(state, WORLD_CONTENT_V2)
+      .filter((movement) => movement.playerId === bel);
     expect(guardedMoves.some((move) => move.sourceId === relayId)).toBe(false);
     expect(relay.army.manpower).toBe(guardedManpower);
 
     state.tick = startedTick + CONQUEST_CAPTURE_GUARD_TICKS;
     synchronizeArmyCapacityV2(state, WORLD_CONTENT_V2);
-    const releasedMoves = redistributeArmiesV2(state, WORLD_CONTENT_V2);
+    const releasedMoves = redistributeArmiesV2(state, WORLD_CONTENT_V2)
+      .filter((movement) => movement.playerId === bel);
     expect(releasedMoves.some((move) => move.sourceId === relayId && move.manpower > 0)).toBe(true);
     expect(relay.army.manpower).toBeLessThan(guardedManpower);
     expect(selectTerritoriesOfV2(state, bel).reduce((sum, territory) => sum + territory.army.manpower, 0))

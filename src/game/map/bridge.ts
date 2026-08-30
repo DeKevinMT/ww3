@@ -13,7 +13,7 @@ export interface MapArmyState {
   deploymentCapacity?: number;
   /** Deployed soldiers available to the local force, in millions. */
   combatStrength: number;
-  /** Exact local Combat Power, including condition and per-soldier quality. */
+  /** Exact local Combat Power, including deployed strength and per-soldier quality. */
   power: number;
   attack: number;
   defense: number;
@@ -28,7 +28,17 @@ export interface MapTerritoryState {
   integration: number;
   /** Fixed calendar endpoint for an active integration program. */
   integrationCompletesTick?: number;
+  /** Survival land that is held only as a logistics corridor, never integrated. */
+  transitOnly?: boolean;
   army: MapArmyState;
+}
+
+export function mapTerritoryIsIntegrating(
+  territory: Pick<MapTerritoryState, 'ownerId' | 'coreOwnerId' | 'integration' | 'transitOnly'>,
+): boolean {
+  return territory.transitOnly !== true
+    && territory.coreOwnerId !== territory.ownerId
+    && territory.integration < 0.999999;
 }
 
 /** Renderer-only projection of the human 20-year opening Army + cap curve. */
@@ -82,6 +92,17 @@ export interface MapBattleEvent {
   defenderLosses?: number;
   /** Effective committed attack power; optional for legacy renderer events. */
   attackerPower?: number;
+  /** Explicit canonical APEX participants. Missing only on legacy battle events. */
+  commanderAttackerId?: string | null;
+  commanderDefenderId?: string | null;
+  /** Explicit APEX ability provenance; renderers must never infer these from deltas. */
+  commanderAttackerSingularityPulse?: boolean;
+  commanderAttackerCounterpulseDamage?: number;
+  commanderDefenderCounterpulseDamage?: number;
+  commanderAttackerProjection?: 'primary' | 'secondary' | null;
+  commanderDefenderProjection?: 'primary' | 'secondary' | null;
+  commanderAttackerProjectionShare?: number;
+  commanderDefenderProjectionShare?: number;
   conquered: boolean;
   operation: string;
 }
@@ -92,6 +113,86 @@ export interface MapLogisticsMovement {
   targetId: string;
   manpower: number;
   capacity: number;
+  /** Exact route kind when supplied by V2; omitted only by legacy adapters. */
+  access?: 'land' | 'naval';
+}
+
+/**
+ * Render-only view of a player's non-territorial APEX neural dome. The
+ * simulation owns integrity, energy, combat and autonomy; the map only needs
+ * enough information to place its field, draw its itinerary and explain state.
+ */
+export interface MapCommanderForceState {
+  readonly playerId: string;
+  /** Explicit visual identity; legacy projections may omit it and render as APEX. */
+  readonly role?: 'apex' | 'rogue-prime';
+  readonly headquartersId: string;
+  readonly locationId: string;
+  readonly mission: string;
+  readonly front: string | null;
+  readonly army: {
+    readonly manpower: number;
+    readonly capacity: number;
+    readonly trainedReserves: number;
+    readonly baseAttack: number;
+    readonly baseDefense: number;
+  };
+  readonly economy: {
+    readonly treasury: number;
+    readonly annualOutput: number;
+    readonly supplyStock: number;
+  };
+  readonly transit: {
+    readonly path: readonly string[];
+    readonly departTick: number;
+    readonly arriveTick: number;
+  } | null;
+  /**
+   * Render-only projection of the persisted APEX protocol runtime. The second
+   * projection intentionally contains placement only: both domes always read
+   * integrity and energy from the single army/economy containers above.
+   */
+  readonly doctrineRuntime?: {
+    readonly lancerSupportedAssaultCount: number;
+    readonly secondaryProjection: {
+      readonly locationId: string;
+      readonly mission: 'assault-support' | 'defense';
+      readonly front: {
+        readonly warId: string;
+        readonly sourceId: string;
+        readonly targetId: string;
+      };
+    } | null;
+  };
+}
+
+/**
+ * Canonical renderer view of the APEX recovery lifecycle. The simulation keeps
+ * an extracted force in one of these missions until its complete operational
+ * readiness gate is satisfied, so renderers must not infer availability from a
+ * tiny survivor count (for example 0.0001 active manpower).
+ */
+export function mapCommanderRecoveryLifecycleActive(
+  force: Pick<MapCommanderForceState, 'mission'>,
+): boolean {
+  return force.mission === 'evacuate' || force.mission === 'hq-training';
+}
+
+export function mapCommanderTransitProgress(
+  force: Pick<MapCommanderForceState, 'transit'>,
+  tick: number,
+): number {
+  const transit = force.transit;
+  if (!transit) return 1;
+  const duration = Math.max(1, transit.arriveTick - transit.departTick);
+  return Math.max(0, Math.min(1, (tick - transit.departTick) / duration));
+}
+
+export function mapCommanderTransitEta(
+  force: Pick<MapCommanderForceState, 'transit'>,
+  tick: number,
+): number {
+  return force.transit ? Math.max(0, Math.ceil(force.transit.arriveTick - tick)) : 0;
 }
 
 export type MapPolarRegion = 'arctic' | 'antarctica';
@@ -118,6 +219,14 @@ export type MapPolarSectorId =
 
 export type MapPolarSectorStatus = 'hidden' | 'available' | 'contested' | 'secured';
 
+export type MapRogueAttentionStage =
+  | 'disabled'
+  | 'dormant'
+  | 'observing'
+  | 'mobilising'
+  | 'breach-imminent'
+  | 'active';
+
 export interface MapPolarSectorState {
   readonly status: MapPolarSectorStatus;
   readonly integrity: number;
@@ -136,15 +245,81 @@ export interface MapPolarEndgameSnapshot {
   readonly phase: MapPolarEndgamePhase;
   readonly visualRevision: number;
   readonly sectors: Readonly<Partial<Record<MapPolarSectorId, MapPolarSectorState>>>;
+  /** Optional on legacy adapters; Survival is treated as awake without it. */
+  readonly rogueAttention?: { readonly stage: MapRogueAttentionStage };
   readonly expeditions?: readonly {
     readonly playerId: string;
     readonly sectorId: MapPolarSectorId;
     readonly manpower: number;
     readonly initialManpower: number;
   }[];
+  /** Hostile elite sidecar; never mixed into the human-only commander roster. */
+  readonly roguePrime?: MapRoguePrimeState;
+}
+
+export type MapRoguePrimeStatus =
+  | 'dormant'
+  | 'guarding'
+  | 'sortie'
+  | 'rebuilding'
+  | 'destroyed';
+
+export interface MapRoguePrimeState {
+  readonly status: MapRoguePrimeStatus;
+  readonly force: MapCommanderForceState | null;
+  readonly sortieSequence: number;
+  readonly nextSortieTick: number | null;
+  readonly gatewayId: MapPolarSectorId | null;
+  readonly targetId: string | null;
+  readonly departTick: number | null;
+  readonly strikeTick: number | null;
+  readonly returnTick: number | null;
+  readonly rebuildReadyTick: number | null;
+}
+
+/**
+ * Viewer-local map knowledge. This projection is deliberately outside the
+ * canonical simulation snapshot: account dossiers may differ per client and
+ * must never enter saves, deterministic hashes or multiplayer replication.
+ */
+export interface MapViewerKnowledge {
+  /** Static account dossiers. These are not permission to read live world state. */
+  readonly chartedTerritoryIds: readonly string[];
+  /** Canonical Campaign Stage-I state projected for the local viewer. */
+  readonly communicationsBlackoutActive?: boolean;
+  readonly communicationsBlackoutTick?: number | null;
+  /**
+   * True only when this renderer was already alive before the viewer confirmed
+   * the blackout briefing. Loaded/reconnected timelines start settled instead
+   * of replaying the presentation transition.
+   */
+  readonly communicationsBlackoutAnimateActivation?: boolean;
+  /**
+   * Viewer-specific narrative gate for the autonomous APEX field. Campaign
+   * keeps the shield invisible through the peaceful prologue; other modes
+   * expose it immediately. This is presentation knowledge, never save state.
+   */
+  readonly apexFieldActivated?: boolean;
+  /**
+   * Viewer-local Stage-IV APEX capability. This may reveal ROGUE PRIME and
+   * its authored sortie line, but never promotes the underlying terrain to
+   * exact live intelligence.
+   */
+  readonly roguePrimeTracking?: boolean;
+  /** Optional viewer-specific detections; never derive these from another human seat. */
+  readonly detectedTerritoryIds?: readonly string[];
 }
 
 export interface WorldMapEngineContract {
+  /** Optional scenario metadata exposed by V2; legacy adapters default to serious fog rules. */
+  readonly content?: {
+    readonly metadata?: { readonly scenarioId?: string };
+    readonly territories?: Readonly<Record<string, {
+      readonly connections: readonly { readonly targetId: string }[];
+    }>>;
+  };
+  /** Render-local knowledge; absent on legacy adapters. */
+  readonly viewerKnowledge?: MapViewerKnowledge;
   readonly state: {
     tick: number;
     humanPlayerId: string;
@@ -154,6 +329,8 @@ export interface WorldMapEngineContract {
     territories: Record<string, MapTerritoryState>;
     wars: readonly MapWarState[];
     logisticsMovements: readonly MapLogisticsMovement[];
+    /** Optional while a legacy save is being migrated. */
+    commanderForces?: Readonly<Record<string, MapCommanderForceState>>;
     /** Optional until a legacy save or adapter has materialised polar state. */
     polarEndgame?: MapPolarEndgameSnapshot;
   };
@@ -182,6 +359,7 @@ export interface MapSceneAdapter {
   setInputBlocked?(blocked: boolean): void;
   focusAction(sourceId?: string, targetId?: string): void;
   focusCountry?(territoryId: string): void;
+  focusCommanderForce?(playerId: string): void;
   focusPolarRegion?(region: MapPolarRegion): void;
   focusPolarSector?(sectorId: MapPolarSectorId): void;
   clearPolarFocus?(): void;

@@ -3,6 +3,7 @@ import {
   AI_EARTH_DEFENSE_MILITARY_PRIORITY_V2,
   aiEarthDefenseMilitaryPriorityV2,
   aiSuspicionMilitaryPriorityV2,
+  autonomousAiVsAiWarCapV2,
   planAiCommandsV2,
 } from './ai';
 import {
@@ -14,8 +15,9 @@ import {
   upkeepFundingTargetRatioV2,
 } from './balance';
 import { createWorldStateV2 } from './bootstrap';
-import { WORLD_CONTENT_V2 } from './content';
+import { isHumanSelectableNationV2, WORLD_CONTENT_V2 } from './content';
 import { nationalAiTreasuryPolicyV2 } from './nationalAi';
+import { resolveScenarioV2 } from './scenarios';
 import { selectNationalEconomyV2, selectWeeklyFinanceBreakdownV2 } from './selectors';
 import { nationIdV2, type WeeklyFinanceBreakdownV2 } from './types';
 
@@ -79,9 +81,9 @@ describe('shared national-AI spending discipline', () => {
     };
 
     expect(plannedMilitary(highSuspicion, human))
-      .toBeGreaterThan(plannedMilitary(lowSuspicion, human));
+      .toBe(plannedMilitary(lowSuspicion, human));
     expect(plannedMilitary(highSuspicion, rival))
-      .toBeGreaterThan(plannedMilitary(lowSuspicion, rival));
+      .toBe(plannedMilitary(lowSuspicion, rival));
     expect(aiEarthDefenseMilitaryPriorityV2(lowSuspicion)).toBe(0);
 
     const lowContact = structuredClone(lowSuspicion);
@@ -98,6 +100,38 @@ describe('shared national-AI spending discipline', () => {
       expect(plannedMilitary(highContact, playerId))
         .toBe(plannedMilitary(lowContact, playerId));
     }
+  });
+
+  it('moves every independent Survival country toward military anti-Rogue readiness', () => {
+    const { content } = resolveScenarioV2({ mode: 'survival', seed: 91_013 });
+    const state = createWorldStateV2(91_013, content);
+    state.tick = 104;
+    const independentIds = content.nationIds.filter((playerId) => (
+      isHumanSelectableNationV2(content, playerId)
+    ));
+    for (const playerId of independentIds) {
+      state.players[playerId]!.budget = { military: 10, research: 45, development: 45 };
+    }
+
+    expect(aiEarthDefenseMilitaryPriorityV2(state))
+      .toBe(AI_EARTH_DEFENSE_MILITARY_PRIORITY_V2);
+    expect(autonomousAiVsAiWarCapV2(state, content, independentIds.length)).toBe(0);
+
+    const commands = planAiCommandsV2(state, content);
+    const plannedBudgets = new Map(commands.flatMap((command) => (
+      command.type === 'set-budget-policy' ? [[command.playerId, command.budget] as const] : []
+    )));
+    expect(plannedBudgets.size).toBeGreaterThanOrEqual(independentIds.length);
+    for (const playerId of independentIds) {
+      expect(plannedBudgets.get(playerId)?.military, playerId).toBeGreaterThan(10);
+    }
+    expect(commands.some((command) => (
+      command.type === 'declare-war'
+        && !state.humanPlayerIds.includes(command.attackerId)
+        && !state.humanPlayerIds.includes(command.defenderId)
+        && isHumanSelectableNationV2(content, command.attackerId)
+        && isHumanSelectableNationV2(content, command.defenderId)
+    ))).toBe(false);
   });
 
   it('uses IQ for bounded treasury judgement and adds runway per active front', () => {
@@ -127,7 +161,11 @@ describe('shared national-AI spending discipline', () => {
       economyScale,
     );
     const buildingCashflow = discretionaryCashflow(building);
-    expect(building.reserveTarget).toBeCloseTo(building.revenue * policy.reserveWeeks, 6);
+    expect(building.reserveTarget).toBeCloseTo(Math.max(
+      building.revenue * policy.reserveWeeks,
+      selectNationalEconomyV2(state, WORLD_CONTENT_V2, belgium).controlledOutput
+        * AI_EXCESS_TREASURY_GDP_THRESHOLD_SHARE,
+    ), 6);
     expect(recurringProgramEnvelope(building)).toBeCloseTo(
       buildingCashflow * (1 - policy.freeCashflowShare),
       5,
@@ -201,6 +239,7 @@ describe('shared national-AI spending discipline', () => {
       threshold + economy.controlledOutput * 0.001,
       economy.controlledOutput,
       economy.weeklyRevenue,
+      justAbove.reserveTarget,
     ).weeklyDraw, 6);
     expect(justAbove.excessCashInvestment).toBeLessThan(economy.weeklyRevenue * 0.01);
 
@@ -213,6 +252,7 @@ describe('shared national-AI spending discipline', () => {
       state.players[netherlands]!.treasury,
       economy.controlledOutput,
       economy.weeklyRevenue,
+      apex.reserveTarget,
     ).weeklyDraw, 6);
   });
 

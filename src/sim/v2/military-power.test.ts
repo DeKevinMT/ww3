@@ -189,7 +189,6 @@ describe('V2 real-world military power calibration', () => {
     const state = createWorldStateV2(2_027);
     const belgium = nationIdV2('bel');
     const territory = state.territories[territoryIdV2('bel')];
-    territory.condition = 1;
     territory.army.capacity = 1;
     territory.army.manpower = 0.10;
     territory.army.baseAttack = 5;

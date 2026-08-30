@@ -410,6 +410,98 @@ describe('authoritative multiplayer game sessions', () => {
     host.close(false);
   }, 10_000);
 
+  it('rebinds the same guest seat and converges missed weeks from a fresh host snapshot', () => {
+    const fixture = createRealLoopback(929);
+    fixture.guestTransport.setState('disconnected');
+    for (let tick = 0; tick < 6; tick += 1) fixture.engine.step();
+    expect(fixture.guestSession.engine?.state.tick).toBe(0);
+
+    const replacement = fixture.hostTransport.connectGuest(fixture.guestTransport.peerId);
+    expect(fixture.guestSession.replaceTransport(replacement)).toEqual({ accepted: true });
+
+    expect(fixture.guestSession.status.phase).toBe('running');
+    expect(fixture.guestSession.engine?.state.tick).toBe(fixture.engine.state.tick);
+    expect(fixture.guestSession.engine?.canonicalHash()).toBe(fixture.engine.canonicalHash());
+    expect(fixture.hostTransport.hostToGuest.some(({ peerId, message }) => (
+      peerId === replacement.peerId
+      && message.type === 'snapshot'
+      && (message.reason === 'reconnect' || message.reason === 'resync')
+      && message.tick === fixture.engine.state.tick
+    ))).toBe(true);
+
+    fixture.engine.step();
+    expect(fixture.guestSession.engine?.state.tick).toBe(fixture.engine.state.tick);
+    fixture.guestSession.close(false);
+    fixture.hostSession.close(false);
+  }, 10_000);
+
+  it('continues the host-owned client sequence after a guest hard reload and reconnect', () => {
+    const fixture = createRealLoopback(929_1);
+    const firstAllocations = {
+      ...fixture.guestSession.engine!.state.players[fixture.guestCountryId]!.research.allocations,
+    };
+    expect(fixture.guestSession.submitCommand({
+      type: 'set-research-allocations',
+      playerId: fixture.guestCountryId,
+      allocations: firstAllocations,
+    })).toEqual({ accepted: true });
+    fixture.engine.step();
+    const hostActionSequenceAfterFirstCommand = fixture.engine.state.actionSequence;
+
+    fixture.guestTransport.setState('disconnected');
+    fixture.guestSession.close(false);
+
+    const replacement = fixture.hostTransport.connectGuest(fixture.guestTransport.peerId);
+    const reloadedResults: Array<{ accepted: boolean; assignedSequence?: number }> = [];
+    const reloadedGuest = new GuestGameSession({
+      transport: replacement,
+      countryId: fixture.guestCountryId,
+      seatCount: 2,
+      humanPlayerIds: [fixture.hostCountryId, fixture.guestCountryId],
+      onCommandResult: ({ result }) => reloadedResults.push({
+        accepted: result.accepted,
+        ...(result.assignedSequence === undefined ? {} : {
+          assignedSequence: result.assignedSequence,
+        }),
+      }),
+    });
+    replacement.setState('connected');
+
+    const reconnectSnapshot = fixture.hostTransport.hostToGuest
+      .filter(({ peerId, message }) => (
+        peerId === replacement.peerId
+          && message.type === 'snapshot'
+          && message.reason === 'reconnect'
+      ))
+      .at(-1)?.message as SnapshotMessage | undefined;
+    expect(reconnectSnapshot?.nextClientSequence).toBe(2);
+    expect(reloadedGuest.status.phase).toBe('running');
+    expect(reloadedGuest.engine?.canonicalHash()).toBe(fixture.engine.canonicalHash());
+
+    const secondAllocations = {
+      ...reloadedGuest.engine!.state.players[fixture.guestCountryId]!.research.allocations,
+    };
+    expect(reloadedGuest.submitCommand({
+      type: 'set-research-allocations',
+      playerId: fixture.guestCountryId,
+      allocations: secondAllocations,
+    })).toEqual({ accepted: true });
+    expect(reloadedResults).toEqual([{
+      accepted: true,
+      assignedSequence: hostActionSequenceAfterFirstCommand + 1,
+    }]);
+    expect(fixture.hostTransport.guestToHost
+      .map(({ message }) => message)
+      .filter((message) => message.type === 'command')
+      .map((message) => message.clientSequence)).toEqual([1, 2]);
+    expect(fixture.engine.state.actionSequence).toBe(hostActionSequenceAfterFirstCommand + 1);
+
+    fixture.engine.step();
+    expect(reloadedGuest.engine?.canonicalHash()).toBe(fixture.engine.canonicalHash());
+    reloadedGuest.close(false);
+    fixture.hostSession.close(false);
+  }, 10_000);
+
   it('rate-limits repeated resync snapshots by authoritative tick and serves a deferred recovery', () => {
     const fixture = createRealLoopback(922);
     const request = {
@@ -565,7 +657,7 @@ function fakeSnapshot(countryId: PlayerId, hash = 'snapshot-good'): SnapshotMess
     tick: 0,
     canonicalStateHash: hash,
   } as unknown as SaveGameV2;
-  return { type: 'snapshot', reason: 'join', tick: 0, hash, save };
+  return { type: 'snapshot', reason: 'join', tick: 0, hash, nextClientSequence: 1, save };
 }
 
 describe('guest ordering and desync recovery', () => {

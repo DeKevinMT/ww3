@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { SaveGameV2 } from '../sim/v2/persistence';
 import { V2_RULES_VERSION } from '../sim/v2/balance';
+import { ARCTIC_PROJECT_IDS_V2 } from '../sim/v2/polarEndgame';
 import { normalizeScenarioConfigV2 } from '../sim/v2/scenarios';
 import { nationIdV2, type ResearchAllocationsV2 } from '../sim/v2/types';
+import { createNeutralMultiplayerDeploymentSnapshotV1 } from './deployment';
 import {
   MULTIPLAYER_PROTOCOL_VERSION,
   MultiplayerProtocolError,
@@ -49,13 +51,157 @@ function snapshotWithExtraPayload(payload: string): SnapshotMessage {
     reason: 'resync',
     tick: 42,
     hash: '0123abcd',
+    nextClientSequence: 8,
     save,
   };
 }
 
 describe('multiplayer protocol', () => {
-  it('uses multiplayer protocol version 2 for scenario-aware rooms', () => {
-    expect(MULTIPLAYER_PROTOCOL_VERSION).toBe(2);
+  it('uses multiplayer protocol version 6 for reload-safe guest command ordering', () => {
+    expect(MULTIPLAYER_PROTOCOL_VERSION).toBe(6);
+  });
+
+  it('requires the host-owned next client sequence in every authoritative snapshot', () => {
+    const snapshot = snapshotWithExtraPayload('reconnect-sequence');
+    expect(validateProtocolMessage(snapshot)).toMatchObject({
+      type: 'snapshot',
+      nextClientSequence: 8,
+    });
+    const { nextClientSequence: _omitted, ...missingSequence } = snapshot;
+    expect(() => validateProtocolMessage(missingSequence)).toThrow(/nextClientSequence/i);
+    expect(() => validateProtocolMessage({
+      ...snapshot,
+      nextClientSequence: 0,
+    })).toThrow(/nextClientSequence/i);
+  });
+
+  it('validates a country, mastery, APEX and doctrine as one exact deployment action', () => {
+    const belgium = nationIdV2('bel');
+    const neutral = createNeutralMultiplayerDeploymentSnapshotV1(belgium);
+    const deployment = {
+      ...neutral,
+      activeDoctrine: 'vanguard' as const,
+      apex: {
+        ...neutral.apex,
+        manpower: neutral.apex.capacity,
+        capabilities: {
+          ...neutral.apex.capabilities,
+          assaultSpecialist: true,
+        },
+      },
+    };
+    const action = {
+      type: 'lobby-action' as const,
+      revision: 2,
+      action: { type: 'select-country' as const, countryId: belgium, deployment },
+    };
+
+    expect(validateProtocolMessage(action)).toEqual(action);
+    expect(() => validateProtocolMessage({
+      ...action,
+      action: {
+        ...action.action,
+        deployment: {
+          ...deployment,
+          apex: { ...deployment.apex, trainedReserves: deployment.apex.capacity + 1 },
+        },
+      },
+    })).toThrow(/integrity and recharge buffer must fit inside max integrity/i);
+    expect(() => validateProtocolMessage({
+      ...action,
+      action: { ...action.action, deployment: { ...deployment, activeDoctrine: 'forged' } },
+    })).toThrow(/activeDoctrine is invalid/i);
+    expect(() => validateProtocolMessage({
+      ...action,
+      action: { ...action.action, deployment: { ...deployment, editableProfile: {} } },
+    })).toThrow(/must contain exactly/i);
+    expect(() => validateProtocolMessage({
+      ...action,
+      action: {
+        ...action.action,
+        deployment: { ...deployment, countryId: nationIdV2('nld') },
+      },
+    })).toThrow(/must match action.countryId/i);
+  });
+
+  it('round-trips rejoin credentials only when session and token are paired', () => {
+    const hello = {
+      type: 'hello',
+      protocolVersion: MULTIPLAYER_PROTOCOL_VERSION,
+      rulesVersion: 'rules-v1',
+      roomId: 'room_12345678',
+      invitationId: 'invite_12345678',
+      peerId: 'guest_12345678',
+      displayName: 'Guest',
+      role: 'guest',
+      sessionId: 'session_12345678',
+      rejoinToken: 'rejoin_12345678',
+    } as const;
+    expect(decodeProtocolMessage(encodeProtocolMessage(hello))).toEqual(hello);
+    expect(() => validateProtocolMessage({ ...hello, rejoinToken: undefined })).toThrow(/supplied together/i);
+  });
+
+  it('rejects retired run-draft choices on the wire', () => {
+    const command = {
+      type: 'command',
+      requestId: 'request_run_upgrade',
+      clientSequence: 1,
+      baseTick: 12,
+      command: {
+        type: 'choose-run-upgrade',
+        playerId: nationIdV2('bel'),
+        offerId: 'run-draft:1:bel:campaign-region',
+        upgradeId: 'combined-arms',
+      },
+    } as const;
+    expect(() => validateProtocolMessage(command)).toThrow(/retired/i);
+  });
+
+  it('round-trips only canonical APEX narrative responses', () => {
+    const command = {
+      type: 'command',
+      requestId: 'request_apex_story',
+      clientSequence: 2,
+      baseTick: 14,
+      command: {
+        type: 'respond-apex-transmission',
+        playerId: nationIdV2('bel'),
+        transmissionId: 'campaign-signal-anomaly',
+        choice: 'accept',
+      },
+    } as const;
+    expect(decodeProtocolMessage(encodeProtocolMessage(command))).toEqual(command);
+    expect(() => validateProtocolMessage({
+      ...command,
+      command: { ...command.command, transmissionId: 'forged-message' },
+    })).toThrow(/transmissionId is invalid/i);
+    expect(() => validateProtocolMessage({
+      ...command,
+      command: { ...command.command, choice: 'yes' },
+    })).toThrow(/choice must be accept or acknowledge/i);
+    expect(() => validateProtocolMessage({
+      ...command,
+      command: { ...command.command, choice: 'later' },
+    })).toThrow(/mandatory/i);
+    expect(() => validateProtocolMessage({
+      ...command,
+      command: { ...command.command, admin: true },
+    })).toThrow(/must contain exactly/i);
+
+    const acknowledgement = {
+      ...command,
+      command: {
+        ...command.command,
+        transmissionId: 'campaign-first-conquest' as const,
+        choice: 'acknowledge' as const,
+      },
+    };
+    expect(decodeProtocolMessage(encodeProtocolMessage(acknowledgement)))
+      .toEqual(acknowledgement);
+    expect(() => validateProtocolMessage({
+      ...acknowledgement,
+      command: { ...acknowledgement.command, choice: 'accept' },
+    })).toThrow(/informational/i);
   });
 
   it('round-trips typed lobby and unicode player data', () => {
@@ -70,6 +216,7 @@ describe('multiplayer protocol', () => {
           peerId: 'host_12345678',
           displayName: 'Kévin 🇧🇪',
           countryId: nationIdV2('BEL'),
+          deployment: createNeutralMultiplayerDeploymentSnapshotV1(nationIdV2('BEL')),
           ready: true,
           connected: true,
         },
@@ -77,6 +224,7 @@ describe('multiplayer protocol', () => {
           peerId: 'guest_12345678',
           displayName: 'Zoë',
           countryId: null,
+          deployment: null,
           ready: false,
           connected: true,
         },
@@ -121,6 +269,39 @@ describe('multiplayer protocol', () => {
         peerId: 'host_12345678', displayName: 'Host', countryId: null, ready: false, connected: true,
       }],
     })).toThrow(/message\.scenario/i);
+    const survivalScenario = normalizeScenarioConfigV2({ mode: 'survival', seed: 987_654_322 });
+    expect(validateProtocolMessage({
+      type: 'lobby-action',
+      revision: 5,
+      action: { type: 'set-scenario', scenario: survivalScenario },
+    })).toEqual({
+      type: 'lobby-action',
+      revision: 5,
+      action: { type: 'set-scenario', scenario: survivalScenario },
+    });
+  });
+
+  it('round-trips bounded canonical Survival empire commands', () => {
+    const message: MultiplayerProtocolMessage = {
+      type: 'command',
+      requestId: 'survival_empire_1',
+      clientSequence: 7,
+      baseTick: 0,
+      command: {
+        type: 'form-survival-empire',
+        flagshipId: nationIdV2('bel'),
+        memberIds: [nationIdV2('bel'), nationIdV2('lux'), nationIdV2('nld')],
+      },
+    };
+    expect(decodeProtocolMessage(encodeProtocolMessage(message))).toEqual(message);
+    expect(() => validateProtocolMessage({
+      ...message,
+      command: { ...message.command, memberIds: ['bel', 'bel'] },
+    })).toThrow(/duplicate country IDs/i);
+    expect(() => validateProtocolMessage({
+      ...message,
+      command: { ...message.command, memberIds: [] },
+    })).toThrow(/1 through 256/i);
   });
 
   it('validates all research branches inside a client command', () => {
@@ -143,6 +324,67 @@ describe('multiplayer protocol', () => {
     })).toThrow(/every supported research branch/i);
   });
 
+  it('round-trips manual Commander orders and strictly validates their policy and front', () => {
+    const policy: MultiplayerProtocolMessage = {
+      type: 'command', requestId: 'commander_policy_1', clientSequence: 6, baseTick: 20,
+      command: {
+        type: 'set-commander-priorities',
+        playerId: nationIdV2('bel'),
+        priorities: { training: 45, logistics: 35, development: 20 },
+      },
+    };
+    const order: MultiplayerProtocolMessage = {
+      type: 'command', requestId: 'commander_order_1', clientSequence: 7, baseTick: 20,
+      command: {
+        type: 'issue-commander-order',
+        playerId: nationIdV2('bel'),
+        destinationId: 'bel' as never,
+        mission: 'defense',
+        front: { warId: 'war-1', sourceId: 'nld' as never, targetId: 'bel' as never },
+      },
+    };
+    expect(decodeProtocolMessage(encodeProtocolMessage(policy))).toEqual(policy);
+    expect(decodeProtocolMessage(encodeProtocolMessage(order))).toEqual(order);
+    expect(() => validateProtocolMessage({
+      ...policy,
+      command: { ...policy.command, priorities: { training: 60, logistics: 30, development: 20 } },
+    })).toThrow(/total exactly 100/i);
+    expect(() => validateProtocolMessage({
+      ...order,
+      command: { ...order.command, front: { ...order.command.front!, autoTarget: true } },
+    })).toThrow(/exactly sourceId, targetId and warId/i);
+    expect(() => validateProtocolMessage({
+      ...order,
+      command: { ...order.command, autoTarget: true },
+    })).toThrow(/Commander orders must contain exactly/i);
+    expect(() => validateProtocolMessage({
+      ...order,
+      // Autonomy is host-simulation state, never a client-selectable command field.
+      command: { ...order.command, orderSource: 'autonomous' },
+    })).toThrow(/Commander orders must contain exactly/i);
+  });
+
+  it('preserves the canonical country-trait and Commander doctrine snapshot in resyncs', () => {
+    const message = snapshotWithExtraPayload('commander-meta');
+    (message.save as unknown as Record<string, any>).commanderForces = {
+      bel: {
+        countryTraitScale: 0.6,
+        capabilities: {
+          mobileHeadquarters: true,
+          fieldHospital: true,
+          rapidResponse: false,
+          assaultSpecialist: true,
+          defenseSpecialist: false,
+          emergencyExtractionCharges: 1,
+        },
+      },
+    };
+    const decoded = decodeProtocolMessage(encodeProtocolMessage(message)) as SnapshotMessage;
+    expect((decoded.save as unknown as Record<string, any>).commanderForces.bel).toEqual(
+      (message.save as unknown as Record<string, any>).commanderForces.bel,
+    );
+  });
+
   it('round-trips polar commands and rejects invalid project, sector and manpower payloads', () => {
     const commands: MultiplayerProtocolMessage[] = [
       {
@@ -152,11 +394,17 @@ describe('multiplayer protocol', () => {
         },
       },
       {
-        type: 'command', requestId: 'polar_warning_1', clientSequence: 11, baseTick: 51,
+        type: 'command', requestId: 'polar_project_2', clientSequence: 11, baseTick: 51,
+        command: {
+          type: 'start-arctic-project', playerId: nationIdV2('can'), projectId: 'ice-theatre-simulation',
+        },
+      },
+      {
+        type: 'command', requestId: 'polar_warning_1', clientSequence: 12, baseTick: 52,
         command: { type: 'acknowledge-polar-warning', playerId: nationIdV2('can') },
       },
       {
-        type: 'command', requestId: 'polar_deploy_1', clientSequence: 12, baseTick: 52,
+        type: 'command', requestId: 'polar_deploy_1', clientSequence: 13, baseTick: 53,
         command: {
           type: 'deploy-antarctic-expedition', playerId: nationIdV2('can'),
           sectorId: 'drake-entry', manpower: 1.25,
@@ -166,9 +414,21 @@ describe('multiplayer protocol', () => {
     for (const message of commands) {
       expect(decodeProtocolMessage(encodeProtocolMessage(message))).toEqual(message);
     }
+    for (const [index, projectId] of ARCTIC_PROJECT_IDS_V2.entries()) {
+      const message: MultiplayerProtocolMessage = {
+        type: 'command',
+        requestId: `polar_all_stages_${index}`,
+        clientSequence: 100 + index,
+        baseTick: 60 + index,
+        command: {
+          type: 'start-arctic-project', playerId: nationIdV2('can'), projectId,
+        },
+      };
+      expect(decodeProtocolMessage(encodeProtocolMessage(message))).toEqual(message);
+    }
 
     const envelope = {
-      type: 'command', requestId: 'polar_invalid_1', clientSequence: 13, baseTick: 53,
+      type: 'command', requestId: 'polar_invalid_1', clientSequence: 14, baseTick: 54,
     } as const;
     expect(() => validateProtocolMessage({
       ...envelope,
@@ -277,8 +537,16 @@ describe('multiplayer protocol', () => {
       scenario: STANDARD_SCENARIO,
       started: false,
       players: [
-        { peerId: 'host_12345678', displayName: 'Host', countryId: 'BEL', ready: true, connected: true },
-        { peerId: 'guest_12345678', displayName: 'Guest', countryId: 'BEL', ready: true, connected: true },
+        {
+          peerId: 'host_12345678', displayName: 'Host', countryId: 'BEL',
+          deployment: createNeutralMultiplayerDeploymentSnapshotV1('BEL'),
+          ready: true, connected: true,
+        },
+        {
+          peerId: 'guest_12345678', displayName: 'Guest', countryId: 'BEL',
+          deployment: createNeutralMultiplayerDeploymentSnapshotV1('BEL'),
+          ready: true, connected: true,
+        },
       ],
     })).toThrow(/countries must be unique/i);
   });

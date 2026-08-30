@@ -7,8 +7,10 @@ import {
 } from './balance';
 import { resetEmptyArmyBaseQualityV2 } from './armyQuality';
 import type { WorldContentV2 } from './content';
+import { selectTerritoryCountryMasteryRuntimeV2 } from './countryMasteryRuntime';
 import { isHumanPlayerV2 } from './humanPlayers';
 import { OPENING_ARMY_BONUS_DURATION_TICKS_V2 } from './openingArmyBonus';
+import { selectRunModifiersV2 } from './runProgression';
 import { traitNationContextV2 } from './traitContext';
 import {
   countryTraitFactorV2,
@@ -23,7 +25,8 @@ export function openingArmyCapacityMultiplierV2(
   content: WorldContentV2,
   ownerId: PlayerId,
 ): number {
-  if (!isHumanPlayerV2(state, ownerId)
+  if (state.commanderForces?.[ownerId]
+    || !isHumanPlayerV2(state, ownerId)
     || state.tick >= OPENING_ARMY_BONUS_DURATION_TICKS_V2) return 1;
   const openingMultiplier = humanStartingArmyMultiplierForContentV2(content, ownerId);
   const remainingShare = clamp(
@@ -49,7 +52,7 @@ const armyCapacityFactorsV2 = (
     ownerId,
     'army-capacity',
     traitNationContextV2(state, ownerId),
-  ),
+  ) * selectRunModifiersV2(state, ownerId).nationalCapacityMultiplier,
   homelandOpening: openingArmyCapacityMultiplierV2(state, content, ownerId),
 });
 
@@ -58,11 +61,15 @@ const territoryArmyCapacityFactorV2 = (
   territoryId: TerritoryId,
   ownerId: PlayerId,
   factors: ArmyCapacityFactorsV2,
-): number => factors.trait * (
-  content.territories[territoryId]?.initialOwnerId === ownerId
+): number => factors.trait
+  * selectTerritoryCountryMasteryRuntimeV2(
+    content,
+    territoryId,
+    ownerId,
+  ).armyCapacityMultiplier
+  * (content.territories[territoryId]?.initialOwnerId === ownerId
     ? factors.homelandOpening
-    : 1
-);
+    : 1);
 
 const liveTerritoryArmyCapacityTargetV2 = (
   state: WorldStateV2,
@@ -125,14 +132,22 @@ export function territoryArmyCapacityTargetV2(
   forceCapacityLevel = 0,
   integration = 1,
 ): number {
-  if (!content.territories[territoryId] || !content.nations[ownerId]) return 0;
-  const owner = content.nations[ownerId]!;
-  const nationalProfessionalForceShare = owner.balance.initialManpower
+  const territory = content.territories[territoryId];
+  if (!territory || !content.nations[ownerId]) return 0;
+  const localForceBase = content.nations[territory.initialOwnerId];
+  if (!localForceBase) return 0;
+  // A conquered population keeps the recruitment institutions of its own
+  // country. Applying the new owner's opening force/population ratio here
+  // made a tiny, relatively militarised homeland (notably Greenland) unlock
+  // an enormous foreign cap and upkeep bill as Signal Purge advanced. Local
+  // capacity now stays anchored to the territory's original force structure;
+  // integration, the current owner's research and mastery still improve it.
+  const localProfessionalForceShare = localForceBase.balance.initialManpower
     * ARMY_CAPACITY_INITIAL_FORCE_FLOOR
-    / Math.max(0.0001, owner.real.population);
+    / Math.max(0.0001, localForceBase.real.population);
   const structuralPopulationShare = Math.max(
     ARMY_CAPACITY_STRUCTURAL_POPULATION_SHARE,
-    nationalProfessionalForceShare,
+    localProfessionalForceShare,
   );
   return round(Math.max(0.0001, Math.max(0, population)
     * structuralPopulationShare

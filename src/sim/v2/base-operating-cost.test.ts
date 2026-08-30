@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { BASE_OPERATING_COST_TAX_REVENUE_SHARE } from './balance';
 import { createWorldStateV2 } from './bootstrap';
-import { WORLD_CONTENT_V2 } from './content';
+import { isRogueAiNationV2, WORLD_CONTENT_V2 } from './content';
 import {
   selectOpeningCandidateFinancePlansV2,
   selectWeeklyFinanceBreakdownV2,
@@ -11,11 +11,12 @@ import { countryTraitFactorV2 } from './traits';
 import { nationIdV2, territoryIdV2 } from './types';
 
 describe('universal base operating cost', () => {
-  it('starts every country at 20% of ordinary weekly tax revenue before its trait', () => {
+  it('starts every ordinary country at 20% of weekly tax revenue before its trait', () => {
     const state = createWorldStateV2(72_001);
     const plans = selectOpeningCandidateFinancePlansV2(state, WORLD_CONTENT_V2);
     expect(plans.size).toBe(WORLD_CONTENT_V2.nationIds.length);
     for (const [playerId, finance] of plans) {
+      if (isRogueAiNationV2(WORLD_CONTENT_V2, playerId)) continue;
       // Twenty percent remains the canonical rule. A country's own active
       // trait is a final multiplier, never a replacement hidden in content.
       const traitFactor = countryTraitFactorV2(
@@ -28,6 +29,10 @@ describe('universal base operating cost', () => {
         6,
       );
     }
+    const roguePlan = plans.get(nationIdV2('rai'))!;
+    expect(roguePlan.baseOperatingCost).toBeLessThan(
+      roguePlan.revenue * BASE_OPERATING_COST_TAX_REVENUE_SHARE,
+    );
   });
 
   it('keeps one selected trait and amplifies Belgium\'s lower overhead for human control', () => {

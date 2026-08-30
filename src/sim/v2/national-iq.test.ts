@@ -263,7 +263,7 @@ describe('national IQ gameplay proxy', () => {
     expect(low.fusionDelta).toBeLessThan(0);
   });
 
-  it('applies only the live empire leader IQ trait once after population fusion', () => {
+  it('keeps the archived empire-leader IQ trait neutral after population fusion', () => {
     const germany = nationIdV2('deu');
     const belgium = nationIdV2('bel');
     const content = contentWithIqs([[germany, 100], [belgium, 90]]);
@@ -277,7 +277,7 @@ describe('national IQ gameplay proxy', () => {
     const leaderTrait = countryTraitFactorV2(germany, 'national-iq');
 
     const view = selectNationalIqViewV2(state, content, germany);
-    expect(leaderTrait).toBeGreaterThan(1);
+    expect(leaderTrait).toBe(1);
     expect(view.traitFactor).toBe(leaderTrait);
     expect(view.fusedBaseline).toBeCloseTo(((100 + 90) / 2) * leaderTrait, 2);
     expect(view.fusionComponents.find((component) => component.originId === belgium)?.baselineScore)
@@ -452,22 +452,21 @@ describe('national IQ gameplay proxy', () => {
 
   });
 
-  it('keeps national-IQ traits modest for AI control and bounded for players', () => {
+  it('keeps national-IQ traits inert for both AI control and players', () => {
     const germany = nationIdV2('deu');
     const state = createWorldStateV2(8_207);
     state.humanPlayerId = nationIdV2('bel');
     state.humanPlayerIds = [nationIdV2('bel')];
     const ordinary = selectNationalIqViewV2(state, WORLD_CONTENT_V2, germany);
 
-    expect(countryTraitFactorV2(germany, 'national-iq')).toBeGreaterThan(1);
-    expect(countryTraitFactorV2(germany, 'national-iq')).toBeLessThanOrEqual(1.02);
+    expect(countryTraitFactorV2(germany, 'national-iq')).toBe(1);
     state.humanPlayerId = germany;
     state.humanPlayerIds = [germany];
     const human = selectNationalIqViewV2(state, WORLD_CONTENT_V2, germany);
 
-    expect(human.score).toBeGreaterThan(ordinary.score);
+    expect(human.score).toBeCloseTo(ordinary.score, 9);
     expect(countryTraitFactorV2(germany, 'national-iq', { humanControlled: true }))
-      .toBeLessThanOrEqual(1.15);
+      .toBe(1);
   });
 
   it('keeps selection neutral while higher IQ narrows defensive-aid intelligence error', () => {

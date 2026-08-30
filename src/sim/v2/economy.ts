@@ -1,11 +1,9 @@
 import {
-  FOOD_DOMESTIC_CAPACITY_RAMP_WEEKS,
   PEACE_FATIGUE_RECOVERY_PER_WEEK,
-  clamp,
   round,
 } from './balance';
 import {
-  territoryTerrainConditionRecoveryMultiplierV2,
+  ROGUE_AI_NATION_ID_V2,
   type WorldContentV2,
 } from './content';
 import { synchronizeArmyCapacityV2 } from './capacity';
@@ -17,7 +15,8 @@ import {
 import {
   createPowerSnapshotV2,
   projectFinanceManpowerPhaseV2,
-  selectFoodDomesticCapacityTargetV2,
+  isSurvivalScorchedTransitTerritoryV2,
+  isSurvivalRogueTransitTerritoryV2,
   selectIsEliminatedV2,
   selectPopulationDynamicsV2,
   selectTerritoriesOfV2,
@@ -26,26 +25,18 @@ import {
   sortedNationIdsV2,
   type PowerSnapshotV2,
 } from './selectors';
-import {
-  composeTraitContextV2,
-  traitNationContextV2,
-  traitTerritoryContextV2,
-  traitTerritoryFrontAccessV2,
-} from './traitContext';
+import { normalizeRetiredFoodCompatibilityV2 } from './retiredFood';
+import { traitNationContextV2 } from './traitContext';
 import { countryTraitFactorV2 } from './traits';
+import { isNationOperationalV2 } from './survival';
+import { enforceSurvivalScorchedWorldV2 } from './survivalEmpire';
+import {
+  addRogueWaveManpowerV2,
+  reconcileRogueWaveManpowerAfterChangeV2,
+} from './survivalProvenance';
 import type { PlayerId, WeeklyFinanceBreakdownV2, WorldStateV2 } from './types';
 
 export type FinancePlansV2 = ReadonlyMap<PlayerId, WeeklyFinanceBreakdownV2>;
-
-/** One bounded weekly step toward the live domestic food-system target. */
-export function advanceDomesticFoodCapacityV2(current: number, target: number): number {
-  const safeCurrent = Math.max(0, current);
-  const safeTarget = Math.max(0, target);
-  const maximumStep = Math.max(safeCurrent, safeTarget, 0.000001)
-    / FOOD_DOMESTIC_CAPACITY_RAMP_WEEKS;
-  if (Math.abs(safeTarget - safeCurrent) <= maximumStep) return round(safeTarget, 9);
-  return round(safeCurrent + Math.sign(safeTarget - safeCurrent) * maximumStep, 9);
-}
 
 export function createFinancePlansV2(
   state: WorldStateV2,
@@ -56,24 +47,24 @@ export function createFinancePlansV2(
     // Defeated identities stay referenced while their old cores integrate, but
     // they own no economy and every commit phase already skips them. Avoid a
     // full finance projection for these dormant records in long campaigns.
-    .filter((id) => !selectIsEliminatedV2(state, id))
+    .filter((id) => !selectIsEliminatedV2(state, id)
+      && isNationOperationalV2(state, content, id))
     .map((id) => [id, selectWeeklyFinanceBreakdownV2(state, content, id, powerSnapshot)]));
 }
 
-function processMilitaryAndCondition(
+function processMilitary(
   state: WorldStateV2,
   content: WorldContentV2,
   playerId: PlayerId,
   finance: WeeklyFinanceBreakdownV2,
 ): void {
-  const atWar = selectWarsOfV2(state, playerId).length > 0;
   const territories = selectTerritoriesOfV2(state, playerId);
-  const nationTraitContext = traitNationContextV2(state, playerId);
   const projectedArmy = projectFinanceManpowerPhaseV2(state, content, playerId, finance);
   state.players[playerId]!.trainedReserves = projectedArmy.trainedReservesAfter;
   const projectedByTerritory = new Map(projectedArmy.territories.map((army) => [army.id, army]));
   for (const view of territories) {
     const territory = state.territories[view.id]!;
+    const manpowerBeforeFinance = territory.army.manpower;
     const projected = projectedByTerritory.get(view.id);
     if (projected) {
       territory.army.capacity = projected.capacity;
@@ -81,27 +72,19 @@ function processMilitaryAndCondition(
       territory.army.baseAttack = projected.baseAttack;
       territory.army.baseDefense = projected.baseDefense;
     }
-    const isConquered = territory.coreOwner !== territory.owner;
-    // Newly conquered infrastructure cannot recover at homeland speed. Restoration
-    // accelerates only as administration and local supply chains return.
-    const reconstructionReadiness = isConquered
-      ? 0.18 + 0.82 * clamp(territory.integration, 0, 1)
-      : 1;
-    const conditionRecoveryFactor = territory.owner === playerId
-      ? countryTraitFactorV2(
-        playerId,
-        'condition-recovery',
-        composeTraitContextV2(
-          nationTraitContext,
-          traitTerritoryContextV2(state, content, playerId, view.id),
-          { access: traitTerritoryFrontAccessV2(state, playerId, view.id) },
-        ),
-      )
-      : 1;
-    const conditionGain = 0.006 * finance.conditionFundingRatio * finance.aiEfficiency
-      * (atWar ? 0.35 : 1) * reconstructionReadiness * conditionRecoveryFactor
-      * territoryTerrainConditionRecoveryMultiplierV2(content, view.id);
-    territory.condition = round(clamp(territory.condition + conditionGain, 0.15, 1));
+    const recruitedInAntarctica = playerId === ROGUE_AI_NATION_ID_V2
+      && !isSurvivalRogueTransitTerritoryV2(state, view.id)
+      ? Math.max(0, territory.army.manpower - manpowerBeforeFinance)
+      : 0;
+    if (recruitedInAntarctica > 0) {
+      addRogueWaveManpowerV2(state, view.id, recruitedInAntarctica);
+    } else {
+      reconcileRogueWaveManpowerAfterChangeV2(
+        state,
+        view.id,
+        manpowerBeforeFinance,
+      );
+    }
   }
   consumeOpeningArmyBonusLossV2(state, playerId, projectedArmy.demobilized);
 }
@@ -120,10 +103,10 @@ function processDevelopment(
     content,
     playerId,
     finance.populationGrowth,
-    finance.foodTargetStock,
   );
   const economyMultiplier = Math.max(0, 1 + annualEconomy) ** (1 / 52);
   for (const view of territories) {
+    if (isSurvivalScorchedTransitTerritoryV2(state, view.id)) continue;
     const territory = state.territories[view.id]!;
     const populationMultiplier = (1 + populationDynamics.annualNetRate) ** (1 / 52);
     territory.economy = round(Math.max(0.10, territory.economy * economyMultiplier));
@@ -145,35 +128,19 @@ export function processFinanceMilitaryV2(
   content: WorldContentV2,
   financePlans: FinancePlansV2,
 ): IntegrationCompletionV2[] {
+  normalizeRetiredFoodCompatibilityV2(state);
   synchronizeArmyCapacityV2(state, content);
-  // Snapshot every target before nation finance mutates stocks, armies and
-  // conditions. Capacity then takes one slow step after the current week's
-  // domestic/import mix has already been funded.
   const playerIds = sortedNationIdsV2(state);
-  const domesticCapacityTargets = new Map(playerIds.flatMap((playerId) => (
-    !selectIsEliminatedV2(state, playerId)
-      // The already-frozen finance plan was built from this exact pre-commit
-      // state and exposes the canonical land-capacity target. Keep the fallback
-      // for callers that intentionally provide a partial plan map.
-      ? [[playerId, financePlans.get(playerId)?.foodLandCapacity
-        ?? selectFoodDomesticCapacityTargetV2(state, content, playerId)] as const]
-      : []
-  )));
   for (const playerId of playerIds) {
-    if (selectIsEliminatedV2(state, playerId)) continue;
+    if (selectIsEliminatedV2(state, playerId)
+      || !isNationOperationalV2(state, content, playerId)) continue;
     const nation = state.players[playerId]!;
     const finance = financePlans.get(playerId) ?? selectWeeklyFinanceBreakdownV2(state, content, playerId);
     nation.treasury = round(finance.closingTreasury);
-    nation.foodStock = round(clamp(
-      nation.foodStock + finance.foodStockChange,
-      0,
-      finance.foodStorageCapacity,
-    ));
-    nation.foodSecurity = round(clamp(finance.foodCoverage, 0, 1));
     // Personnel are projected and then committed by one shared rule path
-    // inside processMilitaryAndCondition. This keeps the
+    // inside processMilitary. This keeps the
     // visible weekly manpower delta identical to the canonical peace update.
-    processMilitaryAndCondition(state, content, playerId, finance);
+    processMilitary(state, content, playerId, finance);
     if (selectWarsOfV2(state, playerId).length === 0) {
       const fatigueRecovery = PEACE_FATIGUE_RECOVERY_PER_WEEK
         * countryTraitFactorV2(
@@ -184,22 +151,12 @@ export function processFinanceMilitaryV2(
       nation.warFatigue = round(Math.max(0, nation.warFatigue - fatigueRecovery));
     }
   }
-  for (const [playerId, target] of domesticCapacityTargets) {
-    const nation = state.players[playerId];
-    if (!nation) continue;
-    nation.domesticFoodCapacity = advanceDomesticFoodCapacityV2(
-      nation.domesticFoodCapacity,
-      target,
-    );
-  }
-  state.ceasefireObligations = state.ceasefireObligations
-    .filter((obligation) => obligation.expiresTick > state.tick
-      && !selectIsEliminatedV2(state, obligation.payerId)
-      && !selectIsEliminatedV2(state, obligation.payeeId));
+  state.ceasefireObligations = [];
   // Complete fusion after this week's precomputed finance has been committed.
   // Otherwise the old plan would overwrite reserves or national stores that
   // have just transferred from the retired country.
   const integrationCompletions = advanceTerritoryIntegrationProgramsV2(state, content);
+  normalizeRetiredFoodCompatibilityV2(state);
   synchronizeArmyCapacityV2(state, content);
   return integrationCompletions;
 }
@@ -210,9 +167,11 @@ export function processDevelopmentPhaseV2(
   financePlans: FinancePlansV2,
 ): void {
   for (const playerId of sortedNationIdsV2(state)) {
-    if (selectIsEliminatedV2(state, playerId)) continue;
+    if (selectIsEliminatedV2(state, playerId)
+      || !isNationOperationalV2(state, content, playerId)) continue;
     const finance = financePlans.get(playerId) ?? selectWeeklyFinanceBreakdownV2(state, content, playerId);
     processDevelopment(state, content, playerId, finance);
   }
+  enforceSurvivalScorchedWorldV2(state, content);
   synchronizeArmyCapacityV2(state, content);
 }

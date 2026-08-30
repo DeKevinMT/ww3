@@ -170,16 +170,39 @@ for (const country of dataset.countries) {
   SOURCE_IDS_BY_CANONICAL.set(canonicalId, sources);
 }
 
-const TARGET_REGIONAL_NAVAL_ROUTES = 8;
-const TARGET_TOTAL_NAVAL_ROUTES = 10;
-const GLOBAL_NAVAL_DISTANCE_KM = 6_000;
+const TARGET_REGIONAL_NAVAL_ROUTES = 3;
+const REGIONAL_NEARBY_DISTANCE_KM = 1_800;
+const REGIONAL_SUBREGION_DISTANCE_KM = 3_200;
+const ISOLATED_REGIONAL_FALLBACK_DISTANCE_KM = 4_500;
 const REGIONAL_CANDIDATE_LIMIT = 12;
-const GLOBAL_CANDIDATE_SAMPLE = 12;
-const CANONICAL_LONG_HAUL_CROSSINGS: readonly (readonly [TerritoryId, TerritoryId])[] = [
-  ['can', 'gbr'],
-  ['usa', 'jpn'],
-  ['chl', 'nzl'],
+export const AUTHORED_INTERCONTINENTAL_SEA_GATEWAYS: readonly (
+  readonly [TerritoryId, TerritoryId]
+)[] = [
+  ['grl', 'isl'],
+  ['grl', 'gnb'],
+  ['grl', 'mrt'],
+  ['sle', 'sur'],
+  ['mdg', 'tls'],
+  ['slv', 'png'],
 ];
+export const AUTHORED_INTERCONTINENTAL_GATEWAY_POWER_CEILING = 24;
+
+interface AuthoredSeaRouteGeometry {
+  readonly leftCoast: readonly [number, number];
+  readonly rightCoast: readonly [number, number];
+  readonly bendDirections: readonly (-1 | 1)[];
+}
+
+// Guinea-Bissau is almost enclosed by Senegal. Its ordinary nearest-anchor
+// scan cannot find the clear Atlantic exit, so the authored lane reuses exact
+// midpoints from each country's canonical exposed coastline.
+const AUTHORED_SEA_ROUTE_GEOMETRY_BY_KEY: Readonly<Record<string, AuthoredSeaRouteGeometry>> = {
+  'gnb:grl': {
+    leftCoast: [-15.2015, 11.0325],
+    rightCoast: [-43.2775, 59.9595],
+    bendDirections: [-1, 1],
+  },
+};
 
 // The source dataset also contains proximity links across open water. Keep those
 // reachable, but classify them as sea lanes instead of impossible land borders.
@@ -599,6 +622,31 @@ function canonicalSeaRouteGeometry(
     SEA_ROUTE_GEOMETRY_CACHE.set(key, null);
     return undefined;
   }
+  const authoredGeometry = AUTHORED_SEA_ROUTE_GEOMETRY_BY_KEY[key];
+  if (authoredGeometry) {
+    const source = projectWorldPoint(...authoredGeometry.leftCoast);
+    const target = wrappedPointNear(projectWorldPoint(...authoredGeometry.rightCoast), source.x);
+    for (const bendDirection of authoredGeometry.bendDirections) {
+      const samples = sampleCombatRoute(
+        source,
+        target,
+        'naval',
+        bendDirection,
+        NAVAL_ROUTE_VALIDATION_SEGMENTS,
+      );
+      if (navalRouteCrossesThirdPartyLand(pair[0], pair[1], samples)) continue;
+      const geometry = {
+        leftId: pair[0],
+        rightId: pair[1],
+        source,
+        target,
+        bendDirection,
+        distanceKm: sampledRouteDistanceKm(samples),
+      } satisfies CanonicalSeaRouteGeometry;
+      SEA_ROUTE_GEOMETRY_CACHE.set(key, geometry);
+      return geometry;
+    }
+  }
   const leftCenter = projectWorldPoint(left.label[0], left.label[1]);
   const rightCenter = wrappedPointNear(projectWorldPoint(right.label[0], right.label[1]), leftCenter.x);
   const sourceCandidates = coastalAnchorCandidates(pair[0], rightCenter);
@@ -693,7 +741,6 @@ function buildStrategicSeaRoutes(): readonly (readonly [TerritoryId, TerritoryId
     new Set(activeNeighbours(countryId)),
   ]));
   const degree = new Map<TerritoryId, number>();
-  const globalDegree = new Map<TerritoryId, number>();
   const addRoute = (leftId: TerritoryId, rightId: TerritoryId): boolean => {
     if (landNeighboursByCountry.get(leftId)?.has(rightId)) return false;
     const pair = [leftId, rightId].sort() as [TerritoryId, TerritoryId];
@@ -704,55 +751,62 @@ function buildStrategicSeaRoutes(): readonly (readonly [TerritoryId, TerritoryId
     routes.set(key, pair);
     degree.set(pair[0], (degree.get(pair[0]) ?? 0) + 1);
     degree.set(pair[1], (degree.get(pair[1]) ?? 0) + 1);
-    if (geometry.distanceKm >= GLOBAL_NAVAL_DISTANCE_KM) {
-      globalDegree.set(pair[0], (globalDegree.get(pair[0]) ?? 0) + 1);
-      globalDegree.set(pair[1], (globalDegree.get(pair[1]) ?? 0) + 1);
-    }
     return true;
   };
-  const sampleEvenly = <T>(values: readonly T[], count: number): readonly T[] => {
-    if (values.length <= count) return values;
-    const samples: T[] = [];
-    const indices = new Set<number>();
-    for (let index = 0; index < count; index += 1) {
-      const sourceIndex = Math.round(index * (values.length - 1) / Math.max(1, count - 1));
-      if (!indices.has(sourceIndex)) samples.push(values[sourceIndex]!);
-      indices.add(sourceIndex);
-    }
-    return samples;
-  };
 
-  // These clear principal-landmass arcs guarantee the North Atlantic and both
-  // Pacific halves are represented; remaining lanes use the bounded scan.
-  for (const [leftId, rightId] of CANONICAL_LONG_HAUL_CROSSINGS) addRoute(leftId, rightId);
+  // Preserve authored proximity links for islands inside one continent. The
+  // cross-continent entries are admitted only through the sparse gateway list.
+  for (const key of SEA_ONLY_CONNECTION_KEYS) {
+    const [leftId, rightId] = key.split(':') as [TerritoryId, TerritoryId];
+    const left = ACTIVE_COUNTRY_BY_ID.get(leftId);
+    const right = ACTIVE_COUNTRY_BY_ID.get(rightId);
+    if (left?.continent === right?.continent) addRoute(leftId, rightId);
+  }
 
   for (const countryId of coastalCountryIds) {
+    const country = ACTIVE_COUNTRY_BY_ID.get(countryId)!;
     const candidates = coastalCountryIds
       .filter((candidateId) => candidateId !== countryId
         && !landNeighboursByCountry.get(countryId)!.has(candidateId))
       .map((candidateId) => ({
         id: candidateId,
         distance: countryDistanceKm(countryId, candidateId),
+        country: ACTIVE_COUNTRY_BY_ID.get(candidateId)!,
       }))
+      .filter((candidate) => candidate.country.continent === country.continent
+        && (candidate.distance <= REGIONAL_NEARBY_DISTANCE_KM
+          || (candidate.country.subregion === country.subregion
+            && candidate.distance <= REGIONAL_SUBREGION_DISTANCE_KM)))
       .sort((left, right) => left.distance - right.distance || left.id.localeCompare(right.id));
 
     for (const candidate of candidates.slice(0, REGIONAL_CANDIDATE_LIMIT)) {
       if ((degree.get(countryId) ?? 0) >= TARGET_REGIONAL_NAVAL_ROUTES) break;
       addRoute(countryId, candidate.id);
     }
+  }
 
-    const globalCandidates = candidates.filter((candidate) => (
-      candidate.distance >= GLOBAL_NAVAL_DISTANCE_KM
-    ));
-    for (const candidate of sampleEvenly(globalCandidates, GLOBAL_CANDIDATE_SAMPLE)) {
-      if ((globalDegree.get(countryId) ?? 0) >= 1) break;
-      addRoute(countryId, candidate.id);
-    }
+  // Give a coastal country with no land or generated sea exit one nearest
+  // same-continent fallback. This protects isolated starts without restoring
+  // the old universal global-route entitlement.
+  for (const countryId of coastalCountryIds) {
+    if ((degree.get(countryId) ?? 0) > 0 || landNeighboursByCountry.get(countryId)!.size > 0) continue;
+    const country = ACTIVE_COUNTRY_BY_ID.get(countryId)!;
+    const candidates = coastalCountryIds
+      .filter((candidateId) => candidateId !== countryId
+        && ACTIVE_COUNTRY_BY_ID.get(candidateId)?.continent === country.continent)
+      .map((candidateId) => ({
+        id: candidateId,
+        distance: countryDistanceKm(countryId, candidateId),
+      }))
+      .filter((candidate) => candidate.distance <= ISOLATED_REGIONAL_FALLBACK_DISTANCE_KM)
+      .sort((left, right) => left.distance - right.distance || left.id.localeCompare(right.id));
+    for (const candidate of candidates) if (addRoute(countryId, candidate.id)) break;
+  }
 
-    for (const candidate of sampleEvenly(candidates, GLOBAL_CANDIDATE_SAMPLE)) {
-      if ((degree.get(countryId) ?? 0) >= TARGET_TOTAL_NAVAL_ROUTES) break;
-      addRoute(countryId, candidate.id);
-    }
+  // Append the exact campaign beachheads after regional generation so a
+  // gateway never consumes a local route slot or creates a hidden mesh.
+  for (const [leftId, rightId] of AUTHORED_INTERCONTINENTAL_SEA_GATEWAYS) {
+    addRoute(leftId, rightId);
   }
   return [...routes.values()].sort((left, right) => (
     left[0].localeCompare(right[0]) || left[1].localeCompare(right[1])

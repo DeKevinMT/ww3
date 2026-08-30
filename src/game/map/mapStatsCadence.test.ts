@@ -1,47 +1,85 @@
 import { describe, expect, it } from 'vitest';
-import { MapStatsRefreshCadence, PEACE_MAP_STATS_REFRESH_TICKS, peacefulMapStatsBucket } from './mapStatsCadence';
+import {
+  MapStatsRefreshCadence,
+  PEACE_MAP_STATS_REFRESH_TICKS,
+  peacefulMapStatsBucket,
+} from './mapStatsCadence';
 
-const territory = (id: string, ownerId = id, lifecycleKey = `${ownerId}:core`) => ({ id, ownerId, lifecycleKey });
-
+const territory = (id: string, ownerId = id, lifecycleKey = `${ownerId}:core`) => ({
+  id, ownerId, lifecycleKey,
+});
 describe('map stat refresh cadence', () => {
-  it('stagger-refreshes peaceful countries exactly once per four-week cycle', () => {
+  it('stagger-refreshes non-front territory bars exactly once per slow cycle', () => {
     const cadence = new MapStatsRefreshCadence();
     const territories = [territory('bel'), territory('nld'), territory('lux')];
-    expect([...cadence.resolve({ tick: 0, territories, warOwnerIds: new Set() })].sort())
+    expect([...cadence.resolve({ tick: 0, territories, warOwnerIds: new Set() }).territoryIds].sort())
       .toEqual(['bel', 'lux', 'nld']);
     const seen = new Map<string, number>();
     for (let tick = 1; tick <= PEACE_MAP_STATS_REFRESH_TICKS; tick += 1) {
-      for (const ownerId of cadence.resolve({ tick, territories, warOwnerIds: new Set() })) {
-        seen.set(ownerId, (seen.get(ownerId) ?? 0) + 1);
-        expect(tick % PEACE_MAP_STATS_REFRESH_TICKS).toBe(peacefulMapStatsBucket(ownerId));
+      const plan = cadence.resolve({ tick, territories, warOwnerIds: new Set() });
+      for (const territoryId of plan.territoryIds) {
+        seen.set(territoryId, (seen.get(territoryId) ?? 0) + 1);
+        expect(tick % PEACE_MAP_STATS_REFRESH_TICKS).toBe(peacefulMapStatsBucket(territoryId));
       }
     }
     expect(Object.fromEntries(seen)).toEqual({ bel: 1, nld: 1, lux: 1 });
   });
 
-  it('keeps belligerents live while peaceful nations remain on their own bucket', () => {
+  it('keeps only real war endpoints live instead of every Rogue holding', () => {
     const cadence = new MapStatsRefreshCadence();
-    const territories = [territory('bel'), territory('nld'), territory('lux')];
+    const territories = [
+      territory('human-core', 'human'),
+      ...Array.from({ length: 100 }, (_, index) => territory(`rai-${index}`, 'rai')),
+    ];
     cadence.resolve({ tick: 0, territories, warOwnerIds: new Set() });
-    for (let tick = 1; tick <= 3; tick += 1) {
-      const due = cadence.resolve({ tick, territories, warOwnerIds: new Set(['bel', 'nld']) });
-      expect(due.has('bel')).toBe(true);
-      expect(due.has('nld')).toBe(true);
-      if (tick % 4 !== peacefulMapStatsBucket('lux')) expect(due.has('lux')).toBe(false);
-    }
+    const plan = cadence.resolve({
+      tick: 1,
+      territories,
+      warOwnerIds: new Set(['human', 'rai']),
+      warTerritoryIds: new Set(['human-core', 'rai-0']),
+    });
+    expect(plan.territoryIds.has('human-core')).toBe(true);
+    expect(plan.territoryIds.has('rai-0')).toBe(true);
+    expect(plan.aggregateOwnerIds).toEqual(new Set(['human', 'rai']));
+    expect(plan.territoryIds.size).toBeLessThanOrEqual(20);
+    expect(plan.territoryIds.size).toBeLessThan(territories.length / 2);
   });
 
-  it('immediately refreshes selection, ownership, integration and war lifecycle changes', () => {
+  it('immediately refreshes exact selection, ownership, integration and war lifecycle changes', () => {
     const cadence = new MapStatsRefreshCadence();
     cadence.resolve({ tick: 0, territories: [territory('bel')], warOwnerIds: new Set() });
-    const offBucketTick = [1, 2, 3, 4].find((tick) => tick % 4 !== peacefulMapStatsBucket('bel'))!;
-    cadence.invalidateOwners(['bel']);
-    expect(cadence.resolve({ tick: offBucketTick, territories: [territory('bel')], warOwnerIds: new Set() }).has('bel')).toBe(true);
-    const ownership = cadence.resolve({ tick: offBucketTick + 4, territories: [territory('bel', 'nld', 'nld:integrating')], warOwnerIds: new Set() });
-    expect(ownership.has('bel')).toBe(true);
-    expect(ownership.has('nld')).toBe(true);
-    expect(cadence.resolve({ tick: offBucketTick + 8, territories: [territory('bel', 'nld', 'nld:core')], warOwnerIds: new Set() }).has('nld')).toBe(true);
-    expect(cadence.resolve({ tick: offBucketTick + 12, territories: [territory('bel', 'nld', 'nld:core')], warOwnerIds: new Set(['nld']) }).has('nld')).toBe(true);
-    expect(cadence.resolve({ tick: offBucketTick + 13, territories: [territory('bel', 'nld', 'nld:core')], warOwnerIds: new Set() }).has('nld')).toBe(true);
+    const offBucketTick = Array.from({ length: PEACE_MAP_STATS_REFRESH_TICKS }, (_, index) => index + 1)
+      .find((tick) => tick % PEACE_MAP_STATS_REFRESH_TICKS !== peacefulMapStatsBucket('bel'))!;
+    cadence.invalidateTerritories(['bel']);
+    expect(cadence.resolve({
+      tick: offBucketTick,
+      territories: [territory('bel')],
+      warOwnerIds: new Set(),
+    }).territoryIds.has('bel')).toBe(true);
+
+    const ownership = cadence.resolve({
+      tick: offBucketTick + PEACE_MAP_STATS_REFRESH_TICKS,
+      territories: [territory('bel', 'nld', 'nld:integrating')],
+      warOwnerIds: new Set(),
+    });
+    expect(ownership.territoryIds.has('bel')).toBe(true);
+    expect(ownership.aggregateOwnerIds).toEqual(new Set(['bel', 'nld']));
+
+    const integration = cadence.resolve({
+      tick: offBucketTick + PEACE_MAP_STATS_REFRESH_TICKS * 2,
+      territories: [territory('bel', 'nld', 'nld:core')],
+      warOwnerIds: new Set(),
+    });
+    expect(integration.territoryIds.has('bel')).toBe(true);
+    expect(integration.aggregateOwnerIds.has('nld')).toBe(true);
+
+    const warStart = cadence.resolve({
+      tick: offBucketTick + PEACE_MAP_STATS_REFRESH_TICKS * 3,
+      territories: [territory('bel', 'nld', 'nld:core')],
+      warOwnerIds: new Set(['nld']),
+      warTerritoryIds: new Set(['bel']),
+    });
+    expect(warStart.territoryIds.has('bel')).toBe(true);
+    expect(warStart.aggregateOwnerIds.has('nld')).toBe(true);
   });
 });

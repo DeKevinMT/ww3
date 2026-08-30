@@ -24,13 +24,11 @@ import type {
   BattleEvent,
   BattleTactic,
   BudgetPolicy,
-  DiplomaticOffer,
   ForceState,
   FrontOperationState,
   MilitaryStance,
   ManagementUpgradeId,
   OperationDoctrine,
-  PeaceSettlementType,
   PlayerId,
   RelationState,
   PlayerPerk,
@@ -38,7 +36,6 @@ import type {
   SimTerritoryState,
   StrategicUpgradeId,
   TerritoryId,
-  TreatyType,
   WarState,
   WeeklyFinanceBreakdown,
   WorldChange,
@@ -77,7 +74,7 @@ export const BUDGET_PRESETS: Record<string, { name: string; description: string;
   },
   diplomacy: {
     name: 'International influence',
-    description: 'Trade, treaties and mediation take priority.',
+    description: 'Trade and mediation take priority.',
     policy: { economy: 30, military: 20, research: 15, diplomacy: 35 },
   },
 };
@@ -407,7 +404,7 @@ export class WorldEngine {
       this.processRelations();
       this.runAiDirectors();
     }
-    if (this.state.tick % 13 === 0) this.processPeacePressure();
+    if (this.state.tick % 13 === 0) this.processWarClosures();
     this.recomputePlayerMetrics();
     this.checkVictory();
     this.pruneHistory();
@@ -525,97 +522,6 @@ export class WorldEngine {
     if (relation.status === 'tension' && relation.score > -20) relation.status = 'peace';
     this.addEvent('diplomacy', 'info', `${from.shortName} opent een dialoog met ${target.shortName}. Relaties verbeteren.`, undefined, targetId);
     this.emit({ reason: 'diplomacy' });
-    return true;
-  }
-
-  proposeTreaty(fromId: PlayerId, targetId: PlayerId, type: TreatyType): boolean {
-    if (type !== 'ceasefire') return false;
-    const war = this.activeWarBetween(fromId, targetId);
-    if (!war) return false;
-    const terms = this.peaceProposalTerms(war.id, fromId);
-    const settlement: PeaceSettlementType = terms.reparationsAvailable ? 'reparations' : 'territory';
-    return this.proposePeaceSettlement(fromId, targetId, settlement);
-  }
-
-  peaceProposalTerms(warId: string, proposerId: PlayerId): {
-    eligible: boolean;
-    weakerId: PlayerId;
-    strongerId: PlayerId;
-    strengthGap: number;
-    duration: number;
-    reason: string;
-    cashAmount: number;
-    reparationsAvailable: boolean;
-    territoryId?: TerritoryId;
-    controlShare: number;
-  } {
-    const war = this.state.wars.find((candidate) => candidate.id === warId);
-    if (!war) return {
-      eligible: false, weakerId: proposerId, strongerId: proposerId, strengthGap: 0, duration: 0,
-      reason: 'No active war.', cashAmount: 0, reparationsAvailable: false, controlShare: 0,
-    };
-    const attackerStanding = this.warStanding(war, war.attackerId);
-    const defenderStanding = this.warStanding(war, war.defenderId);
-    const weakerId = attackerStanding <= defenderStanding ? war.attackerId : war.defenderId;
-    const strongerId = weakerId === war.attackerId ? war.defenderId : war.attackerId;
-    const strengthGap = Math.abs(attackerStanding - defenderStanding);
-    const duration = this.state.tick - war.startedTick;
-    const proposer = this.player(proposerId);
-    const territoryId = this.peaceTerritoryCandidate(weakerId, strongerId);
-    const desiredCash = Math.max(0.2, this.weeklyPublicRevenue(strongerId) * 5 + strengthGap * 0.012);
-    const cashAmount = proposer ? Math.round(Math.min(proposer.treasury * 0.55, desiredCash) * 10) / 10 : 0;
-    const reparationsAvailable = cashAmount >= 0.2;
-    const controlShare = Math.min(0.72, 0.32 + strengthGap * 0.009);
-    const clearDeficit = strengthGap >= 11;
-    const halfwayReached = duration >= 26 && war.battles >= 10;
-    const eligible = proposerId === weakerId && halfwayReached && clearDeficit && Boolean(territoryId || reparationsAvailable);
-    const reason = proposerId !== weakerId
-      ? 'Only the clearly weaker side may request an early peace.'
-      : !halfwayReached
-        ? `Diplomatic settlement unlocks after week 26 and 10 battle phases (${duration} weeks · ${war.battles} phases).`
-        : !clearDeficit
-          ? 'Neither side is losing clearly enough to request terms.'
-          : 'The losing side may seek peace, or continue fighting toward total victory or defeat.';
-    return { eligible, weakerId, strongerId, strengthGap, duration, reason, cashAmount, reparationsAvailable, territoryId, controlShare };
-  }
-
-  proposePeaceSettlement(fromId: PlayerId, targetId: PlayerId, settlement: PeaceSettlementType): boolean {
-    const from = this.player(fromId);
-    const target = this.player(targetId);
-    const relation = this.relation(fromId, targetId);
-    const war = this.activeWarBetween(fromId, targetId);
-    if (!from || !target || !relation || !war || relation.status !== 'war') return false;
-    const terms = this.peaceProposalTerms(war.id, fromId);
-    if (!terms.eligible || terms.strongerId !== targetId) return false;
-    if (settlement === 'reparations' && !terms.reparationsAvailable) return false;
-    if (settlement === 'territory' && !terms.territoryId) return false;
-    const alreadyPending = this.state.offers.some((offer) => offer.status === 'pending'
-      && offer.fromId === fromId && offer.toId === targetId && offer.type === 'ceasefire');
-    if (alreadyPending) return false;
-    const offer = this.createOffer(fromId, targetId, 'ceasefire', settlement, terms);
-    war.lastPeaceOfferTick = this.state.tick;
-    if (target.isHuman) {
-      this.emit({ reason: 'offer', critical: true });
-      return true;
-    }
-    offer.status = 'accepted';
-    this.applyTreaty(relation, offer.type, fromId, targetId, offer);
-    this.emit({ reason: 'treaty-response', critical: from.isHuman });
-    return true;
-  }
-
-  respondToOffer(offerId: string, accept: boolean): boolean {
-    const offer = this.state.offers.find((candidate) => candidate.id === offerId && candidate.status === 'pending');
-    if (!offer) return false;
-    offer.status = accept ? 'accepted' : 'declined';
-    const relation = this.relation(offer.fromId, offer.toId);
-    if (!relation) return false;
-    if (accept) this.applyTreaty(relation, offer.type, offer.fromId, offer.toId, offer);
-    else {
-      relation.score = Math.max(-100, relation.score - 3);
-      this.addEvent('diplomacy', 'info', `${this.player(offer.toId)?.shortName} declines ${this.player(offer.fromId)?.shortName}'s offer.`);
-    }
-    this.emit({ reason: 'offer-response' });
     return true;
   }
 
@@ -1254,6 +1160,7 @@ export class WorldEngine {
   private processRelations(): void {
     const borderPairs = this.currentBorderPairs();
     for (const relation of Object.values(this.state.relations)) {
+      relation.treaties = [];
       if (relation.status === 'war') continue;
       const grievancePressure = relation.grievances * 0.018;
       const unregulatedBorder = borderPairs.has(relation.id);
@@ -1265,9 +1172,7 @@ export class WorldEngine {
       else if (relation.status === 'tension' && relation.score > -16) relation.status = 'peace';
     }
 
-    for (const offer of this.state.offers) {
-      if (offer.status === 'pending' && offer.expiresTick <= this.state.tick) offer.status = 'expired';
-    }
+    this.state.offers = [];
   }
 
   private runAiDirectors(): void {
@@ -1843,180 +1748,45 @@ export class WorldEngine {
     this.emit({ reason: conquered ? 'conquest' : 'battle', battle: battleEvent, critical: conquered && (attacker.isHuman || defender.isHuman) });
   }
 
-  private processPeacePressure(): void {
+  private processWarClosures(): void {
     for (const war of [...this.state.wars]) {
-      const attacker = this.player(war.attackerId)!;
-      const defender = this.player(war.defenderId)!;
       const duration = this.state.tick - war.startedTick;
+      const attackerHp = coalitionHp(this.state, war.attackerId).current;
+      const defenderHp = coalitionHp(this.state, war.defenderId).current;
+      if (attackerHp <= 0.000001 && defenderHp <= 0.000001) {
+        this.endWar(war, 'Mutual military exhaustion ended the conflict.');
+        continue;
+      }
       const staleFront = this.state.tick - war.lastBattleTick >= 48;
       const disconnectedFront = !this.sharesBorder(war.attackerId, war.defenderId);
       if ((staleFront || disconnectedFront) && duration >= 52) {
-        const reason = disconnectedFront
-          ? 'The fronts have separated; mediators establish a ceasefire.'
-          : 'A prolonged front-line stalemate leads to a ceasefire.';
-        this.endWar(war, reason);
-        continue;
-      }
-
-      const attackerTerms = this.peaceProposalTerms(war.id, attacker.id);
-      const weaker = this.player(attackerTerms.weakerId);
-      const stronger = this.player(attackerTerms.strongerId);
-      if (!weaker || !stronger || !attackerTerms.eligible || weaker.isHuman) continue;
-      if (this.state.tick - war.lastPeaceOfferTick < 39) continue;
-      const pending = this.state.offers.some((offer) => offer.status === 'pending'
-        && offer.fromId === weaker.id && offer.toId === stronger.id && offer.type === 'ceasefire');
-      if (pending) continue;
-      const disputedLand = attackerTerms.territoryId
-        ? this.state.territories[attackerTerms.territoryId]?.foreignControl?.share ?? 0
-        : 0;
-      const settlement: PeaceSettlementType = disputedLand >= 0.16 || !attackerTerms.reparationsAvailable
-        ? 'territory' : 'reparations';
-      this.proposePeaceSettlement(weaker.id, stronger.id, settlement);
-      if (!stronger.isHuman) {
-        this.addEvent('peace', 'info', `${weaker.shortName}, the weaker belligerent, secures a negotiated exit from ${stronger.shortName}.`);
+        this.endWar(war, disconnectedFront
+          ? 'Conflict closed after the opposing fronts lost all legal contact.'
+          : 'Conflict closed after a prolonged period without a legal battle front.');
       }
     }
-  }
-
-  private warStanding(war: WarState, playerId: PlayerId): number {
-    const opponentId = playerId === war.attackerId ? war.defenderId : war.attackerId;
-    const player = this.player(playerId);
-    const opponent = this.player(opponentId);
-    if (!player || !opponent) return -999;
-    const hp = coalitionHp(this.state, playerId);
-    const opponentHp = coalitionHp(this.state, opponentId);
-    const hpRatio = hp.max > 0 ? hp.current / hp.max : 0;
-    const opponentHpRatio = opponentHp.max > 0 ? opponentHp.current / opponentHp.max : 0;
-    const powerRatio = this.strategicScore(playerId) / Math.max(1, this.strategicScore(opponentId));
-    const manpowerRatio = player.manpower / Math.max(0.01, opponent.manpower);
-    const score = playerId === war.attackerId ? war.warScore : -war.warScore;
-    return (hpRatio - opponentHpRatio) * 54
-      + Math.log(Math.max(0.08, powerRatio)) * 22
-      + Math.log(Math.max(0.08, manpowerRatio)) * 5
-      + score * 0.72
-      - (player.warExhaustion - opponent.warExhaustion) * 0.28;
-  }
-
-  private peaceTerritoryCandidate(loserId: PlayerId, winnerId: PlayerId): TerritoryId | undefined {
-    return this.territoriesOf(loserId)
-      .map((territory) => {
-        const currentControl = territory.foreignControl?.controllerId === winnerId ? territory.foreignControl.share : 0;
-        const bordersWinner = (TERRITORY_BY_ID[territory.id]?.neighbors ?? [])
-          .some((neighborId) => this.state.territories[neighborId]?.ownerId === winnerId);
-        const score = currentControl * 100 + (bordersWinner ? 22 : 0) + (territory.capital ? -12 : 8) - territory.force.hp * 0.02;
-        return { id: territory.id, score };
-      })
-      .sort((left, right) => right.score - left.score)[0]?.id;
   }
 
   private endWar(war: WarState, reason: string): void {
-    const secured = Object.values(this.state.territories).filter((territory) => (
-      territory.foreignControl
-      && ((territory.ownerId === war.defenderId && territory.foreignControl.controllerId === war.attackerId)
-        || (territory.ownerId === war.attackerId && territory.foreignControl.controllerId === war.defenderId))
-    ));
-    const controlledPopulation = secured.reduce((sum, territory) => sum + territory.population * (territory.foreignControl?.share ?? 0), 0);
-    const controlledLand = secured.reduce((sum, territory) => sum + (territory.foreignControl?.share ?? 0), 0);
     this.state.wars = this.state.wars.filter((candidate) => candidate.id !== war.id);
-    for (const offer of this.state.offers) {
-      if (offer.status === 'pending' && ((offer.fromId === war.attackerId && offer.toId === war.defenderId)
-        || (offer.fromId === war.defenderId && offer.toId === war.attackerId))) offer.status = 'expired';
-    }
+    this.state.offers = this.state.offers.filter((offer) => !(
+      (offer.fromId === war.attackerId && offer.toId === war.defenderId)
+      || (offer.fromId === war.defenderId && offer.toId === war.attackerId)
+    ));
     const relation = this.relation(war.attackerId, war.defenderId);
     if (relation) {
       relation.status = 'truce';
       relation.truceUntilTick = this.state.tick + 26;
-      relation.score = Math.max(-65, relation.score + 12);
+      relation.lastActionTick = this.state.tick;
       relation.grievances += 18;
     }
-    const attacker = this.player(war.attackerId);
-    const defender = this.player(war.defenderId);
-    if (attacker) {
-      attacker.warExhaustion *= 0.65;
-      attacker.recoverySurgeUntilTick = Math.max(attacker.recoverySurgeUntilTick, this.state.tick + 26);
+    for (const playerId of [war.attackerId, war.defenderId]) {
+      const player = this.player(playerId);
+      if (!player) continue;
+      player.warExhaustion *= 0.65;
+      player.recoverySurgeUntilTick = Math.max(player.recoverySurgeUntilTick, this.state.tick + 26);
     }
-    if (defender) {
-      defender.warExhaustion *= 0.65;
-      defender.recoverySurgeUntilTick = Math.max(defender.recoverySurgeUntilTick, this.state.tick + 26);
-    }
-    const settlement = controlledLand > 0.01
-      ? ` The ceasefire preserves ${controlledLand.toFixed(2)} country-equivalents of partial control, covering ${controlledPopulation.toFixed(2)}M people.`
-      : '';
-    this.addEvent('peace', 'action', `${attacker?.shortName} and ${defender?.shortName}: ${reason}${settlement}`);
-  }
-
-  private createOffer(
-    fromId: PlayerId,
-    toId: PlayerId,
-    type: TreatyType,
-    settlement: PeaceSettlementType = 'reparations',
-    terms?: ReturnType<WorldEngine['peaceProposalTerms']>,
-  ): DiplomaticOffer {
-    const territoryName = terms?.territoryId ? TERRITORY_BY_ID[terms.territoryId]?.name : undefined;
-    const note = settlement === 'territory'
-      ? `${this.player(fromId)?.name}, the weaker side, offers peace and concedes ${Math.round((terms?.controlShare ?? 0) * 100)}% control of ${territoryName ?? 'a border region'}.`
-      : `${this.player(fromId)?.name}, the weaker side, offers peace with $${(terms?.cashAmount ?? 0).toFixed(1)}B in reparations.`;
-    const offer: DiplomaticOffer = {
-      id: `offer-${this.state.nextOfferId++}`,
-      fromId,
-      toId,
-      type,
-      createdTick: this.state.tick,
-      expiresTick: this.state.tick + 16,
-      status: 'pending',
-      note,
-      settlement,
-      cashAmount: terms?.cashAmount,
-      territoryId: terms?.territoryId,
-      controlShare: terms?.controlShare,
-      strengthGap: terms?.strengthGap,
-    };
-    this.state.offers.push(offer);
-    const relation = this.relation(fromId, toId);
-    if (relation) relation.lastActionTick = this.state.tick;
-    this.addEvent('diplomacy', toId === this.state.humanPlayerId ? 'action' : 'info', offer.note, undefined, fromId);
-    return offer;
-  }
-
-  private applyTreaty(relation: RelationState, type: TreatyType, fromId: PlayerId, toId: PlayerId, offer?: DiplomaticOffer): void {
-    relation.lastActionTick = this.state.tick;
-    if (type !== 'ceasefire') return;
-    const war = this.activeWarBetween(fromId, toId);
-    if (!war) return;
-    let settlement = 'a ceasefire along the current borders';
-    if (offer?.settlement === 'reparations') {
-      const payer = this.player(fromId);
-      const receiver = this.player(toId);
-      const paid = Math.min(payer?.treasury ?? 0, offer.cashAmount ?? 0);
-      if (payer) payer.treasury = Math.max(0, payer.treasury - paid);
-      if (receiver) receiver.treasury += paid;
-      settlement = `$${paid.toFixed(1)}B in reparations from the losing side`;
-    } else if (offer?.settlement === 'territory' && offer.territoryId) {
-      const territory = this.state.territories[offer.territoryId];
-      if (territory?.ownerId === fromId) {
-        const existing = territory.foreignControl?.controllerId === toId ? territory.foreignControl : undefined;
-        const source = (TERRITORY_BY_ID[territory.id]?.neighbors ?? [])
-          .map((neighborId) => this.state.territories[neighborId])
-          .find((neighbor) => neighbor?.ownerId === toId);
-        const sourcePoint = source ? TERRITORY_BY_ID[source.id] : undefined;
-        const targetPoint = TERRITORY_BY_ID[territory.id];
-        let dx = (sourcePoint?.x ?? (targetPoint?.x ?? 0) - 1) - (targetPoint?.x ?? 0);
-        if (Math.abs(dx) > 640) dx *= -1;
-        const dy = (sourcePoint?.y ?? (targetPoint?.y ?? 0)) - (targetPoint?.y ?? 0);
-        const axis: 'horizontal' | 'vertical' = Math.abs(dx) >= Math.abs(dy) ? 'horizontal' : 'vertical';
-        const fromEdge: 'start' | 'end' = (axis === 'horizontal' ? dx : dy) < 0 ? 'start' : 'end';
-        const share = Math.min(0.78, Math.max(existing?.share ?? 0, offer.controlShare ?? 0.35));
-        territory.foreignControl = {
-          controllerId: toId,
-          share,
-          axis: existing?.axis ?? axis,
-          fromEdge: existing?.fromEdge ?? fromEdge,
-          establishedTick: existing?.establishedTick ?? this.state.tick,
-        };
-        settlement = `${Math.round(share * 100)}% control of ${TERRITORY_BY_ID[territory.id]?.name} ceded by the losing side`;
-      }
-    }
-    this.endWar(war, `Negotiated peace: ${settlement}.`);
+    this.addEvent('war', 'action', `${this.player(war.attackerId)?.shortName} and ${this.player(war.defenderId)?.shortName}: ${reason}`);
   }
 
   private sharesBorder(leftId: PlayerId, rightId: PlayerId): boolean {

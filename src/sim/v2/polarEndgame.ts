@@ -1,16 +1,34 @@
 import { clamp, round } from './balance';
-import type { WorldContentV2 } from './content';
-import { addWorldEventV2 } from './events';
-import { isHumanPlayerV2, selectHumanPlayerIdsV2 } from './humanPlayers';
 import {
-  countryTraitModifiersV2,
-  openingMilitaryOrderForContentV2,
-  openingMilitaryRankForContentV2,
-} from './traits';
+  ANTARCTIC_TERRITORY_IDS_V2,
+  type WorldContentV2,
+} from './content';
+import {
+  prepareAntarcticGatewayBreachesV2,
+} from './antarcticGateways';
+import { addWorldEventV2 } from './events';
+import { processCampaignFirstStrikeGuidanceV2 } from './campaignFirstStrike';
+import {
+  apexInvestigationAuthorizedV2,
+  authorizeMandatoryApexAnalysisV2,
+  cloneApexNarrativeV2,
+  createInitialApexNarrativeV2,
+  processApexNarrativeV2,
+} from './apexNarrative';
+import { isHumanPlayerV2, selectHumanPlayerIdsV2 } from './humanPlayers';
 import {
   selectTrainedReserveCapacityV2,
   type PowerSnapshotV2,
 } from './selectors';
+import {
+  cloneRoguePrimeStateV2,
+  createInitialRoguePrimeStateV2,
+} from './roguePrime';
+import { selectNorthPoleModifiersV2 } from './northPoleModifiers';
+import {
+  activateRogueAiSurvivalV2,
+  processRogueAiSurvivalV2,
+} from './survival';
 import type {
   AntarcticCorridorIdV2,
   AntarcticExpeditionStateV2,
@@ -39,6 +57,7 @@ export interface ArcticProjectDefinitionV2 {
   durationTicks: number;
   baseCost: number;
   rewards: readonly ArcticProjectRewardV2[];
+  benefits: readonly string[];
   revealsAntarctica: boolean;
 }
 
@@ -48,17 +67,9 @@ export interface ArcticProjectTermsV2 {
   reason?: string;
   status: 'locked' | 'available' | 'active' | 'complete';
   baseCost: number;
-  economyCostScale: number;
-  openingMilitaryRank: number;
-  openingMilitaryRankCount: number;
-  openingMilitaryRankCostFactor: number;
-  affinityCostModifier: number;
-  affinityCostMultiplier: number;
   quotedCost: number;
   cost: number;
   baseDurationTicks: number;
-  accessPointCount: number;
-  accessDurationReduction: number;
   researchSpeedDurationReduction: number;
   quotedDurationTicks: number;
   durationTicks: number;
@@ -106,101 +117,166 @@ export interface PolarTickResultV2 {
 export const ARCTIC_PROJECTS_V2: readonly ArcticProjectDefinitionV2[] = [
   {
     id: 'polar-demography',
-    name: 'Polar Habitat Genome',
-    kicker: 'Phase I · Human endurance',
-    description: 'Closed-loop settlements turn extreme cold into new demographic and medical capacity.',
-    durationTicks: 104,
-    baseCost: 40,
-    rewards: [
-      { effect: 'population-growth', levels: 1, label: '+1 population growth level' },
-      { effect: 'recovery', levels: 1, label: '+1 recovery level' },
-      { effect: 'food-storage', levels: 1, label: '+1 food storage level' },
-    ],
+    name: 'Signal Triangulation',
+    kicker: 'Stage 1 · Detect the pattern',
+    description: 'APEX uses the North Pole array to isolate a coordinated signal hidden inside global communications.',
+    durationTicks: 13,
+    baseCost: 0.01,
+    rewards: [],
+    benefits: ['+0.10% research output', '+1 week Rogue-route warning'],
+    revealsAntarctica: false,
+  },
+  {
+    id: 'baseline-calibration',
+    name: 'Baseline Calibration',
+    kicker: 'Stage 2 · Separate signal from noise',
+    description: 'APEX calibrates the array against ordinary military, economic and civilian transmissions.',
+    durationTicks: 18,
+    baseCost: 0.04,
+    rewards: [],
+    benefits: ['+0.15% research output'],
+    revealsAntarctica: false,
+  },
+  {
+    id: 'polar-relay-mesh',
+    name: 'Polar Relay Mesh',
+    kicker: 'Stage 3 · Stabilise the network',
+    description: 'A hardened relay mesh helps APEX reject forged orders and coordinate long-range logistics.',
+    durationTicks: 22,
+    baseCost: 0.12,
+    rewards: [],
+    benefits: ['+0.25% supply throughput'],
+    revealsAntarctica: false,
+  },
+  {
+    id: 'anomaly-filtering',
+    name: 'Anomaly Filtering',
+    kicker: 'Stage 4 · Expose false commands',
+    description: 'APEX filters forged command traffic before it can distort ordinary supply decisions.',
+    durationTicks: 26,
+    baseCost: 0.3,
+    rewards: [],
+    benefits: ['+0.25% supply throughput'],
+    revealsAntarctica: false,
+  },
+  {
+    id: 'neural-signature-map',
+    name: 'Neural Signature Map',
+    kicker: 'Stage 5 · Identify the conditioning',
+    description: 'Recovered signal fragments reveal the first repeatable markers of Rogue conditioning.',
+    durationTicks: 30,
+    baseCost: 0.7,
+    rewards: [],
+    benefits: ['2% faster Signal Purge'],
+    revealsAntarctica: false,
+  },
+  {
+    id: 'command-verification',
+    name: 'Command Verification',
+    kicker: 'Stage 6 · Authenticate human control',
+    description: 'APEX builds a trusted command chain that accelerates the removal of hostile conditioning.',
+    durationTicks: 34,
+    baseCost: 1.5,
+    rewards: [],
+    benefits: ['2% faster Signal Purge'],
+    revealsAntarctica: false,
+  },
+  {
+    id: 'recovery-routing',
+    name: 'Recovery Routing',
+    kicker: 'Stage 7 · Protect replacement flow',
+    description: 'Verified routes give recovering formations priority without creating a separate military economy.',
+    durationTicks: 38,
+    baseCost: 3,
+    rewards: [],
+    benefits: ['+1% army recovery'],
     revealsAntarctica: false,
   },
   {
     id: 'cryogenic-logistics',
-    name: 'Cryogenic Logistics Grid',
-    kicker: 'Phase II · Deep supply',
-    description: 'Autonomous depots and polar medicine make long, isolated campaigns survivable.',
-    durationTicks: 156,
-    baseCost: 90,
-    rewards: [
-      { effect: 'supply', levels: 2, label: '+2 supply levels' },
-      { effect: 'casualty-reduction', levels: 1, label: '+1 casualty reduction level' },
-      { effect: 'research-efficiency', levels: 1, label: '+1 research efficiency level' },
-    ],
+    name: 'Cognitive Firewall',
+    kicker: 'Stage 8 · Break the influence',
+    description: 'APEX exposes the Rogue conditioning that turned every nation against its neighbours.',
+    durationTicks: 42,
+    baseCost: 5,
+    rewards: [],
+    benefits: ['4% faster Signal Purge', '+1% army recovery', '+2% defense against Rogue AI'],
+    revealsAntarctica: false,
+  },
+  {
+    id: 'rogue-ballistics',
+    name: 'Rogue Ballistics',
+    kicker: 'Stage 9 · Read machine armour',
+    description: 'Machine damage signatures expose repeatable structural weaknesses in Rogue combat frames.',
+    durationTicks: 48,
+    baseCost: 12,
+    rewards: [],
+    benefits: ['+2% attack against Rogue AI'],
+    revealsAntarctica: false,
+  },
+  {
+    id: 'predictive-defense',
+    name: 'Predictive Defense',
+    kicker: 'Stage 10 · Anticipate machine fire',
+    description: 'APEX models Rogue targeting decisions early enough to harden the threatened formations.',
+    durationTicks: 55,
+    baseCost: 25,
+    rewards: [],
+    benefits: ['+2% defense against Rogue AI'],
     revealsAntarctica: false,
   },
   {
     id: 'strategic-mobilisation',
-    name: 'Strategic Mobilisation Vaults',
-    kicker: 'Phase III · Continental readiness',
-    description: 'Sub-ice arsenals and hardened training hubs expand the force and reserve ceiling.',
-    durationTicks: 260,
-    baseCost: 180,
-    rewards: [
-      { effect: 'force-capacity', levels: 2, label: '+2 army-cap levels' },
-      { effect: 'reserve-training', levels: 2, label: '+2 reserve training levels' },
-      { effect: 'reserve-mobilization', levels: 2, label: '+2 reserve mobilisation levels' },
-    ],
+    name: 'Machine-War Countermeasures',
+    kicker: 'Stage 11 · Fight the source',
+    description: 'APEX turns the recovered command signature into bounded countermeasures that work only against Rogue forces.',
+    durationTicks: 62,
+    baseCost: 50,
+    rewards: [],
+    benefits: ['+2% attack against Rogue AI', '+2% defense against Rogue AI'],
+    revealsAntarctica: false,
+  },
+  {
+    id: 'polar-supply-model',
+    name: 'Polar Supply Model',
+    kicker: 'Stage 12 · Prepare the ice routes',
+    description: 'Long-range polar simulations identify the first sustainable supply patterns for an Antarctic theatre.',
+    durationTicks: 72,
+    baseCost: 110,
+    rewards: [],
+    benefits: ['+4% Antarctic supply'],
+    revealsAntarctica: false,
+  },
+  {
+    id: 'ice-theatre-simulation',
+    name: 'Ice-Theatre Simulation',
+    kicker: 'Stage 13 · Model the assault',
+    description: 'APEX rehearses movement, supply and combat against an enemy operating beneath the ice.',
+    durationTicks: 84,
+    baseCost: 240,
+    rewards: [],
+    benefits: ['+4% Antarctic supply', '+2.5% Antarctic operation power'],
     revealsAntarctica: false,
   },
   {
     id: 'deep-ice-signals',
-    name: 'Deep-Ice Signal Array',
-    kicker: 'Phase IV · The impossible signal',
-    description: 'A planet-scale listening array maps an artificial transmission beneath Antarctic ice.',
-    durationTicks: 416,
-    baseCost: 360,
-    rewards: [
-      { effect: 'attack', levels: 1, label: '+1 attack level' },
-      { effect: 'defense', levels: 1, label: '+1 defense level' },
-      { effect: 'research-speed', levels: 1, label: '+1 research speed level' },
-    ],
+    name: 'Antarctic Assault Protocol',
+    kicker: 'Stage 14 · Locate the source',
+    description: 'APEX fixes the origin beneath Antarctica and models the three physical invasion corridors without waking the Rogue.',
+    durationTicks: 96,
+    baseCost: 500,
+    rewards: [],
+    benefits: ['+2.5% Antarctic operation power', 'ROGUE PRIME tracking'],
     revealsAntarctica: true,
   },
 ] as const;
 
 export const ARCTIC_PROJECT_IDS_V2 = ARCTIC_PROJECTS_V2.map((project) => project.id);
+export { selectNorthPoleModifiersV2, type NorthPoleModifiersV2 } from './northPoleModifiers';
 
-const ARCTIC_RESEARCH_AFFINITY_PLAYER_IDS_V2 = [
-  'grl', 'isl', 'nor', 'can', 'fin', 'swe', 'rus', 'usa',
-] as const;
-
-/** Derived from canonical raw nation traits; human amplification never applies. */
-export const ARCTIC_RESEARCH_AFFINITY_COST_MODIFIERS_V2 = Object.freeze(
-  Object.fromEntries(ARCTIC_RESEARCH_AFFINITY_PLAYER_IDS_V2.map((playerId) => [
-    playerId,
-    (countryTraitModifiersV2(playerId, 'arctic-research-cost')[0]?.percentage ?? 0) / 100,
-  ])),
-) as Readonly<Record<(typeof ARCTIC_RESEARCH_AFFINITY_PLAYER_IDS_V2)[number], number>>;
-
-export const ARCTIC_RESEARCH_RANK_COST_FACTOR_STRONGEST_V2 = 5;
-export const ARCTIC_RESEARCH_RANK_COST_FACTOR_WEAKEST_V2 = 0.5;
-
-export function arcticResearchAffinityCostModifierV2(
-  playerId: PlayerId | string,
-): number {
-  return ARCTIC_RESEARCH_AFFINITY_COST_MODIFIERS_V2[
-    String(playerId) as keyof typeof ARCTIC_RESEARCH_AFFINITY_COST_MODIFIERS_V2
-  ] ?? 0;
-}
-
-/** Smooth scenario-aware cost curve based solely on immutable opening rank. */
-export function arcticResearchRankCostFactorV2(
-  content: WorldContentV2,
-  playerId: PlayerId | string,
-): number {
-  const order = openingMilitaryOrderForContentV2(content);
-  const rank = openingMilitaryRankForContentV2(content, playerId);
-  if (!rank) return 1;
-  const rankShare = clamp((rank - 1) / Math.max(1, order.length - 1), 0, 1);
-  const smoothRank = rankShare * rankShare * (3 - 2 * rankShare);
-  return ARCTIC_RESEARCH_RANK_COST_FACTOR_STRONGEST_V2
-    + (ARCTIC_RESEARCH_RANK_COST_FACTOR_WEAKEST_V2
-      - ARCTIC_RESEARCH_RANK_COST_FACTOR_STRONGEST_V2) * smoothRank;
-}
+export const ROGUE_ATTENTION_MIN_CAMPAIGN_TICK_V2 = 416;
+export const ROGUE_ATTENTION_LIBERATED_WORLD_SHARE_V2 = 0.18;
+export const ROGUE_ATTENTION_STAGE_DURATION_TICKS_V2 = 26;
 
 export const ANTARCTIC_SECTORS_V2: readonly AntarcticSectorDefinitionV2[] = [
   {
@@ -252,13 +328,45 @@ export const ANTARCTIC_SECTORS_V2: readonly AntarcticSectorDefinitionV2[] = [
 
 export const ANTARCTIC_SECTOR_IDS_V2 = ANTARCTIC_SECTORS_V2.map((sector) => sector.id);
 
-const ARCTIC_GATEWAY_TERRITORIES = new Set(['can', 'fin', 'grl', 'isl', 'nor', 'rus', 'swe', 'usa']);
 const POLAR_BATTLE_INTERVAL_TICKS = 4;
 const EARTH_COUNTEROFFENSIVE_INTERVAL_TICKS = 13;
 const CORE_ID: AntarcticSectorIdV2 = 'zero-point-core';
 
 const projectById = new Map(ARCTIC_PROJECTS_V2.map((project) => [project.id, project]));
 const sectorById = new Map(ANTARCTIC_SECTORS_V2.map((sector) => [sector.id, sector]));
+
+function arcticProjectCostLabelV2(costBillions: number): string {
+  return costBillions < 1
+    ? `$${round(costBillions * 1_000, 1)}M`
+    : `$${round(costBillions, 2)}B`;
+}
+
+/**
+ * Schema-22 saves store project IDs rather than a numeric rank. When new
+ * stages are inserted between legacy projects, completing (or actively
+ * running) a later legacy project proves that every new prerequisite was
+ * already passed in that timeline. Closing the sequence here preserves those
+ * saves without changing paid cost, start tick or completion tick.
+ */
+export function normalizeArcticCompletedProjectsV2(
+  completedProjects: readonly ArcticProjectIdV2[],
+  activeProjectId?: ArcticProjectIdV2,
+): ArcticProjectIdV2[] {
+  let furthestCompletedIndex = -1;
+  for (const projectId of completedProjects) {
+    furthestCompletedIndex = Math.max(
+      furthestCompletedIndex,
+      ARCTIC_PROJECT_IDS_V2.indexOf(projectId),
+    );
+  }
+  const activeIndex = activeProjectId === undefined
+    ? -1
+    : ARCTIC_PROJECT_IDS_V2.indexOf(activeProjectId);
+  const requiredIndex = Math.max(furthestCompletedIndex, activeIndex - 1);
+  return requiredIndex < 0
+    ? []
+    : ARCTIC_PROJECT_IDS_V2.slice(0, requiredIndex + 1);
+}
 
 function freshSector(definition: AntarcticSectorDefinitionV2): AntarcticSectorStateV2 {
   return {
@@ -274,6 +382,7 @@ function freshSector(definition: AntarcticSectorDefinitionV2): AntarcticSectorSt
 export function createInitialPolarEndgameV2(): PolarEndgameStateV2 {
   return {
     phase: 'dormant',
+    communicationsBlackoutTick: null,
     revealedBy: null,
     warningTick: null,
     contactTick: null,
@@ -285,6 +394,17 @@ export function createInitialPolarEndgameV2(): PolarEndgameStateV2 {
       sector.id,
       freshSector(sector),
     ])) as Record<AntarcticSectorIdV2, AntarcticSectorStateV2>,
+    gatewayBreachOrder: [],
+    gatewayBreaches: {},
+    rogueAttention: {
+      stage: 'dormant',
+      liberatedWorldShare: 0,
+      benchmarkMetTick: null,
+      nextStageTick: null,
+      activatedTick: null,
+    },
+    apexNarrative: createInitialApexNarrativeV2(),
+    roguePrime: createInitialRoguePrimeStateV2(),
     expeditions: [],
     earthDefenseMembers: [],
     globalWave: 1,
@@ -292,6 +412,8 @@ export function createInitialPolarEndgameV2(): PolarEndgameStateV2 {
     bossPhase: 0,
     bossIntegrity: 100,
     suspicionReliefEarned: 0,
+    rogueWaveManpowerByTerritory: {},
+    rogueWaveLossCreditByPlayer: {},
     visualRevision: 0,
     nextExpeditionId: 1,
   };
@@ -300,6 +422,7 @@ export function createInitialPolarEndgameV2(): PolarEndgameStateV2 {
 export function clonePolarEndgameV2(source: PolarEndgameStateV2): PolarEndgameStateV2 {
   return {
     ...source,
+    communicationsBlackoutTick: source.communicationsBlackoutTick ?? null,
     // Same-schema saves made before commander credit existed can recover the
     // actual final-strike commander from the already canonical core record.
     victoryCommanderId: source.victoryCommanderId
@@ -311,17 +434,39 @@ export function clonePolarEndgameV2(source: PolarEndgameStateV2): PolarEndgameSt
       .map(([playerId, progress]) => [playerId, progress ? {
         ...progress,
         activeProject: progress.activeProject ? { ...progress.activeProject } : null,
-        completedProjects: [...progress.completedProjects],
+        completedProjects: normalizeArcticCompletedProjectsV2(
+          progress.completedProjects,
+          progress.activeProject?.projectId,
+        ),
       } : progress])) as PolarEndgameStateV2['arcticPrograms'],
     sectors: Object.fromEntries(ANTARCTIC_SECTOR_IDS_V2.map((sectorId) => [
       sectorId,
       { ...source.sectors[sectorId] },
     ])) as PolarEndgameStateV2['sectors'],
+    gatewayBreachOrder: [...(source.gatewayBreachOrder ?? [])],
+    gatewayBreaches: Object.fromEntries(Object.entries(source.gatewayBreaches ?? {})
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([gatewayId, breach]) => [gatewayId, breach ? { ...breach } : breach])),
+    rogueAttention: source.rogueAttention ? { ...source.rogueAttention } : {
+      stage: 'dormant',
+      liberatedWorldShare: 0,
+      benchmarkMetTick: null,
+      nextStageTick: null,
+      activatedTick: null,
+    },
+    apexNarrative: cloneApexNarrativeV2(source.apexNarrative),
+    roguePrime: cloneRoguePrimeStateV2(source.roguePrime),
     expeditions: source.expeditions
       .map((expedition) => ({ ...expedition }))
       .sort((left, right) => left.id - right.id),
     earthDefenseMembers: [...source.earthDefenseMembers]
       .sort((left, right) => left.localeCompare(right)),
+    rogueWaveManpowerByTerritory: Object.fromEntries(Object.entries(
+      source.rogueWaveManpowerByTerritory ?? {},
+    ).sort(([left], [right]) => left.localeCompare(right))),
+    rogueWaveLossCreditByPlayer: Object.fromEntries(Object.entries(
+      source.rogueWaveLossCreditByPlayer ?? {},
+    ).sort(([left], [right]) => left.localeCompare(right))),
   };
 }
 
@@ -343,10 +488,12 @@ export function retirePolarNationReferencesV2(
   const affectedSectorIds = new Set(departingExpeditions.map((expedition) => expedition.sectorId));
   const changed = departingExpeditions.length > 0
     || Boolean(state.polarEndgame.arcticPrograms[playerId])
+    || Boolean(state.polarEndgame.apexNarrative.players[playerId])
     || state.polarEndgame.earthDefenseMembers.includes(playerId)
     || state.polarEndgame.warningAcknowledgedBy.includes(playerId);
 
   delete state.polarEndgame.arcticPrograms[playerId];
+  delete state.polarEndgame.apexNarrative.players[playerId];
   state.polarEndgame.expeditions = state.polarEndgame.expeditions
     .filter((expedition) => expedition.playerId !== playerId);
   for (const sectorId of affectedSectorIds) {
@@ -362,12 +509,6 @@ export function retirePolarNationReferencesV2(
     .filter((memberId) => memberId !== playerId);
   if (changed) state.polarEndgame.visualRevision += 1;
   return survivingManpower;
-}
-
-function arcticAccessPointCountV2(state: WorldStateV2, playerId: PlayerId): number {
-  return Object.entries(state.territories).filter(([territoryId, territory]) => (
-    territory.owner === playerId && ARCTIC_GATEWAY_TERRITORIES.has(territoryId)
-  )).length;
 }
 
 function arcticProgressV2(state: WorldStateV2, playerId: PlayerId): ArcticResearchProgressV2 {
@@ -393,73 +534,65 @@ export function selectArcticProjectTermsV2(
     .every((id) => progress.completedProjects.includes(id));
   const complete = progress.completedProjects.includes(project.id);
   const active = progress.activeProject?.projectId === project.id;
-  // Kept in the public quote breakdown for compatibility. Arctic pricing is
-  // identity-based and deliberately ignores the player's current empire.
-  const economyCostScale = 1;
-  const openingOrder = openingMilitaryOrderForContentV2(content);
-  const openingMilitaryRank = openingMilitaryRankForContentV2(content, playerId) ?? openingOrder.length;
-  const openingMilitaryRankCostFactor = arcticResearchRankCostFactorV2(content, playerId);
-  const affinityCostModifier = arcticResearchAffinityCostModifierV2(playerId);
-  const affinityCostMultiplier = 1 + affinityCostModifier;
-  const quotedCost = round(
-    project.baseCost
-      * economyCostScale
-      * openingMilitaryRankCostFactor
-      * affinityCostMultiplier,
-    3,
-  );
+  // Every flagship buys the exact same staged investigation. Country,
+  // opening rank and ownership never alter price or access.
+  const quotedCost = round(project.baseCost, 3);
   const cost = active && progress.activeProject ? progress.activeProject.costPaid : quotedCost;
-  const accessPointCount = arcticAccessPointCountV2(state, playerId);
-  const accessDurationReduction = Math.min(0.35, Math.max(0, accessPointCount - 1) * 0.05);
   const researchLevel = player?.research.effectLevels['research-speed'] ?? 0;
-  const researchSpeedDurationReduction = Math.min(0.18, researchLevel * 0.006);
-  const quotedDurationTicks = Math.max(52, Math.ceil(
-    project.durationTicks
-      * (1 - accessDurationReduction)
-      * (1 - researchSpeedDurationReduction),
+  // Stage I is a fixed three-month story gate for every country and reconnect.
+  const researchSpeedDurationReduction = project.id === 'polar-demography'
+    ? 0
+    : Math.min(0.18, researchLevel * 0.006);
+  const quotedDurationTicks = Math.max(1, Math.ceil(
+    project.durationTicks * (1 - researchSpeedDurationReduction),
   ));
-  const durationTicks = active && progress.activeProject
-    ? progress.activeProject.completesTick - progress.activeProject.startedTick
+  const activeCompletesTick = active && progress.activeProject
+    ? project.id === 'polar-demography'
+      ? Math.min(
+        progress.activeProject.completesTick,
+        progress.activeProject.startedTick + project.durationTicks,
+      )
+      : progress.activeProject.completesTick
+    : undefined;
+  const durationTicks = active && progress.activeProject && activeCompletesTick !== undefined
+    ? activeCompletesTick - progress.activeProject.startedTick
     : quotedDurationTicks;
   const progressShare = active && progress.activeProject
     ? clamp((state.tick - progress.activeProject.startedTick)
-      / Math.max(1, progress.activeProject.completesTick - progress.activeProject.startedTick), 0, 1)
+      / Math.max(1, durationTicks), 0, 1)
     : complete ? 1 : 0;
   let status: ArcticProjectTermsV2['status'] = 'locked';
   if (complete) status = 'complete';
   else if (active) status = 'active';
   else if (!progress.activeProject && previousComplete) status = 'available';
   let reason: string | undefined;
-  if (!player || !isHumanPlayerV2(state, playerId)) reason = 'Only an active human country can lead Arctic research.';
+  if (!player || !isHumanPlayerV2(state, playerId)) reason = 'Only an active human country can lead the investigation.';
+  else if (content.metadata?.scenarioId === 'survival') reason = 'Survival begins after Rogue contact; the investigation is already bypassed.';
+  else if (projectIndex > 0 && !apexInvestigationAuthorizedV2(state, playerId)) {
+    reason = 'Begin mandatory Signal Triangulation first.';
+  }
   else if (state.polarEndgame.phase === 'victory') reason = 'The polar campaign is already complete.';
-  else if (accessPointCount === 0) reason = 'Control Canada, Finland, Greenland, Iceland, Norway, Russia, Sweden or the United States to establish Arctic access.';
   else if (complete) reason = 'Project complete.';
   else if (progress.activeProject && !active) reason = `${projectById.get(progress.activeProject.projectId)?.name ?? 'Another project'} is already active.`;
-  else if (!previousComplete) reason = 'Complete the earlier Arctic phase first.';
-  else if (player.treasury + 0.000001 < cost) reason = `Treasury requires $${cost.toFixed(1)}B.`;
+  else if (!previousComplete) reason = 'Complete the earlier signal stage first.';
+  else if (player.treasury + 0.000001 < cost) {
+    reason = `Treasury requires ${arcticProjectCostLabelV2(cost)}.`;
+  }
   return {
     project,
     allowed: status === 'available' && !reason,
     ...(reason ? { reason } : {}),
     status,
     baseCost: project.baseCost,
-    economyCostScale,
-    openingMilitaryRank,
-    openingMilitaryRankCount: openingOrder.length,
-    openingMilitaryRankCostFactor,
-    affinityCostModifier,
-    affinityCostMultiplier,
     quotedCost,
     cost,
     baseDurationTicks: project.durationTicks,
-    accessPointCount,
-    accessDurationReduction,
     researchSpeedDurationReduction,
     quotedDurationTicks,
     durationTicks,
     ...(progress.activeProject && active ? {
       startedTick: progress.activeProject.startedTick,
-      completesTick: progress.activeProject.completesTick,
+      completesTick: activeCompletesTick!,
     } : {}),
     progress: progressShare,
   };
@@ -471,9 +604,9 @@ export function startArcticProjectV2(
   playerId: PlayerId,
   projectId: ArcticProjectIdV2,
 ): CommandResultV2 {
-  if (!projectById.has(projectId)) return { accepted: false, reason: 'Unknown Arctic project.' };
+  if (!projectById.has(projectId)) return { accepted: false, reason: 'Unknown Rogue Signal stage.' };
   const terms = selectArcticProjectTermsV2(state, content, playerId, projectId);
-  if (!terms.allowed) return { accepted: false, reason: terms.reason ?? 'Arctic project is unavailable.' };
+  if (!terms.allowed) return { accepted: false, reason: terms.reason ?? 'Rogue Signal stage is unavailable.' };
   const nation = state.players[playerId]!;
   nation.treasury = round(nation.treasury - terms.cost);
   const progress = arcticProgressV2(state, playerId);
@@ -485,13 +618,14 @@ export function startArcticProjectV2(
     costPaid: terms.cost,
   };
   state.polarEndgame.arcticPrograms[playerId] = progress;
+  if (projectId === 'polar-demography') authorizeMandatoryApexAnalysisV2(state, playerId);
   if (state.polarEndgame.phase === 'dormant') state.polarEndgame.phase = 'arctic-research';
   state.polarEndgame.visualRevision += 1;
   addWorldEventV2(
     state,
     'polar',
     'action',
-    `${terms.project.name} began in the Arctic. Completion is expected in ${terms.durationTicks} weeks.`,
+    `NORTH POLE: ${terms.project.name} began. Completion is expected in ${terms.durationTicks} weeks.`,
     undefined,
     playerId,
     { polarRegion: 'arctic' },
@@ -500,21 +634,26 @@ export function startArcticProjectV2(
 }
 
 function revealAntarcticaV2(state: WorldStateV2, playerId: PlayerId): void {
-  if (state.polarEndgame.warningTick !== null) return;
-  state.polarEndgame.phase = 'warning';
-  state.polarEndgame.revealedBy = playerId;
-  state.polarEndgame.warningTick = state.tick;
+  const firstOriginLock = ANTARCTIC_SECTORS_V2
+    .filter((candidate) => candidate.region === 'gateway')
+    .every((sector) => state.polarEndgame.sectors[sector.id].status === 'hidden');
+  if (!['contact', 'counteroffensive', 'core-exposed', 'victory']
+    .includes(state.polarEndgame.phase)) state.polarEndgame.phase = 'warning';
+  state.polarEndgame.revealedBy ??= playerId;
+  state.polarEndgame.warningTick ??= state.tick;
+  prepareAntarcticGatewayBreachesV2(state);
   for (const sector of ANTARCTIC_SECTORS_V2.filter((candidate) => candidate.region === 'gateway')) {
     const sectorState = state.polarEndgame.sectors[sector.id];
     sectorState.status = 'available';
     sectorState.discoveredTick = state.tick;
   }
   state.polarEndgame.visualRevision += 1;
+  if (!firstOriginLock) return;
   addWorldEventV2(
     state,
     'polar',
     'critical',
-    'DEEP-ICE ALERT: a coordinated artificial signal is active beneath Antarctica. Three approach corridors are now open.',
+    'APEX ORIGIN LOCK: the Rogue signal comes from Antarctica. Three gateways are identified, but all physical routes remain sealed.',
     undefined,
     playerId,
     { polarRegion: 'antarctica' },
@@ -523,16 +662,22 @@ function revealAntarcticaV2(state: WorldStateV2, playerId: PlayerId): void {
 
 export function processArcticResearchV2(
   state: WorldStateV2,
-  _content: WorldContentV2,
+  content: WorldContentV2,
 ): PolarTickChangeV2[] {
   const changes: PolarTickChangeV2[] = [];
   for (const playerId of (Object.keys(state.polarEndgame.arcticPrograms) as PlayerId[])
     .sort((left, right) => left.localeCompare(right))) {
     const progress = state.polarEndgame.arcticPrograms[playerId];
     const run = progress?.activeProject;
-    if (!progress || !run || run.completesTick > state.tick || !state.players[playerId]) continue;
+    if (!progress || !run || !state.players[playerId]) continue;
     const project = projectById.get(run.projectId);
     if (!project) continue;
+    // Authenticated legacy Stage-I saves keep their original start and payment,
+    // but inherit the shorter schedule exactly once instead of restarting.
+    if (project.id === 'polar-demography') {
+      run.completesTick = Math.min(run.completesTick, run.startedTick + project.durationTicks);
+    }
+    if (run.completesTick > state.tick) continue;
     progress.activeProject = null;
     if (!progress.completedProjects.includes(project.id)) {
       progress.completedProjects.push(project.id);
@@ -544,22 +689,116 @@ export function processArcticResearchV2(
       }
     }
     state.polarEndgame.visualRevision += 1;
+    if (project.id === 'polar-demography'
+      && content.metadata?.scenarioId === 'standard-2026'
+      && state.polarEndgame.communicationsBlackoutTick === null) {
+      state.polarEndgame.communicationsBlackoutTick = state.tick;
+      // Seed ordinary AI pacing from the blackout rather than releasing every
+      // country's accumulated pre-prologue readiness on this exact week.
+      state.aiEscalation.lastWarStartTick = state.tick;
+    }
     changes.push({ kind: 'project-complete', playerId, projectId: project.id });
     addWorldEventV2(
       state,
       'polar',
       'action',
-      `${project.name} completed. ${project.rewards.map((reward) => reward.label).join(', ')}.`,
+      `${project.name} completed. ${[
+        ...project.rewards.map((reward) => reward.label),
+        ...project.benefits,
+      ].join(', ')}.`,
       undefined,
       playerId,
       { polarRegion: 'arctic' },
     );
-    if (project.revealsAntarctica && state.polarEndgame.warningTick === null) {
-      revealAntarcticaV2(state, playerId);
-      changes.push({ kind: 'warning', playerId, projectId: project.id });
-    }
+    if (project.revealsAntarctica) revealAntarcticaV2(state, playerId);
   }
   return changes;
+}
+
+export function selectLiberatedWorldShareV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+): number {
+  const antarcticIds = new Set(ANTARCTIC_TERRITORY_IDS_V2);
+  const worldIds = content.territoryIds.filter((territoryId) => !antarcticIds.has(territoryId));
+  if (worldIds.length === 0) return 0;
+  const humanOwners = new Set(state.humanPlayerIds);
+  const liberated = worldIds.filter((territoryId) => {
+    const owner = state.territories[territoryId]?.owner;
+    return owner !== undefined && humanOwners.has(owner);
+  }).length;
+  return round(liberated / worldIds.length, 9);
+}
+
+/**
+ * Campaign awakening is caused by visible human expansion, never by pressing
+ * the final research button. The once-only buildup gives three deterministic
+ * warning stages before the first physical gateway even starts; Stage I adds
+ * its promised advance-warning time to that complete countdown.
+ */
+export function processRogueAttentionV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+): boolean {
+  const attention = state.polarEndgame.rogueAttention;
+  if (content.metadata?.scenarioId === 'random-world') {
+    attention.stage = 'disabled';
+    attention.liberatedWorldShare = 0;
+    attention.benchmarkMetTick = null;
+    attention.nextStageTick = null;
+    attention.activatedTick = null;
+    return false;
+  }
+  if (content.metadata?.scenarioId === 'survival' || attention.stage === 'active') return false;
+  attention.liberatedWorldShare = selectLiberatedWorldShareV2(state, content);
+  if (attention.stage === 'disabled') attention.stage = 'dormant';
+  if (attention.stage === 'dormant') {
+    if (state.tick < ROGUE_ATTENTION_MIN_CAMPAIGN_TICK_V2
+      || attention.liberatedWorldShare + 1e-9
+        < ROGUE_ATTENTION_LIBERATED_WORLD_SHARE_V2) return false;
+    attention.stage = 'observing';
+    attention.benchmarkMetTick = state.tick;
+    const routeWarningLead = Math.max(0, ...state.humanPlayerIds.map((playerId) => (
+      selectNorthPoleModifiersV2(state, playerId).rogueWarningLeadTicks
+    )));
+    attention.nextStageTick = state.tick + ROGUE_ATTENTION_STAGE_DURATION_TICKS_V2
+      + routeWarningLead;
+    const estimatedBuildup = ROGUE_ATTENTION_STAGE_DURATION_TICKS_V2 * 3
+      + routeWarningLead;
+    prepareAntarcticGatewayBreachesV2(state);
+    state.polarEndgame.visualRevision += 1;
+    addWorldEventV2(
+      state,
+      'polar',
+      'critical',
+      `ROGUE ATTENTION · OBSERVING: APEX detects a response to ${Math.round(attention.liberatedWorldShare * 100)}% world liberation. Estimated buildup: ${estimatedBuildup} weeks.`,
+      undefined,
+      state.humanPlayerId,
+      { polarRegion: 'antarctica' },
+    );
+    return false;
+  }
+  if (attention.nextStageTick === null || attention.nextStageTick > state.tick) return false;
+  if (attention.stage === 'observing') {
+    attention.stage = 'mobilising';
+    attention.nextStageTick = state.tick + ROGUE_ATTENTION_STAGE_DURATION_TICKS_V2;
+  } else if (attention.stage === 'mobilising') {
+    attention.stage = 'breach-imminent';
+    attention.nextStageTick = state.tick + ROGUE_ATTENTION_STAGE_DURATION_TICKS_V2;
+  } else if (attention.stage === 'breach-imminent') {
+    return activateRogueAiSurvivalV2(state, content, state.humanPlayerId, false);
+  }
+  state.polarEndgame.visualRevision += 1;
+  addWorldEventV2(
+    state,
+    'polar',
+    'critical',
+    `ROGUE ATTENTION · ${attention.stage.toUpperCase()}: ${attention.nextStageTick - state.tick} weeks to the next escalation.`,
+    undefined,
+    state.humanPlayerId,
+    { polarRegion: 'antarctica' },
+  );
+  return false;
 }
 
 export function acknowledgePolarWarningV2(
@@ -579,49 +818,22 @@ function prerequisitesSecuredV2(state: WorldStateV2, definition: AntarcticSector
   return definition.prerequisites.every((sectorId) => state.polarEndgame.sectors[sectorId].status === 'secured');
 }
 
-function effectiveEnemyStrengthV2(state: WorldStateV2, definition: AntarcticSectorDefinitionV2): number {
-  const sector = state.polarEndgame.sectors[definition.id];
-  const waveFactor = 1 + Math.max(0, sector.wave - 1) * 0.12 + Math.max(0, state.polarEndgame.globalWave - 1) * 0.025;
-  const bossFactor = definition.region === 'core' ? 1 + state.polarEndgame.bossPhase * 0.28 : 1;
-  return round(definition.enemyStrength * waveFactor * bossFactor);
-}
-
 export function selectAntarcticExpeditionTermsV2(
-  state: WorldStateV2,
+  _state: WorldStateV2,
   _content: WorldContentV2,
-  playerId: PlayerId,
+  _playerId: PlayerId,
   sectorId: AntarcticSectorIdV2,
 ): AntarcticExpeditionTermsV2 {
   const sector = sectorById.get(sectorId) ?? ANTARCTIC_SECTORS_V2[0]!;
-  const sectorState = state.polarEndgame.sectors[sector.id];
-  const nation = state.players[playerId];
-  const enemyStrength = effectiveEnemyStrengthV2(state, sector);
-  const minManpower = round(Math.max(0.08, enemyStrength * 0.34), 3);
-  const maxManpower = round(Math.max(0, nation?.trainedReserves ?? 0), 3);
-  const recommendedManpower = round(Math.min(maxManpower, Math.max(minManpower, enemyStrength * 1.15)), 3);
-  const activeExpedition = state.polarEndgame.expeditions.find((candidate) => candidate.playerId === playerId);
-  const expectedDamage = clamp(8 + 18 * (Math.max(minManpower, recommendedManpower) / Math.max(0.01, enemyStrength)), 5, 30);
-  let reason: string | undefined;
-  if (!nation || !isHumanPlayerV2(state, playerId)) reason = 'Only an active human country can deploy an expedition.';
-  else if (state.polarEndgame.warningTick === null || state.polarEndgame.phase === 'dormant' || state.polarEndgame.phase === 'arctic-research') reason = 'Antarctica has not been revealed.';
-  else if (state.polarEndgame.phase === 'victory') reason = 'The rogue intelligence has already been destroyed.';
-  else if (!prerequisitesSecuredV2(state, sector)) reason = 'Secure the prerequisite sectors first.';
-  else if (sectorState.status === 'hidden') reason = 'This sector is still hidden.';
-  else if (sectorState.status === 'secured') reason = 'This sector is secure.';
-  else if (activeExpedition) reason = 'Your country already has an active Antarctic expedition.';
-  else if (maxManpower + 0.000001 < minManpower) reason = `At least ${minManpower.toFixed(2)}M trained reserves are required.`;
   return {
     sector,
-    allowed: !reason,
-    ...(reason ? { reason } : {}),
-    minManpower,
-    maxManpower,
-    recommendedManpower,
-    enemyStrength,
-    projectedDurationTicks: Math.max(POLAR_BATTLE_INTERVAL_TICKS, Math.ceil(
-      sectorState.integrity / Math.max(1, expectedDamage),
-    ) * POLAR_BATTLE_INTERVAL_TICKS),
-    ...(activeExpedition ? { activeExpedition } : {}),
+    allowed: false,
+    reason: 'Expeditions were retired. Capture Antarctic territories through normal wars and logistics.',
+    minManpower: 0,
+    maxManpower: 0,
+    recommendedManpower: 0,
+    enemyStrength: sector.enemyStrength,
+    projectedDurationTicks: 0,
   };
 }
 
@@ -661,6 +873,11 @@ export function deployAntarcticExpeditionV2(
   sectorId: AntarcticSectorIdV2,
   manpowerInput: number,
 ): CommandResultV2 {
+  return {
+    accepted: false,
+    reason: 'Expeditions were retired. Antarctica now uses normal territories, armies, logistics and wars.',
+  };
+  /* c8 ignore start -- authenticated legacy implementation retained until the schema migration is retired. */
   if (!sectorById.has(sectorId)) return { accepted: false, reason: 'Unknown Antarctic sector.' };
   if (!Number.isFinite(manpowerInput)) return { accepted: false, reason: 'Expedition manpower must be finite.' };
   const terms = selectAntarcticExpeditionTermsV2(state, content, playerId, sectorId);
@@ -696,6 +913,7 @@ export function deployAntarcticExpeditionV2(
     { polarRegion: 'antarctica', polarSectorId: sectorId },
   );
   return { accepted: true };
+  /* c8 ignore stop */
 }
 
 function polarHashV2(seed: number, expeditionId: number, sectorId: AntarcticSectorIdV2, wave: number, pulse: number): number {
@@ -822,7 +1040,7 @@ function shareEarthResearchV2(state: WorldStateV2): void {
   if (members.length < 2) return;
   const effects: ResearchEffectV2[] = [
     'attack', 'defense', 'casualty-reduction', 'recovery', 'supply', 'research-speed',
-    'force-capacity', 'reserve-training', 'reserve-mobilization', 'food-production',
+    'force-capacity', 'reserve-training', 'reserve-mobilization',
   ];
   for (const playerId of members) {
     const nation = state.players[playerId]!;
@@ -889,66 +1107,25 @@ function processEarthCounteroffensiveV2(
 
 export function processPolarEndgameV2(
   state: WorldStateV2,
-  _content: WorldContentV2,
-  powerSnapshot: PowerSnapshotV2,
+  content: WorldContentV2,
+  _powerSnapshot: PowerSnapshotV2,
 ): PolarTickResultV2 {
   const changes: PolarTickChangeV2[] = [];
-  let suspicionRelief = 0;
-  for (const expedition of [...state.polarEndgame.expeditions].sort((left, right) => left.id - right.id)) {
-    if (state.tick - expedition.lastPulseTick < POLAR_BATTLE_INTERVAL_TICKS) continue;
-    const definition = sectorById.get(expedition.sectorId);
-    const sector = state.polarEndgame.sectors[expedition.sectorId];
-    const nation = state.players[expedition.playerId];
-    if (!definition || !nation || sector.status === 'secured') continue;
-    const pulse = Math.floor((state.tick - expedition.startedTick) / POLAR_BATTLE_INTERVAL_TICKS);
-    const roll = 0.84 + polarHashV2(state.seed, expedition.id, expedition.sectorId, sector.wave, pulse) * 0.32;
-    const attackResearch = 1 + nation.research.effectLevels.attack * 0.018
-      + nation.research.effectLevels.supply * 0.012;
-    const coalitionSupport = 1 + Math.min(0.36, state.polarEndgame.earthDefenseMembers.length * 0.006)
-      * (1 - state.aiEscalation.globalThreat / 180);
-    const attackPower = Math.max(0.001, expedition.manpower * attackResearch * coalitionSupport);
-    const enemyStrength = effectiveEnemyStrengthV2(state, definition);
-    const damage = round(clamp(7 + 17 * (attackPower / Math.max(0.01, enemyStrength)) * roll, 4, 31));
-    const casualtyRate = clamp(
-      0.035 + 0.075 * (enemyStrength / attackPower) * (1.08 - (roll - 0.84)),
-      0.025,
-      0.28,
-    ) * (1 - Math.min(0.30, nation.research.effectLevels['casualty-reduction'] * 0.012));
-    const casualties = round(Math.min(expedition.manpower, expedition.manpower * casualtyRate));
-    expedition.manpower = round(Math.max(0, expedition.manpower - casualties));
-    expedition.damageDealt = round(expedition.damageDealt + damage);
-    expedition.lastPulseTick = state.tick;
-    sector.integrity = round(Math.max(0, sector.integrity - damage));
-    if (expedition.sectorId === CORE_ID) state.polarEndgame.bossIntegrity = sector.integrity;
-    suspicionRelief += damage * (0.045 + definition.depth * 0.008);
-    changes.push({ kind: 'battle', playerId: expedition.playerId, sectorId: expedition.sectorId });
-    state.polarEndgame.visualRevision += 1;
-    if (sector.integrity <= 0) {
-      const finished = finishSectorV2(state, expedition.sectorId, expedition.playerId, changes);
-      suspicionRelief += finished ? 1.5 + definition.depth * 0.75 : 1;
-      continue;
-    }
-    if (expedition.manpower < 0.005) {
-      state.polarEndgame.expeditions = state.polarEndgame.expeditions
-        .filter((candidate) => candidate.id !== expedition.id);
-      if (!state.polarEndgame.expeditions.some((candidate) => candidate.sectorId === expedition.sectorId)) {
-        sector.status = 'available';
-      }
-      sector.wave += 1;
-      state.polarEndgame.globalWave += 1;
-      addWorldEventV2(
-        state,
-        'polar',
-        'action',
-        `The expedition at ${definition.name} was overwhelmed. The machine army is adapting for wave ${sector.wave}.`,
-        undefined,
-        expedition.playerId,
-        { polarRegion: 'antarctica', polarSectorId: expedition.sectorId },
-      );
-    }
-  }
-  suspicionRelief += processEarthCounteroffensiveV2(state, powerSnapshot, changes);
-  return { changes, suspicionRelief: round(suspicionRelief) };
+  const attentionActivated = processRogueAttentionV2(state, content);
+  const survival = processRogueAiSurvivalV2(state, content);
+  processApexNarrativeV2(state, content);
+  processCampaignFirstStrikeGuidanceV2(state, content);
+  if (attentionActivated) changes.push({
+    kind: 'contact',
+    playerId: state.humanPlayerId,
+  });
+  if (survival.waveStarted !== null) changes.push({ kind: 'counteroffensive' });
+  if (survival.victory) changes.push({
+    kind: 'victory',
+    playerId: state.polarEndgame.victoryCommanderId ?? undefined,
+    sectorId: 'zero-point-core',
+  });
+  return { changes, suspicionRelief: 0 };
 }
 
 export function applyPolarSuspicionReliefV2(state: WorldStateV2, requestedRelief: number): number {
@@ -960,8 +1137,6 @@ export function applyPolarSuspicionReliefV2(state: WorldStateV2, requestedRelief
 }
 
 export function polarEarthUnityActiveV2(state: Pick<WorldStateV2, 'polarEndgame'>): boolean {
-  return state.polarEndgame.phase === 'contact'
-    || state.polarEndgame.phase === 'counteroffensive'
-    || state.polarEndgame.phase === 'core-exposed'
-    || state.polarEndgame.phase === 'victory';
+  void state;
+  return false;
 }

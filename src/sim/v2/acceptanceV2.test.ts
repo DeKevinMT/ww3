@@ -160,8 +160,6 @@ function pulseFixture(options: { sourceHp?: number; sourceMaxHp?: number; target
   state.tick = 2;
   const source = state.territories[A_HOME];
   const target = state.territories[B_FRONT];
-  source.condition = 1;
-  target.condition = 1;
   source.army = {
     ...source.army,
     manpower: options.sourceHp ?? 100,
@@ -265,7 +263,7 @@ describe('V2 combat and absorption acceptance', () => {
     const event = resolveBattlePulseV2(state, FIXTURE_CONTENT, currentWar, currentOperation)!;
     expect(DEFENDER_POSITION_MULTIPLIER).toBe(1);
     expect(event.defenderPower).toBe(round(expectedShield));
-    expect(event.defenderLosses).toBe(round(expectedDamage));
+    expect(event.defenderLosses).toBe(round(expectedDamage, 9));
   });
 
   it('keeps ownership unchanged after a failed pressure pulse', () => {
@@ -297,7 +295,6 @@ describe('V2 combat and absorption acceptance', () => {
     state.players[B].treasury = 40;
     target.population = 8;
     target.economy = 80;
-    target.condition = 0.8;
     const before = {
       sourceManpower: source.army.manpower,
       population: target.population,

@@ -7,6 +7,13 @@ export interface ScrollSessionTarget {
 
 export type ScrollSessionSnapshot = ReadonlyMap<string, number>;
 
+export interface DisclosureSessionTarget {
+  readonly dataset: { readonly disclosureSession?: string };
+  open: boolean;
+}
+
+export type DisclosureSessionSnapshot = ReadonlyMap<string, boolean>;
+
 function validScrollTop(value: number): number {
   return Number.isFinite(value) ? Math.max(0, value) : 0;
 }
@@ -65,4 +72,31 @@ export function restoreScrollSessions(
 export function drawerScrollSessionId(panelMode: string, territoryId?: string): string {
   if (territoryId) return `drawer:territory:${territoryId}`;
   return `drawer:${panelMode}`;
+}
+
+/**
+ * Preserve explicit disclosure choices independently from live simulation
+ * renders. A weekly tick may update the values inside a drawer, but it must
+ * never collapse a section the player is currently reading.
+ */
+export function captureDisclosureSessions(
+  targets: Iterable<DisclosureSessionTarget>,
+  previous: DisclosureSessionSnapshot = new Map(),
+): Map<string, boolean> {
+  const snapshot = new Map(previous);
+  for (const target of targets) {
+    const session = target.dataset.disclosureSession;
+    if (session) snapshot.set(session, target.open);
+  }
+  return snapshot;
+}
+
+export function restoreDisclosureSessions(
+  targets: Iterable<DisclosureSessionTarget>,
+  snapshot: DisclosureSessionSnapshot,
+): void {
+  for (const target of targets) {
+    const session = target.dataset.disclosureSession;
+    if (session && snapshot.has(session)) target.open = snapshot.get(session)!;
+  }
 }

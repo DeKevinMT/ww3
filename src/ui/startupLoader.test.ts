@@ -10,7 +10,7 @@ const criticalStyleStart = indexSource.indexOf('<style id="startup-critical-css"
 const criticalStyleEnd = indexSource.indexOf('</style>', criticalStyleStart);
 const criticalStyleSource = indexSource.slice(criticalStyleStart, criticalStyleEnd);
 
-describe('post-selection map loader', () => {
+describe('boot and timeline deployment loaders', () => {
   it('paints a complete dark loader before modules or application CSS are available', () => {
     const moduleTag = '<script type="module" src="/src/main.ts"></script>';
     expect(indexSource).toContain('<meta name="theme-color" content="#030a12" />');
@@ -25,33 +25,60 @@ describe('post-selection map loader', () => {
     expect(criticalStyleSource).toContain('position: fixed;');
     expect(criticalStyleSource).toContain('inset: 0;');
     expect(criticalStyleSource).toContain('min-height: 100dvh;');
-    expect(criticalStyleSource).toContain('@keyframes startup-map-progress');
+    expect(criticalStyleSource).toContain('@keyframes startup-uplink-progress');
     expect(criticalStyleSource).toContain('@media (prefers-reduced-motion: reduce)');
     expect(stylesSource).not.toContain('#startup-loader');
     expect(stylesSource).not.toContain('.startup-loader__');
   });
 
-  it('shows a short initial loader before revealing the country picker', () => {
+  it('shows a short APEX account uplink before revealing the Commander main menu', () => {
     expect(indexSource.match(/id="startup-loader"/g)).toHaveLength(1);
     expect(indexSource).toContain('id="startup-loader" role="status"');
     expect(indexSource).toContain('aria-live="polite" aria-atomic="true" aria-hidden="false"');
-    expect(indexSource).toContain('<span class="startup-loader__sr-only">Loading Frontier Command</span>');
+    expect(indexSource).toContain('data-loader-variant="boot" data-loader-stage="boot"');
+    expect(indexSource).toContain('<span class="startup-loader__sr-only">Connecting to APEX account</span>');
+    expect(indexSource).toContain('APEX UPLINK');
+    expect(indexSource).toContain('LOADING PROFILE &amp; ACTIVE TIMELINE');
+    expect(indexSource).not.toContain('DEPLOYING COMMAND MAP');
     expect(indexSource).toContain('aria-hidden="false"');
     expect(mainSource).toContain("document.querySelector<HTMLElement>('#startup-loader')");
-    expect(mainSource).toContain('const INTRO_LOADER_MIN_VISIBLE_MS = 2_000;');
-    expect(mainSource).toContain('void dismissIntroLoaderAfterReady();');
-    expect(mainSource).toContain('INTRO_LOADER_MIN_VISIBLE_MS - (performance.now() - startupLoaderShownAt)');
+    expect(mainSource).toContain('const BOOT_LOADER_MIN_VISIBLE_MS = 450;');
+    const bootDismissal = mainSource.slice(
+      mainSource.indexOf('async function dismissBootLoaderAfterReady()'),
+      mainSource.indexOf('function worldEngineFromSession('),
+    );
+    expect(bootDismissal).toContain('BOOT_LOADER_MIN_VISIBLE_MS - (performance.now() - startupLoaderShownAt)');
+    expect(bootDismissal).not.toContain('worldMapRenderer');
+    expect(bootDismissal).not.toContain('waitForMapReady');
+    expect(mainSource).toContain('showCommanderMenu(true);\n  await dismissBootLoaderAfterReady();');
     expect(mainSource).not.toContain('await renderer.firstFrameReady;');
   });
 
-  it('activates only after an accepted country confirmation', () => {
+  it('activates the distinct deployment surface only after an accepted country confirmation', () => {
     const chooseCountryBody = worldUiSource.slice(
       worldUiSource.indexOf("case 'choose-country':"),
       worldUiSource.indexOf("case 'open-multiplayer':"),
     );
     expect(chooseCountryBody.indexOf('this.options.onCountryConfirmed?.(countryId);'))
       .toBeGreaterThan(chooseCountryBody.indexOf('if (!commandAccepted(result))'));
-    expect(mainSource).toContain('onCountryConfirmed: showStartupLoader');
+    const confirmationCallback = mainSource.slice(
+      mainSource.indexOf('onCountryConfirmed:'),
+      mainSource.indexOf('onInitialMapSynchronized:', mainSource.indexOf('onCountryConfirmed:')),
+    );
+    expect(confirmationCallback).toContain('showDeploymentLoader(countryId, scenarioConfigFromEngineV2(engine));');
+    expect(confirmationCallback).toContain('void beginStoredCampaign(engine, countryId);');
+    expect(indexSource).toContain('class="startup-loader__deployment"');
+    expect(indexSource).toContain('data-loader-country-flag');
+    expect(indexSource).toContain('data-loader-country');
+    expect(indexSource).toContain('data-loader-mode');
+    expect(indexSource).toContain('data-loader-year');
+    expect(indexSource).toContain('01 · TIMELINE');
+    expect(indexSource).toContain('02 · WORLD MAP');
+    expect(indexSource).toContain('03 · APEX');
+    expect(mainSource).toContain("startupLoader.dataset.loaderVariant = 'deployment';");
+    expect(mainSource).toContain("startupLoader.dataset.loaderStage = 'world';");
+    expect(mainSource).toContain("scenario.mode === 'survival' ? 2096 : 2026");
+    expect(mainSource).toContain('countryFlagHtml(country.id, country.sigil, true)');
     expect(mainSource).toContain("startupLoaderState: 'idle' | 'active' | 'complete' = startupLoader?.isConnected");
     expect(mainSource).toContain("startupLoader.classList.remove('is-hidden', 'is-ready')");
   });
@@ -64,6 +91,8 @@ describe('post-selection map loader', () => {
     expect(worldUiSource).toContain('this.options.onInitialMapSynchronized?.();');
     expect(mainSource).toContain('await renderer.waitForMapReady();');
     expect(mainSource).toContain('const STARTUP_LOADER_MIN_VISIBLE_MS = 2_800;');
+    expect(mainSource).toContain("setDeploymentLoaderStage('map');");
+    expect(mainSource).toContain("setDeploymentLoaderStage('apex');");
     expect(mainSource).toContain('STARTUP_LOADER_MIN_VISIBLE_MS - (performance.now() - startupLoaderShownAt)');
     expect(mainSource).toContain('window.setTimeout(resolve, minimumDelayRemaining)');
     expect(mainSource).toContain('await renderer.waitForNextFrame();');
@@ -75,6 +104,27 @@ describe('post-selection map loader', () => {
     expect(globeSceneSource).toContain('return this.globeTexture.waitForReady();');
     expect(globeSceneSource.indexOf('for (const resolve of resolvers) resolve();'))
       .toBeGreaterThan(globeSceneSource.indexOf('this.renderer.render(this.scene, this.camera);'));
+  });
+
+  it('launches Survival on the selected flagship without the initial Rogue warning modal', () => {
+    const campaignInitialization = mainSource.slice(
+      mainSource.indexOf('async function beginStoredCampaign('),
+      mainSource.indexOf('function persistProfileResult('),
+    );
+    const nationFirstLaunch = mainSource.slice(
+      mainSource.indexOf('async function launchSoloScenarioForCountry('),
+      mainSource.indexOf('function attachHostStatus('),
+    );
+    expect(campaignInitialization).toContain("if (scenario.mode === 'survival')");
+    expect(campaignInitialization).toContain('engine.formSurvivalEmpire(countryId, commanderProfile.unlockedCountryIds)');
+    expect(campaignInitialization).toContain('acknowledgePolarWarningV2(engine.state, countryId)');
+    expect(campaignInitialization.indexOf('acknowledgePolarWarningV2(engine.state, countryId)'))
+      .toBeGreaterThan(campaignInitialization.indexOf('engine.formSurvivalEmpire('));
+    expect(campaignInitialization.indexOf('acknowledgePolarWarningV2(engine.state, countryId)'))
+      .toBeLessThan(campaignInitialization.indexOf('stateSave: engine.save()'));
+    expect(nationFirstLaunch).toContain('mountWorldUi(engine, false, activeControllerNames, countryId, false)');
+    expect(nationFirstLaunch).toContain('void focusInitialFlagshipAfterMapReady(countryId);');
+    expect(mainSource).toContain('await renderer.waitForMapReady();\n  renderer.focusCountry(countryId);');
   });
 
   it('keeps the timeout fallback valid while asynchronous flags settle', () => {
@@ -94,6 +144,11 @@ describe('post-selection map loader', () => {
       mainSource.indexOf('function launchSoloScenario('),
       mainSource.indexOf('function attachHostStatus('),
     );
-    expect(scenarioBody).not.toContain('startupLoader');
+    const legacyScenarioOnly = scenarioBody.slice(
+      0,
+      scenarioBody.indexOf('async function launchSoloScenarioForCountry('),
+    );
+    expect(legacyScenarioOnly).not.toContain('showDeploymentLoader');
+    expect(scenarioBody).toContain('showDeploymentLoader(countryId, resolved.config)');
   });
 });

@@ -1,4 +1,11 @@
-import { MAX_MULTIPLAYER_PLAYERS, MIN_MULTIPLAYER_PLAYERS, type LobbyAction, type LobbyPlayer, type LobbyStateMessage } from './protocol';
+import {
+  MAX_MULTIPLAYER_PLAYERS,
+  MIN_MULTIPLAYER_PLAYERS,
+  validateMultiplayerDeploymentSnapshotV1,
+  type LobbyAction,
+  type LobbyPlayer,
+  type LobbyStateMessage,
+} from './protocol';
 import type { CommandResultV2 } from '../sim/v2/types';
 import type { WorldContentV2 } from '../sim/v2/content';
 import {
@@ -6,6 +13,8 @@ import {
   resolveScenarioV2,
   type ScenarioConfigV2,
 } from '../sim/v2/scenarios';
+
+export const LOBBY_REJOIN_GRACE_MS = 2 * 60_000;
 
 function cleanName(value: string): string {
   return value.trim().replace(/\s+/g, ' ').slice(0, 40);
@@ -18,11 +27,14 @@ export class HostLobbyModel {
   private startedRevision?: number;
   private scenario: ScenarioConfigV2;
   private content: WorldContentV2;
+  private readonly disconnectedAt = new Map<string, number>();
 
   constructor(
     readonly hostPeerId: string,
     hostName: string,
     scenario: ScenarioConfigV2 = normalizeScenarioConfigV2({ mode: 'standard-2026', seed: 1 }),
+    private readonly now: () => number = Date.now,
+    private readonly rejoinGraceMs = LOBBY_REJOIN_GRACE_MS,
   ) {
     const resolved = resolveScenarioV2(scenario);
     this.scenario = resolved.config;
@@ -31,6 +43,7 @@ export class HostLobbyModel {
       peerId: hostPeerId,
       displayName: cleanName(hostName) || 'Host',
       countryId: null,
+      deployment: null,
       ready: false,
       connected: true,
     });
@@ -38,6 +51,7 @@ export class HostLobbyModel {
 
   connect(peerId: string, displayName: string): CommandResultV2 {
     if (this.started) return { accepted: false, reason: 'The campaign has already started.' };
+    this.releaseExpiredDisconnected();
     const existing = this.players.get(peerId);
     if (!existing && this.players.size >= MAX_MULTIPLAYER_PLAYERS) {
       return { accepted: false, reason: `This room is full (${MAX_MULTIPLAYER_PLAYERS} players).` };
@@ -50,7 +64,15 @@ export class HostLobbyModel {
 
     this.players.set(peerId, existing
       ? { ...existing, displayName: name, connected: true }
-      : { peerId, displayName: name, countryId: null, ready: false, connected: true });
+      : {
+          peerId,
+          displayName: name,
+          countryId: null,
+          deployment: null,
+          ready: false,
+          connected: true,
+        });
+    this.disconnectedAt.delete(peerId);
     this.revision += 1;
     return { accepted: true };
   }
@@ -58,13 +80,10 @@ export class HostLobbyModel {
   disconnect(peerId: string): void {
     const player = this.players.get(peerId);
     if (!player || !player.connected) return;
-    // A new direct invitation creates a new peer identity. Releasing a guest
-    // before launch avoids permanent ghost names, countries and room slots.
-    if (peerId === this.hostPeerId) {
-      this.players.set(peerId, { ...player, connected: false, ready: false });
-    } else {
-      this.players.delete(peerId);
-    }
+    // Stable Direct Connect identity reclaims this exact seat during grace;
+    // country and display name cannot be stolen by a new transport.
+    this.players.set(peerId, { ...player, connected: false, ready: false });
+    if (peerId !== this.hostPeerId) this.disconnectedAt.set(peerId, this.now());
     this.revision += 1;
   }
 
@@ -99,12 +118,14 @@ export class HostLobbyModel {
         this.scenario = resolved.config;
         this.content = resolved.content;
         for (const [candidatePeerId, candidate] of this.players) {
+          const countryId = preserveCountryChoices
+            && candidate.countryId && this.content.nations[candidate.countryId]
+            ? candidate.countryId
+            : null;
           this.players.set(candidatePeerId, {
             ...candidate,
-            countryId: preserveCountryChoices
-              && candidate.countryId && this.content.nations[candidate.countryId]
-              ? candidate.countryId
-              : null,
+            countryId,
+            deployment: countryId ? candidate.deployment : null,
             ready: false,
           });
         }
@@ -115,18 +136,42 @@ export class HostLobbyModel {
         if (!this.content.nations[action.countryId]) {
           return { accepted: false, reason: 'That country is not available in this scenario.' };
         }
+        let deployment: LobbyPlayer['deployment'];
+        try {
+          deployment = validateMultiplayerDeploymentSnapshotV1(action.deployment);
+        } catch (error) {
+          return {
+            accepted: false,
+            reason: error instanceof Error ? error.message : 'That account deployment is invalid.',
+          };
+        }
+        if (deployment.countryId !== action.countryId) {
+          return { accepted: false, reason: 'The account deployment does not match that country.' };
+        }
         if ([...this.players.values()].some((candidate) => (
           candidate.peerId !== peerId && candidate.countryId === action.countryId
         ))) return { accepted: false, reason: 'That country is already claimed.' };
-        this.players.set(peerId, { ...player, countryId: action.countryId, ready: false });
+        this.players.set(peerId, {
+          ...player,
+          countryId: action.countryId,
+          deployment,
+          ready: false,
+        });
         this.revision += 1;
         return { accepted: true };
       case 'clear-country':
-        this.players.set(peerId, { ...player, countryId: null, ready: false });
+        this.players.set(peerId, {
+          ...player,
+          countryId: null,
+          deployment: null,
+          ready: false,
+        });
         this.revision += 1;
         return { accepted: true };
       case 'set-ready':
-        if (action.ready && !player.countryId) return { accepted: false, reason: 'Choose a country first.' };
+        if (action.ready && (!player.countryId || !player.deployment)) {
+          return { accepted: false, reason: 'Choose a country first.' };
+        }
         this.players.set(peerId, { ...player, ready: action.ready });
         this.revision += 1;
         return { accepted: true };
@@ -162,14 +207,18 @@ export class HostLobbyModel {
   }
 
   startBlockReason(): string | undefined {
+    this.releaseExpiredDisconnected();
     const connected = [...this.players.values()].filter((player) => player.connected);
     if (connected.length < MIN_MULTIPLAYER_PLAYERS) return 'At least two connected players are required.';
-    if (connected.some((player) => !player.countryId)) return 'Every connected player must choose a country.';
+    if (connected.some((player) => !player.countryId || !player.deployment)) {
+      return 'Every connected player must choose a country.';
+    }
     if (connected.some((player) => !player.ready)) return 'Every connected player must be ready.';
     return undefined;
   }
 
   snapshot(): LobbyStateMessage {
+    this.releaseExpiredDisconnected();
     return {
       type: 'lobby-state',
       revision: this.revision,
@@ -182,7 +231,25 @@ export class HostLobbyModel {
           || left.displayName.localeCompare(right.displayName, 'en')
           || left.peerId.localeCompare(right.peerId)
         ))
-        .map((player) => ({ ...player })),
+        .map((player) => ({
+          ...player,
+          deployment: player.deployment ? structuredClone(player.deployment) : null,
+        })),
     };
+  }
+
+  releaseExpiredDisconnected(now = this.now()): string[] {
+    const released: string[] = [];
+    for (const [peerId, disconnectedAt] of this.disconnectedAt) {
+      if (now - disconnectedAt < this.rejoinGraceMs) continue;
+      this.disconnectedAt.delete(peerId);
+      const player = this.players.get(peerId);
+      if (player && !player.connected) {
+        this.players.delete(peerId);
+        released.push(peerId);
+      }
+    }
+    if (released.length > 0) this.revision += 1;
+    return released;
   }
 }

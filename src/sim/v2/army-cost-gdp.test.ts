@@ -18,6 +18,7 @@ import {
 } from './selectors';
 import { nationIdV2, territoryIdV2 } from './types';
 import { declareWarV2 } from './war';
+import { enterPostBlackoutCampaignForTestV2 } from './testSupport';
 
 describe('GDP-per-capita military costs', () => {
   it('uses one bounded local-cost curve for poor mass armies and rich elite forces', () => {
@@ -57,6 +58,7 @@ describe('GDP-per-capita military costs', () => {
     const northKorea = nationIdV2('prk');
     const southKorea = nationIdV2('kor');
     state.wars = [];
+    enterPostBlackoutCampaignForTestV2(state);
     state.players[northKorea].treasury = 1_000;
     expect(declareWarV2(state, WORLD_CONTENT_V2, northKorea, southKorea))
       .toEqual({ accepted: true });

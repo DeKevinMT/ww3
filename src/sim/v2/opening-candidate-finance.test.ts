@@ -28,7 +28,7 @@ describe('V2 opening candidate finance projections', () => {
     }
   });
 
-  it('limits the human multiplier to the controlled country\'s own applicable trait', () => {
+  it('keeps opening finance identical when legacy trait ownership changes', () => {
     const ireland = nationIdV2('irl');
     const irelandState = createWorldStateV2(8_229);
     irelandState.humanPlayerId = ireland;
@@ -46,6 +46,6 @@ describe('V2 opening candidate finance projections', () => {
         .toBeCloseTo(irelandPlans.get(playerId)?.annualEconomyGrowthRate ?? 0, 9);
     }
     expect(irelandPlans.get(ireland)!.annualEconomyGrowthRate)
-      .toBeGreaterThan(usaPlans.get(ireland)!.annualEconomyGrowthRate);
+      .toBeCloseTo(usaPlans.get(ireland)!.annualEconomyGrowthRate, 9);
   });
 });

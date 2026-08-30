@@ -362,7 +362,7 @@ export function absorbFederationMemberV2(
   memberId: PlayerId,
 ): void {
   // Ownership changes when the voluntary union starts, but every local army,
-  // resident, economic value and condition remains untouched. National cash,
+  // resident and economic value remains untouched. National cash,
   // food, reserves and knowledge stay on the member record until its final
   // core finishes the accelerated integration and are then transferred by the
   // same exactly-once retirement path as conquest.
@@ -558,7 +558,21 @@ function maybeFormAiDefensiveFederationV2(
   return false;
 }
 
-export function selectGlobalResistanceV2(state: WorldStateV2): GlobalResistanceV2 {
+export function selectGlobalResistanceV2(
+  state: WorldStateV2,
+  content?: WorldContentV2,
+): GlobalResistanceV2 {
+  if (content?.metadata?.scenarioId === 'standard-2026'
+    || content?.metadata?.scenarioId === 'survival') {
+    return {
+      level: 0,
+      threat: 0,
+      members: 0,
+      memberIds: [],
+      defenseBonus: 0,
+      offensiveBonus: 0,
+    };
+  }
   const level = state.aiEscalation.resistanceLevel;
   const threat = state.aiEscalation.globalThreat;
   const humanPlayerIds = new Set(selectHumanPlayerIdsV2(state));
@@ -583,6 +597,16 @@ export function updateGlobalResistanceV2(
   content: WorldContentV2,
   powers: PowerSnapshotV2 = createPowerSnapshotV2(state, content),
 ): 0 | 1 | 2 | undefined {
+  // In serious modes the Rogue Signal has already shattered international
+  // trust. The old global Suspicion/coalition envelope is compatibility-only:
+  // local opponent threat drives independent opportunism instead.
+  if (content.metadata?.scenarioId === 'standard-2026'
+    || content.metadata?.scenarioId === 'survival') {
+    state.aiEscalation.globalThreat = 0;
+    state.aiEscalation.coalitionMembers = [];
+    state.aiEscalation.resistanceLevel = 0;
+    return undefined;
+  }
   updateThreatV2(state, content, powers);
   if (state.polarEndgame.phase === 'contact'
     || state.polarEndgame.phase === 'counteroffensive'

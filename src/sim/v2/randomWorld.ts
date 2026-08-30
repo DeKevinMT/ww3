@@ -12,6 +12,7 @@ import {
   WORLD_CONTENT_V2,
   calibratedMilitaryRatingsV2,
   calibratedNationalIqScoreV2,
+  isRogueAiNationV2,
   nationalQualityIndexV2,
   type NationContentV2,
   type NationRealDataV2,
@@ -27,6 +28,9 @@ import type { PlayerId, TerritoryId } from './types';
  */
 export const RANDOM_WORLD_GENERATOR_VERSION_V2 = 2;
 export const LEGACY_RANDOM_WORLD_GENERATOR_VERSION_V2 = 1;
+
+const randomizableNationIdsV2 = (): PlayerId[] => WORLD_CONTENT_V2.nationIds
+  .filter((id) => !isRogueAiNationV2(WORLD_CONTENT_V2, id));
 
 type RandomWorldSpecializationLaneV2 =
   | 'population'
@@ -219,7 +223,7 @@ function randomLatentProfilesV2(
   generatorVersion: number,
 ): Map<PlayerId, RandomWorldLatentProfileV2> {
   const result = new Map<PlayerId, RandomWorldLatentProfileV2>();
-  const ids = [...WORLD_CONTENT_V2.nationIds].sort((left, right) => left.localeCompare(right));
+  const ids = randomizableNationIdsV2().sort((left, right) => left.localeCompare(right));
   for (const id of ids) {
     const base = WORLD_CONTENT_V2.nations[id]!;
     const densityPosition = nextRandom(random);
@@ -468,10 +472,10 @@ function createRandomDraftsV2(
   random: RandomStateV2,
   generatorVersion: number,
 ): RandomWorldDraftV2[] {
-  const ids = [...WORLD_CONTENT_V2.nationIds].sort((left, right) => left.localeCompare(right));
+  const ids = randomizableNationIdsV2().sort((left, right) => left.localeCompare(right));
   const profiles = randomLatentProfilesV2(random, generatorVersion);
   const populationTarget = totalV2(
-    WORLD_CONTENT_V2.nationIds.map((id) => WORLD_CONTENT_V2.nations[id]!.real.population),
+    ids.map((id) => WORLD_CONTENT_V2.nations[id]!.real.population),
   );
   const populationWeights = new Map(ids.map((id) => [id, profiles.get(id)!.populationWeight]));
   const populations = normalizeWeightsV2(
@@ -493,7 +497,7 @@ function createRandomDraftsV2(
     return [id, populations.get(id)! * perCapita / 1_000] as const;
   }));
   const gdpTarget = totalV2(
-    WORLD_CONTENT_V2.nationIds.map((id) => WORLD_CONTENT_V2.nations[id]!.real.gdp),
+    ids.map((id) => WORLD_CONTENT_V2.nations[id]!.real.gdp),
   );
   const gdps = normalizeWeightsV2(
     ids,
@@ -518,7 +522,7 @@ function createRandomDraftsV2(
     ] as const;
   }));
   const researchTarget = totalV2(
-    WORLD_CONTENT_V2.nationIds.map((id) => WORLD_CONTENT_V2.nations[id]!.real.researchCapacity),
+    ids.map((id) => WORLD_CONTENT_V2.nations[id]!.real.researchCapacity),
   );
   const research = normalizeWeightsV2(
     ids,
@@ -602,17 +606,23 @@ export function createRandomWorldContentV2(
     rngState: mixedGeneratorSeedV2(seedInput, generatorVersion),
   };
   const drafts = createRandomDraftsV2(random, generatorVersion);
-  const nations = Object.fromEntries(drafts.map((draft) => [
-    draft.id,
-    createRandomNationV2(draft),
-  ])) as Record<PlayerId, NationContentV2>;
+  const nations = Object.fromEntries([
+    ...drafts.map((draft) => [draft.id, createRandomNationV2(draft)] as const),
+    ...WORLD_CONTENT_V2.nationIds
+      .filter((id) => isRogueAiNationV2(WORLD_CONTENT_V2, id))
+      .map((id) => [id, WORLD_CONTENT_V2.nations[id]!] as const),
+  ]) as Record<PlayerId, NationContentV2>;
   const territories = Object.fromEntries(WORLD_CONTENT_V2.territoryIds.map((id) => {
     const base = WORLD_CONTENT_V2.territories[id]!;
     const owner = nations[base.initialOwnerId];
     if (!owner) throw new Error(`Alternative Universe is missing initial owner ${base.initialOwnerId}.`);
     const value: TerritoryContentV2 = Object.freeze({
       ...base,
-      baseline: Object.freeze({ ...owner.real }),
+      // Antarctica remains the same authored survival empire in every mode;
+      // only ordinary human-world countries are regenerated from the seed.
+      baseline: Object.freeze(isRogueAiNationV2(WORLD_CONTENT_V2, base.initialOwnerId)
+        ? { ...base.baseline }
+        : { ...owner.real }),
       connections: Object.freeze(base.connections.map((connection) => Object.freeze({ ...connection }))),
     });
     return [id, value] as const;

@@ -1,9 +1,12 @@
-const MIN_BATTLE_EFFECT_SCALE = 0.72;
-const MAX_BATTLE_EFFECT_SCALE = 1.80;
-const MIN_BATTLE_PROJECTILE_SCALE = 0.70;
-const MAX_BATTLE_PROJECTILE_SCALE = 0.94;
-const FULL_SCALE_ATTACK_POWER = 180;
-const FALLBACK_LOSS_POWER_MULTIPLIER = 20;
+/**
+ * Combat FX are presentation-only and deliberately invariant to army size.
+ * A skirmish and a major-power attack therefore consume the same visual budget
+ * and never turn simulation magnitude into extra GPU or DOM work.
+ */
+export const BATTLE_EFFECT_SCALE = 1;
+export const BATTLE_PROJECTILE_SCALE = 0.82;
+export const BATTLE_EFFECT_MAX_ACTIVE = 4;
+export const BATTLE_EFFECT_COALESCE_WINDOW_MS = 280;
 const MIN_WAVE_RADIUS_DEGREES = 0.8;
 const MAX_WAVE_RADIUS_DEGREES = 70;
 
@@ -15,39 +18,20 @@ export interface BattleEffectMagnitudeInput {
 
 type CountryRings = readonly (readonly (readonly [number, number])[])[];
 
-function finitePositive(value: number | undefined): number {
-  return Number.isFinite(value) ? Math.max(0, value ?? 0) : 0;
+/**
+ * Kept as a function for renderer/API compatibility. Magnitude is intentionally
+ * ignored: battle power and losses affect simulation outcomes, never FX scale.
+ */
+export function battleEffectScale(_input: BattleEffectMagnitudeInput): number {
+  return BATTLE_EFFECT_SCALE;
 }
 
 /**
- * Maps real battle power onto a deliberately narrow visual range. The log curve
- * keeps a USA-scale assault visibly larger than an island skirmish without ever
- * allowing a large empire to cover the globe with one projectile or explosion.
- * Legacy map events fall back to actual military losses when power is absent.
+ * The projectile has one authored screen presence in every battle. The ignored
+ * argument preserves the existing renderer call sites and saved-event contract.
  */
-export function battleEffectScale(input: BattleEffectMagnitudeInput): number {
-  const reportedPower = finitePositive(input.attackerPower);
-  const fallbackPower = (
-    finitePositive(input.attackerLosses) + finitePositive(input.defenderLosses)
-  ) * FALLBACK_LOSS_POWER_MULTIPLIER;
-  const power = reportedPower > 0 ? reportedPower : fallbackPower;
-  const curved = Math.min(1, Math.log1p(power) / Math.log1p(FULL_SCALE_ATTACK_POWER));
-  return MIN_BATTLE_EFFECT_SCALE
-    + curved * (MAX_BATTLE_EFFECT_SCALE - MIN_BATTLE_EFFECT_SCALE);
-}
-
-/**
- * Keeps attack magnitude legible through the impact and territory wave while
- * compressing the projectile itself into a deliberately subtle size range.
- */
-export function battleProjectileScale(effectScale: number): number {
-  const boundedEffectScale = Number.isFinite(effectScale)
-    ? Math.max(MIN_BATTLE_EFFECT_SCALE, Math.min(MAX_BATTLE_EFFECT_SCALE, effectScale))
-    : MIN_BATTLE_EFFECT_SCALE;
-  const normalized = (boundedEffectScale - MIN_BATTLE_EFFECT_SCALE)
-    / (MAX_BATTLE_EFFECT_SCALE - MIN_BATTLE_EFFECT_SCALE);
-  return MIN_BATTLE_PROJECTILE_SCALE
-    + normalized * (MAX_BATTLE_PROJECTILE_SCALE - MIN_BATTLE_PROJECTILE_SCALE);
+export function battleProjectileScale(_effectScale: number): number {
+  return BATTLE_PROJECTILE_SCALE;
 }
 
 function unitVector(longitude: number, latitude: number): readonly [number, number, number] {

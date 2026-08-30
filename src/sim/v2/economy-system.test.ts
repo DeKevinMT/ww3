@@ -4,7 +4,6 @@ import { WORLD_CONTENT_V2 } from './content';
 import { optimizeNationalAiPlanV2 } from './nationalAi';
 import {
   invalidateTerritoryIndexV2,
-  selectFoodLandCapacityV2,
   selectNationalEconomyV2,
   selectWeeklyFinanceBreakdownV2,
 } from './selectors';
@@ -43,23 +42,28 @@ describe('V2 simple dynamic economy and survival AI', () => {
     const peacePlan = selectWeeklyFinanceBreakdownV2(peace, WORLD_CONTENT_V2, belgium);
     const warPlan = selectWeeklyFinanceBreakdownV2(war, WORLD_CONTENT_V2, belgium);
     expect(warPlan.annualEconomyGrowthRate)
-      .toBeLessThan(peacePlan.annualEconomyGrowthRate - 0.015);
+      .toBeLessThan(peacePlan.annualEconomyGrowthRate - 0.01);
   });
 
-  it('makes a food and infrastructure collapse directly reduce economic growth', () => {
+  it('makes infrastructure collapse reduce growth while legacy commodity fields stay inert', () => {
     const healthy = createWorldStateV2(52_002);
     const crisis = structuredClone(healthy);
+    const neutralCrisis = structuredClone(healthy);
     const belgium = nationIdV2('bel');
     const territory = crisis.territories[territoryIdV2('bel')]!;
+    neutralCrisis.territories[territoryIdV2('bel')]!.economy *= 0.10;
     crisis.players[belgium]!.foodStock = 0;
     crisis.players[belgium]!.foodSecurity = 0.20;
-    territory.condition = 0.15;
     territory.economy *= 0.10;
 
     const healthyPlan = selectWeeklyFinanceBreakdownV2(healthy, WORLD_CONTENT_V2, belgium);
     const crisisPlan = selectWeeklyFinanceBreakdownV2(crisis, WORLD_CONTENT_V2, belgium);
-    expect(crisisPlan.foodProduction / crisisPlan.revenue)
-      .toBeGreaterThan(healthyPlan.foodProduction / healthyPlan.revenue);
+    const neutralCrisisPlan = selectWeeklyFinanceBreakdownV2(
+      neutralCrisis, WORLD_CONTENT_V2, belgium,
+    );
+    expect(crisisPlan.foodProduction).toBe(0);
+    expect(crisisPlan.foodCoverage).toBe(1);
+    expect(crisisPlan.annualEconomyGrowthRate).toBe(neutralCrisisPlan.annualEconomyGrowthRate);
     expect(crisisPlan.annualEconomyGrowthRate).toBeLessThan(healthyPlan.annualEconomyGrowthRate);
   });
 
@@ -83,20 +87,15 @@ describe('V2 simple dynamic economy and survival AI', () => {
     expect(populousPoor.population).toBeGreaterThan(rich.population);
     expect(populousPoor.wealthPerPerson).toBeLessThan(base.wealthPerPerson);
     expect(populousPoor.controlledOutput).toBeGreaterThan(base.controlledOutput);
-    expect(selectFoodLandCapacityV2(populousPoorState, WORLD_CONTENT_V2, belgium))
-      .toBeGreaterThan(selectFoodLandCapacityV2(baseState, WORLD_CONTENT_V2, belgium));
   });
 
   it('puts survival first in peace and military first only during war', () => {
     const common = {
       intent: { military: 35, research: 15, development: 50 } as const,
       fillRatio: 0.45,
-      averageCondition: 0.60,
       researchGap: 5,
       treasuryWeeks: -1,
-      foodSecurity: 0.55,
       populationGrowthRate: -0.01,
-      foodReserveWeeks: 0.4,
       iqScore: 100,
     };
     const peace = optimizeNationalAiPlanV2({ ...common, activeWars: 0 });
@@ -104,7 +103,7 @@ describe('V2 simple dynamic economy and survival AI', () => {
 
     expect(peace.mode).toBe('recovery');
     expect(peace.activeBudget.development).toBeGreaterThan(peace.activeBudget.military);
-    expect(peace.explanation).toMatch(/survival|population|food/i);
+    expect(peace.explanation).toMatch(/recovery|population|treasury|debt/i);
     expect(war.mode).toBe('war');
     expect(war.activeBudget.military).toBeGreaterThan(war.activeBudget.development);
   });

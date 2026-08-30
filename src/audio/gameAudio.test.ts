@@ -3,6 +3,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { BattleEventV2, WarOutcomeV2 } from '../sim/v2/types';
 import {
+  AI_ELIMINATION_DISTRESS_DURATION_SHARE,
+  AI_ELIMINATION_DISTRESS_FADE_SECONDS,
   AI_FIGHT_GAIN_MAX,
   AI_FIGHT_MIN_FOCUS,
   AMBIENT_MUSIC_VOLUME,
@@ -457,6 +459,20 @@ describe('game audio presentation adapter', () => {
       { viewerPlayerId: 'aaa', humanPlayerIds: ['aaa'] },
     );
     expect(context.sources.map((source) => source.buffer?.duration)).toEqual([8.184]);
+    const distressDuration = GAME_AUDIO_SOURCES.distress.durationSeconds
+      * AI_ELIMINATION_DISTRESS_DURATION_SHARE;
+    const distressGain = context.gains[FIGHT_AUDIO_MAX_OVERLAP]!;
+    expect(distressGain.automation.at(-2)).toEqual({
+      kind: 'set', value: 1,
+      time: context.currentTime + distressDuration - AI_ELIMINATION_DISTRESS_FADE_SECONDS,
+    });
+    expect(distressGain.automation.at(-1)).toEqual({
+      kind: 'ramp', value: 0, time: context.currentTime + distressDuration,
+    });
+    expect(context.sources[0]!.stoppedAt).toBeCloseTo(
+      context.currentTime + distressDuration + 0.02,
+      4,
+    );
     context.sources[0]!.finish();
 
     await controller.handleWorldChange(

@@ -9,7 +9,7 @@ import {
   AI_EXPANSION_ROLLS_PER_DECISION,
   aiExpansionDeclarationChanceV2,
   aiHumanAttackSuspicionFactorV2,
-  aiHumanWarStrainOpportunityV2,
+  aiHumanExpansionOpportunityV2,
   aiConcurrentWarLimitV2,
   aiTargetWarLimitV2,
   aiWarCandidateForecastScoreV2,
@@ -59,7 +59,7 @@ describe('quiet but active AI war pacing', () => {
     expect(aiHumanAttackSuspicionFactorV2(100)).toBeCloseTo(2.2275, 9);
   });
 
-  it('brakes optional AI wars as the world fills while retaining the human-strain opening', () => {
+  it('brakes optional AI wars as the world fills while retaining expansion responses', () => {
     const quietWorld = aiExpansionDeclarationChanceV2({
       ratio: 1.2,
       expansionChance: 0.08,
@@ -74,31 +74,31 @@ describe('quiet but active AI war pacing', () => {
       rivalInvaderCount: 0,
       globalWarLoad: 1,
     });
-    const strainedHuman = aiExpansionDeclarationChanceV2({
+    const expandingNeighbor = aiExpansionDeclarationChanceV2({
       ratio: 1.2,
       expansionChance: 0.08,
       regionalEscalation: false,
       rivalInvaderCount: 0,
-      humanWarStrainPressure: 1,
+      neighborCounterattackPressure: 1,
       globalWarLoad: 1,
     });
 
     expect(busyWorld).toBeLessThan(quietWorld * 0.6);
-    expect(strainedHuman).toBeGreaterThan(quietWorld * 1.8);
+    expect(expandingNeighbor).toBeGreaterThan(quietWorld * 1.8);
   });
 
-  it('opens a bounded, progressive opportunistic window above controlled war strain', () => {
-    const controlled = aiHumanWarStrainOpportunityV2(39);
-    const guarded = aiHumanWarStrainOpportunityV2(50);
-    const high = aiHumanWarStrainOpportunityV2(70);
-    const critical = aiHumanWarStrainOpportunityV2(90);
+  it('opens a bounded, progressive response window above controlled Expansion Threat', () => {
+    const controlled = aiHumanExpansionOpportunityV2(39);
+    const guarded = aiHumanExpansionOpportunityV2(50);
+    const high = aiHumanExpansionOpportunityV2(70);
+    const critical = aiHumanExpansionOpportunityV2(90);
     const ordinaryDogpile = aiExpansionDeclarationChanceV2({
       ratio: 1.2,
       expansionChance: 0.08,
       regionalEscalation: false,
       rivalInvaderCount: 1,
     });
-    const strainedDogpile = aiExpansionDeclarationChanceV2({
+    const expansionResponse = aiExpansionDeclarationChanceV2({
       ratio: 1.2,
       expansionChance: 0.08,
       regionalEscalation: false,
@@ -114,8 +114,8 @@ describe('quiet but active AI war pacing', () => {
     expect(guarded.pressure).toBeLessThan(high.pressure);
     expect(high.pressure).toBeLessThan(critical.pressure);
     expect(critical.rivalCautionMultiplier).toBeGreaterThanOrEqual(0.35);
-    expect(strainedDogpile).toBeGreaterThan(ordinaryDogpile * 3);
-    expect(strainedDogpile).toBeLessThanOrEqual(0.30);
+    expect(expansionResponse).toBeGreaterThan(ordinaryDogpile * 3);
+    expect(expansionResponse).toBeLessThanOrEqual(0.30);
   });
 
   it('uses IQ for safer target selection and timing, never for a larger war roll', () => {

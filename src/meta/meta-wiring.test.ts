@@ -1,0 +1,137 @@
+import { readFileSync } from 'node:fs';
+import { describe, expect, it } from 'vitest';
+import mainSource from '../main.ts?raw';
+import worldUiSource from '../ui/WorldUIV2.ts?raw';
+import commanderProfileSource from './commanderProfile.ts?raw';
+
+const stylesSource = readFileSync(new URL('../styles.css', import.meta.url), 'utf8');
+
+describe('account progression wiring', () => {
+  it('applies the immutable Commander and all five country upgrade tracks at campaign start', () => {
+    expect(mainSource).toContain('resolveCommanderForceInitializationV1(loadout)');
+    expect(mainSource).toContain('nation.empireName = commanderProfile.empireName');
+    expect(mainSource).toContain("effects['reserve-training'] += levels.mobilization");
+    expect(mainSource).toContain("effects['operating-efficiency'] += levels.logistics");
+    expect(mainSource).toContain("effects['research-efficiency'] += levels.research");
+    expect(mainSource).toContain("effects['tax-efficiency'] += levels.economy");
+    expect(commanderProfileSource).toContain('countryTraitScale: loadout.traitScale');
+    expect(mainSource).toContain('selectCommanderDoctrineV1(commanderProfile, doctrine)');
+    expect(mainSource).toContain('respecCommanderTalentsV1(commanderProfile)');
+  });
+
+  it('applies every Survival member mastery before fusion with country traits retired', () => {
+    const start = mainSource.indexOf('async function beginStoredCampaign(');
+    const end = mainSource.indexOf('function persistProfileResult(', start);
+    const launch = mainSource.slice(start, end);
+    expect(launch).toContain("const rosterCountryIds = scenario.mode === 'survival'");
+    expect(launch).toContain('resolveCountryLoadoutV1(commanderProfile, rosterCountryId)');
+    expect(launch.indexOf('applyCountryLoadoutAtCampaignStart('))
+      .toBeLessThan(launch.indexOf('engine.formSurvivalEmpire('));
+    expect(launch).toContain('resolveCommanderForceInitializationV1(loadout)');
+    expect(commanderProfileSource).toContain('BASE_COUNTRY_TRAIT_SCALE_V1 = 0');
+    expect(commanderProfileSource).not.toContain('(1 - BASE_COUNTRY_TRAIT_SCALE_V1)');
+  });
+
+  it('does not scale defeated countries across Campaign timelines', () => {
+    expect(mainSource).not.toContain('rememberDefeatedCampaignOpponent(');
+    expect(mainSource).not.toContain('recordCampaignAdaptationV1(');
+    expect(mainSource).not.toContain('applyCampaignWorldEvolutionV1(');
+    expect(commanderProfileSource).toContain('Rival scaling was retired.');
+  });
+
+  it('settles a real no-territory defeat even if a transient global game-over flag lags', () => {
+    expect(mainSource).toContain(
+      'engine.territoriesOf(campaignSlot.countryId as PlayerId).length === 0',
+    );
+  });
+
+  it('uses the explicit resume boundary only when the player continues a stored campaign', () => {
+    const start = mainSource.indexOf('function continueStoredCampaign()');
+    const end = mainSource.indexOf('function mountWorldUi(', start);
+    const continueCampaign = mainSource.slice(start, end);
+    expect(continueCampaign).toContain('WorldEngineV2.fromSave(');
+    expect(continueCampaign).toContain('engine.resumeClock();');
+    expect(continueCampaign).not.toContain('engine.startClock();');
+
+    const storedSettlementStart = mainSource.indexOf('function surrenderStoredCampaign()');
+    const storedSettlementEnd = mainSource.indexOf(
+      'function applyCountryLoadoutAtCampaignStart(', storedSettlementStart,
+    );
+    expect(mainSource.slice(storedSettlementStart, storedSettlementEnd))
+      .not.toContain('resumeClock');
+  });
+
+  it('settles a surrendered home-screen save through the canonical campaign report path', () => {
+    const storedSettlementStart = mainSource.indexOf('function surrenderStoredCampaign()');
+    const storedSettlementEnd = mainSource.indexOf(
+      'function applyCountryLoadoutAtCampaignStart(', storedSettlementStart,
+    );
+    const storedSettlement = mainSource.slice(storedSettlementStart, storedSettlementEnd);
+    const canonicalSettlement = mainSource.slice(
+      mainSource.indexOf('async function settleActiveCampaign('),
+      storedSettlementStart,
+    );
+    expect(storedSettlement).toContain('WorldEngineV2.fromSave(campaign.stateSave, resolved.content)');
+    expect(storedSettlement).toContain("settleActiveCampaign('surrender', { engine, campaign })");
+    expect(canonicalSettlement).toContain('createCampaignLifecycleSnapshotV1({');
+    expect(canonicalSettlement).toContain('claimCampaignRewardV1(commanderProfile, snapshot.reward)');
+    expect(canonicalSettlement).toContain('campaignReport = new CampaignReportV1({');
+    expect(canonicalSettlement).toContain('await commanderDatabase.clearCampaign();');
+  });
+
+  it('persists one cumulative war ledger for live, resumed and homescreen settlement', () => {
+    const autosave = mainSource.slice(
+      mainSource.indexOf('function attachCampaignAutosave('),
+      mainSource.indexOf('async function settleActiveCampaign('),
+    );
+    const settlement = mainSource.slice(
+      mainSource.indexOf('async function settleActiveCampaign('),
+      mainSource.indexOf('function surrenderStoredCampaign()'),
+    );
+    const continuation = mainSource.slice(
+      mainSource.indexOf('function continueStoredCampaign()'),
+      mainSource.indexOf('function mountWorldUi('),
+    );
+    expect(autosave).toContain('activeCampaign.warOutcomes.filter(');
+    expect(autosave).toContain('ownLosses: warOutcome.ownLosses');
+    expect(mainSource).toContain('warOutcomeLedgerStartedTick: engine.state.tick');
+    expect(continuation).toContain('campaignSlot.warOutcomeLedgerStartedTick === undefined');
+    expect(settlement).not.toContain('activeCampaignWarOutcomes');
+  });
+
+  it('silently unlocks an ordinary nation on a standard Campaign war victory', () => {
+    const autosave = mainSource.slice(
+      mainSource.indexOf('function attachCampaignAutosave('),
+      mainSource.indexOf('async function settleActiveCampaign('),
+    );
+    expect(autosave).toContain("activeCampaign?.scenario.mode === 'standard-2026'");
+    expect(autosave).toContain("warOutcome.result === 'victory'");
+    expect(autosave).toContain('warOutcome?.humanId === activeCampaign.countryId');
+    expect(autosave).toContain("engine.content.nations[warOutcome.opponentId]?.kind !== 'rogue-ai'");
+    expect(autosave).toContain('recordCampaignDefeatedCountriesV1(');
+    expect(autosave).toContain('commanderDatabase.saveProfile(commanderProfile)');
+    expect(autosave).not.toContain('recordCampaignSignalPurgedCountriesV1(');
+    expect(autosave).not.toContain('enqueueCountryUnlockNotification');
+  });
+
+  it('has no unlock popup or nation-purchase runtime wiring', () => {
+    for (const source of [mainSource, worldUiSource]) {
+      expect(source).not.toMatch(/CountryUnlockNotification|countryUnlockNotificationQueue/);
+      expect(source).not.toMatch(/onUnlockCountry|purchaseCountryUpgrade|unlock-notified-country/);
+    }
+    expect(stylesSource).not.toContain('country-unlock-notice');
+  });
+
+  it('contains neither the fullscreen recommendation nor the conquest empire-name modal', () => {
+    for (const removed of [
+      'fullscreenPromptOpen',
+      'renderFullscreenRecommendation',
+      'data-action="fullscreen-enter"',
+      'empireNameDraft',
+      'empireNameSubmitted',
+      'renderEmpireNamePrompt',
+      'data-action="name-empire"',
+    ]) expect(worldUiSource).not.toContain(removed);
+    expect(stylesSource).not.toMatch(/fullscreen-recommendation|empire-name-overlay/);
+  });
+});

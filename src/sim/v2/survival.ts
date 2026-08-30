@@ -1,0 +1,615 @@
+import { clamp, round } from './balance';
+import {
+  ROGUE_AI_NATION_ID_V2,
+  isRogueAiNationV2,
+  type WorldContentV2,
+} from './content';
+import { addWorldEventV2 } from './events';
+import {
+  CAMPAIGN_FIRST_GATEWAY_BREACH_TICKS_V2,
+  LATER_GATEWAY_BREACH_TICKS_V2,
+  SURVIVAL_FIRST_GATEWAY_BREACH_TICKS_V2,
+  antarcticGatewayTerritoryIdV2,
+  initializeAntarcticGatewayBreachesV2,
+  isWorldConnectionOpenV2,
+  processAntarcticGatewayBreachesV2,
+  scheduleAntarcticGatewayBreachV2,
+} from './antarcticGateways';
+import {
+  addRogueWaveManpowerV2,
+  rogueWaveManpowerAtV2,
+} from './survivalProvenance';
+import { activateRoguePrimeV2 } from './roguePrime';
+import type {
+  PlayerId,
+  ResearchEffectV2,
+  TerritoryId,
+  WarStateV2,
+  WorldStateV2,
+} from './types';
+import { territoryIdV2 } from './types';
+
+export const SURVIVAL_FIRST_WAVE_DELAY_TICKS_V2 = 13;
+export const SURVIVAL_BASE_WAVE_INTERVAL_TICKS_V2 = 52;
+export const SURVIVAL_MIN_WAVE_INTERVAL_TICKS_V2 = 26;
+/** Hard readability/performance ceiling after the first world foothold. */
+export const SURVIVAL_MAX_CONCURRENT_ROGUE_FRONTS_V2 = 6;
+export const ROGUE_AI_CORE_TERRITORY_ID_V2 = territoryIdV2('zero-point-core');
+export const SURVIVAL_WAR_PRESSURE_BASELINE_V2 = 4;
+export const SURVIVAL_WAR_PRESSURE_CAP_V2 = 45;
+export const SURVIVAL_QUIET_PRESSURE_RELIEF_V2 = 0.03;
+export const SURVIVAL_WAVE_PRESSURE_RELIEF_V2 = 1.50;
+export const SURVIVAL_RECAPTURE_PRESSURE_RELIEF_V2 = 2;
+/** Weakened Survival states capitulate once a real Antarctic column has
+ * destroyed most of the force they actually started the timeline with. */
+export const SURVIVAL_ROGUE_DECISIVE_SURRENDER_LOSS_SHARE_V2 = 0.65;
+/**
+ * Four thousand machines in wave one: the normal visible opening convoy.
+ * Later waves retain the same super-linear escalation curve.
+ */
+export const SURVIVAL_WAVE_STAGING_BASE_MANPOWER_V2 = 0.004;
+export const SURVIVAL_WAVE_STAGING_EXPONENT_V2 = 1.32;
+
+const ROGUE_AI_MINIMUM_RESEARCH_V2: Readonly<Partial<Record<ResearchEffectV2, number>>> = Object.freeze({
+  attack: 5,
+  defense: 7,
+  'casualty-reduction': 5,
+  recovery: 8,
+  supply: 10,
+  'force-capacity': 7,
+  'reserve-training': 10,
+  'reserve-mobilization': 9,
+  'research-speed': 8,
+  'research-efficiency': 8,
+  'economy-growth': 5,
+  'tax-efficiency': 6,
+  'operating-efficiency': 10,
+  training: 8,
+});
+
+export interface SurvivalWaveResultV2 {
+  readonly activated: boolean;
+  readonly waveStarted: number | null;
+  readonly targets: readonly PlayerId[];
+  readonly victory: boolean;
+}
+
+/** Save-stable scenario identity; no UI or commander-profile state is needed. */
+export function isSurvivalStateV2(
+  state: Pick<WorldStateV2, 'contentVersion'>,
+): boolean {
+  return state.contentVersion.startsWith('survival-v');
+}
+
+/** The machine conflict is one continuous Survival war, not a peace campaign. */
+export function isPermanentRogueWarV2(
+  state: Pick<WorldStateV2, 'contentVersion'>,
+  war: Pick<WarStateV2, 'attackerId' | 'defenderId'>,
+): boolean {
+  return isSurvivalStateV2(state)
+    && (war.attackerId === ROGUE_AI_NATION_ID_V2
+      || war.defenderId === ROGUE_AI_NATION_ID_V2);
+}
+
+/**
+ * Survival pressure is earned by actual field losses and undersupply. The
+ * tiny pulse prevents completely free fighting, while the hard cap keeps an
+ * endless mode playable instead of converging on Campaign's exhaustion wall.
+ */
+export function survivalBattlePressureGainV2(
+  casualtyShare: number,
+  supplyAvailability: number,
+): number {
+  const losses = clamp(Number.isFinite(casualtyShare) ? casualtyShare : 0, 0, 0.25);
+  const shortage = clamp(1 - (Number.isFinite(supplyAvailability) ? supplyAvailability : 0), 0, 0.75);
+  return round(clamp(
+    0.012 + 2.40 * losses + 0.16 * Math.pow(shortage, 1.25),
+    0,
+    0.75,
+  ));
+}
+
+export function adjustSurvivalWarPressureV2(
+  state: WorldStateV2,
+  playerId: PlayerId,
+  delta: number,
+): void {
+  const player = state.players[playerId];
+  if (!player || !isSurvivalStateV2(state) || !Number.isFinite(delta)) return;
+  player.warFatigue = round(clamp(
+    player.warFatigue + delta,
+    SURVIVAL_WAR_PRESSURE_BASELINE_V2,
+    SURVIVAL_WAR_PRESSURE_CAP_V2,
+  ));
+}
+
+function activeRogueWarOpponentsV2(state: WorldStateV2): PlayerId[] {
+  const opponents = new Set<PlayerId>();
+  for (const war of state.wars) {
+    if (!isPermanentRogueWarV2(state, war)) continue;
+    const opponentId = war.attackerId === ROGUE_AI_NATION_ID_V2
+      ? war.defenderId : war.attackerId;
+    if (state.players[opponentId]) opponents.add(opponentId);
+  }
+  return [...opponents].sort((left, right) => left.localeCompare(right));
+}
+
+function normalizeSurvivalWarPressureV2(state: WorldStateV2): void {
+  const currentBattleByParticipant = new Map<PlayerId, boolean>();
+  for (const war of state.wars) {
+    if (!isPermanentRogueWarV2(state, war)) continue;
+    for (const participantId of [war.attackerId, war.defenderId]) {
+      currentBattleByParticipant.set(
+        participantId,
+        (currentBattleByParticipant.get(participantId) ?? false) || war.lastBattleTick >= state.tick,
+      );
+    }
+  }
+  for (const [participantId, foughtThisTick] of currentBattleByParticipant) {
+    adjustSurvivalWarPressureV2(
+      state,
+      participantId,
+      foughtThisTick ? 0 : -SURVIVAL_QUIET_PRESSURE_RELIEF_V2,
+    );
+  }
+}
+
+function rogueOwnedTerritoryIdsV2(state: WorldStateV2): TerritoryId[] {
+  return (Object.entries(state.territories) as Array<[TerritoryId, WorldStateV2['territories'][TerritoryId]]>)
+    .filter(([, territory]) => territory.owner === ROGUE_AI_NATION_ID_V2)
+    .map(([territoryId]) => territoryId)
+    .sort((left, right) => left.localeCompare(right));
+}
+
+export function rogueAiSurvivalActiveV2(state: Pick<WorldStateV2, 'polarEndgame'>): boolean {
+  return state.polarEndgame.phase === 'contact'
+    || state.polarEndgame.phase === 'counteroffensive'
+    || state.polarEndgame.phase === 'core-exposed';
+}
+
+export function rogueAiIsHostileToV2(
+  content: WorldContentV2,
+  playerId: PlayerId,
+): boolean {
+  return Boolean(content.nations[playerId]) && !isRogueAiNationV2(content, playerId);
+}
+
+export function isNationOperationalV2(
+  state: Pick<WorldStateV2, 'polarEndgame'>,
+  content: WorldContentV2,
+  playerId: PlayerId,
+): boolean {
+  return !isRogueAiNationV2(content, playerId) || rogueAiSurvivalActiveV2(state);
+}
+
+/**
+ * Gives the machine state its authored operating doctrine without inventing a
+ * second combat/economy system. Every bonus is represented by the same budget,
+ * treasury, reserve and research fields consumed for ordinary nations.
+ */
+export function primeRogueAiNationV2(state: WorldStateV2, content: WorldContentV2): void {
+  const rogue = state.players[ROGUE_AI_NATION_ID_V2];
+  if (!rogue || !isRogueAiNationV2(content, ROGUE_AI_NATION_ID_V2)) return;
+  rogue.budget = { military: 65, research: 20, development: 15 };
+  rogue.treasury = round(Math.max(rogue.treasury, 8_000), 3);
+  rogue.trainedReserves = round(Math.max(rogue.trainedReserves, 0.85), 9);
+  for (const [effect, minimum] of Object.entries(ROGUE_AI_MINIMUM_RESEARCH_V2) as Array<[
+    ResearchEffectV2,
+    number,
+  ]>) {
+    rogue.research.effectLevels[effect] = Math.max(
+      rogue.research.effectLevels[effect],
+      minimum,
+    );
+  }
+}
+
+export function activateRogueAiSurvivalV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  revealedBy: PlayerId | null,
+  immediate = false,
+): boolean {
+  if (rogueAiSurvivalActiveV2(state) || state.polarEndgame.phase === 'victory') return false;
+  if (!state.players[ROGUE_AI_NATION_ID_V2]
+    || !content.nations[ROGUE_AI_NATION_ID_V2]
+    || rogueOwnedTerritoryIdsV2(state).length === 0) return false;
+  primeRogueAiNationV2(state, content);
+  state.polarEndgame.phase = 'contact';
+  state.polarEndgame.revealedBy = revealedBy;
+  state.polarEndgame.warningTick ??= state.tick;
+  state.polarEndgame.contactTick = state.tick;
+  state.polarEndgame.victoryTick = null;
+  state.polarEndgame.victoryCommanderId = null;
+  state.polarEndgame.globalWave = 1;
+  state.polarEndgame.nextCounteroffensiveTick = state.tick
+    + (immediate ? SURVIVAL_FIRST_WAVE_DELAY_TICKS_V2 : SURVIVAL_BASE_WAVE_INTERVAL_TICKS_V2);
+  state.polarEndgame.earthDefenseMembers = (Object.keys(state.players) as PlayerId[])
+    .filter((playerId) => rogueAiIsHostileToV2(content, playerId))
+    .sort((left, right) => left.localeCompare(right));
+  state.polarEndgame.expeditions = [];
+  state.polarEndgame.rogueAttention = {
+    stage: 'active',
+    liberatedWorldShare: state.polarEndgame.rogueAttention?.liberatedWorldShare ?? 0,
+    benchmarkMetTick: state.polarEndgame.rogueAttention?.benchmarkMetTick ?? state.tick,
+    nextStageTick: null,
+    activatedTick: state.tick,
+  };
+  initializeAntarcticGatewayBreachesV2(
+    state,
+    immediate
+      ? SURVIVAL_FIRST_GATEWAY_BREACH_TICKS_V2
+      : CAMPAIGN_FIRST_GATEWAY_BREACH_TICKS_V2,
+  );
+  activateRoguePrimeV2(state);
+  state.polarEndgame.visualRevision += 1;
+  addWorldEventV2(
+    state,
+    'polar',
+    'critical',
+    immediate
+      ? 'SURVIVAL PROTOCOL: APEX detects the Codex Ascendancy beneath Antarctica. All three gateways are sealed; the first breach is being prepared.'
+      : 'APEX ORIGIN LOCK: the Codex Ascendancy is active beneath Antarctica. All three gateways are sealed; one breach is forming.',
+    undefined,
+    revealedBy ?? undefined,
+    { polarRegion: 'antarctica' },
+  );
+  return true;
+}
+
+export function initializeSurvivalScenarioV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+): void {
+  primeRogueAiNationV2(state, content);
+  if (content.metadata?.scenarioId === 'survival') {
+    activateRogueAiSurvivalV2(state, content, state.humanPlayerId, true);
+  }
+}
+
+function relationMatchesV2(
+  leftId: PlayerId,
+  rightId: PlayerId,
+  targetId: PlayerId,
+): boolean {
+  return (leftId === ROGUE_AI_NATION_ID_V2 && rightId === targetId)
+    || (rightId === ROGUE_AI_NATION_ID_V2 && leftId === targetId);
+}
+
+function clearRogueWarBlocksV2(state: WorldStateV2, targetId: PlayerId): void {
+  state.truces = state.truces.filter((truce) => !relationMatchesV2(truce.leftId, truce.rightId, targetId));
+  state.ceasefireObligations = [];
+  state.offers = [];
+  state.alliances = state.alliances.filter((alliance) => !relationMatchesV2(alliance.leftId, alliance.rightId, targetId));
+  state.allianceOffers = state.allianceOffers.filter((offer) => !relationMatchesV2(offer.fromId, offer.toId, targetId));
+}
+
+function activeRogueWarWithV2(state: WorldStateV2, targetId: PlayerId): boolean {
+  return state.wars.some((war) => relationMatchesV2(war.attackerId, war.defenderId, targetId));
+}
+
+export interface RogueTargetAccessV2 {
+  targetId: PlayerId;
+  access: 'land' | 'naval';
+}
+
+export function accessibleRogueTargetsV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+): RogueTargetAccessV2[] {
+  const targets = new Map<PlayerId, 'land' | 'naval'>();
+  for (const sourceId of rogueOwnedTerritoryIdsV2(state)) {
+    // A damaged occupation marker cannot project a new front by itself. A war
+    // becomes real only after Antarctic-origin personnel have visibly reached
+    // an adjacent staging territory through the ordinary logistics graph.
+    if (rogueWaveManpowerAtV2(state, sourceId) <= 1e-9) continue;
+    for (const connection of content.territories[sourceId]?.connections ?? []) {
+      if (!isWorldConnectionOpenV2(state, sourceId, connection.targetId)) continue;
+      const ownerId = state.territories[connection.targetId]?.owner;
+      if (!ownerId || !rogueAiIsHostileToV2(content, ownerId)) continue;
+      if (!state.players[ownerId] || activeRogueWarWithV2(state, ownerId)) continue;
+      const access = connection.kind === 'land' ? 'land' : 'naval';
+      if (access === 'land' || !targets.has(ownerId)) targets.set(ownerId, access);
+    }
+  }
+  const candidates = [...targets].map(([targetId, access]) => ({ targetId, access }));
+  // World occupation expands over contiguous borders. A sea operation is a
+  // slow fallback only when no land objective exists at this wave review.
+  const land = candidates.filter((candidate) => candidate.access === 'land');
+  return (land.length > 0 ? land : candidates)
+    .sort((left, right) => left.targetId.localeCompare(right.targetId));
+}
+
+function waveHashV2(seed: number, wave: number, playerId: PlayerId): number {
+  let hash = (seed ^ Math.imul(wave + 1, 0x9e3779b1)) >>> 0;
+  for (let index = 0; index < playerId.length; index += 1) {
+    hash = Math.imul(hash ^ playerId.charCodeAt(index), 0x45d9f3b) >>> 0;
+  }
+  hash ^= hash >>> 16;
+  return hash >>> 0;
+}
+
+function openRogueWarV2(state: WorldStateV2, targetId: PlayerId): WarStateV2 {
+  clearRogueWarBlocksV2(state, targetId);
+  const war: WarStateV2 = {
+    id: `war-${state.nextWarId++}`,
+    attackerId: ROGUE_AI_NATION_ID_V2,
+    defenderId: targetId,
+    startedTick: state.tick,
+    lastBattleTick: state.tick,
+    warScore: 0,
+    battles: 0,
+    attackerLosses: 0,
+    defenderLosses: 0,
+    attackerCivilianLosses: 0,
+    defenderCivilianLosses: 0,
+    lastPeaceOfferTick: -1_000_000,
+    revenge: null,
+    attackerOperations: [],
+    defenderOperations: [],
+  };
+  state.wars.push(war);
+  return war;
+}
+
+function strengthenRogueForWaveV2(state: WorldStateV2, wave: number): void {
+  const rogue = state.players[ROGUE_AI_NATION_ID_V2];
+  if (!rogue) return;
+  const evolution = Math.max(0, wave - 1);
+  const halfWave = Math.floor(evolution / 2);
+  rogue.research.effectLevels.attack = Math.max(
+    rogue.research.effectLevels.attack,
+    ROGUE_AI_MINIMUM_RESEARCH_V2.attack! + halfWave,
+  );
+  rogue.research.effectLevels.defense = Math.max(
+    rogue.research.effectLevels.defense,
+    ROGUE_AI_MINIMUM_RESEARCH_V2.defense! + Math.floor(evolution / 3),
+  );
+  rogue.research.effectLevels.supply = Math.max(
+    rogue.research.effectLevels.supply,
+    ROGUE_AI_MINIMUM_RESEARCH_V2.supply! + evolution,
+  );
+  rogue.research.effectLevels['reserve-training'] = Math.max(
+    rogue.research.effectLevels['reserve-training'],
+    ROGUE_AI_MINIMUM_RESEARCH_V2['reserve-training']! + halfWave,
+  );
+  rogue.research.effectLevels['reserve-mobilization'] = Math.max(
+    rogue.research.effectLevels['reserve-mobilization'],
+    ROGUE_AI_MINIMUM_RESEARCH_V2['reserve-mobilization']! + halfWave,
+  );
+}
+
+/** Requested millions mobilised at Zero Point before ordinary one-hop logistics moves them. */
+export function survivalWaveStagingManpowerV2(wave: number): number {
+  const canonicalWave = Math.max(1, Math.floor(Number.isFinite(wave) ? wave : 1));
+  return round(
+    SURVIVAL_WAVE_STAGING_BASE_MANPOWER_V2
+      * Math.pow(canonicalWave, SURVIVAL_WAVE_STAGING_EXPONENT_V2),
+    9,
+  );
+}
+
+/**
+ * The first convoy remains one readable approaching threat. Once the machine
+ * has a real world foothold, successive waves fan out through nearby land
+ * borders much sooner, while a hard ceiling prevents a global war explosion.
+ */
+export function survivalRogueFrontCapV2(
+  wave: number,
+  hasWorldFoothold: boolean,
+): number {
+  if (!hasWorldFoothold) return 1;
+  const canonicalWave = Math.max(1, Math.floor(Number.isFinite(wave) ? wave : 1));
+  return Math.min(
+    SURVIVAL_MAX_CONCURRENT_ROGUE_FRONTS_V2,
+    2 + Math.floor(Math.max(0, canonicalWave - 1) / 2),
+  );
+}
+
+/**
+ * Zero Point explicitly manufactures every authored wave. This is deliberately
+ * outside ordinary national recruitment, which stays frozen during war. The
+ * machines materialise only at the core; from the following week the normal
+ * paid, capacity-limited logistics pass must carry them core -> inner -> outer
+ * -> gateway -> world one hop at a time.
+ *
+ * A full core may retire only its unverified static garrison to make room. That
+ * placeholder manpower is removed before the new wave is provenance-tagged, so
+ * it can never become reward-eligible by conversion.
+ */
+function stageRogueWaveAtCoreV2(state: WorldStateV2, wave: number): number {
+  const rogue = state.players[ROGUE_AI_NATION_ID_V2];
+  const core = state.territories[ROGUE_AI_CORE_TERRITORY_ID_V2];
+  if (!rogue || !core || core.owner !== ROGUE_AI_NATION_ID_V2) return 0;
+  const manufactured = survivalWaveStagingManpowerV2(wave);
+  rogue.trainedReserves = round(rogue.trainedReserves + manufactured, 9);
+  const verifiedAtCore = rogueWaveManpowerAtV2(state, ROGUE_AI_CORE_TERRITORY_ID_V2);
+  const unverifiedGarrison = Math.max(0, core.army.manpower - verifiedAtCore);
+  const initialCapacityRoom = Math.max(0, core.army.capacity - core.army.manpower);
+  const displacedPlaceholder = Math.min(
+    unverifiedGarrison,
+    Math.max(0, manufactured - initialCapacityRoom),
+  );
+  if (displacedPlaceholder > 0) {
+    core.army.manpower = round(core.army.manpower - displacedPlaceholder, 9);
+  }
+  const capacityRoom = Math.max(0, core.army.capacity - core.army.manpower);
+  const staged = round(Math.min(
+    manufactured,
+    Math.max(0, rogue.trainedReserves),
+    capacityRoom,
+  ), 9);
+  if (staged <= 0) return 0;
+  rogue.trainedReserves = round(Math.max(0, rogue.trainedReserves - staged), 9);
+  core.army.manpower = round(core.army.manpower + staged, 9);
+  addRogueWaveManpowerV2(state, ROGUE_AI_CORE_TERRITORY_ID_V2, staged);
+  return staged;
+}
+
+function finishSurvivalVictoryV2(state: WorldStateV2): boolean {
+  const coreOwner = state.territories[ROGUE_AI_CORE_TERRITORY_ID_V2]?.owner;
+  if (!coreOwner || coreOwner === ROGUE_AI_NATION_ID_V2) return false;
+  // Keep the legacy polar envelope internally coherent for old saves and
+  // multiplayer hashes. The territory owner is authoritative in the new
+  // system; this record is compatibility metadata, not a second battle model.
+  const coreRecord = state.polarEndgame.sectors['zero-point-core'];
+  if (coreRecord) {
+    coreRecord.status = 'secured';
+    coreRecord.integrity = 0;
+    coreRecord.discoveredTick ??= state.tick;
+    coreRecord.securedTick = state.tick;
+    coreRecord.securedBy = coreOwner;
+  }
+  state.polarEndgame.phase = 'victory';
+  state.polarEndgame.victoryTick = state.tick;
+  state.polarEndgame.victoryCommanderId = coreOwner;
+  state.polarEndgame.nextCounteroffensiveTick = null;
+  state.polarEndgame.bossPhase = 3;
+  state.polarEndgame.bossIntegrity = 0;
+  state.polarEndgame.visualRevision += 1;
+  addWorldEventV2(
+    state,
+    'polar',
+    'critical',
+    'ZERO POINT CAPTURED: the Rogue AI core has gone silent. Humanity survives the machine invasion.',
+    ROGUE_AI_CORE_TERRITORY_ID_V2,
+    coreOwner,
+    { polarRegion: 'antarctica', polarSectorId: 'zero-point-core' },
+  );
+  return true;
+}
+
+export function processRogueAiSurvivalV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+): SurvivalWaveResultV2 {
+  if (finishSurvivalVictoryV2(state)) {
+    return { activated: true, waveStarted: null, targets: [], victory: true };
+  }
+  if (!rogueAiSurvivalActiveV2(state)) {
+    return { activated: false, waveStarted: null, targets: [], victory: false };
+  }
+  for (const gatewayId of processAntarcticGatewayBreachesV2(state)) {
+    const gatewayTerritoryId = antarcticGatewayTerritoryIdV2(gatewayId);
+    addWorldEventV2(
+      state,
+      'polar',
+      'critical',
+      `${content.territories[gatewayTerritoryId]?.name ?? gatewayId} BREACH OPEN: the first machine convoys can now enter the world supply network.`,
+      gatewayTerritoryId,
+      ROGUE_AI_NATION_ID_V2,
+      { polarRegion: 'antarctica', polarSectorId: gatewayId },
+    );
+  }
+  normalizeSurvivalWarPressureV2(state);
+  const dueTick = state.polarEndgame.nextCounteroffensiveTick;
+  if (dueTick === null || dueTick > state.tick) {
+    if (activeRogueWarOpponentsV2(state).length === 0) {
+      const humanIds = new Set(state.humanPlayerIds);
+      const reached = accessibleRogueTargetsV2(state, content)
+        .sort((left, right) => Number(humanIds.has(right.targetId))
+          - Number(humanIds.has(left.targetId))
+          || waveHashV2(state.seed, state.polarEndgame.globalWave, left.targetId)
+            - waveHashV2(state.seed, state.polarEndgame.globalWave, right.targetId)
+          || left.targetId.localeCompare(right.targetId))[0];
+      if (reached) {
+        openRogueWarV2(state, reached.targetId);
+        state.polarEndgame.visualRevision += 1;
+        addWorldEventV2(
+          state,
+          'polar',
+          'critical',
+          `MACHINE FRONT REACHED: an Antarctic-origin column made contact with ${content.nations[reached.targetId]?.shortName ?? reached.targetId} by ${reached.access}.`,
+          undefined,
+          ROGUE_AI_NATION_ID_V2,
+          { polarRegion: 'antarctica' },
+        );
+      }
+    }
+    return { activated: true, waveStarted: null, targets: [], victory: false };
+  }
+  const wave = Math.max(1, Math.floor(state.polarEndgame.globalWave));
+  const breachIndex = wave === 3 ? 1 : wave === 5 ? 2 : -1;
+  if (breachIndex >= 0) {
+    const gatewayId = scheduleAntarcticGatewayBreachV2(
+      state,
+      breachIndex,
+      LATER_GATEWAY_BREACH_TICKS_V2,
+    );
+    if (gatewayId) {
+      const gatewayTerritoryId = antarcticGatewayTerritoryIdV2(gatewayId);
+      addWorldEventV2(
+        state,
+        'polar',
+        'critical',
+        `${content.territories[gatewayTerritoryId]?.name ?? gatewayId} BREACHING: route opens in ${LATER_GATEWAY_BREACH_TICKS_V2} weeks.`,
+        gatewayTerritoryId,
+        ROGUE_AI_NATION_ID_V2,
+        { polarRegion: 'antarctica', polarSectorId: gatewayId },
+      );
+    }
+  }
+  strengthenRogueForWaveV2(state, wave);
+  const stagedManpower = stageRogueWaveAtCoreV2(state, wave);
+  const humanIds = new Set(state.humanPlayerIds);
+  const activeTargets = activeRogueWarOpponentsV2(state);
+  const candidates = accessibleRogueTargetsV2(state, content)
+    .sort((left, right) => Number(humanIds.has(right.targetId)) - Number(humanIds.has(left.targetId))
+      || waveHashV2(state.seed, wave, left.targetId) - waveHashV2(state.seed, wave, right.targetId)
+      || left.targetId.localeCompare(right.targetId));
+  const hasWorldFoothold = Object.entries(state.territories).some(([territoryId, territory]) => (
+    territory.owner === ROGUE_AI_NATION_ID_V2
+      && content.territories[territoryId as TerritoryId]?.kind === 'sovereign'
+  ));
+  // The opening is one readable, approaching threat. Later gateways may be
+  // visible already, but they do not steal the convoy from the first breach
+  // until the machine has actually established a world foothold. Expansion
+  // can fan out gradually afterwards as stronger waves arrive.
+  const targetCount = survivalRogueFrontCapV2(wave, hasWorldFoothold);
+  const newTargets = candidates.slice(0, Math.max(0, targetCount - activeTargets.length))
+    .map((candidate) => candidate.targetId);
+  const targets = [...activeTargets, ...newTargets]
+    .filter((targetId, index, all) => all.indexOf(targetId) === index)
+    .sort((left, right) => left.localeCompare(right));
+  const interval = Math.max(
+    SURVIVAL_MIN_WAVE_INTERVAL_TICKS_V2,
+    SURVIVAL_BASE_WAVE_INTERVAL_TICKS_V2 - Math.min(26, wave * 2),
+  );
+  if (targets.length === 0) {
+    // The convoy is still a real wave and must not be restaged every four
+    // weeks. It leaves Zero Point now; its first war is declared only after
+    // provenance physically reaches a gateway/front on a later review.
+    state.polarEndgame.globalWave = wave + 1;
+    state.polarEndgame.nextCounteroffensiveTick = state.tick + interval;
+    state.polarEndgame.visualRevision += 1;
+    addWorldEventV2(
+      state,
+      'polar',
+      'action',
+      `ROGUE WAVE ${wave}: Zero Point mobilised ${Math.round(stagedManpower * 1_000_000)} machines. The convoy is moving through Antarctica; no world front is in range yet.`,
+      undefined,
+      ROGUE_AI_NATION_ID_V2,
+      { polarRegion: 'antarctica' },
+    );
+    return { activated: true, waveStarted: wave, targets: [], victory: false };
+  }
+  for (const targetId of newTargets) openRogueWarV2(state, targetId);
+  if (wave > 1) {
+    for (const targetId of targets) {
+      adjustSurvivalWarPressureV2(state, targetId, -SURVIVAL_WAVE_PRESSURE_RELIEF_V2);
+    }
+  }
+  state.polarEndgame.globalWave = wave + 1;
+  state.polarEndgame.nextCounteroffensiveTick = state.tick + interval;
+  state.polarEndgame.visualRevision += 1;
+  addWorldEventV2(
+    state,
+    'polar',
+    wave >= 4 ? 'critical' : 'action',
+    `ROGUE WAVE ${wave}: Zero Point mobilised ${Math.round(stagedManpower * 1_000_000)} machines into the visible Antarctic supply chain toward ${targets.length} permanent front${targets.length === 1 ? '' : 's'} against ${targets.map((id) => content.nations[id]?.shortName ?? id).join(', ')}${newTargets.length > 0 ? `, opening ${newTargets.length} new theatre${newTargets.length === 1 ? '' : 's'}` : ''}.`,
+    undefined,
+    ROGUE_AI_NATION_ID_V2,
+    { polarRegion: 'antarctica' },
+  );
+  return { activated: true, waveStarted: wave, targets, victory: false };
+}

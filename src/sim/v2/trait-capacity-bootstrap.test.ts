@@ -23,8 +23,8 @@ import {
 } from './traits';
 import { nationIdV2, territoryIdV2 } from './types';
 
-describe('country trait opening economy and army capacity', () => {
-  it('adds army-capacity room without granting free opening manpower', () => {
+describe('trait-neutral opening economy and army capacity', () => {
+  it('uses raw army capacity and opening manpower without archived modifiers', () => {
     const state = createWorldStateV2(91_001);
     const mexico = nationIdV2('mex');
     const mexicoTerritory = territoryIdV2('mex');
@@ -33,12 +33,12 @@ describe('country trait opening economy and army capacity', () => {
     const army = state.territories[mexicoTerritory].army;
     const factor = countryTraitFactorV2(mexico, 'army-capacity');
 
-    expect(factor).toBeGreaterThan(1);
+    expect(factor).toBe(1);
     expect(army.capacity).toBeCloseTo(rawCapacity * factor, 5);
     expect(army.manpower).toBeCloseTo(rawCapacity * openingFill, 5);
   });
 
-  it('combines Greenland authored capacity with its temporary human opening force', () => {
+  it('combines neutral Greenland capacity with its separate temporary human opening force', () => {
     const state = createWorldStateV2(91_000);
     const greenland = nationIdV2('grl');
     const greenlandTerritory = territoryIdV2('grl');
@@ -50,7 +50,7 @@ describe('country trait opening economy and army capacity', () => {
 
     expect(WORLD_CONTENT_V2.nations[greenland].balance.initialManpower)
       .toBeCloseTo(0.001903546, 9);
-    expect(aiFactor).toBeCloseTo(1.09, 12);
+    expect(aiFactor).toBe(1);
     expect(army.capacity).toBeCloseTo(rawCapacity * aiFactor, 5);
     expect(army.manpower).toBeCloseTo(rawCapacity * openingFill, 5);
 
@@ -94,22 +94,22 @@ describe('country trait opening economy and army capacity', () => {
       9,
     );
     expect(state.players[greenland]!.openingArmyBonus?.remainingManpower).toBeGreaterThan(0);
-    expect(humanFactor).toBeCloseTo(1.27, 12);
+    expect(humanFactor).toBe(1);
   });
 
-  it('gives Eswatini capacity instead of an inactive reserve-training identity', () => {
+  it('keeps Eswatini at raw authored capacity', () => {
     const state = createWorldStateV2(91_005);
     const eswatini = nationIdV2('swz');
     const eswatiniTerritory = territoryIdV2('swz');
     const rawCapacity = initialTerritoryArmyCapacityV2(WORLD_CONTENT_V2, eswatiniTerritory);
 
     const factor = countryTraitFactorV2(eswatini, 'army-capacity');
-    expect(factor).toBeGreaterThan(1);
+    expect(factor).toBe(1);
     expect(state.territories[eswatiniTerritory].army.capacity)
       .toBeCloseTo(rawCapacity * factor, 5);
   });
 
-  it('uses only the live empire leader trait after conquest or fusion', () => {
+  it('cannot inherit archived capacity modifiers after conquest or fusion', () => {
     const state = createWorldStateV2(91_002);
     const mexico = nationIdV2('mex');
     const venezuela = nationIdV2('ven');
@@ -128,7 +128,7 @@ describe('country trait opening economy and army capacity', () => {
       0,
       1,
     );
-    expect(countryTraitFactorV2(venezuela, 'army-capacity')).toBeGreaterThan(1);
+    expect(countryTraitFactorV2(venezuela, 'army-capacity')).toBe(1);
     expect(stateTerritoryArmyCapacityTargetV2(
       state,
       WORLD_CONTENT_V2,
@@ -137,18 +137,18 @@ describe('country trait opening economy and army capacity', () => {
     )).toBeCloseTo(rawCapacity * countryTraitFactorV2(mexico, 'army-capacity'), 5);
   });
 
-  it('keeps the national target equal to the sum of its trait-adjusted local targets', () => {
+  it('keeps the national target equal to the sum of neutral local targets', () => {
     const state = createWorldStateV2(91_003);
     const burundi = nationIdV2('bdi');
     const localTargets = stateArmyCapacityTargetsV2(state, WORLD_CONTENT_V2, burundi);
     const localSum = [...localTargets.values()].reduce((sum, value) => sum + value, 0);
 
-    expect(countryTraitFactorV2(burundi, 'army-capacity')).toBeGreaterThan(1);
+    expect(countryTraitFactorV2(burundi, 'army-capacity')).toBe(1);
     expect(nationalArmyCapacityTargetV2(state, WORLD_CONTENT_V2, burundi))
       .toBeCloseTo(localSum, 8);
   });
 
-  it('uses the common starting-treasury formula while Luxembourg grows through army capacity', () => {
+  it('uses the common starting-treasury formula and neutral Luxembourg capacity', () => {
     const state = createWorldStateV2(91_004);
     const luxembourg = nationIdV2('lux');
     const definition = WORLD_CONTENT_V2.nations[luxembourg];
@@ -172,7 +172,7 @@ describe('country trait opening economy and army capacity', () => {
       3,
     );
     expect(countryTraitFactorV2(luxembourg, 'starting-treasury')).toBe(1);
-    expect(countryTraitFactorV2(luxembourg, 'army-capacity')).toBeGreaterThan(1);
+    expect(countryTraitFactorV2(luxembourg, 'army-capacity')).toBe(1);
     expect(state.players[luxembourg]).not.toHaveProperty('trait');
     expect(state.territories[territoryIdV2('lux')]).not.toHaveProperty('trait');
   });

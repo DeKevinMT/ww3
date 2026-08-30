@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   FOOD_MAX_STOCK_WEEKS,
   RESEARCH_CATCH_UP_FULL_GAP,
+  WAR_FATIGUE_OPERATION_COST_MAX_BONUS,
   warAccessOperationMultiplierV2,
 } from './balance';
 import { createWorldStateV2 } from './bootstrap';
@@ -190,8 +191,8 @@ function withSeaRouteV2(
   return { ...content, territories: territories as WorldContentV2['territories'] };
 }
 
-describe('country-trait selector runtime', () => {
-  it('applies fiscal traits once and never inherits an annexed country trait', () => {
+describe('retired country-trait selector runtime', () => {
+  it('keeps fiscal selectors neutral and cannot inherit an annexed country trait', () => {
     const belgium = identityFixtureV2('bel', 82_001);
     expect(selectTaxEfficiencyMultiplierV2(belgium.traitState, belgium.traitId)
       / selectTaxEfficiencyMultiplierV2(belgium.neutralState, belgium.neutralId))
@@ -214,7 +215,7 @@ describe('country-trait selector runtime', () => {
     expect(selectTaxEfficiencyMultiplierV2(fusionState, netherlands)).toBe(1);
   });
 
-  it('wires recruitment cost, throughput and reserve capacity independently', () => {
+  it('keeps recruitment cost, throughput and reserve capacity neutral', () => {
     const china = identityFixtureV2('chn', 82_010);
     expect(selectRecruitmentUnitCostV2(china.traitState, china.traitId, china.traitContent)
       / selectRecruitmentUnitCostV2(china.neutralState, china.neutralId, china.neutralContent))
@@ -251,7 +252,7 @@ describe('country-trait selector runtime', () => {
     ), 5);
   });
 
-  it('applies reserve training, deployment and accelerated recruitment before their live caps', () => {
+  it('keeps reserve training, deployment and accelerated recruitment neutral', () => {
     const guatemala = identityFixtureV2('gtm', 82_020);
     configureBothV2(guatemala, (state, playerId) => {
       state.players[playerId]!.treasury = 1_000_000;
@@ -308,15 +309,12 @@ describe('country-trait selector runtime', () => {
       .toBeCloseTo(countryTraitFactorV2(cuba.traitId, 'reserve-deployment-throughput'), 3);
   });
 
-  it('scales only development investment and the funded demographic component', () => {
+  it('keeps development and demographic selectors neutral', () => {
     const dominicanRepublic = identityFixtureV2('dom', 82_030);
     configureBothV2(dominicanRepublic, (state, playerId) => {
       state.players[playerId]!.treasury = 1_000_000;
       state.players[playerId]!.foodSecurity = 1;
       state.players[playerId]!.budget = { military: 0, research: 0, development: 100 };
-      for (const territory of Object.values(state.territories)) {
-        if (territory.owner === playerId) territory.condition = 1;
-      }
     });
     const domTrait = selectWeeklyFinanceBreakdownV2(
       dominicanRepublic.traitState, dominicanRepublic.traitContent, dominicanRepublic.traitId,
@@ -347,7 +345,7 @@ describe('country-trait selector runtime', () => {
       .toBeCloseTo(countryTraitFactorV2(india.traitId, 'population-growth-funding'), 4);
   });
 
-  it('applies research output, catch-up bonus and branch progress at separate layers', () => {
+  it('keeps research output, catch-up and branch progress neutral', () => {
     const estonia = identityFixtureV2('est', 82_040);
     const sharedFinance = selectWeeklyFinanceBreakdownV2(
       estonia.neutralState, estonia.neutralContent, estonia.neutralId,
@@ -403,7 +401,7 @@ describe('country-trait selector runtime', () => {
       }), 5);
   });
 
-  it('wires food capacity, post-wealth costs, storage, access and export income', () => {
+  it('keeps food capacity, costs, storage, access and export income neutral', () => {
     const argentina = identityFixtureV2('arg', 82_050);
     expect(selectFoodLandCapacityV2(
       argentina.traitState, argentina.traitContent, argentina.traitId,
@@ -422,9 +420,10 @@ describe('country-trait selector runtime', () => {
     const hndNeutral = selectWeeklyFinanceBreakdownV2(
       honduras.neutralState, honduras.neutralContent, honduras.neutralId,
     );
-    expect(hndTrait.foodProduction / hndNeutral.foodProduction)
-      .toBeCloseTo(countryTraitFactorV2(honduras.traitId, 'food-import-cost'), 4);
-    expect(hndTrait.foodImported).toBeCloseTo(hndNeutral.foodImported, 3);
+    expect(hndTrait.foodProduction).toBe(0);
+    expect(hndTrait.foodProduction).toBe(hndNeutral.foodProduction);
+    expect(hndTrait.foodImported).toBe(0);
+    expect(hndTrait.foodImported).toBe(hndNeutral.foodImported);
 
     const venezuela = identityFixtureV2('ven', 82_052);
     configureBothV2(venezuela, (state, playerId) => {
@@ -439,8 +438,8 @@ describe('country-trait selector runtime', () => {
     const venNeutral = selectWeeklyFinanceBreakdownV2(
       venezuela.neutralState, venezuela.neutralContent, venezuela.neutralId,
     );
-    expect(venTrait.foodProduction / venNeutral.foodProduction)
-      .toBeCloseTo(countryTraitFactorV2(venezuela.traitId, 'food-production-cost'), 5);
+    expect(venTrait.foodProduction).toBe(0);
+    expect(venTrait.foodProduction).toBe(venNeutral.foodProduction);
 
     const mongolia = identityFixtureV2('mng', 82_053);
     const mngDemand = selectFoodDemandV2(mongolia.traitState, mongolia.traitId);
@@ -457,7 +456,7 @@ describe('country-trait selector runtime', () => {
     const palestine = identityFixtureV2('psx', 82_054);
     expect(selectFoodAccessCeilingV2(
       palestine.traitState, palestine.traitContent, palestine.traitId,
-    )).toBeGreaterThan(selectFoodAccessCeilingV2(
+    )).toBe(selectFoodAccessCeilingV2(
       palestine.neutralState, palestine.neutralContent, palestine.neutralId,
     ));
 
@@ -466,6 +465,11 @@ describe('country-trait selector runtime', () => {
       state.players[playerId]!.treasury = 1_000_000_000;
       state.players[playerId]!.foodSecurity = 0;
       const demand = selectFoodDemandV2(state, playerId);
+      state.players[playerId]!.research.effectLevels['food-production'] = 100;
+      for (const [territoryId, territory] of Object.entries(state.territories)) {
+        if (territory.owner !== playerId) continue;
+        territory.economy = (content.territories[territoryIdV2(territoryId)]?.baseline.gdp ?? territory.economy) * 1.5;
+      }
       state.players[playerId]!.domesticFoodCapacity = demand * 3;
       state.players[playerId]!.foodStock = selectFoodStorageCapacityV2(
         state, content, playerId, demand,
@@ -475,12 +479,13 @@ describe('country-trait selector runtime', () => {
     const ghaNeutral = selectWeeklyFinanceBreakdownV2(
       ghana.neutralState, ghana.neutralContent, ghana.neutralId,
     );
-    expect(ghaTrait.foodExported).toBeGreaterThan(0);
-    expect(ghaTrait.foodExportIncome / ghaNeutral.foodExportIncome)
-      .toBeCloseTo(countryTraitFactorV2(ghana.traitId, 'food-export-income'), 4);
+    expect(ghaTrait.foodExported).toBe(0);
+    expect(ghaTrait.foodExported).toBe(ghaNeutral.foodExported);
+    expect(ghaTrait.foodExportIncome).toBe(0);
+    expect(ghaTrait.foodExportIncome).toBe(ghaNeutral.foodExportIncome);
   });
 
-  it('keeps operation, naval-distance, fatigue and active food-logistics layers separate', () => {
+  it('keeps operation, naval-distance, fatigue and food-logistics layers neutral', () => {
     const cameroon = identityFixtureV2('cmr', 82_060);
     configureBothV2(cameroon, (state, playerId) => {
       state.players[playerId]!.treasury = 1_000_000;
@@ -542,10 +547,14 @@ describe('country-trait selector runtime', () => {
       italy.traitId, 'war-fatigue-operation-surcharge', { atWar: true },
     );
     expect(itaTrait.warOperations / itaNeutral.warOperations)
-      .toBeCloseTo((1 + 0.30 * italyFatigueFactor) / 1.30, 5);
+      .toBeCloseTo(
+        (1 + WAR_FATIGUE_OPERATION_COST_MAX_BONUS * italyFatigueFactor)
+          / (1 + WAR_FATIGUE_OPERATION_COST_MAX_BONUS),
+        5,
+      );
   });
 
-  it('keeps Switzerland useful before defeat and uses the standard treasury seizure rule', () => {
+  it('keeps Switzerland on the standard neutral treasury-seizure rule', () => {
     const state = createWorldStateV2(82_070);
     const switzerland = nationIdV2('che');
     const france = nationIdV2('fra');

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   BATTLE_INTERVAL_TICKS,
+  COMBAT_DEFENSE_BASE_EFFECT_V2,
+  COMBAT_DEFENSE_RELATIVE_EFFECT_MAX_V2,
   combatDefenseEffectV2,
   effectiveDefenseStatV2,
   RAPID_RECRUITMENT_COOLDOWN_TICKS,
@@ -25,6 +27,7 @@ import {
 import { nationIdV2, territoryIdV2, type FrontOperationV2, type WarStateV2, type WorldStateV2 } from './types';
 import { processWarsV2, resolveBattlePulseV2 } from './war';
 import { WorldEngineV2 } from './WorldEngineV2';
+import { enterPostBlackoutCampaignForTestV2 } from './testSupport';
 
 const bel = nationIdV2('bel');
 const nld = nationIdV2('nld');
@@ -75,8 +78,6 @@ function equalPulse(
     ...state.territories[nldTerritory].army,
     manpower: 0.10, capacity: 0.10,
   };
-  state.territories[belTerritory].condition = 1;
-  state.territories[nldTerritory].condition = 1;
   mutate?.(state);
   return resolveBattlePulseV2(state, WORLD_CONTENT_V2, activeWar(state), operation())!;
 }
@@ -131,6 +132,7 @@ describe('V2 one-source manpower combat', () => {
     const twiceAttack = combatDefenseEffectV2(2, 1);
     const fiveTimesAttack = combatDefenseEffectV2(5, 1);
     const tenTimesAttack = combatDefenseEffectV2(10, 1);
+    const extremeDefense = combatDefenseEffectV2(1_000_000, 1);
     expect(atParity).toBeLessThan(1);
     expect(twiceAttack).toBeGreaterThan(atParity);
     expect(fiveTimesAttack).toBeGreaterThan(twiceAttack);
@@ -139,6 +141,10 @@ describe('V2 one-source manpower combat', () => {
     expect(tenTimesAttack).toBeLessThan(10 * 0.75 * 0.75);
     expect((fiveTimesAttack - twiceAttack) / 3).toBeGreaterThan(
       (tenTimesAttack - fiveTimesAttack) / 5,
+    );
+    expect(extremeDefense).toBeGreaterThan(tenTimesAttack);
+    expect(extremeDefense).toBeLessThan(
+      COMBAT_DEFENSE_BASE_EFFECT_V2 * COMBAT_DEFENSE_RELATIVE_EFFECT_MAX_V2,
     );
   });
 
@@ -253,6 +259,7 @@ describe('V2 one-source manpower combat', () => {
     const engine = new WorldEngineV2(308);
     expect(engine.chooseCountry(isl)).toEqual({ accepted: true });
     engine.stopClock();
+    enterPostBlackoutCampaignForTestV2(engine.state);
     for (const territory of engine.territoriesOf(isl)) territory.army.manpower = territory.army.capacity * 0.10;
     engine.state.players[isl].treasury = 100;
     const status = engine.warDeclarationStatus(isl, gbr);

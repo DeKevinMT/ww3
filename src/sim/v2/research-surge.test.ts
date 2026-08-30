@@ -69,9 +69,6 @@ describe('targeted Research Surge', () => {
     expect(expanded.empireScale).toBeGreaterThan(1);
     expect(expanded.cost).toBe(baseline.cost);
 
-    for (const territory of Object.values(state.territories)) {
-      if (territory.owner === bel) territory.condition = 0.15;
-    }
     state.wars.push({
       id: 'surge-war', attackerId: bel, defenderId: lux,
       startedTick: 0, lastBattleTick: 0, warScore: 0, battles: 0,

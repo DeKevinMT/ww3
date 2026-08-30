@@ -319,7 +319,7 @@ describe('strategic world simulation', () => {
   it('bevat geen permanente bilaterale pacten meer', () => {
     const engine = new WorldEngine(77);
     expect(engine.relation('bel', 'nld')!.treaties).toEqual([]);
-    expect(engine.proposeTreaty('bel', 'nld', 'ceasefire')).toBe(false);
+    expect('proposeTreaty' in engine).toBe(false);
     expect(engine.canDeclareWar('bel', 'nld')).toBe(true);
   });
 
@@ -370,7 +370,8 @@ describe('strategic world simulation', () => {
   });
 
   it('keeps naval routes land-clear without inventing access for landlocked countries', () => {
-    expect(STRATEGIC_SEA_ROUTE_PAIRS.length).toBeGreaterThan(225);
+    expect(STRATEGIC_SEA_ROUTE_PAIRS.length).toBeGreaterThan(100);
+    expect(STRATEGIC_SEA_ROUTE_PAIRS.length).toBeLessThan(170);
     for (const territory of TERRITORIES) {
       if (LANDLOCKED_COUNTRY_IDS.has(territory.id)) {
         expect(territory.seaNeighbors, territory.id).toEqual([]);
@@ -390,15 +391,15 @@ describe('strategic world simulation', () => {
     expect(engine.warMobilizationCost('bel', 'gbr')).toBeGreaterThan(engine.warMobilizationCost('bel', 'nld') * 1.65);
   });
 
-  it('maakt een oorlog tegen een groot land veel duurder dan tegen een klein eiland', () => {
+  it('maakt een oorlog tegen een groter land duurder dan tegen een kleinere kuststaat', () => {
     const engine = new WorldEngine(2036);
-    expect(isValidSeaRoute('gbr', 'can')).toBe(true);
-    expect(isSeaConnection('gbr', 'can')).toBe(true);
-    const icelandCost = engine.warMobilizationCost('gbr', 'isl');
-    const canadaCost = engine.warMobilizationCost('gbr', 'can');
-    expect(Number.isFinite(icelandCost)).toBe(true);
-    expect(Number.isFinite(canadaCost)).toBe(true);
-    expect(canadaCost).toBeGreaterThan(icelandCost * 2);
+    expect(isSeaConnection('bel', 'gbr')).toBe(true);
+    expect(isSeaConnection('bel', 'dnk')).toBe(true);
+    const denmarkCost = engine.warMobilizationCost('bel', 'dnk');
+    const britainCost = engine.warMobilizationCost('bel', 'gbr');
+    expect(Number.isFinite(denmarkCost)).toBe(true);
+    expect(Number.isFinite(britainCost)).toBe(true);
+    expect(britainCost).toBeGreaterThan(denmarkCost * 1.5);
   });
 
   it('laat een verklaarde maritieme oorlog werkelijk vechten in plaats van eindeloos mobiliseren', () => {
@@ -462,34 +463,6 @@ describe('strategic world simulation', () => {
     expect(engine.state.territories.ukr!.ownerId).toBe('rus');
     expect(engine.player('ukr')!.eliminated).toBe(true);
     expect(engine.activeWarBetween('rus', 'ukr')).toBeUndefined();
-  });
-
-  it('laat alleen de duidelijk verliezende partij halverwege vrede kopen met geld of land', () => {
-    const engine = new WorldEngine(2041);
-    engine.chooseCountry('rus');
-    engine.player('rus')!.treasury = 100;
-    expect(engine.declareWar('rus', 'ukr')).toBe(true);
-    const war = engine.activeWarBetween('rus', 'ukr')!;
-    war.startedTick = engine.state.tick - 30;
-    war.battles = 18;
-    war.warScore = 36;
-    engine.state.territories.ukr!.force.hp = engine.state.territories.ukr!.force.maxHp * 0.28;
-    engine.player('ukr')!.warExhaustion = 62;
-    const loserTerms = engine.peaceProposalTerms(war.id, 'ukr');
-    const winnerTerms = engine.peaceProposalTerms(war.id, 'rus');
-    expect(loserTerms.eligible).toBe(true);
-    expect(loserTerms.weakerId).toBe('ukr');
-    expect(winnerTerms.eligible).toBe(false);
-    expect(engine.proposePeaceSettlement('rus', 'ukr', 'territory')).toBe(false);
-    expect(engine.proposePeaceSettlement('ukr', 'rus', 'territory')).toBe(true);
-    const offer = engine.state.offers.find((candidate) => candidate.status === 'pending')!;
-    expect(offer.fromId).toBe('ukr');
-    expect(offer.settlement).toBe('territory');
-    expect(engine.respondToOffer(offer.id, true)).toBe(true);
-    expect(engine.activeWarBetween('rus', 'ukr')).toBeUndefined();
-    expect(engine.state.territories.ukr!.foreignControl?.controllerId).toBe('rus');
-    expect(engine.relation('rus', 'ukr')?.status).toBe('truce');
-    expect(worldInvariantErrors(engine.state)).toEqual([]);
   });
 
   it('past de echte nationale bevolkingsgroeitrend toe', () => {

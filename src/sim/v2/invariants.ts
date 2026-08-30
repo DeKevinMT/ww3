@@ -1,6 +1,5 @@
 import {
   ALLIANCE_OFFER_DURATION_TICKS,
-  CEASEFIRE_PAYMENT_WEEKS,
   PROPAGANDA_DURATION_TICKS,
   RESEARCH_BRANCHES,
   V2_MAP_ID,
@@ -8,27 +7,55 @@ import {
   WAR_CAMPAIGN_MAX_TICKS,
   WAR_REVENGE_WINDOW_TICKS,
 } from './balance';
-import type { WorldContentV2 } from './content';
+
+/** Authenticates the retired save-only obligation shape before load strips it. */
+const LEGACY_CEASEFIRE_PAYMENT_WEEKS = 52;
+import {
+  ANTARCTIC_GATEWAY_COUNTRY_ROUTES_V2,
+  ANTARCTIC_TERRITORY_IDS_V2,
+  ROGUE_AI_NATION_ID_V2,
+  type WorldContentV2,
+} from './content';
 import { stateTerritoryArmyCapacityTargetV2 } from './capacity';
+import {
+  apexCapstoneCapabilityCountV2,
+  selectCommanderRouteV2,
+} from './commanderForce';
+import { selectCoopMilitaryAccessRouteBetweenV2 } from './coopAccess';
 import { isHumanPlayerV2 } from './humanPlayers';
 import { OPENING_ARMY_BONUS_DURATION_TICKS_V2 } from './openingArmyBonus';
 import {
   ANTARCTIC_SECTOR_IDS_V2,
   ARCTIC_PROJECT_IDS_V2,
 } from './polarEndgame';
+import {
+  ANTARCTIC_GATEWAY_IDS_V2,
+  deterministicAntarcticGatewayOrderV2,
+} from './antarcticGateways';
 import { contentVersionForWorldContentV2 } from './scenarios';
+import {
+  RUN_UPGRADES_V2,
+  runProgressionModeForContentV2,
+} from './runProgression';
 import {
   finiteStateNumbersV2,
   relationKeyV2,
   selectArmyCombatManpowerV2,
   selectIsEliminatedV2,
   selectTerritoriesOfV2,
-  selectTerritoryWarAccessV2,
 } from './selectors';
-import type { PlayerId, TerritoryId, WorldStateV2 } from './types';
+import {
+  APEX_TRANSMISSION_IDS_V2,
+  RUN_UPGRADE_IDS_V2,
+  type CommanderEmpireSupportV2,
+  type CommanderForceStateV2,
+  type PlayerId,
+  type TerritoryId,
+  type WorldStateV2,
+} from './types';
 
 const NATION_KEYS = ['budget', 'capitalId', 'ceasefiresRequested', 'domesticFoodCapacity', 'empireName', 'foodSecurity', 'foodStock', 'manualActionUses', 'openingArmyBonus', 'propagandaAvailableTick', 'propagandaProgram', 'rapidRecruitmentAvailableTick', 'research', 'researchSurgeAvailableTick', 'trainedReserves', 'treasury', 'warFatigue'];
-const TERRITORY_KEYS = ['army', 'condition', 'coreOwner', 'economy', 'integration', 'integrationProgram', 'owner', 'population'];
+const TERRITORY_KEYS = ['army', 'coreOwner', 'economy', 'integration', 'integrationProgram', 'owner', 'population'];
 const RESEARCH_KEYS = ['allocations', 'breakthroughs', 'effectLevels', 'progress'];
 const BUDGET_KEYS = ['development', 'military', 'research'];
 const MANUAL_ACTION_USE_KEYS = ['propaganda', 'rapidRecruitment', 'researchSurge'];
@@ -68,22 +95,67 @@ const BREAKTHROUGH_KEYS = [
 const ARMY_KEYS = ['baseAttack', 'baseDefense', 'capacity', 'manpower'];
 const PROPAGANDA_PROGRAM_KEYS = ['endsTick', 'startedTick', 'totalSuspicionReduction', 'weeklySuspicionReduction'];
 const OPENING_ARMY_BONUS_KEYS = ['expiresTick', 'initialManpower', 'remainingManpower', 'startedTick'];
+const LEGACY_COMMANDER_FORCE_KEYS = [
+  'army', 'capabilities', 'countryTraitScale', 'economy', 'empireSupport', 'front', 'locationId', 'manualHoldUntilTick', 'mission', 'orderSource', 'transit',
+];
+const COMMANDER_FORCE_KEYS = [...LEGACY_COMMANDER_FORCE_KEYS, 'doctrineRuntime'];
+const COMMANDER_CAPABILITY_KEYS = [
+  'assaultSpecialist', 'defenseSpecialist', 'emergencyExtractionCharges',
+  'fieldHospital', 'mobileHeadquarters', 'rapidResponse',
+];
+const COMMANDER_ARMY_KEYS = ['baseAttack', 'baseDefense', 'capacity', 'manpower', 'trainedReserves'];
+const COMMANDER_ECONOMY_KEYS = ['annualOutput', 'priorities', 'supplyStock', 'treasury'];
+const COMMANDER_PRIORITY_KEYS = ['development', 'logistics', 'training'];
+const COMMANDER_EMPIRE_SUPPORT_KEYS = [
+  'annualFoodOutput', 'foodImportCostMultiplier', 'foodProductionMultiplier', 'foodStorageMultiplier',
+  'recruitmentMultiplier', 'reserveTrainingMultiplier',
+];
+const COMMANDER_FRONT_KEYS = ['sourceId', 'targetId', 'warId'];
+const COMMANDER_TRANSIT_KEYS = ['arriveTick', 'departTick', 'distanceKm', 'path'];
+const APEX_DOCTRINE_RUNTIME_KEYS = ['lancerSupportedAssaultCount', 'secondaryProjection'];
+const APEX_SECONDARY_PROJECTION_KEYS = [
+  'front', 'locationId', 'mission', 'pairedPrimaryFront',
+];
 const INTEGRATION_PROGRAM_KEYS = ['annualCost', 'cause', 'completesTick', 'fromCoreOwnerId', 'fromOwnerId', 'startedTick', 'toOwnerId'];
-const WAR_KEYS = ['attackerCivilianLosses', 'attackerId', 'attackerLosses', 'attackerOperations', 'battles', 'campaign', 'defenderCivilianLosses', 'defenderId', 'defenderLosses', 'defenderOperations', 'id', 'lastBattleTick', 'lastPeaceOfferTick', 'revenge', 'startedTick', 'warScore'];
+const WAR_KEYS = ['apexTelemetryByPlayer', 'attackerCivilianLosses', 'attackerId', 'attackerLosses', 'attackerOperations', 'battles', 'campaign', 'defenderCivilianLosses', 'defenderId', 'defenderLosses', 'defenderOperations', 'id', 'lastBattleTick', 'lastPeaceOfferTick', 'reportBaselineByPlayer', 'revenge', 'startedTick', 'warScore'];
 const WAR_REVENGE_KEYS = ['claimantId', 'expiresTick', 'triggeredTick'];
 const WAR_CAMPAIGN_KEYS = ['attackerCaptures', 'attackerObjective', 'consolidationUntilTick', 'defenderCaptures', 'defenderObjective', 'expiresTick'];
+const APEX_WAR_TELEMETRY_KEYS = [
+  'integrityLosses', 'maxIntegrity', 'mirrorCounterpulseDamage', 'peakPower',
+  'singularityPulses', 'supplyDelivered', 'supplySpent', 'supportedBattles',
+  'twinProjectionBattles',
+];
+const WAR_REPORT_BASELINE_KEYS = [
+  'allyContributorIds', 'allyLosses', 'allyPeakPower', 'allySupportedBattles',
+  'capacityBefore', 'combatPowerBefore', 'effectiveAttackBefore',
+  'effectiveDefenseBefore', 'ownedTerritoryIds', 'touchedTerritoryIds',
+  'treasuryBefore', 'treasuryLost', 'treasurySeized',
+];
 const OPERATION_KEYS = ['access', 'commanderId', 'doctrine', 'holdUntilTick', 'lastBattleTick', 'momentum', 'sourceId', 'startedTick', 'targetId'];
 const TRUCE_KEYS = ['expiresTick', 'leftId', 'rightId'];
 const CEASEFIRE_OBLIGATION_KEYS = ['expiresTick', 'payeeId', 'payerId', 'startsTick', 'warId', 'weeklyCost'];
 const OFFER_KEYS = ['cashAmount', 'createdTick', 'expiresTick', 'fromId', 'id', 'paymentWeeks', 'settlement', 'status', 'toId', 'warId', 'weeklyCost'];
 const ALLIANCE_KEYS = ['formedTick', 'leftId', 'rightId'];
 const ALLIANCE_OFFER_KEYS = ['createdTick', 'expiresTick', 'fromId', 'toId'];
-const AI_ESCALATION_KEYS = ['coalitionMembers', 'globalThreat', 'lastFederationTick', 'lastHumanPower', 'lastHumanTerritoryCount', 'lastWarStartTick', 'resistanceLevel'];
-const POLAR_ENDGAME_KEYS = ['arcticPrograms', 'bossIntegrity', 'bossPhase', 'contactTick', 'earthDefenseMembers', 'expeditions', 'globalWave', 'nextCounteroffensiveTick', 'nextExpeditionId', 'phase', 'revealedBy', 'sectors', 'suspicionReliefEarned', 'victoryCommanderId', 'victoryTick', 'visualRevision', 'warningAcknowledgedBy', 'warningTick'];
+const AI_ESCALATION_KEYS = ['coalitionMembers', 'globalThreat', 'lastFederationTick', 'lastHumanPower', 'lastHumanTerritoryCount', 'lastWarStartTick', 'openingConflictsStarted', 'resistanceLevel'];
+const POLAR_ENDGAME_KEYS = ['apexNarrative', 'arcticPrograms', 'bossIntegrity', 'bossPhase', 'communicationsBlackoutTick', 'contactTick', 'earthDefenseMembers', 'expeditions', 'gatewayBreaches', 'gatewayBreachOrder', 'globalWave', 'nextCounteroffensiveTick', 'nextExpeditionId', 'phase', 'revealedBy', 'rogueAttention', 'roguePrime', 'rogueWaveLossCreditByPlayer', 'rogueWaveManpowerByTerritory', 'sectors', 'suspicionReliefEarned', 'victoryCommanderId', 'victoryTick', 'visualRevision', 'warningAcknowledgedBy', 'warningTick'];
 const ARCTIC_PROGRESS_KEYS = ['activeProject', 'completedProjects', 'playerId'];
 const ARCTIC_RUN_KEYS = ['completesTick', 'costPaid', 'playerId', 'projectId', 'startedTick'];
 const ANTARCTIC_SECTOR_KEYS = ['discoveredTick', 'integrity', 'securedBy', 'securedTick', 'status', 'wave'];
 const ANTARCTIC_EXPEDITION_KEYS = ['damageDealt', 'id', 'initialManpower', 'lastPulseTick', 'manpower', 'playerId', 'sectorId', 'startedTick'];
+const ANTARCTIC_GATEWAY_BREACH_KEYS = ['breachStartedTick', 'gatewayId', 'openedTick', 'opensTick', 'status'];
+const ROGUE_ATTENTION_KEYS = ['activatedTick', 'benchmarkMetTick', 'liberatedWorldShare', 'nextStageTick', 'stage'];
+const ROGUE_PRIME_KEYS = ['departTick', 'force', 'gatewayId', 'nextSortieTick', 'rebuildReadyTick', 'returnTick', 'sortieSequence', 'status', 'strikeTick', 'targetId'];
+const APEX_NARRATIVE_KEYS = ['players'];
+const APEX_NARRATIVE_PLAYER_KEYS = ['investigationAuthorized', 'transmissions'];
+const APEX_TRANSMISSION_KEYS = [
+  'action', 'body', 'choice', 'id', 'playerId', 'resolvedTick', 'sentTick', 'targetId', 'title',
+];
+const RUN_PROGRESSION_KEYS = ['mode', 'nextOfferSequence', 'players', 'scorchedWorldTerritoryIds'];
+const RUN_PLAYER_KEYS = ['activeOffer', 'picks', 'queuedMilestones', 'recapturedScorchedTerritoryIds', 'stacks', 'triggeredMilestoneIds'];
+const RUN_OFFER_KEYS = ['createdTick', 'id', 'milestoneId', 'milestoneKind', 'milestoneLabel', 'optionIds', 'playerId'];
+const RUN_MILESTONE_KEYS = ['createdTick', 'id', 'kind', 'label'];
+const RUN_PICK_KEYS = ['milestoneId', 'milestoneLabel', 'offerId', 'pickedTick', 'upgradeId'];
 const OPTIONAL_CANONICAL_KEYS = ['cause', 'integrationProgram'] as const;
 const allowedKeySetCache = new WeakMap<readonly string[], ReadonlySet<string>>();
 
@@ -106,9 +178,100 @@ function exactKeys(value: object, allowed: readonly string[]): boolean {
   return actual.length === expectedCount && actual.every((key) => allowedSet.has(key));
 }
 
+function commanderEmpireSupportValidV2(support: CommanderEmpireSupportV2): boolean {
+  return exactKeys(support, COMMANDER_EMPIRE_SUPPORT_KEYS)
+    && [
+      support.recruitmentMultiplier,
+      support.reserveTrainingMultiplier,
+      support.annualFoodOutput,
+      support.foodProductionMultiplier,
+      support.foodStorageMultiplier,
+      support.foodImportCostMultiplier,
+    ].every(Number.isFinite)
+    && support.recruitmentMultiplier >= 1 && support.recruitmentMultiplier <= 1.50
+    && support.reserveTrainingMultiplier >= 1 && support.reserveTrainingMultiplier <= 1.75
+    && support.annualFoodOutput >= 0 && support.annualFoodOutput <= 1.56
+    && support.foodProductionMultiplier >= 1 && support.foodProductionMultiplier <= 1.50
+    && support.foodStorageMultiplier >= 1 && support.foodStorageMultiplier <= 1.75
+    && support.foodImportCostMultiplier >= 0.75 && support.foodImportCostMultiplier <= 1;
+}
+
+/** The absent doctrine sidecar is the deterministic authenticated-legacy default. */
+function commanderForceKeysValidV2(force: CommanderForceStateV2): boolean {
+  return exactKeys(force, COMMANDER_FORCE_KEYS)
+    || exactKeys(force, LEGACY_COMMANDER_FORCE_KEYS);
+}
+
+function sameCommanderFrontV2(
+  left: CommanderForceStateV2['front'],
+  right: CommanderForceStateV2['front'],
+): boolean {
+  return Boolean(left && right
+    && left.warId === right.warId
+    && left.sourceId === right.sourceId
+    && left.targetId === right.targetId);
+}
+
+function apexDoctrineRuntimeValidV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  playerId: PlayerId,
+  force: CommanderForceStateV2,
+): boolean {
+  const runtime = force.doctrineRuntime;
+  if (runtime === undefined) return true;
+  if (!runtime || !exactKeys(runtime, APEX_DOCTRINE_RUNTIME_KEYS)
+    || !Number.isSafeInteger(runtime.lancerSupportedAssaultCount)
+    || runtime.lancerSupportedAssaultCount < 0
+    || runtime.lancerSupportedAssaultCount > 2
+    || (!force.capabilities.assaultSpecialist
+      && runtime.lancerSupportedAssaultCount !== 0)) return false;
+  const secondary = runtime.secondaryProjection;
+  if (secondary === null) return true;
+  if (!secondary || !exactKeys(secondary, APEX_SECONDARY_PROJECTION_KEYS)
+    || !exactKeys(secondary.front, COMMANDER_FRONT_KEYS)
+    || !exactKeys(secondary.pairedPrimaryFront, COMMANDER_FRONT_KEYS)
+    || !['assault-support', 'defense'].includes(secondary.mission)
+    || !force.capabilities.rapidResponse
+    || Boolean(force.transit)
+    || force.army.manpower <= 0
+    || !force.front
+    || !['assault-support', 'defense'].includes(force.mission)
+    || !sameCommanderFrontV2(force.front, secondary.pairedPrimaryFront)
+    || sameCommanderFrontV2(force.front, secondary.front)
+    || secondary.locationId === force.locationId
+    || !state.territories[secondary.locationId]
+    || state.territories[secondary.locationId]?.owner !== playerId
+    || !selectCommanderRouteV2(
+      state, content, playerId, force.locationId, secondary.locationId,
+    )) return false;
+  const primaryRoleValid = force.mission === 'assault-support'
+    ? force.locationId === force.front.sourceId
+      && state.territories[force.front.sourceId]?.owner === playerId
+    : force.locationId === force.front.targetId
+      && state.territories[force.front.targetId]?.owner === playerId;
+  const assignedWar = state.wars.find((war) => war.id === secondary.front.warId);
+  const operationActive = assignedWar
+    && [...assignedWar.attackerOperations, ...assignedWar.defenderOperations]
+      .some((operation) => operation.sourceId === secondary.front.sourceId
+        && operation.targetId === secondary.front.targetId);
+  return Boolean(primaryRoleValid && operationActive
+    && (secondary.mission === 'assault-support'
+      ? secondary.locationId === secondary.front.sourceId
+        && state.territories[secondary.front.sourceId]?.owner === playerId
+      : secondary.locationId === secondary.front.targetId
+        && state.territories[secondary.front.targetId]?.owner === playerId));
+}
+
 function hasOnlyKeys(value: object, allowed: readonly string[]): boolean {
   const allowedSet = allowedKeySet(allowed);
   return Object.keys(value).every((key) => allowedSet.has(key));
+}
+
+function isSortedUniqueStringArray(value: unknown): value is string[] {
+  return Array.isArray(value)
+    && value.every((item) => typeof item === 'string')
+    && value.every((item, index) => index === 0 || value[index - 1]! < item);
 }
 
 export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2): string[] {
@@ -135,6 +298,183 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
     || humanPlayerIds.join('|') !== [...humanPlayerIds].sort((left, right) => left.localeCompare(right)).join('|')) {
     errors.push('Human player roster is invalid.');
   }
+  const run = state.runProgression;
+  const runUpgradeIds = new Set<string>(RUN_UPGRADE_IDS_V2);
+  const upgradeMaxStacks = new Map(RUN_UPGRADES_V2.map((card) => [card.id, card.maxStacks]));
+  const runPlayerKeys = run && typeof run.players === 'object'
+    ? Object.keys(run.players).sort() : [];
+  if (!run || !exactKeys(run, RUN_PROGRESSION_KEYS)
+    || run.mode !== runProgressionModeForContentV2(content)
+    || !Number.isSafeInteger(run.nextOfferSequence) || run.nextOfferSequence < 1) {
+    errors.push('Run progression envelope is invalid.');
+  } else {
+    const scorched = run.scorchedWorldTerritoryIds;
+    if (!Array.isArray(scorched)
+      || new Set(scorched).size !== scorched.length
+      || scorched.join('|') !== [...scorched].sort().join('|')
+      || scorched.some((id) => !state.territories[id]
+        || content.territories[id]?.regionId === 'antarctica')
+      || (content.metadata?.scenarioId !== 'survival' && scorched.length > 0)) {
+      errors.push('Run progression scorched-world registry is invalid.');
+    }
+    for (const [rawPlayerId, progress] of Object.entries(run.players)) {
+      const playerId = rawPlayerId as PlayerId;
+      if (!content.nations[playerId] || !progress || !exactKeys(progress, RUN_PLAYER_KEYS)) {
+        errors.push(`Run progression for ${playerId} is invalid.`);
+        continue;
+      }
+      if (progress.activeOffer !== null
+        || progress.queuedMilestones.length > 0
+        || progress.triggeredMilestoneIds.length > 0
+        || progress.picks.length > 0
+        || Object.keys(progress.stacks).length > 0
+        || progress.recapturedScorchedTerritoryIds.length > 0) {
+        errors.push(`Retired run progression for ${playerId} must be empty.`);
+        continue;
+      }
+    }
+  }
+  const commanderMissions = [
+    'standby', 'assault-support', 'defense', 'logistics-relief', 'evacuate', 'hq-training',
+  ];
+  const frontMissions = new Set(['assault-support', 'defense', 'logistics-relief']);
+  for (const [rawPlayerId, force] of Object.entries(state.commanderForces ?? {})) {
+    const playerId = rawPlayerId as PlayerId;
+    const narrativeSurvivor = Boolean(force
+      && !Object.values(state.territories).some((territory) => territory.owner === playerId)
+      && force.army.manpower > 0
+      && force.mission === 'standby'
+      && !force.front
+      && !force.transit);
+    const lostStationEvacuation = Boolean(force?.transit
+      && force.mission === 'evacuate'
+      && force.transit.path.length >= 2
+      && force.transit.path[0] === force.locationId
+      && state.territories[force.locationId]
+      && state.territories[force.locationId]?.owner !== playerId
+      && force.transit.path.slice(1).every((territoryId) => (
+        state.territories[territoryId]?.owner === playerId
+      )));
+    if (!force || !humanPlayerIds.includes(playerId)
+      || !state.players[playerId] && !narrativeSurvivor
+      || !commanderForceKeysValidV2(force)
+      || !exactKeys(force.army, COMMANDER_ARMY_KEYS)
+      || !exactKeys(force.capabilities, COMMANDER_CAPABILITY_KEYS)
+      || !commanderEmpireSupportValidV2(force.empireSupport)
+      || !exactKeys(force.economy, COMMANDER_ECONOMY_KEYS)
+      || !exactKeys(force.economy.priorities, COMMANDER_PRIORITY_KEYS)
+      || !state.territories[force.locationId]
+      || state.territories[force.locationId]?.owner !== playerId
+        && !lostStationEvacuation && !narrativeSurvivor
+      || !commanderMissions.includes(force.mission)
+      || !['manual', 'autonomous'].includes(force.orderSource)
+      || !Number.isFinite(force.countryTraitScale)
+      || force.countryTraitScale < 0 || force.countryTraitScale > 1
+      || ![
+        force.capabilities.mobileHeadquarters,
+        force.capabilities.fieldHospital,
+        force.capabilities.rapidResponse,
+        force.capabilities.assaultSpecialist,
+        force.capabilities.defenseSpecialist,
+      ].every((value) => typeof value === 'boolean')
+      || apexCapstoneCapabilityCountV2(force.capabilities) > 1
+      || !Number.isSafeInteger(force.capabilities.emergencyExtractionCharges)
+      || force.capabilities.emergencyExtractionCharges < 0
+      || force.capabilities.emergencyExtractionCharges > 2
+      || !Number.isSafeInteger(force.manualHoldUntilTick)
+      || force.manualHoldUntilTick < 0
+      || !apexDoctrineRuntimeValidV2(state, content, playerId, force)) {
+      errors.push(`Commander force ${rawPlayerId} has invalid canonical state.`);
+      continue;
+    }
+    const army = force.army;
+    const economy = force.economy;
+    const priorities = economy.priorities;
+    if (![army.manpower, army.capacity, army.trainedReserves, army.baseAttack, army.baseDefense,
+      economy.treasury, economy.annualOutput, economy.supplyStock].every(Number.isFinite)
+      || army.manpower < 0 || army.capacity <= 0 || army.trainedReserves < 0
+      || army.manpower > army.capacity + 0.000000001
+      || army.trainedReserves > army.capacity + 0.000000001
+      || army.baseAttack <= 0 || army.baseAttack > 160
+      || army.baseDefense <= 0 || army.baseDefense > 160
+      || economy.treasury < 0 || economy.annualOutput < 0 || economy.supplyStock < 0
+      || ![priorities.training, priorities.logistics, priorities.development]
+        .every((value) => Number.isInteger(value) && value >= 0 && value <= 100)
+      || priorities.training + priorities.logistics + priorities.development !== 100) {
+      errors.push(`Commander force ${rawPlayerId} has invalid economy or army values.`);
+    }
+    if (frontMissions.has(force.mission) !== Boolean(force.front)) {
+      errors.push(`Commander force ${rawPlayerId} has an invalid mission/front pairing.`);
+    }
+    if (force.front) {
+      const front = force.front;
+      const assignedWar = state.wars.find((war) => war.id === front.warId);
+      if (!exactKeys(front, COMMANDER_FRONT_KEYS)
+        || !front.warId || !state.territories[front.sourceId] || !state.territories[front.targetId]
+        || !force.transit && (!assignedWar
+          || ![...assignedWar.attackerOperations, ...assignedWar.defenderOperations]
+            .some((operation) => operation.sourceId === front.sourceId
+              && operation.targetId === front.targetId))) {
+        errors.push(`Commander force ${rawPlayerId} has an invalid front assignment.`);
+      }
+    }
+    if (force.transit) {
+      const transit = force.transit;
+      if (!exactKeys(transit, COMMANDER_TRANSIT_KEYS)
+        || !Array.isArray(transit.path) || transit.path.length < 2
+        || transit.path[0] !== force.locationId
+        || transit.path.some((id) => !state.territories[id])
+        || transit.path.some((id, index) => state.territories[id]?.owner !== playerId
+          && !(index === 0 && lostStationEvacuation))
+        || transit.path.some((id, index) => index > 0
+          && !content.territories[transit.path[index - 1]!]?.connections
+            .some((connection) => connection.targetId === id))
+        || !Number.isFinite(transit.distanceKm) || transit.distanceKm <= 0
+        || !Number.isInteger(transit.departTick) || !Number.isInteger(transit.arriveTick)
+        || transit.departTick < 0 || transit.departTick > state.tick
+        || transit.arriveTick <= state.tick || transit.arriveTick <= transit.departTick) {
+        errors.push(`Commander force ${rawPlayerId} has invalid canonical transit.`);
+      }
+    }
+    // `hq-training` is the persisted compatibility name for stationary APEX
+    // recovery. Recovery is remote and legal at any currently owned station;
+    // the canonical location/ownership checks above remain authoritative.
+  }
+  const apexTerritoryClaims = new Map<TerritoryId, PlayerId>();
+  const apexFrontClaims = new Map<string, PlayerId>();
+  for (const [rawPlayerId, force] of (Object.entries(state.commanderForces ?? {}) as Array<[
+    string,
+    CommanderForceStateV2,
+  ]>)
+    .sort(([left], [right]) => left.localeCompare(right))) {
+    const playerId = rawPlayerId as PlayerId;
+    for (const territoryId of new Set([
+      force.locationId,
+      ...(force.transit?.path.at(-1) ? [force.transit.path.at(-1)!] : []),
+      ...(force.doctrineRuntime?.secondaryProjection?.locationId
+        ? [force.doctrineRuntime.secondaryProjection.locationId] : []),
+    ])) {
+      const existing = apexTerritoryClaims.get(territoryId);
+      if (existing && existing !== playerId) {
+        errors.push(`APEX territory ${territoryId} is claimed by both ${existing} and ${playerId}.`);
+      } else apexTerritoryClaims.set(territoryId, playerId);
+    }
+    if (force.front) {
+      const signature = `${force.front.warId}:${force.front.sourceId}:${force.front.targetId}`;
+      const existing = apexFrontClaims.get(signature);
+      if (existing && existing !== playerId) {
+        errors.push(`APEX front ${signature} is claimed by both ${existing} and ${playerId}.`);
+      } else apexFrontClaims.set(signature, playerId);
+    }
+    const secondaryFront = force.doctrineRuntime?.secondaryProjection?.front;
+    if (secondaryFront) {
+      const signature = `${secondaryFront.warId}:${secondaryFront.sourceId}:${secondaryFront.targetId}`;
+      const existing = apexFrontClaims.get(signature);
+      if (existing && existing !== playerId) {
+        errors.push(`APEX front ${signature} is claimed by both ${existing} and ${playerId}.`);
+      } else apexFrontClaims.set(signature, playerId);
+    }
+  }
   const firstIntegrationDiscountUsedBy = state.firstIntegrationDiscountUsedBy;
   if (!Array.isArray(firstIntegrationDiscountUsedBy)
     || new Set(firstIntegrationDiscountUsedBy).size !== firstIntegrationDiscountUsedBy.length
@@ -145,8 +485,9 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
   }
   if (!exactKeys(state.aiEscalation, AI_ESCALATION_KEYS)
     || ![0, 1, 2].includes(state.aiEscalation.resistanceLevel)
-    || ![state.aiEscalation.lastWarStartTick, state.aiEscalation.lastFederationTick, state.aiEscalation.globalThreat, state.aiEscalation.lastHumanPower, state.aiEscalation.lastHumanTerritoryCount].every(Number.isFinite)
+    || ![state.aiEscalation.lastWarStartTick, state.aiEscalation.openingConflictsStarted, state.aiEscalation.lastFederationTick, state.aiEscalation.globalThreat, state.aiEscalation.lastHumanPower, state.aiEscalation.lastHumanTerritoryCount].every(Number.isFinite)
     || state.aiEscalation.globalThreat < 0 || state.aiEscalation.globalThreat > 100
+    || !Number.isInteger(state.aiEscalation.openingConflictsStarted) || state.aiEscalation.openingConflictsStarted < 0
     || !Number.isInteger(state.aiEscalation.lastHumanTerritoryCount) || state.aiEscalation.lastHumanTerritoryCount < 0) errors.push('AI escalation state is invalid.');
   const coalitionMembers = state.aiEscalation.coalitionMembers;
   if ([...new Set(coalitionMembers)].length !== coalitionMembers.length
@@ -169,7 +510,8 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
     || polar.revealedBy !== null && !content.nations[polar.revealedBy]
     || polar.victoryCommanderId !== null && !content.nations[polar.victoryCommanderId]
     || polar.phase !== 'victory' && polar.victoryCommanderId !== null
-    || ![polar.warningTick, polar.contactTick, polar.victoryTick, polar.nextCounteroffensiveTick]
+    || ![polar.warningTick, polar.contactTick, polar.victoryTick, polar.nextCounteroffensiveTick,
+      polar.communicationsBlackoutTick]
       .every((value) => value === null || Number.isInteger(value) && value >= 0 && value <= state.tick + 52)
     || (polar.phase === 'dormant' || polar.phase === 'arctic-research') && polar.warningTick !== null
     || !['dormant', 'arctic-research'].includes(polar.phase) && polar.warningTick === null
@@ -178,6 +520,179 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
     errors.push('Polar endgame state is invalid.');
   }
   if (polar) {
+    const narrative = polar.apexNarrative;
+    if (!narrative || !exactKeys(narrative, APEX_NARRATIVE_KEYS)) {
+      errors.push('APEX narrative state is invalid.');
+    } else {
+      for (const [rawPlayerId, progress] of Object.entries(narrative.players)) {
+        const playerId = rawPlayerId as PlayerId;
+        if (!progress || !content.nations[playerId]
+          || !exactKeys(progress, APEX_NARRATIVE_PLAYER_KEYS)
+          || typeof progress.investigationAuthorized !== 'boolean'
+          || !Array.isArray(progress.transmissions)) {
+          errors.push(`APEX narrative player ${rawPlayerId} is invalid.`);
+          continue;
+        }
+        const ids = new Set<string>();
+        for (const transmission of progress.transmissions) {
+          if (!transmission || !exactKeys(transmission, APEX_TRANSMISSION_KEYS)
+            || !APEX_TRANSMISSION_IDS_V2.includes(transmission.id)
+            || transmission.playerId !== playerId
+            || ids.has(transmission.id)
+            || !Number.isInteger(transmission.sentTick)
+            || transmission.sentTick < 0 || transmission.sentTick > state.tick
+            || transmission.resolvedTick !== null
+              && (!Number.isInteger(transmission.resolvedTick)
+                || transmission.resolvedTick < transmission.sentTick
+                || transmission.resolvedTick > state.tick)
+            || typeof transmission.title !== 'string' || transmission.title.length < 1
+            || transmission.title.length > 120
+            || typeof transmission.body !== 'string' || transmission.body.length < 1
+            || transmission.body.length > 500
+            || ![null, 'north-pole-investigation', 'first-strike-guidance']
+              .includes(transmission.action)
+            || transmission.targetId !== null && !content.territories[transmission.targetId]
+            || ![null, 'accept', 'later', 'acknowledge'].includes(transmission.choice)) {
+            errors.push(`APEX transmission ${String(transmission?.id)} is invalid.`);
+            continue;
+          }
+          ids.add(transmission.id);
+          if ((transmission.choice === null) !== (transmission.resolvedTick === null)) {
+            errors.push(`APEX transmission ${transmission.id} has invalid response timing.`);
+          }
+          if (transmission.action === null
+            && transmission.choice !== null && transmission.choice !== 'acknowledge') {
+            errors.push(`APEX transmission ${transmission.id} has an invalid acknowledgement.`);
+          }
+          if (transmission.action === 'north-pole-investigation'
+            && transmission.choice === 'acknowledge') {
+            errors.push(`APEX transmission ${transmission.id} did not receive its required decision.`);
+          }
+          const targetAllowed = transmission.action === 'first-strike-guidance'
+            || transmission.id === 'campaign-first-conquest'
+            || transmission.id === 'campaign-first-war-recovery'
+            || transmission.id === 'campaign-first-purge-arrival'
+            || transmission.id === 'campaign-first-liberation';
+          if (transmission.action === 'first-strike-guidance'
+            ? transmission.targetId === null
+            : transmission.targetId !== null && !targetAllowed) {
+            errors.push(`APEX transmission ${transmission.id} has an invalid guidance target.`);
+          }
+        }
+      }
+    }
+    const prime = polar.roguePrime;
+    const primeTicks = prime ? [
+      prime.nextSortieTick,
+      prime.departTick,
+      prime.strikeTick,
+      prime.returnTick,
+      prime.rebuildReadyTick,
+    ] : [];
+    const primeBasicValid = Boolean(prime
+      && exactKeys(prime, ROGUE_PRIME_KEYS)
+      && ['dormant', 'guarding', 'sortie', 'rebuilding', 'destroyed'].includes(prime.status)
+      && Number.isSafeInteger(prime.sortieSequence) && prime.sortieSequence >= 0
+      && primeTicks.every((tick) => tick === null || Number.isSafeInteger(tick) && tick >= 0));
+    if (!primeBasicValid) {
+      errors.push('ROGUE PRIME lifecycle state is invalid.');
+    } else {
+      const force = prime.force;
+      const forceRequired = prime.status === 'guarding' || prime.status === 'sortie';
+      const timingValid = prime.status === 'dormant' || prime.status === 'destroyed'
+        ? prime.nextSortieTick === null && prime.rebuildReadyTick === null
+          && prime.gatewayId === null && prime.targetId === null
+          && prime.departTick === null && prime.strikeTick === null && prime.returnTick === null
+        : prime.status === 'guarding'
+          ? prime.rebuildReadyTick === null && prime.gatewayId === null && prime.targetId === null
+            && prime.departTick === null && prime.strikeTick === null && prime.returnTick === null
+          : prime.status === 'rebuilding'
+            ? prime.rebuildReadyTick !== null && prime.nextSortieTick === null
+              && prime.gatewayId === null && prime.targetId === null
+              && prime.departTick === null && prime.strikeTick === null && prime.returnTick === null
+            : prime.status === 'sortie'
+              && prime.nextSortieTick === null && prime.rebuildReadyTick === null
+              && prime.gatewayId !== null && prime.targetId !== null
+              && prime.departTick !== null && prime.departTick <= state.tick
+              && prime.strikeTick !== null && prime.strikeTick > prime.departTick
+              && prime.returnTick !== null && prime.returnTick > prime.strikeTick;
+      if (!timingValid || forceRequired !== Boolean(force)) {
+        errors.push('ROGUE PRIME status/timing pairing is invalid.');
+      }
+      if (force) {
+        const priorities = force.economy.priorities;
+        const army = force.army;
+        const directSortieRoute = prime.gatewayId === null || prime.targetId === null
+          ? true
+          : ANTARCTIC_GATEWAY_COUNTRY_ROUTES_V2.some((route) => (
+            route.gatewayId === prime.gatewayId && route.countryId === prime.targetId
+          ));
+        if (!commanderForceKeysValidV2(force)
+          || !apexDoctrineRuntimeValidV2(
+            state, content, ROGUE_AI_NATION_ID_V2, force,
+          )
+          || !exactKeys(force.army, COMMANDER_ARMY_KEYS)
+          || !exactKeys(force.capabilities, COMMANDER_CAPABILITY_KEYS)
+          || !commanderEmpireSupportValidV2(force.empireSupport)
+          || !exactKeys(force.economy, COMMANDER_ECONOMY_KEYS)
+          || !exactKeys(priorities, COMMANDER_PRIORITY_KEYS)
+          || !ANTARCTIC_TERRITORY_IDS_V2.includes(force.locationId)
+          || state.territories[force.locationId]?.owner !== ROGUE_AI_NATION_ID_V2
+          || !['standby', 'assault-support', 'defense'].includes(force.mission)
+          || force.orderSource !== 'autonomous' || force.manualHoldUntilTick !== 0
+          || force.countryTraitScale !== 0
+          || ![army.manpower, army.capacity, army.trainedReserves,
+            army.baseAttack, army.baseDefense, force.economy.treasury,
+            force.economy.annualOutput, force.economy.supplyStock].every(Number.isFinite)
+          || army.manpower < 0 || army.capacity <= 0 || army.trainedReserves < 0
+          || army.manpower + army.trainedReserves > army.capacity + 0.000000001
+          || army.baseAttack <= 0 || army.baseAttack > 120
+          || army.baseDefense <= 0 || army.baseDefense > 120
+          || force.economy.treasury < 0 || force.economy.annualOutput !== 0
+          || force.economy.supplyStock < 0
+          || priorities.training + priorities.logistics + priorities.development !== 100
+          || !directSortieRoute) {
+          errors.push('ROGUE PRIME force state is invalid.');
+        }
+        if (force.front && (!exactKeys(force.front, COMMANDER_FRONT_KEYS)
+          || !state.wars.some((war) => war.id === force.front!.warId)
+          || !content.territories[force.front.sourceId]?.connections
+            .some((edge) => edge.targetId === force.front!.targetId))) {
+          errors.push('ROGUE PRIME front assignment is invalid.');
+        }
+        if (force.transit && (!exactKeys(force.transit, COMMANDER_TRANSIT_KEYS)
+          || force.transit.path.length < 2
+          || force.transit.path[0] !== force.locationId
+          || force.transit.path.some((id) => !ANTARCTIC_TERRITORY_IDS_V2.includes(id)
+            || state.territories[id]?.owner !== ROGUE_AI_NATION_ID_V2)
+          || force.transit.departTick < 0 || force.transit.departTick > state.tick
+          || force.transit.arriveTick <= state.tick
+          || force.transit.arriveTick <= force.transit.departTick
+          || !Number.isFinite(force.transit.distanceKm) || force.transit.distanceKm <= 0)) {
+          errors.push('ROGUE PRIME Antarctic transit is invalid.');
+        }
+      }
+    }
+    for (const [rawTerritoryId, manpower] of Object.entries(
+      polar.rogueWaveManpowerByTerritory,
+    )) {
+      const territoryId = rawTerritoryId as TerritoryId;
+      const territory = state.territories[territoryId];
+      if (!territory || territory.owner !== 'rai' || typeof manpower !== 'number'
+        || !Number.isFinite(manpower)
+        || manpower <= 0 || manpower - territory.army.manpower > 0.000000001) {
+        errors.push(`Rogue wave provenance ${rawTerritoryId} is invalid.`);
+      }
+    }
+    for (const [rawPlayerId, losses] of Object.entries(
+      polar.rogueWaveLossCreditByPlayer,
+    )) {
+      const playerId = rawPlayerId as PlayerId;
+      if (!state.humanPlayerIds.includes(playerId) || typeof losses !== 'number'
+        || !Number.isFinite(losses) || losses <= 0) {
+        errors.push(`Rogue wave loss credit ${rawPlayerId} is invalid.`);
+      }
+    }
     if (new Set(polar.warningAcknowledgedBy).size !== polar.warningAcknowledgedBy.length
       || polar.warningAcknowledgedBy.some((id) => !state.humanPlayerIds.includes(id))
       || polar.warningAcknowledgedBy.join('|') !== [...polar.warningAcknowledgedBy]
@@ -224,6 +739,66 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
         || sector.status === 'hidden' && sector.discoveredTick !== null) {
         errors.push(`Antarctic sector ${sectorId} is invalid.`);
       }
+    }
+    const gatewayOrder = polar.gatewayBreachOrder;
+    const activeGatewayCampaign = gatewayOrder.length > 0;
+    const gatewayOrderValid = gatewayOrder.length === (activeGatewayCampaign
+      ? ANTARCTIC_GATEWAY_IDS_V2.length : 0)
+      && new Set(gatewayOrder).size === gatewayOrder.length
+      && gatewayOrder.every((gatewayId) => ANTARCTIC_GATEWAY_IDS_V2.includes(
+        gatewayId as (typeof ANTARCTIC_GATEWAY_IDS_V2)[number],
+      ))
+      && (!activeGatewayCampaign || gatewayOrder.join('|')
+        === deterministicAntarcticGatewayOrderV2(state.seed).join('|'));
+    if (!gatewayOrderValid) errors.push('Antarctic gateway breach order is invalid.');
+    const gatewayBreachKeys = Object.keys(polar.gatewayBreaches).sort();
+    const expectedGatewayKeys = activeGatewayCampaign
+      ? [...ANTARCTIC_GATEWAY_IDS_V2].sort() : [];
+    if (gatewayBreachKeys.join('|') !== expectedGatewayKeys.join('|')) {
+      errors.push('Antarctic gateway breach records are incomplete.');
+    }
+    let breachingCount = 0;
+    let seenNotOpen = false;
+    for (const gatewayId of gatewayOrder) {
+      const breach = polar.gatewayBreaches[gatewayId];
+      if (!breach || !exactKeys(breach, ANTARCTIC_GATEWAY_BREACH_KEYS)
+        || breach.gatewayId !== gatewayId
+        || !['sealed', 'breaching', 'open'].includes(breach.status)
+        || ![breach.breachStartedTick, breach.opensTick, breach.openedTick]
+          .every((tick) => tick === null || Number.isInteger(tick) && tick >= 0)
+        || breach.status === 'sealed'
+          && (breach.breachStartedTick !== null || breach.opensTick !== null || breach.openedTick !== null)
+        || breach.status === 'breaching'
+          && (breach.breachStartedTick === null || breach.opensTick === null
+            || breach.openedTick !== null || breach.opensTick <= breach.breachStartedTick)
+        || breach.status === 'open'
+          && (breach.breachStartedTick === null || breach.opensTick === null
+            || breach.openedTick === null || breach.openedTick < breach.opensTick
+            || breach.openedTick > state.tick)) {
+        errors.push(`Antarctic gateway breach ${gatewayId} is invalid.`);
+        continue;
+      }
+      if (breach.status === 'breaching') breachingCount += 1;
+      if (breach.status !== 'open') seenNotOpen = true;
+      else if (seenNotOpen) errors.push('Antarctic gateways did not open monotonically.');
+    }
+    if (breachingCount > 1) errors.push('More than one Antarctic gateway is breaching.');
+    const attention = polar.rogueAttention;
+    if (!attention || !exactKeys(attention, ROGUE_ATTENTION_KEYS)
+      || !['disabled', 'dormant', 'observing', 'mobilising', 'breach-imminent', 'active']
+        .includes(attention.stage)
+      || !Number.isFinite(attention.liberatedWorldShare)
+      || attention.liberatedWorldShare < 0 || attention.liberatedWorldShare > 1
+      || ![attention.benchmarkMetTick, attention.nextStageTick, attention.activatedTick]
+        .every((tick) => tick === null || Number.isInteger(tick) && tick >= 0)
+      || attention.stage === 'active' && attention.activatedTick === null
+      || attention.stage === 'dormant'
+        && (attention.benchmarkMetTick !== null || attention.nextStageTick !== null
+          || attention.activatedTick !== null)
+      || ['observing', 'mobilising', 'breach-imminent'].includes(attention.stage)
+        && (attention.benchmarkMetTick === null || attention.nextStageTick === null
+          || attention.activatedTick !== null)) {
+      errors.push('Rogue attention state is invalid.');
     }
     if (polar.phase === 'victory'
       && polar.victoryCommanderId !== polar.sectors['zero-point-core']?.securedBy) {
@@ -311,7 +886,7 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
       || !Number.isFinite(nation.domesticFoodCapacity) || nation.domesticFoodCapacity < 0
       || !Number.isFinite(nation.trainedReserves) || nation.trainedReserves < 0
       || nation.foodStock < 0 || nation.foodSecurity < 0 || nation.foodSecurity > 1
-      || !Number.isInteger(nation.ceasefiresRequested) || nation.ceasefiresRequested < 0
+      || nation.ceasefiresRequested !== 0
       || !Number.isInteger(nation.rapidRecruitmentAvailableTick) || nation.rapidRecruitmentAvailableTick < 0
       || !Number.isInteger(nation.researchSurgeAvailableTick) || nation.researchSurgeAvailableTick < 0
       || !Number.isInteger(nation.propagandaAvailableTick) || nation.propagandaAvailableTick < 0
@@ -342,7 +917,7 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
     if (!state.players[territory.owner]) errors.push(`Territory ${id} has an unknown owner.`);
     if (!state.players[territory.coreOwner]) errors.push(`Territory ${id} has an unknown core owner.`);
     const expectedCapacity = stateTerritoryArmyCapacityTargetV2(state, content, id, territory.owner);
-    if (territory.population < 0.01 || territory.economy < 0.10 || territory.condition < 0.15 || territory.condition > 1
+    if (territory.population < 0.01 || territory.economy < 0.10
       || territory.integration < 0 || territory.integration > 1
       || territory.army.capacity < 0 || territory.army.manpower < 0
       || !Number.isFinite(territory.army.baseAttack) || territory.army.baseAttack <= 0 || territory.army.baseAttack > 20
@@ -365,10 +940,19 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
         || program.completesTick <= state.tick || territory.integration >= 1) {
         errors.push(`Territory ${id} has an invalid integration program.`);
       }
-    } else if (territory.coreOwner !== territory.owner || territory.integration !== 1) {
+    } else {
+      const survivalSupplyCorridor = content.metadata?.scenarioId === 'survival'
+        && state.runProgression.scorchedWorldTerritoryIds.includes(id)
+        && !ANTARCTIC_TERRITORY_IDS_V2.includes(id);
+      if (survivalSupplyCorridor
+        ? territory.integration !== 0
+        : territory.coreOwner !== territory.owner || territory.integration !== 1) {
       errors.push(`Territory ${id} has unfinished integration without a program.`);
+      }
     }
   }
+  if (state.offers.length !== 0) errors.push('Retired settlement offers must be empty.');
+  if (state.ceasefireObligations.length !== 0) errors.push('Retired settlement obligations must be empty.');
   const referencedNations = new Set<PlayerId>();
   for (const humanId of humanPlayerIds) if (state.players[humanId]) referencedNations.add(humanId);
   for (const territory of Object.values(state.territories)) {
@@ -428,6 +1012,89 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
       || (war.defenderCivilianLosses ?? 0) < 0) {
       errors.push(`War ${war.id} has invalid numeric state.`);
     }
+    const apexTelemetry = war.apexTelemetryByPlayer as unknown;
+    if (apexTelemetry !== undefined) {
+      if (!apexTelemetry || typeof apexTelemetry !== 'object' || Array.isArray(apexTelemetry)) {
+        errors.push(`War ${war.id} has invalid APEX telemetry.`);
+      } else {
+        for (const [playerId, rawTelemetry] of Object.entries(apexTelemetry)) {
+          if (!rawTelemetry || typeof rawTelemetry !== 'object' || Array.isArray(rawTelemetry)) {
+            errors.push(`War ${war.id} has invalid APEX telemetry for ${playerId}.`);
+            continue;
+          }
+          const telemetry = rawTelemetry as NonNullable<
+            NonNullable<typeof war.apexTelemetryByPlayer>[PlayerId]
+          >;
+          const nonNegativeValues = [
+            telemetry.peakPower,
+            telemetry.maxIntegrity,
+            telemetry.integrityLosses,
+            telemetry.supplyDelivered,
+            telemetry.supplySpent,
+            telemetry.mirrorCounterpulseDamage,
+          ];
+          const countValues = [
+            telemetry.supportedBattles,
+            telemetry.singularityPulses,
+            telemetry.twinProjectionBattles,
+          ];
+          if (!exactKeys(telemetry, APEX_WAR_TELEMETRY_KEYS)
+            || !isHumanPlayerV2(state, playerId as PlayerId)
+            || !nonNegativeValues.every((value) => Number.isFinite(value) && value >= 0)
+            || !countValues.every((value) => Number.isSafeInteger(value) && value >= 0)
+            || telemetry.singularityPulses > telemetry.supportedBattles
+            || telemetry.twinProjectionBattles > telemetry.supportedBattles) {
+            errors.push(`War ${war.id} has invalid APEX telemetry for ${playerId}.`);
+          }
+        }
+      }
+    }
+    const reportBaselines = war.reportBaselineByPlayer as unknown;
+    if (reportBaselines !== undefined) {
+      if (!reportBaselines || typeof reportBaselines !== 'object' || Array.isArray(reportBaselines)) {
+        errors.push(`War ${war.id} has invalid report baselines.`);
+      } else {
+        for (const [playerId, rawBaseline] of Object.entries(reportBaselines)) {
+          if (!rawBaseline || typeof rawBaseline !== 'object' || Array.isArray(rawBaseline)) {
+            errors.push(`War ${war.id} has invalid report baseline for ${playerId}.`);
+            continue;
+          }
+          const baseline = rawBaseline as NonNullable<
+            NonNullable<typeof war.reportBaselineByPlayer>[PlayerId]
+          >;
+          const nonNegativeValues = [
+            baseline.treasurySeized,
+            baseline.treasuryLost,
+            baseline.allyPeakPower,
+            baseline.allyLosses,
+            baseline.effectiveAttackBefore,
+            baseline.effectiveDefenseBefore,
+            baseline.combatPowerBefore,
+            baseline.capacityBefore,
+          ];
+          const territoryIdsValid = (ids: unknown): ids is TerritoryId[] => (
+            isSortedUniqueStringArray(ids)
+              && ids.every((territoryId) => Boolean(content.territories[territoryId as TerritoryId]))
+          );
+          if (!exactKeys(baseline, WAR_REPORT_BASELINE_KEYS)
+            || !isHumanPlayerV2(state, playerId as PlayerId)
+            || (playerId !== war.attackerId && playerId !== war.defenderId)
+            || !Number.isFinite(baseline.treasuryBefore)
+            || !nonNegativeValues.every((value) => Number.isFinite(value) && value >= 0)
+            || !Number.isSafeInteger(baseline.allySupportedBattles)
+            || baseline.allySupportedBattles < 0
+            || baseline.allySupportedBattles > war.battles
+            || !territoryIdsValid(baseline.ownedTerritoryIds)
+            || !territoryIdsValid(baseline.touchedTerritoryIds)
+            || !isSortedUniqueStringArray(baseline.allyContributorIds)
+            || !baseline.allyContributorIds.every((contributorId) => (
+              humanPlayerIds.includes(contributorId as PlayerId)
+            ))) {
+            errors.push(`War ${war.id} has invalid report baseline for ${playerId}.`);
+          }
+        }
+      }
+    }
     const revenge = war.revenge as unknown;
     if (revenge !== undefined && revenge !== null) {
       if (typeof revenge !== 'object' || Array.isArray(revenge)) {
@@ -481,6 +1148,9 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
       errors.push(`War ${war.id} has invalid operation lists.`);
       continue;
     }
+    if (war.attackerOperations.length + war.defenderOperations.length > 1) {
+      errors.push(`War ${war.id} has more than one canonical front.`);
+    }
     const usedSources = new Set<TerritoryId>();
     for (const [commanderId, opponentId, operations] of [
       [war.attackerId, war.defenderId, war.attackerOperations],
@@ -501,7 +1171,15 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
           || source.owner !== commanderId
           || selectArmyCombatManpowerV2(state, commanderId, source.army) <= 0
           || target.owner !== opponentId) errors.push(`War ${war.id} has an invalid operation.`);
-        if (selectTerritoryWarAccessV2(content, operation.sourceId, operation.targetId) !== operation.access) {
+        const route = selectCoopMilitaryAccessRouteBetweenV2(
+          state,
+          content,
+          commanderId,
+          opponentId,
+          operation.sourceId,
+          operation.targetId,
+        );
+        if (route?.access !== operation.access) {
           errors.push(`War ${war.id} operation has no legal route.`);
         }
       }
@@ -524,7 +1202,7 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
     if (!hasOnlyKeys(offer, OFFER_KEYS)) errors.push(`Offer ${offer.id} has non-canonical keys.`);
     if (!state.players[offer.fromId] || !state.players[offer.toId] || !state.wars.some((war) => war.id === offer.warId)) errors.push(`Offer ${offer.id} has invalid references.`);
     if (![offer.createdTick, offer.expiresTick, offer.cashAmount ?? 0, offer.weeklyCost ?? 0, offer.paymentWeeks ?? 0].every(Number.isFinite)
-      || (offer.settlement === 'ceasefire' && (!(offer.weeklyCost! > 0) || offer.paymentWeeks !== CEASEFIRE_PAYMENT_WEEKS))) {
+      || (offer.settlement === 'ceasefire' && (!(offer.weeklyCost! > 0) || offer.paymentWeeks !== LEGACY_CEASEFIRE_PAYMENT_WEEKS))) {
       errors.push(`Offer ${offer.id} has invalid numeric state.`);
     }
   }

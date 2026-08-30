@@ -2,14 +2,21 @@ import { describe, expect, it } from 'vitest';
 import { nationIdV2 } from '../sim/v2/types';
 import { normalizeScenarioConfigV2 } from '../sim/v2/scenarios';
 import { HostLobbyModel } from './lobbyModel';
+import { createNeutralMultiplayerDeploymentSnapshotV1 } from './deployment';
+
+const selection = (countryId: ReturnType<typeof nationIdV2>) => ({
+  type: 'select-country' as const,
+  countryId,
+  deployment: createNeutralMultiplayerDeploymentSnapshotV1(countryId),
+});
 
 describe('Direct Connect lobby model', () => {
   it('requires two unique, connected and ready country seats', () => {
     const lobby = new HostLobbyModel('host', 'Alice');
     expect(lobby.connect('guest', 'Bob').accepted).toBe(true);
-    expect(lobby.apply('host', { type: 'select-country', countryId: nationIdV2('bel') }).accepted).toBe(true);
-    expect(lobby.apply('guest', { type: 'select-country', countryId: nationIdV2('bel') }).accepted).toBe(false);
-    expect(lobby.apply('guest', { type: 'select-country', countryId: nationIdV2('can') }).accepted).toBe(true);
+    expect(lobby.apply('host', selection(nationIdV2('bel'))).accepted).toBe(true);
+    expect(lobby.apply('guest', selection(nationIdV2('bel'))).accepted).toBe(false);
+    expect(lobby.apply('guest', selection(nationIdV2('can'))).accepted).toBe(true);
     expect(lobby.apply('host', { type: 'set-ready', ready: true }).accepted).toBe(true);
     expect(lobby.apply('host', { type: 'start' }).accepted).toBe(false);
     expect(lobby.apply('guest', { type: 'set-ready', ready: true }).accepted).toBe(true);
@@ -17,22 +24,33 @@ describe('Direct Connect lobby model', () => {
     expect(lobby.snapshot().started).toBe(true);
   });
 
-  it('does not let a guest start and releases a disconnected guest seat', () => {
-    const lobby = new HostLobbyModel('host', 'Alice');
+  it('does not let a guest start and reserves its country during reconnect grace', () => {
+    let now = 1_000;
+    const lobby = new HostLobbyModel('host', 'Alice', undefined, () => now, 5_000);
     lobby.connect('guest', 'Bob');
     expect(lobby.apply('guest', { type: 'start' }).accepted).toBe(false);
-    lobby.apply('guest', { type: 'select-country', countryId: nationIdV2('can') });
+    lobby.apply('guest', selection(nationIdV2('can')));
     lobby.apply('guest', { type: 'set-ready', ready: true });
     lobby.disconnect('guest');
-    const guest = lobby.snapshot().players.find((player) => player.peerId === 'guest');
-    expect(guest).toBeUndefined();
+    expect(lobby.snapshot().players.find((player) => player.peerId === 'guest')).toMatchObject({
+      countryId: 'can', connected: false, ready: false,
+    });
+    expect(lobby.apply('host', selection(nationIdV2('can'))).accepted).toBe(false);
+    expect(lobby.connect('guest', 'Bob')).toEqual({ accepted: true });
+    expect(lobby.snapshot().players.find((player) => player.peerId === 'guest')).toMatchObject({
+      countryId: 'can', connected: true,
+    });
+
+    lobby.disconnect('guest');
+    now += 5_001;
+    expect(lobby.releaseExpiredDisconnected()).toEqual(['guest']);
+    expect(lobby.snapshot().players.find((player) => player.peerId === 'guest')).toBeUndefined();
   });
 
   it('rejects a forged country identifier before it can poison the room', () => {
     const lobby = new HostLobbyModel('host', 'Alice');
     expect(lobby.apply('host', {
-      type: 'select-country',
-      countryId: nationIdV2('not-a-country'),
+      ...selection(nationIdV2('not-a-country')),
     }).accepted).toBe(false);
     expect(lobby.snapshot().players[0]?.countryId).toBeNull();
   });
@@ -40,8 +58,8 @@ describe('Direct Connect lobby model', () => {
   it('lets only the host roll back the matching failed launch and retry', () => {
     const lobby = new HostLobbyModel('host', 'Alice');
     lobby.connect('guest', 'Bob');
-    lobby.apply('host', { type: 'select-country', countryId: nationIdV2('bel') });
-    lobby.apply('guest', { type: 'select-country', countryId: nationIdV2('can') });
+    lobby.apply('host', selection(nationIdV2('bel')));
+    lobby.apply('guest', selection(nationIdV2('can')));
     lobby.apply('host', { type: 'set-ready', ready: true });
     lobby.apply('guest', { type: 'set-ready', ready: true });
 
@@ -67,8 +85,8 @@ describe('Direct Connect lobby model', () => {
     const random = normalizeScenarioConfigV2({ mode: 'random-world', seed: 202 });
     const lobby = new HostLobbyModel('host', 'Alice', initial);
     lobby.connect('guest', 'Bob');
-    lobby.apply('host', { type: 'select-country', countryId: nationIdV2('bel') });
-    lobby.apply('guest', { type: 'select-country', countryId: nationIdV2('can') });
+    lobby.apply('host', selection(nationIdV2('bel')));
+    lobby.apply('guest', selection(nationIdV2('can')));
     lobby.apply('host', { type: 'set-ready', ready: true });
     lobby.apply('guest', { type: 'set-ready', ready: true });
     const before = lobby.snapshot();
@@ -87,9 +105,8 @@ describe('Direct Connect lobby model', () => {
     const lobby = new HostLobbyModel('host', 'Alice');
     lobby.connect('guest', 'Bob');
     const revision = lobby.snapshot().revision;
-    expect(lobby.apply('guest', {
-      type: 'select-country', countryId: nationIdV2('can'),
-    }, revision)).toEqual({ accepted: true });
+    expect(lobby.apply('guest', selection(nationIdV2('can')), revision))
+      .toEqual({ accepted: true });
     const current = lobby.snapshot();
 
     expect(lobby.apply('guest', { type: 'set-ready', ready: true }, revision).accepted).toBe(false);

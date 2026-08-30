@@ -26,6 +26,7 @@ import {
   selectTotalManpowerV2,
   invalidateTerritoryIndexV2,
 } from './selectors';
+import { enterPostBlackoutCampaignForTestV2 } from './testSupport';
 import {
   declareWarV2,
   processWarsV2,
@@ -125,7 +126,7 @@ describe('V2 combat, capture and absorption', () => {
       * combatDefenseEffectV2(displayedDefense, attackerAttack)
       * DEFENDER_POSITION_MULTIPLIER
       * territoryTerrainDefenseMultiplierV2(WORLD_CONTENT_V2, nldTerritory)
-      * (0.65 + 0.35 * target.condition) * supply
+      * supply
       * selectNationalIqViewV2(WORLD_CONTENT_V2, nld).logisticsMultiplier;
     const event = resolveBattlePulseV2(state, WORLD_CONTENT_V2, testWar(state), operation())!;
     expect(DEFENDER_POSITION_MULTIPLIER).toBe(1);
@@ -197,7 +198,7 @@ describe('V2 combat, capture and absorption', () => {
     expect(state.wars.some((war) => war.attackerId === deu && war.defenderId === nld)).toBe(false);
   });
 
-  it('turns a contested invasion into rival wars that survive the original target', () => {
+  it('keeps two opportunistic invasions bilateral instead of creating a rival coalition war', () => {
     const state = createWorldStateV2(23021);
     state.wars = [];
     testWar(state, bel, nld, 'war-primary-invasion');
@@ -208,7 +209,7 @@ describe('V2 combat, capture and absorption', () => {
     expect(state.wars.some((war) => (
       (war.attackerId === deu && war.defenderId === bel)
       || (war.attackerId === bel && war.defenderId === deu)
-    ))).toBe(true);
+    ))).toBe(false);
 
     state.territories[nldTerritory].owner = bel;
     state.territories[nldTerritory].coreOwner = bel;
@@ -221,14 +222,15 @@ describe('V2 combat, capture and absorption', () => {
     expect(state.wars.some((war) => (
       (war.attackerId === deu && war.defenderId === bel)
       || (war.attackerId === bel && war.defenderId === deu)
-    ))).toBe(true);
+    ))).toBe(false);
   });
 
-  it('does not turn a linked defensive intervention against the country being helped', () => {
+  it('ignores a linked-war hint and keeps the Campaign declaration bilateral', () => {
     const state = createWorldStateV2(23022);
     state.wars = [];
     const invasion = testWar(state, bel, nld, 'war-linked-invasion');
     state.players[deu].treasury = 1_000_000;
+    enterPostBlackoutCampaignForTestV2(state);
 
     expect(declareWarV2(state, WORLD_CONTENT_V2, deu, bel, invasion.id).accepted).toBe(true);
     expect(state.wars.some((war) => war.attackerId === deu && war.defenderId === bel)).toBe(true);

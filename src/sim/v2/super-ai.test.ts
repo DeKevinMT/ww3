@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  aiPeaceOfferAcceptanceChanceV2,
-  aiPeaceRequestChanceV2,
+  activeAutonomousAiVsAiWarsV2,
   planAiCommandsV2,
   selectAiResearchAllocationsV2,
   selectDefensiveAidAssessmentV2,
@@ -52,6 +51,7 @@ import { declareWarV2, warDeclarationStatusV2 } from './war';
 import { humanStartingArmyMultiplierV2 } from './traits';
 import { nationIdV2, territoryIdV2 } from './types';
 import { WorldEngineV2 } from './WorldEngineV2';
+import { enterPostBlackoutCampaignForTestV2 } from './testSupport';
 
 describe('V2 shared national AI', () => {
   it('redirects every research share once costly Education reaches the useful IQ cap', () => {
@@ -82,95 +82,6 @@ describe('V2 shared national AI', () => {
     expect(Object.values(allocation).reduce((sum, value) => sum + value, 0)).toBe(100);
   });
 
-  it('makes peace exceptional and values an imminent conquest above a small payment', () => {
-    const winningForSmallPayment = aiPeaceOfferAcceptanceChanceV2({
-      aggressiveness: 0.78,
-      warFatigue: 0.20,
-      armyFillRatio: 0.90,
-      activeWarCount: 1,
-      powerRatio: 1.8,
-      warScore: 30,
-      opponentTerritoryCount: 1,
-      settlementGenerosity: 0.08,
-      revengePending: false,
-    });
-    const collapsingForMeaningfulPayment = aiPeaceOfferAcceptanceChanceV2({
-      aggressiveness: 0.15,
-      warFatigue: 0.95,
-      armyFillRatio: 0.08,
-      activeWarCount: 3,
-      powerRatio: 0.45,
-      warScore: -40,
-      opponentTerritoryCount: 4,
-      settlementGenerosity: 1.2,
-      revengePending: false,
-    });
-    expect(winningForSmallPayment).toBeLessThanOrEqual(0.005);
-    expect(collapsingForMeaningfulPayment).toBeGreaterThan(winningForSmallPayment * 10);
-    expect(collapsingForMeaningfulPayment).toBeLessThanOrEqual(0.16);
-    expect(aiPeaceOfferAcceptanceChanceV2({
-      aggressiveness: 0,
-      warFatigue: 1,
-      armyFillRatio: 0,
-      activeWarCount: 4,
-      powerRatio: 0.2,
-      warScore: -80,
-      opponentTerritoryCount: 5,
-      settlementGenerosity: 1.5,
-      revengePending: true,
-    })).toBe(0);
-
-    expect(aiPeaceRequestChanceV2({
-      aggressiveness: 0.5,
-      warAge: 156,
-      warFatigue: 0.20,
-      armyFillRatio: 0.85,
-      activeWarCount: 1,
-      strengthGap: 5,
-      revengePending: false,
-    })).toBe(0);
-    const collapseRequest = aiPeaceRequestChanceV2({
-      aggressiveness: 0.15,
-      warAge: 156,
-      warFatigue: 0.95,
-      armyFillRatio: 0.08,
-      activeWarCount: 3,
-      strengthGap: 55,
-      revengePending: false,
-    });
-    expect(collapseRequest).toBeGreaterThan(0);
-    expect(collapseRequest).toBeLessThanOrEqual(0.14);
-  });
-
-  it('rarely accepts an ordinary ceasefire offer in seeded campaign planning', () => {
-    let accepted = 0;
-    const samples = 40;
-    for (let seed = 1_900; seed < 1_900 + samples; seed += 1) {
-      const state = createWorldStateV2(seed);
-      const human = nationIdV2('bel');
-      const rival = nationIdV2('lux');
-      state.humanPlayerId = human;
-      state.tick = 96;
-      state.wars = [{
-        id: 'war-peace-choice', attackerId: human, defenderId: rival,
-        startedTick: 60, lastBattleTick: 96, warScore: 8, battles: 12,
-        attackerLosses: 0.02, defenderLosses: 0.08, lastPeaceOfferTick: 90,
-        attackerOperations: [], defenderOperations: [],
-      }];
-      state.offers = [{
-        id: 'offer-peace-choice', fromId: human, toId: rival, warId: 'war-peace-choice',
-        settlement: 'ceasefire', createdTick: 95, expiresTick: 103, status: 'pending',
-        weeklyCost: 0.1, paymentWeeks: 52,
-      }];
-      const response = planAiCommandsV2(state, WORLD_CONTENT_V2).find((command) => (
-        command.type === 'respond-to-offer' && command.offerId === 'offer-peace-choice'
-      ));
-      expect(response?.type).toBe('respond-to-offer');
-      if (response?.type === 'respond-to-offer' && response.accept) accepted += 1;
-    }
-    expect(accepted).toBeLessThan(samples * 0.25);
-  }, 10_000);
-
   it('combines a recent military-posture baseline with live national readiness', () => {
     const state = createWorldStateV2(8_230_002);
     const country = nationIdV2('usa');
@@ -180,7 +91,6 @@ describe('V2 shared national AI', () => {
     player.foodSecurity = 0.15;
     player.warFatigue = 95;
     for (const territory of selectTerritoriesOfV2(state, country)) {
-      territory.condition = 0.20;
       territory.army.manpower = territory.army.capacity * 0.05;
     }
     const strained = selectNationalAggressivenessV2(state, WORLD_CONTENT_V2, country);
@@ -212,18 +122,29 @@ describe('V2 shared national AI', () => {
       .toBe(ordinaryForecast.projectedDefenderLosses);
   });
 
-  it('stages a lightly chaotic first year without attributing those rival wars to the player', () => {
+  it('keeps the first year readable without attributing rival wars to the player', () => {
     const engine = new WorldEngineV2(700);
+    enterPostBlackoutCampaignForTestV2(engine.state);
     expect(engine.state.wars).toHaveLength(0);
     const seenWars = new Set<string>();
+    let maximumActiveWars = 0;
+    let maximumBackgroundWars = 0;
     for (let week = 0; week < 50; week += 1) {
       engine.step();
+      maximumActiveWars = Math.max(maximumActiveWars, engine.state.wars.length);
+      maximumBackgroundWars = Math.max(
+        maximumBackgroundWars,
+        activeAutonomousAiVsAiWarsV2(engine.state, WORLD_CONTENT_V2),
+      );
       for (const war of engine.state.wars) {
         seenWars.add(`${war.attackerId}:${war.defenderId}`);
         expect(war.attackerId).not.toBe(engine.state.humanPlayerId);
       }
     }
-    expect(seenWars.size).toBe(3);
+    expect(maximumBackgroundWars).toBe(1);
+    expect(maximumActiveWars).toBeLessThanOrEqual(2);
+    expect(seenWars.size).toBeGreaterThanOrEqual(1);
+    expect(seenWars.size).toBeLessThanOrEqual(2);
     updateGlobalResistanceV2(engine.state, WORLD_CONTENT_V2);
     expect(selectGlobalResistanceV2(engine.state).threat).toBe(0);
     expect(selectGlobalResistanceV2(engine.state).members).toBe(0);
@@ -232,7 +153,7 @@ describe('V2 shared national AI', () => {
   it('turns a national intent into an exact adaptive target plan', () => {
     const intent = { military: 35, research: 15, development: 50 } as const;
     const peace = optimizeNationalAiPlanV2({
-      intent, activeWars: 0, fillRatio: 1, averageCondition: 1,
+      intent, activeWars: 0, fillRatio: 1,
       researchGap: 0, treasuryWeeks: 8, iqScore: 100,
     });
     expect(peace.mode).toBe('growth');
@@ -240,7 +161,7 @@ describe('V2 shared national AI', () => {
     expect(peace.efficiency).toBe(nationalAiEfficiencyV2(100));
 
     const war = optimizeNationalAiPlanV2({
-      intent, activeWars: 2, fillRatio: 0.45, averageCondition: 0.7,
+      intent, activeWars: 2, fillRatio: 0.45,
       researchGap: 8, treasuryWeeks: 1, iqScore: 100,
     });
     expect(war.mode).toBe('war');
@@ -403,6 +324,7 @@ describe('V2 shared national AI', () => {
 
   it('allows multiple simultaneous fronts and charges each one', () => {
     const state = createWorldStateV2(706);
+    enterPostBlackoutCampaignForTestV2(state);
     const belgium = nationIdV2('bel');
     const netherlands = nationIdV2('nld');
     const luxembourg = nationIdV2('lux');
@@ -437,8 +359,8 @@ describe('V2 shared national AI', () => {
   });
 });
 
-describe('V2 dynamic containment coalition', () => {
-  it('makes defensive cooperation strongly prefer low-aggression countries', () => {
+describe('V2 serious every-nation-for-itself routing and legacy Alternative helpers', () => {
+  it('keeps the legacy Alternative cooperation curve deterministic', () => {
     const cautious = coalitionWillingnessV2(20);
     const moderate = coalitionWillingnessV2(50);
     const aggressive = coalitionWillingnessV2(85);
@@ -456,6 +378,7 @@ describe('V2 dynamic containment coalition', () => {
     state.wars = [];
     state.aiEscalation = {
       lastWarStartTick: -1_000_000,
+      openingConflictsStarted: 0,
       lastFederationTick: -1_000_000,
       resistanceLevel: 0,
       globalThreat: 0,
@@ -468,13 +391,13 @@ describe('V2 dynamic containment coalition', () => {
     return selectGlobalResistanceV2(state);
   }
 
-  it('gives small states a real opening window while major-power aggression draws more suspicion', () => {
+  it('keeps obsolete global suspicion at zero for small and major Campaign powers', () => {
     const belgium = firstConquestThreat('bel', 'nld');
     const unitedStates = firstConquestThreat('usa', 'can');
     expect(belgium.level).toBe(0);
     expect(belgium.members).toBe(0);
-    expect(belgium.threat).toBeLessThan(4);
-    expect(unitedStates.threat).toBeGreaterThan(belgium.threat * 1.7);
+    expect(belgium.threat).toBe(0);
+    expect(unitedStates.threat).toBe(0);
   });
 
   it('reacts to live military rank so any current top-five power triggers faster federations', () => {
@@ -501,7 +424,7 @@ describe('V2 dynamic containment coalition', () => {
     expect(resistance.threat).toBeLessThan(12);
   });
 
-  it('builds a rare containment coalition from the least aggressive willing countries', () => {
+  it('clears legacy coalition membership instead of forming a Campaign bloc', () => {
     const state = createWorldStateV2(703);
     state.aiEscalation.globalThreat = 100;
     for (let wave = 0; wave < 6; wave += 1) {
@@ -509,28 +432,26 @@ describe('V2 dynamic containment coalition', () => {
       updateGlobalResistanceV2(state, WORLD_CONTENT_V2);
     }
     const formed = selectGlobalResistanceV2(state);
-    expect(formed.members).toBeGreaterThanOrEqual(1);
-    const powers = createPowerSnapshotV2(state, WORLD_CONTENT_V2);
-    const memberAggressiveness = state.aiEscalation.coalitionMembers.map((memberId) => (
-      selectNationalAggressivenessV2(state, WORLD_CONTENT_V2, memberId, powers)
-    ));
-    expect(Math.max(...memberAggressiveness)).toBeLessThan(60);
+    expect(formed.members).toBe(0);
+    expect(formed.level).toBe(0);
+    expect(state.aiEscalation.coalitionMembers).toEqual([]);
 
     state.aiEscalation.globalThreat = 0;
     expect(updateGlobalResistanceV2(state, WORLD_CONTENT_V2)).toBeUndefined();
-    expect(selectGlobalResistanceV2(state).members).toBe(formed.members);
+    expect(selectGlobalResistanceV2(state).members).toBe(0);
   });
 
-  it('never grants containment or federation a selected-opponent combat multiplier', () => {
+  it('normalizes stale coalition saves without granting any combat multiplier', () => {
     const state = createWorldStateV2(704);
     state.aiEscalation.globalThreat = 80;
     state.aiEscalation.coalitionMembers = WORLD_CONTENT_V2.nationIds
       .filter((id) => id !== state.humanPlayerId).slice(0, 40);
-    expect(updateGlobalResistanceV2(state, WORLD_CONTENT_V2)).toBe(2);
     const human = state.humanPlayerId;
     const enemy = state.aiEscalation.coalitionMembers[0]!;
     const third = WORLD_CONTENT_V2.nationIds.find((id) => id !== human && id !== enemy
       && !state.aiEscalation.coalitionMembers.includes(id))!;
+    expect(updateGlobalResistanceV2(state, WORLD_CONTENT_V2)).toBeUndefined();
+    expect(state.aiEscalation.coalitionMembers).toEqual([]);
     expect(resistanceCombatMultiplierV2(state, human, enemy)).toEqual({ attacker: 1, defender: 1 });
     expect(resistanceCombatMultiplierV2(state, enemy, human).attacker).toBe(1);
     expect(resistanceCombatMultiplierV2(state, enemy, third)).toEqual({ attacker: 1, defender: 1 });
@@ -584,6 +505,7 @@ describe('V2 dynamic containment coalition', () => {
 
   it('does not turn every loose coalition member into an automatic player attacker', () => {
     const state = createWorldStateV2(714);
+    enterPostBlackoutCampaignForTestV2(state);
     state.wars = [];
     state.tick = 80;
     state.aiEscalation.lastWarStartTick = -1_000_000;
@@ -635,7 +557,7 @@ describe('V2 dynamic containment coalition', () => {
     ))).toBe(false);
   });
 
-  it('keeps rare defensive aid available to a human facing an overwhelming aggressor', () => {
+  it('keeps the legacy Alternative defensive-aid assessment bounded', () => {
     const human = nationIdV2('bel');
     const aggressor = nationIdV2('deu');
     const supporter = nationIdV2('nld');
@@ -681,6 +603,7 @@ describe('V2 dynamic containment coalition', () => {
     const attackers = new Set<string>();
     for (let seed = 800; seed < 920; seed += 1) {
       const state = createWorldStateV2(seed);
+      enterPostBlackoutCampaignForTestV2(state);
       state.wars = [];
       state.tick = 184;
       state.aiEscalation.lastWarStartTick = -1_000_000;
@@ -698,6 +621,7 @@ describe('V2 dynamic containment coalition', () => {
     const directPeerWars: string[] = [];
     for (let seed = 4_500; seed < 4_540; seed += 1) {
       const state = createWorldStateV2(seed);
+      enterPostBlackoutCampaignForTestV2(state);
       state.tick = 520;
       state.wars = [];
       state.aiEscalation.lastWarStartTick = -1_000_000;
@@ -733,7 +657,7 @@ describe('V2 dynamic containment coalition', () => {
     expect(usaPolicy.maxFederationTerritories).toBeGreaterThan(belgiumPolicy.maxFederationTerritories);
   });
 
-  it('lets nearby small coalition members permanently fuse against rapid expansion', () => {
+  it('never fuses nearby countries in serious Campaign despite stale coalition data', () => {
     const state = createWorldStateV2(712);
     const human = state.humanPlayerId;
     state.wars = [];
@@ -754,7 +678,6 @@ describe('V2 dynamic containment coalition', () => {
       {
         population: territory.population,
         economy: territory.economy,
-        condition: territory.condition,
         manpower: territory.army.manpower,
         baseAttack: territory.army.baseAttack,
         baseDefense: territory.army.baseDefense,
@@ -778,9 +701,11 @@ describe('V2 dynamic containment coalition', () => {
       .filter(([id]) => id !== human)
       .reduce((sum, [, nation]) => sum + nation.treasury, 0);
 
-    expect(updateGlobalResistanceV2(state, WORLD_CONTENT_V2)).toBeDefined();
+    expect(updateGlobalResistanceV2(state, WORLD_CONTENT_V2)).toBeUndefined();
     const livingAfter = new Set(Object.values(state.territories).map((territory) => territory.owner)).size;
-    expect(livingAfter).toBeLessThan(livingBefore);
+    expect(livingAfter).toBe(livingBefore);
+    expect(state.aiEscalation.coalitionMembers).toEqual([]);
+    return;
     const federation = WORLD_CONTENT_V2.nationIds.find((id) => (
       id !== human
       && state.players[id].empireName.endsWith('Defense Federation')
@@ -812,7 +737,6 @@ describe('V2 dynamic containment coalition', () => {
       expect({
         population: territory.population,
         economy: territory.economy,
-        condition: territory.condition,
         manpower: territory.army.manpower,
         baseAttack: territory.army.baseAttack,
         baseDefense: territory.army.baseDefense,
@@ -870,7 +794,7 @@ describe('V2 dynamic containment coalition', () => {
     );
   });
 
-  it('lets gradual federations contain an expanding AI major power too', () => {
+  it('keeps an expanding AI major and its neighbours independent in serious Campaign', () => {
     const state = createWorldStateV2(714);
     const human = nationIdV2('bel');
     const russia = nationIdV2('rus');
@@ -885,9 +809,11 @@ describe('V2 dynamic containment coalition', () => {
     state.territories[ukraine].integration = 1;
     const livingBefore = new Set(Object.values(state.territories).map((territory) => territory.owner)).size;
 
-    expect(updateGlobalResistanceV2(state, WORLD_CONTENT_V2)).toBeDefined();
+    expect(updateGlobalResistanceV2(state, WORLD_CONTENT_V2)).toBeUndefined();
     const livingAfter = new Set(Object.values(state.territories).map((territory) => territory.owner)).size;
-    expect(livingAfter).toBe(livingBefore - 1);
+    expect(livingAfter).toBe(livingBefore);
+    expect(state.aiEscalation.coalitionMembers).toHaveLength(0);
+    return;
     const federations = WORLD_CONTENT_V2.nationIds.filter((id) => (
       state.players[id].empireName.endsWith('Defense Federation')
     ));

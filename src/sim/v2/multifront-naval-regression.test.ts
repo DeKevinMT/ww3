@@ -4,6 +4,7 @@ import {
   WAR_ACCESS_CASUALTY_MULTIPLIER,
   WAR_ACCESS_OPERATION_MULTIPLIER,
   WAR_ACCESS_SUPPLY_MULTIPLIER,
+  NAVAL_ROUTE_SUPPLY_MULTIPLIER_MIN,
   WAR_MOBILIZATION_TICKS,
   warAccessOperationMultiplierV2,
   warAccessSupplyMultiplierV2,
@@ -26,6 +27,7 @@ import {
 } from './traitContext';
 import { countryTraitFactorV2 } from './traits';
 import { nationIdV2, territoryIdV2 } from './types';
+import { enterPostBlackoutCampaignForTestV2 } from './testSupport';
 import { declareWarV2, processWarsV2, supplyFactorV2 } from './war';
 
 const bel = nationIdV2('bel');
@@ -39,10 +41,11 @@ const nldTerritory = territoryIdV2('nld');
 const gbrTerritory = territoryIdV2('gbr');
 
 describe('V2 multi-front and naval balance regressions', () => {
-  it('opens and resolves every viable source-unique empire front in one combat round', () => {
+  it('publishes and resolves one strongest front for a bilateral multi-border war', () => {
     const state = createWorldStateV2(8_220_001);
     state.humanPlayerId = usa;
     state.wars = [];
+    enterPostBlackoutCampaignForTestV2(state);
     state.territories[deuTerritory].owner = bel;
     state.territories[deuTerritory].coreOwner = bel;
     state.territories[deuTerritory].integration = 1;
@@ -50,7 +53,6 @@ describe('V2 multi-front and naval balance regressions', () => {
     invalidateTerritoryIndexV2(state);
 
     for (const sourceId of [belTerritory, deuTerritory]) {
-      state.territories[sourceId].condition = 1;
       state.territories[sourceId].army = {
         ...state.territories[sourceId].army,
         manpower: 1,
@@ -59,7 +61,6 @@ describe('V2 multi-front and naval balance regressions', () => {
         baseDefense: 1,
       };
     }
-    state.territories[nldTerritory].condition = 1;
     state.territories[nldTerritory].army = {
       ...state.territories[nldTerritory].army,
       manpower: 0.5,
@@ -72,7 +73,7 @@ describe('V2 multi-front and naval balance regressions', () => {
     const activeWar = state.wars.find((war) => (
       war.attackerId === bel && war.defenderId === nld
     ))!;
-    expect(activeWar.attackerOperations).toEqual([]);
+    expect(activeWar.attackerOperations.length + activeWar.defenderOperations.length).toBe(1);
 
     state.tick = activeWar.startedTick + WAR_MOBILIZATION_TICKS;
     const battles = processWarsV2(state, WORLD_CONTENT_V2)
@@ -80,15 +81,15 @@ describe('V2 multi-front and naval balance regressions', () => {
     const operationSources = activeWar.attackerOperations.map((operation) => operation.sourceId);
     const battleSources = battles.map((battle) => battle.sourceId);
 
-    expect(operationSources).toHaveLength(2);
-    expect(new Set(operationSources)).toEqual(new Set([belTerritory, deuTerritory]));
-    expect(battles).toHaveLength(2);
-    expect(new Set(battleSources)).toEqual(new Set([belTerritory, deuTerritory]));
+    expect(operationSources).toHaveLength(1);
+    expect([belTerritory, deuTerritory]).toContain(operationSources[0]);
+    expect(battles).toHaveLength(1);
+    expect([belTerritory, deuTerritory]).toContain(battleSources[0]);
     expect(new Set(battleSources).size).toBe(battles.length);
     expect(battles.every((battle) => battle.tick === state.tick)).toBe(true);
   });
 
-  it('puts naval risk mainly in cost while keeping the combat-supply penalty light', () => {
+  it('makes naval war viable but materially slower to supply than a land front', () => {
     expect(WAR_ACCESS_ASSAULT_MULTIPLIER.naval)
       .toBe(WAR_ACCESS_ASSAULT_MULTIPLIER.land);
     expect(WAR_ACCESS_CASUALTY_MULTIPLIER.naval)
@@ -96,12 +97,11 @@ describe('V2 multi-front and naval balance regressions', () => {
     expect(WAR_ACCESS_OPERATION_MULTIPLIER.naval
       / WAR_ACCESS_OPERATION_MULTIPLIER.land).toBeCloseTo(1.35, 10);
     expect(WAR_ACCESS_SUPPLY_MULTIPLIER.naval
-      / WAR_ACCESS_SUPPLY_MULTIPLIER.land).toBeCloseTo(0.98, 10);
+      / WAR_ACCESS_SUPPLY_MULTIPLIER.land).toBeCloseTo(0.85, 10);
     expect(WAR_ACCESS_OPERATION_MULTIPLIER.naval - 1)
-      .toBeGreaterThan((1 - WAR_ACCESS_SUPPLY_MULTIPLIER.naval) * 10);
+      .toBeGreaterThan(1 - WAR_ACCESS_SUPPLY_MULTIPLIER.naval);
 
     const supplyState = createWorldStateV2(8_220_002);
-    supplyState.territories[belTerritory].condition = 1;
     supplyState.players[bel].research.effectLevels.supply = 0;
     const landSupply = supplyFactorV2(
       supplyState, WORLD_CONTENT_V2, bel, belTerritory, 'land',
@@ -109,12 +109,14 @@ describe('V2 multi-front and naval balance regressions', () => {
     const navalSupply = supplyFactorV2(
       supplyState, WORLD_CONTENT_V2, bel, belTerritory, 'naval',
     );
-    expect(navalSupply / landSupply).toBeCloseTo(0.98, 10);
+    expect(navalSupply / landSupply).toBeCloseTo(0.85, 10);
 
     const landState = createWorldStateV2(8_220_003);
     const navalState = createWorldStateV2(8_220_003);
     landState.wars = [];
     navalState.wars = [];
+    enterPostBlackoutCampaignForTestV2(landState);
+    enterPostBlackoutCampaignForTestV2(navalState);
     expect(declareWarV2(landState, WORLD_CONTENT_V2, bel, nld).accepted).toBe(true);
     expect(declareWarV2(navalState, WORLD_CONTENT_V2, bel, gbr).accepted).toBe(true);
     const landOperations = selectWeeklyFinanceBreakdownV2(
@@ -162,12 +164,11 @@ describe('V2 multi-front and naval balance regressions', () => {
     const distantCombatSupply = warAccessSupplyMultiplierV2('naval', farRoute!.distanceKm);
     expect(distantOperationCost).toBeGreaterThan(WAR_ACCESS_OPERATION_MULTIPLIER.naval);
     expect(distantCombatSupply).toBeLessThan(WAR_ACCESS_SUPPLY_MULTIPLIER.naval);
-    expect(distantCombatSupply).toBeGreaterThanOrEqual(0.90);
+    expect(distantCombatSupply).toBeGreaterThanOrEqual(NAVAL_ROUTE_SUPPLY_MULTIPLIER_MIN);
     expect(distantOperationCost - 1).toBeGreaterThan((1 - distantCombatSupply) * 5);
 
     const state = createWorldStateV2(8_220_004);
     const sourceOwner = state.territories[farRoute!.sourceId]!.owner;
-    state.territories[farRoute!.sourceId]!.condition = 1;
     state.players[sourceOwner]!.research.effectLevels.supply = 0;
     expect(state.players[sourceOwner]!.capitalId).toBe(farRoute!.sourceId);
     const localSupply = supplyFactorV2(

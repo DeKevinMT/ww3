@@ -1,91 +1,72 @@
-import type { WarAccessV2 } from '../sim/v2/types';
+import type {
+  AvailableWarTargetAccessV2,
+  WarTargetRouteIntelInputV2,
+} from '../sim/v2/warTargetRanking';
 
-export type AvailableWarTargetAccessV2 = Exclude<WarAccessV2, 'none'>;
+export type {
+  AvailableWarTargetAccessV2,
+  WarTargetRecommendationRankInputV2,
+  WarTargetRouteIntelInputV2,
+} from '../sim/v2/warTargetRanking';
+export {
+  compareWarTargetRecommendationsV2,
+  rankWarTargetRecommendationsV2,
+  warTargetFusionValueBonusV2,
+  warTargetRecommendationScoreV2,
+  warTargetRoutePenaltyV2,
+} from '../sim/v2/warTargetRanking';
 
-export interface WarTargetRecommendationRankInputV2 {
-  readonly targetId: string;
-  readonly chance: number;
-  readonly access: AvailableWarTargetAccessV2;
-  readonly distanceKm?: number;
-  readonly gdpPerCapitaThousands?: number;
-  readonly nationalIq?: number;
+function finiteClamped(value: number | undefined, minimum: number, maximum: number): number | undefined {
+  if (!Number.isFinite(value)) return undefined;
+  return Math.max(minimum, Math.min(maximum, value!));
 }
 
-/** Bounded fusion value: conquest quality can add at most eight forecast points. */
-export function warTargetFusionValueBonusV2(
-  target: Pick<WarTargetRecommendationRankInputV2, 'gdpPerCapitaThousands' | 'nationalIq'>,
-): number {
-  const wealth = Number.isFinite(target.gdpPerCapitaThousands)
-    ? Math.max(0, target.gdpPerCapitaThousands ?? 0) : 0;
-  const iq = Number.isFinite(target.nationalIq) ? target.nationalIq ?? 0 : 0;
-  const wealthBonus = 4 * Math.min(1, Math.log1p(wealth / 10) / Math.log(11));
-  const iqBonus = 4 * Math.max(0, Math.min(1, (iq - 70) / 50));
-  return Math.min(8, wealthBonus + iqBonus);
+function safeDistance(distanceKm: number | undefined): number {
+  return finiteClamped(distanceKm, 0, Number.MAX_SAFE_INTEGER) ?? 0;
 }
 
-/**
- * Route friction is expressed in forecast percentage points so the military
- * outlook stays dominant. Naval access starts 1.5 points behind a land border
- * and adds at most another 6.5 points over 12,000 km. Consequently, any target
- * with a forecast advantage greater than eight points wins on military merit,
- * regardless of distance.
- */
-export function warTargetRoutePenaltyV2(
-  access: AvailableWarTargetAccessV2,
+function routeInput(
+  accessOrIntel: AvailableWarTargetAccessV2 | WarTargetRouteIntelInputV2,
   distanceKm?: number,
-): number {
-  if (access === 'land') return 0;
-  const finiteDistance = Number.isFinite(distanceKm) ? Math.max(0, distanceKm ?? 0) : 0;
-  const distancePressure = Math.min(1, finiteDistance / 12_000);
-  return 1.5 + 6.5 * distancePressure;
+): WarTargetRouteIntelInputV2 {
+  return typeof accessOrIntel === 'string'
+    ? { access: accessOrIntel, distanceKm }
+    : accessOrIntel;
 }
 
-export function warTargetRecommendationScoreV2(
-  target: WarTargetRecommendationRankInputV2,
-): number {
-  const chance = Number.isFinite(target.chance)
-    ? Math.max(0, Math.min(100, target.chance))
-    : 0;
-  return chance - warTargetRoutePenaltyV2(target.access, target.distanceKm)
-    + warTargetFusionValueBonusV2(target);
+function routeEtaWeeks(target: WarTargetRouteIntelInputV2): number | undefined {
+  return finiteClamped(target.etaWeeks ?? target.preparationWeeks, 0, Number.MAX_SAFE_INTEGER);
 }
 
-export function compareWarTargetRecommendationsV2(
-  left: WarTargetRecommendationRankInputV2,
-  right: WarTargetRecommendationRankInputV2,
-): number {
-  const scoreDifference = warTargetRecommendationScoreV2(right)
-    - warTargetRecommendationScoreV2(left);
-  if (Math.abs(scoreDifference) > 0.000_001) return scoreDifference;
-  if (right.chance !== left.chance) return right.chance - left.chance;
-  const routeDifference = warTargetRoutePenaltyV2(left.access, left.distanceKm)
-    - warTargetRoutePenaltyV2(right.access, right.distanceKm);
-  if (Math.abs(routeDifference) > 0.000_001) return routeDifference;
-  const distanceDifference = (left.distanceKm ?? 0) - (right.distanceKm ?? 0);
-  if (distanceDifference !== 0) return distanceDifference;
-  return left.targetId < right.targetId ? -1 : left.targetId > right.targetId ? 1 : 0;
-}
-
-export function rankWarTargetRecommendationsV2<T extends WarTargetRecommendationRankInputV2>(
-  targets: readonly T[],
-): T[] {
-  return [...targets].sort(compareWarTargetRecommendationsV2);
-}
-
-function roundedDistanceLabel(distanceKm: number): string {
-  return Math.round(Math.max(0, distanceKm)).toString()
+function roundedNumberLabel(value: number): string {
+  return Math.round(Math.max(0, value)).toString()
     .replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 }
 
-/** Compact route intel for the recommendation row. */
+function routeCategory(target: WarTargetRouteIntelInputV2): string {
+  if (target.access === 'land') return 'LAND BORDER';
+  if (target.sameRegion === true || safeDistance(target.distanceKm) <= 2_500) {
+    return 'REGIONAL NAVAL';
+  }
+  return 'OCEAN EXPEDITION';
+}
+
+/** Compact presentation of the same route facts used by canonical ranking. */
 export function warTargetRouteLabelV2(
   access: AvailableWarTargetAccessV2,
   distanceKm?: number,
+): string;
+export function warTargetRouteLabelV2(target: WarTargetRouteIntelInputV2): string;
+export function warTargetRouteLabelV2(
+  accessOrTarget: AvailableWarTargetAccessV2 | WarTargetRouteIntelInputV2,
+  distanceKm?: number,
 ): string {
-  if (access === 'land') return 'LAND BORDER';
-  if (!Number.isFinite(distanceKm)) return 'NAVAL';
-  const distance = Math.max(0, distanceKm ?? 0);
-  const category = distance <= 2_000 ? 'SHORT NAVAL'
-    : distance >= 6_500 ? 'LONG NAVAL' : 'NAVAL';
-  return `${category} · ${roundedDistanceLabel(distance)} KM`;
+  const target = routeInput(accessOrTarget, distanceKm);
+  const parts = [routeCategory(target)];
+  if (target.access === 'naval' && Number.isFinite(target.distanceKm)) {
+    parts.push(`${roundedNumberLabel(target.distanceKm!)} KM`);
+  }
+  const etaWeeks = routeEtaWeeks(target);
+  if (etaWeeks !== undefined) parts.push(`ETA ${roundedNumberLabel(etaWeeks)}W`);
+  return parts.join(' · ');
 }

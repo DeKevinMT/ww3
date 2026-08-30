@@ -78,8 +78,8 @@ export function findOwnedPath(
 export function unitCombatPower(units: readonly UnitInstance[]): number {
   return units.reduce((sum, unit) => {
     const definition = UNIT_DEFINITIONS[unit.type];
-    const condition = 0.5 + 0.5 * (unit.hp / definition.maxHp);
-    return sum + definition.attack * condition + definition.defense * 0.55 + unit.hp * 0.3;
+    const healthFactor = 0.5 + 0.5 * (unit.hp / definition.maxHp);
+    return sum + definition.attack * healthFactor + definition.defense * 0.55 + unit.hp * 0.3;
   }, 0);
 }
 

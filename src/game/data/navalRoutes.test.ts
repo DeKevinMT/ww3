@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
+import { createWorldStateV2 } from '../../sim/v2/bootstrap';
 import { WORLD_CONTENT_V2 } from '../../sim/v2/content';
+import { selectWarAccessTypeV2 } from '../../sim/v2/selectors';
+import { nationIdV2 } from '../../sim/v2/types';
 import {
+  AUTHORED_INTERCONTINENTAL_GATEWAY_POWER_CEILING,
+  AUTHORED_INTERCONTINENTAL_SEA_GATEWAYS,
+  COUNTRIES,
   LANDLOCKED_COUNTRY_IDS,
   STRATEGIC_SEA_ROUTE_PAIRS,
   TERRITORY_BY_ID,
@@ -27,6 +33,55 @@ function expectEndpointWithin(
 }
 
 describe('canonical naval routes', () => {
+  it('authors a small deterministic intercontinental gateway set through weaker beachheads', () => {
+    expect(AUTHORED_INTERCONTINENTAL_SEA_GATEWAYS).toEqual([
+      ['grl', 'isl'],
+      ['grl', 'gnb'],
+      ['grl', 'mrt'],
+      ['sle', 'sur'],
+      ['mdg', 'tls'],
+      ['slv', 'png'],
+    ]);
+    expect(AUTHORED_INTERCONTINENTAL_SEA_GATEWAYS.length).toBeLessThanOrEqual(8);
+    const state = createWorldStateV2(5_713);
+    for (const [leftId, rightId] of AUTHORED_INTERCONTINENTAL_SEA_GATEWAYS) {
+      const left = COUNTRIES.find((country) => country.id === leftId)!;
+      const right = COUNTRIES.find((country) => country.id === rightId)!;
+      const distanceKm = countrySeaRouteDistanceKm(leftId, rightId)!;
+      const route = countrySeaRouteMapGeometry(leftId, rightId)!;
+      const reverseRoute = countrySeaRouteMapGeometry(rightId, leftId)!;
+      const leftConnection = WORLD_CONTENT_V2.territories[leftId]!.connections
+        .find((connection) => connection.targetId === rightId);
+      const rightConnection = WORLD_CONTENT_V2.territories[rightId]!.connections
+        .find((connection) => connection.targetId === leftId);
+
+      expect(left.continent).not.toBe(right.continent);
+      expect(left.powerIndex, leftId).toBeLessThanOrEqual(AUTHORED_INTERCONTINENTAL_GATEWAY_POWER_CEILING);
+      expect(right.powerIndex, rightId).toBeLessThanOrEqual(AUTHORED_INTERCONTINENTAL_GATEWAY_POWER_CEILING);
+      expect(isSeaConnection(leftId, rightId), `${leftId}:${rightId}`).toBe(true);
+      expect(isSeaConnection(rightId, leftId), `${rightId}:${leftId}`).toBe(true);
+      expect(isValidSeaRoute(leftId, rightId), `${leftId}:${rightId}`).toBe(true);
+      expect(route).toBeDefined();
+      expect(reverseRoute).toBeDefined();
+      expect(countrySeaRouteDistanceKm(rightId, leftId)).toBeCloseTo(distanceKm, 10);
+      expect(leftConnection).toMatchObject({ kind: 'sea' });
+      expect(rightConnection).toMatchObject({ kind: 'sea' });
+      expect(leftConnection?.distanceKm).toBeCloseTo(distanceKm, 3);
+      expect(rightConnection?.distanceKm).toBeCloseTo(distanceKm, 3);
+      expect(selectWarAccessTypeV2(
+        state, WORLD_CONTENT_V2, nationIdV2(leftId), nationIdV2(rightId),
+      )).toBe('naval');
+      expect(selectWarAccessTypeV2(
+        state, WORLD_CONTENT_V2, nationIdV2(rightId), nationIdV2(leftId),
+      )).toBe('naval');
+    }
+
+    expect(countrySeaRouteDistanceKm('grl', 'gnb')).toBeGreaterThan(6_000);
+    expect(countrySeaRouteDistanceKm('grl', 'mrt')).toBeGreaterThan(5_000);
+    expect(TERRITORY_BY_ID.grl!.seaNeighbors).toEqual(expect.arrayContaining(['can', 'isl', 'gnb', 'mrt']));
+    expect(TERRITORY_BY_ID.can!.seaNeighbors).toContain('grl');
+  });
+
   it('keeps credible Belgian sea access without cutting across Europe', () => {
     const belgianRoutes = TERRITORY_BY_ID.bel!.seaNeighbors;
     expect(belgianRoutes).toContain('gbr');
@@ -38,7 +93,8 @@ describe('canonical naval routes', () => {
   });
 
   it('only generates symmetric, land-clear routes for coastal countries', () => {
-    expect(STRATEGIC_SEA_ROUTE_PAIRS.length).toBeGreaterThan(225);
+    expect(STRATEGIC_SEA_ROUTE_PAIRS.length).toBeGreaterThan(100);
+    expect(STRATEGIC_SEA_ROUTE_PAIRS.length).toBeLessThan(170);
     for (const [leftId, rightId] of STRATEGIC_SEA_ROUTE_PAIRS) {
       expect(LANDLOCKED_COUNTRY_IDS.has(leftId), `${leftId}:${rightId}`).toBe(false);
       expect(LANDLOCKED_COUNTRY_IDS.has(rightId), `${leftId}:${rightId}`).toBe(false);
@@ -71,51 +127,73 @@ describe('canonical naval routes', () => {
   });
 
   it('anchors routes on each canonical country principal landmass', () => {
-    const franceCanada = countrySeaRouteMapGeometry('fra', 'can')!;
-    expectEndpointWithin(franceCanada, 'source', [-6, 11], [41, 52]);
-
     const netherlandsBritain = countrySeaRouteMapGeometry('nld', 'gbr')!;
     expectEndpointWithin(netherlandsBritain, 'source', [3, 8], [50, 54]);
     expectEndpointWithin(netherlandsBritain, 'target', [-9, 3], [49, 60]);
 
-    const unitedStatesJapan = countrySeaRouteMapGeometry('usa', 'jpn')!;
-    // Mainland bounds exclude Alaska, Hawaii and other overseas islands.
-    expectEndpointWithin(unitedStatesJapan, 'source', [-126, -66], [24, 50]);
-    expectEndpointWithin(unitedStatesJapan, 'target', [129, 143], [30, 43]);
+    const greenlandGuineaBissau = countrySeaRouteMapGeometry('grl', 'gnb')!;
+    expectEndpointWithin(greenlandGuineaBissau, 'source', [-74, -12], [59, 84]);
+    expectEndpointWithin(greenlandGuineaBissau, 'target', [-17, -13], [10, 13]);
 
-    const chileNewZealand = countrySeaRouteMapGeometry('chl', 'nzl')!;
-    // Easter Island is near -109 degrees; the route must leave continental Chile.
-    expectEndpointWithin(chileNewZealand, 'source', [-77, -65], [-57, -17]);
-    expectEndpointWithin(chileNewZealand, 'target', [165, 179], [-48, -34]);
+    const madagascarTimor = countrySeaRouteMapGeometry('mdg', 'tls')!;
+    expectEndpointWithin(madagascarTimor, 'source', [43, 51], [-26, -11]);
+    expectEndpointWithin(madagascarTimor, 'target', [124, 128], [-10, -8]);
+
+    const elSalvadorPapua = countrySeaRouteMapGeometry('slv', 'png')!;
+    expectEndpointWithin(elSalvadorPapua, 'source', [-91, -87], [13, 15]);
+    expectEndpointWithin(elSalvadorPapua, 'target', [140, 156], [-12, 0]);
   });
 
-  it('retains valid long-haul Pacific crossings without forcing arcs through land', () => {
-    expect(isSeaConnection('usa', 'jpn')).toBe(true);
-    expect(isValidSeaRoute('usa', 'jpn')).toBe(true);
-    expect(countrySeaRouteMapGeometry('usa', 'jpn')).toBeDefined();
-    expect(isSeaConnection('chl', 'nzl')).toBe(true);
-    expect(isValidSeaRoute('chl', 'nzl')).toBe(true);
-    expect(countrySeaRouteMapGeometry('chl', 'nzl')).toBeDefined();
-    // The principal Australia-to-USA quadratic arc intersects Papua New Guinea;
-    // it stays invalid instead of silently drawing a fleet through that landmass.
-    expect(isValidSeaRoute('usa', 'aus')).toBe(false);
-    expect(isSeaConnection('usa', 'aus')).toBe(false);
-    expect(countrySeaRouteDistanceKm('usa', 'jpn')).toBeGreaterThan(6_000);
-  });
-
-  it('gives several coastal powers deterministic non-curated global reach', () => {
-    for (const countryId of ['bra', 'chl', 'jpn', 'sen', 'zaf']) {
-      const longRangeNeighbors = TERRITORY_BY_ID[countryId]!.seaNeighbors.filter((neighborId) => (
-        (countrySeaRouteDistanceKm(countryId, neighborId) ?? 0) >= 6_000
-      ));
-      expect(longRangeNeighbors.length, countryId).toBeGreaterThan(0);
+  it('keeps every non-authored route regional and major powers out of intercontinental gateways', () => {
+    const gatewayKeys = new Set(AUTHORED_INTERCONTINENTAL_SEA_GATEWAYS.map((pair) => (
+      [...pair].sort().join(':')
+    )));
+    for (const [leftId, rightId] of STRATEGIC_SEA_ROUTE_PAIRS) {
+      const key = [leftId, rightId].sort().join(':');
+      const left = COUNTRIES.find((country) => country.id === leftId)!;
+      const right = COUNTRIES.find((country) => country.id === rightId)!;
+      if (gatewayKeys.has(key)) continue;
+      expect(left.continent, key).toBe(right.continent);
+      expect(countrySeaRouteDistanceKm(leftId, rightId), key).toBeLessThan(6_000);
     }
+    expect(AUTHORED_INTERCONTINENTAL_SEA_GATEWAYS.flat()).not.toEqual(
+      expect.arrayContaining(['usa', 'chn', 'rus', 'ind']),
+    );
+    expect(TERRITORY_BY_ID.usa!.seaNeighbors.every((neighborId) => {
+      const neighbor = COUNTRIES.find((country) => country.id === neighborId)!;
+      return neighbor.continent === 'North America'
+        && (countrySeaRouteDistanceKm('usa', neighborId) ?? Infinity) < 6_000;
+    })).toBe(true);
+    expect(isSeaConnection('usa', 'jpn')).toBe(false);
+    expect(isSeaConnection('chl', 'nzl')).toBe(false);
+  });
 
-    const degrees = Object.values(TERRITORY_BY_ID)
-      .filter((territory) => !LANDLOCKED_COUNTRY_IDS.has(territory.id))
-      .map((territory) => territory.seaNeighbors.length);
-    expect(degrees.reduce((total, value) => total + value, 0) / degrees.length).toBeGreaterThan(5);
-    expect(Math.max(...degrees)).toBeLessThan(40);
+  it('keeps continents reachable while isolated coastal starts retain a local exit', () => {
+    const visited = new Set<string>(['gnb']);
+    const queue = ['gnb'];
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      for (const neighborId of TERRITORY_BY_ID[current]?.neighbors ?? []) {
+        if (visited.has(neighborId)) continue;
+        visited.add(neighborId);
+        queue.push(neighborId);
+      }
+    }
+    const reachedContinents = new Set(COUNTRIES
+      .filter((country) => visited.has(country.id))
+      .map((country) => country.continent));
+    expect(reachedContinents).toEqual(new Set(COUNTRIES.map((country) => country.continent)));
+
+    const isolatedCoastalCountries = COUNTRIES.filter((country) => {
+      if (LANDLOCKED_COUNTRY_IDS.has(country.id)) return false;
+      const territory = TERRITORY_BY_ID[country.id]!;
+      const landNeighbors = territory.neighbors.filter((neighborId) => !territory.seaNeighbors.includes(neighborId));
+      return landNeighbors.length === 0;
+    });
+    expect(isolatedCoastalCountries.length).toBeGreaterThan(0);
+    for (const country of isolatedCoastalCountries) {
+      expect(TERRITORY_BY_ID[country.id]!.seaNeighbors.length, country.id).toBeGreaterThan(0);
+    }
   });
 
   it('rejects landlocked endpoints and direct arcs blocked by third-party land', () => {

@@ -1,18 +1,21 @@
 import { describe, expect, it, vi } from 'vitest';
-import { peacefulMapStatsBucket } from '../game/map/mapStatsCadence';
+import {
+  PEACE_MAP_STATS_REFRESH_TICKS,
+  peacefulMapStatsBucket,
+} from '../game/map/mapStatsCadence';
 import { WorldEngineV2 } from '../sim/v2/WorldEngineV2';
 import { nationIdV2, territoryIdV2 } from '../sim/v2/types';
 import { createMapEngineAdapter } from './WorldUIV2';
 
 function nextTickOutsideBucket(afterTick: number, ownerId: string): number {
   let tick = afterTick + 1;
-  while (tick % 4 === peacefulMapStatsBucket(ownerId)) tick += 1;
+  while (tick % PEACE_MAP_STATS_REFRESH_TICKS === peacefulMapStatsBucket(ownerId)) tick += 1;
   return tick;
 }
 
 function nextTickInBucket(afterTick: number, ownerId: string): number {
   let tick = afterTick + 1;
-  while (tick % 4 !== peacefulMapStatsBucket(ownerId)) tick += 1;
+  while (tick % PEACE_MAP_STATS_REFRESH_TICKS !== peacefulMapStatsBucket(ownerId)) tick += 1;
   return tick;
 }
 

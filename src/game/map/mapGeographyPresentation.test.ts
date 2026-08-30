@@ -14,17 +14,18 @@ import {
   ANTARCTICA_COASTLINE,
   ANTARCTICA_ICE_SHELF,
   ANTARCTICA_MAP_SILHOUETTE,
+  ANTARCTICA_POLITICAL_COASTLINE,
   ANTARCTICA_SECTOR_PRESENTATIONS,
-  ARCTIC_ICE_COASTLINE,
-  ARCTIC_RESEARCH_ACCESS_TERRITORY_IDS,
   ARCTIC_RESEARCH_ZONE_ID,
   SEA_MAP_LABELS,
   antarcticaSectorAtCoordinates,
-  arcticResearchAccessTerritoriesForEmpire,
   seaLabelZoomPresentation,
 } from './mapGeographyPresentation';
 
 const stylesSource = readFileSync(new URL('../../styles.css', import.meta.url), 'utf8');
+const geographySource = readFileSync(new URL('./mapGeographyPresentation.ts', import.meta.url), 'utf8');
+const globeSceneSource = readFileSync(new URL('./three/ThreeGlobeScene.ts', import.meta.url), 'utf8');
+const globeTextureSource = readFileSync(new URL('./three/globeTexture.ts', import.meta.url), 'utf8');
 
 function greatCircleCoordinate(
   start: readonly [number, number],
@@ -87,7 +88,7 @@ describe('map geography presentation', () => {
     expect(deep).toEqual(expect.objectContaining({ visible: false, alpha: 0 }));
   });
 
-  it('renders a natural, visibly separated Antarctica as non-playable map-space geometry', () => {
+  it('preserves the natural Antarctic ice base beneath its political territory layer', () => {
     expect(ANTARCTICA_COASTLINE.length).toBeGreaterThan(70);
     expect(ANTARCTICA_MAP_SILHOUETTE.length).toBe(ANTARCTICA_COASTLINE.length + 2);
     for (const [x, y] of ANTARCTICA_MAP_SILHOUETTE) {
@@ -118,6 +119,9 @@ describe('map geography presentation', () => {
       mapSceneSource.indexOf('  private createSeaLabels(): void'),
     );
     expect(antarcticaMethod).not.toContain('setInteractive');
+    expect(mapSceneSource).toContain('this.createAntarcticaTerritories();');
+    expect(mapSceneSource).toContain('sector.mapRings');
+    expect(mapSceneSource).toContain('setInteractive(new Phaser.Geom.Polygon(points)');
   });
 
   it('defines three open-sea Antarctica corridors without creating territories', () => {
@@ -175,53 +179,77 @@ describe('map geography presentation', () => {
     expect(antarcticaSectorAtCoordinates(20, -70, visible)).toBeUndefined();
   });
 
+  it('tessellates the complete ice silhouette into nine seam-safe country polygons', () => {
+    expect(ANTARCTICA_POLITICAL_COASTLINE.length).toBeGreaterThan(150);
+    expect(ANTARCTICA_POLITICAL_COASTLINE[0]?.[0]).toBe(-180);
+    expect(ANTARCTICA_POLITICAL_COASTLINE.at(-1)?.[0]).toBe(180);
+    expect(ANTARCTICA_SECTOR_PRESENTATIONS).toHaveLength(9);
+    expect(ANTARCTICA_SECTOR_PRESENTATIONS.flatMap((sector) => sector.rings)).toHaveLength(11);
+
+    const allVisible = new Set(ANTARCTICA_SECTOR_PRESENTATIONS.map((sector) => sector.id));
+    for (const sector of ANTARCTICA_SECTOR_PRESENTATIONS) {
+      expect(sector.rings.length).toBeGreaterThan(0);
+      expect(sector.mapRings).toHaveLength(sector.rings.length);
+      expect(antarcticaSectorAtCoordinates(
+        sector.longitude,
+        sector.latitude,
+        allVisible,
+      )).toBe(sector.id);
+      for (const ring of sector.rings) {
+        expect(ring.length).toBeGreaterThan(6);
+        expect(ring.every(([longitude, latitude]) => (
+          longitude >= -180 && longitude <= 180 && latitude >= -90 && latitude <= -61
+        ))).toBe(true);
+      }
+      for (const ring of sector.mapRings) {
+        expect(ring.every(([x, y]) => (
+          x >= 0 && x <= MAP_WIDTH && y >= 0 && y <= MAP_HEIGHT
+        ))).toBe(true);
+      }
+    }
+
+    const coastLatitude = (longitude: number): number => {
+      const scaled = (longitude + 180) / 2;
+      const left = Math.max(0, Math.min(
+        ANTARCTICA_POLITICAL_COASTLINE.length - 1,
+        Math.floor(scaled),
+      ));
+      const right = Math.min(ANTARCTICA_POLITICAL_COASTLINE.length - 1, left + 1);
+      const progress = scaled - left;
+      return ANTARCTICA_POLITICAL_COASTLINE[left]![1] * (1 - progress)
+        + ANTARCTICA_POLITICAL_COASTLINE[right]![1] * progress;
+    };
+    for (let longitude = -177; longitude <= 177; longitude += 6) {
+      const coast = coastLatitude(longitude);
+      for (const depth of [0.08, 0.37, 0.67, 0.90]) {
+        const latitude = coast + (-90 - coast) * depth;
+        const containing = ANTARCTICA_SECTOR_PRESENTATIONS.filter((sector) => (
+          sector.rings.some((ring) => pointInRing(longitude, latitude, ring))
+        ));
+        expect(containing, `${longitude},${latitude} must belong to exactly one sector`)
+          .toHaveLength(1);
+      }
+    }
+  });
+
   it('keeps the Arctic Research Zone outside canonical countries and territories', () => {
     expect(COUNTRIES.some((country) => country.id === ARCTIC_RESEARCH_ZONE_ID)).toBe(false);
     expect(TERRITORIES.some((territory) => territory.id === ARCTIC_RESEARCH_ZONE_ID)).toBe(false);
   });
 
-  it('defines a natural closed Arctic ice edge entirely at high northern latitudes', () => {
-    expect(ARCTIC_ICE_COASTLINE.length).toBeGreaterThan(40);
-    expect(ARCTIC_ICE_COASTLINE[0]).toEqual([-180, 82.1]);
-    expect(ARCTIC_ICE_COASTLINE.at(-1)).toEqual([180, 82.1]);
-    const latitudes = ARCTIC_ICE_COASTLINE.map(([, latitude]) => latitude);
-    expect(Math.min(...latitudes)).toBeGreaterThanOrEqual(81);
-    expect(Math.max(...latitudes)).toBeLessThan(90);
-    expect(Math.max(...latitudes)).toBeGreaterThan(86);
-    expect(Math.max(...latitudes) - Math.min(...latitudes)).toBeGreaterThan(5);
-    for (let index = 1; index < ARCTIC_ICE_COASTLINE.length; index += 1) {
-      expect(ARCTIC_ICE_COASTLINE[index]![0])
-        .toBeGreaterThan(ARCTIC_ICE_COASTLINE[index - 1]![0]);
-    }
+  it('keeps the North Pole natural without a handmade white ice land overlay', () => {
+    expect(geographySource).not.toContain('ARCTIC_ICE_COASTLINE');
+    expect(globeTextureSource).not.toMatch(/drawArcticIce|traceArcticIce|#b9dde2/);
+    expect(globeTextureSource).toContain('drawNaturalEarthBase(');
+    expect(globeTextureSource).toContain('drawOcean(');
   });
 
-  it('uses all eight canonical Arctic countries as research gateways', () => {
-    expect(ARCTIC_RESEARCH_ACCESS_TERRITORY_IDS).toEqual([
-      'can', 'fin', 'grl', 'isl', 'nor', 'rus', 'swe', 'usa',
-    ]);
-    expect(new Set(ARCTIC_RESEARCH_ACCESS_TERRITORY_IDS).size)
-      .toBe(ARCTIC_RESEARCH_ACCESS_TERRITORY_IDS.length);
-    expect(ARCTIC_RESEARCH_ACCESS_TERRITORY_IDS.every((id) => (
-      TERRITORIES.some((territory) => territory.id === id)
-    ))).toBe(true);
-  });
-
-  it('grants immediate Arctic access through a conquered live-owner border', () => {
-    const territories: Record<string, { ownerId: string; integration: number }> = {
-      can: { ownerId: 'can', integration: 1 },
-      fin: { ownerId: 'fin', integration: 1 },
-      grl: { ownerId: 'grl', integration: 1 },
-      isl: { ownerId: 'isl', integration: 1 },
-      nor: { ownerId: 'nor', integration: 1 },
-      rus: { ownerId: 'rus', integration: 1 },
-      swe: { ownerId: 'swe', integration: 1 },
-      usa: { ownerId: 'usa', integration: 1 },
-    };
-    expect(arcticResearchAccessTerritoriesForEmpire(territories, 'bel')).toEqual([]);
-
-    territories.can = { ownerId: 'bel', integration: 0 };
-    expect(arcticResearchAccessTerritoriesForEmpire(territories, 'bel')).toEqual(['can']);
-    expect(arcticResearchAccessTerritoriesForEmpire(territories, 'can')).toEqual([]);
+  it('uses one universal North Pole signal site without country gateway ownership', () => {
+    expect(geographySource).not.toMatch(/ARCTIC_RESEARCH_ACCESS|arcticResearchAccessTerritoriesForEmpire/);
+    expect(globeSceneSource).not.toMatch(/OWN AN ARCTIC COUNTRY|GATEWAYS · CANADA/);
+    expect(globeSceneSource).toContain('<strong>SIGNAL INVESTIGATION</strong>');
+    expect(globeSceneSource).toContain('AVAILABLE TO EVERY COMMANDER');
+    expect(globeSceneSource).toContain('new THREE.OctahedronGeometry(0.11, 1)');
   });
 
   it('wires sea labels below gameplay and fills FIT letterbox bands with ocean', () => {

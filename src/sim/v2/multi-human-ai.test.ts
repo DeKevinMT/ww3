@@ -1,16 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { planAiCommandsV2, selectDefensiveAidAssessmentV2 } from './ai';
-import {
-  PROPAGANDA_DURATION_TICKS,
-  PROPAGANDA_TOTAL_SUSPICION_REDUCTION,
-} from './balance';
 import { createWorldStateV2 } from './bootstrap';
 import { WORLD_CONTENT_V2 } from './content';
 import { addWorldEventV2 } from './events';
 import { processPropagandaProgramsV2, selectPropagandaTermsV2 } from './propaganda';
 import { selectGlobalResistanceV2, updateGlobalResistanceV2 } from './resistance';
 import { createPowerSnapshotV2, selectNationViewV2 } from './selectors';
-import { selectWarStrainSummaryV2 } from './warStrain';
 import {
   nationIdV2,
   territoryIdV2,
@@ -24,7 +19,7 @@ function setHumanPlayers(state: WorldStateV2, playerIds: readonly PlayerId[]): v
 }
 
 describe('multi-human simulation boundaries', () => {
-  it('gives host and guest APEX the same Suspicion-driven military priority', () => {
+  it('keeps obsolete global Suspicion out of every serious-mode military budget', () => {
     const lowSuspicion = createWorldStateV2(9_100, WORLD_CONTENT_V2);
     const host = nationIdV2('bel');
     const guest = nationIdV2('nld');
@@ -53,10 +48,10 @@ describe('multi-human simulation boundaries', () => {
 
     for (const human of [host, guest]) {
       expect(plannedMilitary(highSuspicion, human))
-        .toBeGreaterThan(plannedMilitary(lowSuspicion, human));
+        .toBe(plannedMilitary(lowSuspicion, human));
     }
     expect(plannedMilitary(highSuspicion, rival))
-      .toBeGreaterThan(plannedMilitary(lowSuspicion, rival));
+      .toBe(plannedMilitary(lowSuspicion, rival));
   });
 
   it('keeps APEX economy and research active without choosing a second human war or peace', () => {
@@ -84,23 +79,9 @@ describe('multi-human simulation boundaries', () => {
       attackerOperations: [],
       defenderOperations: [],
     }];
-    state.offers = [{
-      id: 'offer-secondary-human',
-      fromId: aiOpponent,
-      toId: secondHuman,
-      warId: 'war-secondary-human',
-      settlement: 'ceasefire',
-      createdTick: 95,
-      expiresTick: 103,
-      status: 'pending',
-      weeklyCost: 0.1,
-      paymentWeeks: 52,
-    }];
+    state.offers = [];
 
     const commands = planAiCommandsV2(state, WORLD_CONTENT_V2);
-
-    expect(selectWarStrainSummaryV2(state, WORLD_CONTENT_V2, secondHuman).score)
-      .toBeGreaterThanOrEqual(70);
 
     expect(commands.some((command) => (
       command.type === 'set-budget-policy' && command.playerId === secondHuman
@@ -111,12 +92,7 @@ describe('multi-human simulation boundaries', () => {
     expect(commands.some((command) => (
       command.type === 'declare-war' && command.attackerId === secondHuman
     ))).toBe(false);
-    expect(commands.some((command) => (
-      command.type === 'request-ceasefire' && command.requesterId === secondHuman
-    ))).toBe(false);
-    expect(commands.some((command) => (
-      command.type === 'respond-to-offer' && command.offerId === 'offer-secondary-human'
-    ))).toBe(false);
+    expect(state.offers).toEqual([]);
   });
 
   it('never treats any human country as an autonomous defensive-aid actor', () => {
@@ -151,7 +127,7 @@ describe('multi-human simulation boundaries', () => {
     )).toBeUndefined();
   });
 
-  it('allows propaganda for every human and advances all active campaigns', () => {
+  it('retires propaganda for every human and clears legacy programs', () => {
     const state = createWorldStateV2(9_103, WORLD_CONTENT_V2);
     const primary = nationIdV2('bel');
     const secondHuman = nationIdV2('nld');
@@ -159,16 +135,15 @@ describe('multi-human simulation boundaries', () => {
     state.players[primary]!.treasury = 1_000_000;
     state.players[secondHuman]!.treasury = 1_000_000;
 
-    expect(selectPropagandaTermsV2(state, WORLD_CONTENT_V2, primary).allowed).toBe(true);
-    expect(selectPropagandaTermsV2(state, WORLD_CONTENT_V2, secondHuman).allowed).toBe(true);
+    expect(selectPropagandaTermsV2(state, WORLD_CONTENT_V2, primary).allowed).toBe(false);
+    expect(selectPropagandaTermsV2(state, WORLD_CONTENT_V2, secondHuman).allowed).toBe(false);
 
-    const weeklyReduction = PROPAGANDA_TOTAL_SUSPICION_REDUCTION / PROPAGANDA_DURATION_TICKS;
     for (const playerId of [primary, secondHuman]) {
       state.players[playerId]!.propagandaProgram = {
         startedTick: 0,
-        endsTick: PROPAGANDA_DURATION_TICKS,
-        totalSuspicionReduction: PROPAGANDA_TOTAL_SUSPICION_REDUCTION,
-        weeklySuspicionReduction: weeklyReduction,
+        endsTick: 52,
+        totalSuspicionReduction: 15,
+        weeklySuspicionReduction: 15 / 52,
       };
     }
     state.aiEscalation.globalThreat = 60;
@@ -176,9 +151,9 @@ describe('multi-human simulation boundaries', () => {
 
     processPropagandaProgramsV2(state);
 
-    expect(state.aiEscalation.globalThreat).toBeCloseTo(60 - 2 * weeklyReduction, 6);
-    expect(state.players[primary]!.propagandaProgram).not.toBeNull();
-    expect(state.players[secondHuman]!.propagandaProgram).not.toBeNull();
+    expect(state.aiEscalation.globalThreat).toBe(60);
+    expect(state.players[primary]!.propagandaProgram).toBeNull();
+    expect(state.players[secondHuman]!.propagandaProgram).toBeNull();
   });
 
   it('marks every human nation and its relevant events as human-facing', () => {
@@ -200,7 +175,7 @@ describe('multi-human simulation boundaries', () => {
     expect(state.events.at(-1)?.unread).toBe(false);
   });
 
-  it('removes every human from resistance membership before federation decisions', () => {
+  it('clears the complete legacy resistance roster in serious modes', () => {
     const state = createWorldStateV2(9_105, WORLD_CONTENT_V2);
     const primary = nationIdV2('bel');
     const secondHuman = nationIdV2('nld');
@@ -209,14 +184,15 @@ describe('multi-human simulation boundaries', () => {
     state.tick = 1;
     state.aiEscalation.coalitionMembers = [secondHuman, aiMember];
 
-    expect(selectGlobalResistanceV2(state).memberIds).toEqual([aiMember]);
+    expect(selectGlobalResistanceV2(state, WORLD_CONTENT_V2).memberIds).toEqual([]);
     updateGlobalResistanceV2(
       state,
       WORLD_CONTENT_V2,
       createPowerSnapshotV2(state, WORLD_CONTENT_V2),
     );
 
-    expect(state.aiEscalation.coalitionMembers).toEqual([aiMember]);
+    expect(state.aiEscalation.coalitionMembers).toEqual([]);
+    expect(state.aiEscalation.globalThreat).toBe(0);
     expect(state.players[secondHuman]).toBeDefined();
     expect(state.territories[territoryIdV2('nld')]?.owner).toBe(secondHuman);
   });

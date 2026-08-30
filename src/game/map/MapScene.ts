@@ -140,7 +140,7 @@ export class MapScene extends Phaser.Scene implements MapSceneAdapter {
       const body = this.add.polygon(0, 0, points, 0x29465b, 0.96).setStrokeStyle(2, 0xc1e0e8, 0.45);
       const name = this.add.text(0, -17, territory.name.toUpperCase(), {
         fontFamily: 'Inter, system-ui, sans-serif',
-        fontSize: territory.name.length > 10 ? '9px' : '10px',
+        fontSize: '10px',
         fontStyle: '600',
         color: '#eaf8fc',
         letterSpacing: 0.7,
@@ -154,7 +154,7 @@ export class MapScene extends Phaser.Scene implements MapSceneAdapter {
       }).setOrigin(0.5);
       const composition = this.add.text(0, 27, 'I1', {
         fontFamily: 'Inter, system-ui, sans-serif',
-        fontSize: '9px',
+        fontSize: '10px',
         fontStyle: '600',
         color: '#c8e2e9',
         letterSpacing: 0.4,
@@ -163,7 +163,7 @@ export class MapScene extends Phaser.Scene implements MapSceneAdapter {
       const sigilDisk = this.add.circle(-territory.radiusX * 0.62, -territory.radiusY * 0.55, 10, 0x07111f, 0.88)
         .setStrokeStyle(1, 0xffffff, 0.35);
       const sigil = this.add.text(sigilDisk.x, sigilDisk.y, '', {
-        fontFamily: 'Inter, system-ui, sans-serif', fontSize: '9px', fontStyle: '800', color: '#ffffff',
+        fontFamily: 'Inter, system-ui, sans-serif', fontSize: '10px', fontStyle: '800', color: '#ffffff',
       }).setOrigin(0.5);
 
       container.add([glow, body, hpBar, sigilDisk, sigil, name, count, composition]);

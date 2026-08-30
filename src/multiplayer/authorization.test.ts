@@ -21,6 +21,18 @@ describe('multiplayer command authorization', () => {
     }, false).accepted).toBe(false);
   });
 
+  it('blocks a correctly owned war command when both countries are permanent co-op seats', () => {
+    const state = createWorldStateV2(511, WORLD_CONTENT_V2);
+    state.humanPlayerIds = [belgium, canada].sort((left, right) => left.localeCompare(right));
+
+    expect(authorizeMultiplayerCommandV2(state, belgium, {
+      type: 'declare-war', attackerId: belgium, defenderId: canada,
+    }, false)).toEqual({
+      accepted: false,
+      reason: 'Co-op teammates are permanently on the same side.',
+    });
+  });
+
   it('reserves shared speed for the room host and rejects AI escalation spoofing', () => {
     const state = createWorldStateV2(52, WORLD_CONTENT_V2);
     expect(authorizeMultiplayerCommandV2(state, belgium, {
@@ -34,12 +46,23 @@ describe('multiplayer command authorization', () => {
     }, true).accepted).toBe(false);
   });
 
-  it('binds Arctic research, warning acknowledgement and Antarctic deployment to the issuing seat', () => {
+  it('reserves Survival empire formation for the host-owned flagship', () => {
+    const state = createWorldStateV2(521, WORLD_CONTENT_V2);
+    const command = {
+      type: 'form-survival-empire' as const,
+      flagshipId: belgium,
+      memberIds: [belgium, canada],
+    };
+    expect(authorizeMultiplayerCommandV2(state, belgium, command, false).accepted).toBe(false);
+    expect(authorizeMultiplayerCommandV2(state, belgium, command, true).accepted).toBe(true);
+    expect(authorizeMultiplayerCommandV2(state, canada, command, true).accepted).toBe(false);
+  });
+
+  it('binds Arctic research and warnings to the issuing seat while expeditions stay retired', () => {
     const state = createWorldStateV2(55, WORLD_CONTENT_V2);
     const ownCommands = [
       { type: 'start-arctic-project', playerId: belgium, projectId: 'polar-demography' },
       { type: 'acknowledge-polar-warning', playerId: belgium },
-      { type: 'deploy-antarctic-expedition', playerId: belgium, sectorId: 'drake-entry', manpower: 1 },
     ] as const;
     const spoofedCommands = [
       { type: 'start-arctic-project', playerId: canada, projectId: 'polar-demography' },
@@ -53,27 +76,51 @@ describe('multiplayer command authorization', () => {
     for (const command of spoofedCommands) {
       expect(authorizeMultiplayerCommandV2(state, belgium, command, true).accepted).toBe(false);
     }
+    expect(authorizeMultiplayerCommandV2(state, belgium, {
+      type: 'deploy-antarctic-expedition', playerId: belgium,
+      sectorId: 'drake-entry', manpower: 1,
+    }, true)).toEqual({
+      accepted: false,
+      reason: 'Antarctic expeditions were retired; use normal wars and logistics.',
+    });
   });
 
-  it('only lets the addressed country answer a peace offer', () => {
-    const state = createWorldStateV2(53, WORLD_CONTENT_V2);
-    state.offers.push({
-      id: 'offer-test',
-      fromId: canada,
-      toId: belgium,
-      warId: 'war-test',
-      createdTick: 1,
-      expiresTick: 20,
-      status: 'pending',
-      settlement: 'ceasefire',
-    });
+  it('binds the separate Commander economy and manual route to its owning seat', () => {
+    const state = createWorldStateV2(551, WORLD_CONTENT_V2);
+    const ownCommands = [
+      {
+        type: 'set-commander-priorities' as const,
+        playerId: belgium,
+        priorities: { training: 40, logistics: 40, development: 20 },
+      },
+      {
+        type: 'issue-commander-order' as const,
+        playerId: belgium,
+        destinationId: nationIdV2('bel') as never,
+        mission: 'standby' as const,
+        front: null,
+      },
+    ];
+    for (const command of ownCommands) {
+      expect(authorizeMultiplayerCommandV2(state, belgium, command, false).accepted).toBe(true);
+      expect(authorizeMultiplayerCommandV2(state, canada, command, true).accepted).toBe(false);
+    }
+  });
 
-    expect(authorizeMultiplayerCommandV2(state, belgium, {
-      type: 'respond-to-offer', offerId: 'offer-test', accept: true,
-    }, false).accepted).toBe(true);
-    expect(authorizeMultiplayerCommandV2(state, canada, {
-      type: 'respond-to-offer', offerId: 'offer-test', accept: true,
-    }, false).accepted).toBe(false);
+  it('binds APEX transmission responses to the addressed human seat', () => {
+    const state = createWorldStateV2(552, WORLD_CONTENT_V2);
+    const command = {
+      type: 'respond-apex-transmission' as const,
+      playerId: belgium,
+      transmissionId: 'campaign-signal-anomaly' as const,
+      choice: 'accept' as const,
+    };
+
+    expect(authorizeMultiplayerCommandV2(state, belgium, command, false).accepted).toBe(true);
+    expect(authorizeMultiplayerCommandV2(state, canada, command, true)).toEqual({
+      accepted: false,
+      reason: 'You can only manage your own country.',
+    });
   });
 
   it('binds alliance invitations to the sender seat and replies to the addressed seat', () => {

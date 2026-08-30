@@ -15,6 +15,7 @@ import {
   type DirectConnectStateEvent,
   type DirectHostMessageEvent,
 } from '../multiplayer/directConnect';
+import { createNeutralMultiplayerDeploymentSnapshotV1 } from '../multiplayer/deployment';
 import { HostLobbyModel } from '../multiplayer/lobbyModel';
 import { MatchmakingClient, matchmakingServiceUrl } from '../multiplayer/matchmakingClient';
 import type { MatchmakingParticipant, MatchmakingServerMessage } from '../multiplayer/matchmakingProtocol';
@@ -22,6 +23,7 @@ import type {
   LobbyAction,
   LobbyPlayer,
   LobbyStateMessage,
+  MultiplayerDeploymentSnapshotV1,
   SessionMessage,
   SnapshotMessage,
 } from '../multiplayer/protocol';
@@ -53,9 +55,43 @@ export interface MultiplayerLobbyOptions {
   openingMetrics: IntroOpeningMetricsSnapshotV2;
   scenarioConfig?: ScenarioConfigV2;
   preferredCountryId?: PlayerId;
+  /** Shared-account nation unlocks. Omit to preserve the legacy full roster. */
+  availableCountryIds?: ReadonlySet<string>;
+  /** Shared-account mastery level keyed by canonical nation id. */
+  countryMasteryLevels?: ReadonlyMap<string, number>;
+  /** Frozen local account effects for every selectable unlocked nation. */
+  deploymentSnapshots?: ReadonlyMap<string, MultiplayerDeploymentSnapshotV1>;
+  /**
+   * Immediately enters the public queue with `preferredCountryId` and
+   * `scenarioConfig` locked in. The normal lobby then shows only search,
+   * readiness and launch state; private/direct-connect tools stay advanced.
+   */
+  directMatchmaking?: boolean;
+}
+
+export interface MultiplayerAccountCountries {
+  availableCountryIds?: ReadonlySet<string>;
+  countryMasteryLevels?: ReadonlyMap<string, number>;
 }
 
 type LobbyMode = 'menu' | 'matchmaking' | 'host' | 'guest';
+
+/** Public queues are mode-specific; peer handshakes still use V2_RULES_VERSION. */
+export function multiplayerQueueCompatibilityKey(mode: GameModeV2): string {
+  return `${V2_RULES_VERSION}:${mode}`;
+}
+
+function gameModeLabel(mode: GameModeV2): string {
+  return mode === 'standard-2026' ? 'Campaign'
+    : mode === 'survival' ? 'Survival'
+      : 'Alternative Universe';
+}
+
+function gameModeBrief(mode: GameModeV2): string {
+  return mode === 'standard-2026' ? '2026 world campaign'
+    : mode === 'survival' ? 'Rogue AI survival front'
+      : 'Unranked random world';
+}
 
 function escapeHtml(value: string): string {
   return value.replace(/[&<>'"]/g, (character) => ({
@@ -129,8 +165,17 @@ export class MultiplayerLobby {
   private preferredCountryAttempted = false;
   private resolvedScenario: ResolvedScenarioV2;
   private openingMetrics: IntroOpeningMetricsSnapshotV2;
+  private availableCountryIds?: ReadonlySet<string>;
+  private countryMasteryLevels?: ReadonlyMap<string, number>;
+  private readonly deploymentSnapshots?: ReadonlyMap<string, MultiplayerDeploymentSnapshotV1>;
+  private advancedPrivateOpen = false;
+  private readonly directMatchmaking: boolean;
 
   constructor(private readonly options: MultiplayerLobbyOptions) {
+    this.directMatchmaking = options.directMatchmaking === true;
+    this.availableCountryIds = options.availableCountryIds;
+    this.countryMasteryLevels = options.countryMasteryLevels;
+    this.deploymentSnapshots = options.deploymentSnapshots;
     const initialScenario = normalizeScenarioConfigV2(options.scenarioConfig ?? {
       mode: 'standard-2026',
       seed: freshScenarioSeedV2(),
@@ -155,6 +200,38 @@ export class MultiplayerLobby {
     this.root.addEventListener('input', this.onInput);
     this.root.addEventListener('change', this.onChange);
     document.body.append(this.root);
+    if (this.directMatchmaking) {
+      this.mode = 'matchmaking';
+      this.status = options.preferredCountryId
+        ? 'Preparing your selected deployment for matchmaking…'
+        : 'Choose a nation before starting matchmaking.';
+      if (!options.preferredCountryId) {
+        this.error = 'Direct matchmaking needs a selected nation.';
+      }
+    }
+    this.render();
+    if (this.directMatchmaking && options.preferredCountryId) {
+      queueMicrotask(() => {
+        if (this.mode === 'matchmaking' && !this.matchmaker && !this.lobby) {
+          void this.startMatchmaking();
+        }
+      });
+    }
+  }
+
+  /** Refreshes the local commander's account access without affecting remote seats. */
+  setAccountCountries(account: MultiplayerAccountCountries): void {
+    this.availableCountryIds = account.availableCountryIds;
+    this.countryMasteryLevels = account.countryMasteryLevels;
+    const local = this.localPlayer();
+    if (local?.countryId && !this.isCountryAvailableToAccount(local.countryId)) {
+      this.applyLocalAction({ type: 'clear-country' });
+      this.status = `${this.resolvedScenario.content.nations[local.countryId]?.name ?? 'That country'} is not unlocked on this account.`;
+    }
+    const available = this.availablePickerNationIds();
+    if (!this.isCountryAvailableToAccount(this.pickerPreviewCountryId)) {
+      this.pickerPreviewCountryId = available[0] ?? this.pickerPreviewCountryId;
+    }
     this.render();
   }
 
@@ -233,9 +310,19 @@ export class MultiplayerLobby {
       case 'show-host':
         this.mode = 'host'; this.error = ''; this.render();
         break;
+      case 'toggle-private':
+        this.advancedPrivateOpen = !this.advancedPrivateOpen;
+        this.error = '';
+        this.render();
+        break;
       case 'find-match': void this.startMatchmaking(); break;
       case 'cancel-matchmaking':
         this.stopMatchmaking();
+        if (this.directMatchmaking) {
+          this.destroy();
+          this.options.onClose();
+          break;
+        }
         this.mode = 'menu';
         this.status = 'Matchmaking cancelled.';
         this.render();
@@ -277,13 +364,18 @@ export class MultiplayerLobby {
       }
       case 'preview-country':
         this.capturePickerScroll();
-        if (target.dataset.country) this.pickerPreviewCountryId = target.dataset.country as PlayerId;
+        if (target.dataset.country && this.isCountryAvailableToAccount(target.dataset.country)) {
+          this.pickerPreviewCountryId = target.dataset.country as PlayerId;
+        }
         this.render();
         break;
       case 'select-country':
-        if (target.dataset.country) {
+        if (target.dataset.country && this.isCountryAvailableToAccount(target.dataset.country)) {
           this.pickerPreviewCountryId = target.dataset.country as PlayerId;
           this.applyLocalAction({ type: 'select-country', countryId: this.pickerPreviewCountryId });
+        } else if (target.dataset.country) {
+          this.status = 'Unlock that nation in the Nation Arsenal before selecting it.';
+          this.render();
         }
         break;
     }
@@ -308,7 +400,7 @@ export class MultiplayerLobby {
     try {
       this.matchmaker = new MatchmakingClient({
         url,
-        rulesVersion: V2_RULES_VERSION,
+        rulesVersion: multiplayerQueueCompatibilityKey(this.resolvedScenario.config.mode),
         displayName: name,
         onOpen: () => {
           this.busy = false;
@@ -616,19 +708,47 @@ export class MultiplayerLobby {
     }
   }
 
+  private countrySelectionAction(countryId: PlayerId): LobbyAction {
+    const deployment = this.deploymentSnapshots?.get(countryId)
+      ?? createNeutralMultiplayerDeploymentSnapshotV1(countryId);
+    return {
+      type: 'select-country',
+      countryId,
+      deployment: structuredClone(deployment),
+    };
+  }
+
   private applyLocalAction(action: LobbyAction): void {
     this.error = '';
+    if (action.type === 'select-country' && !this.isCountryAvailableToAccount(action.countryId)) {
+      this.status = 'Unlock that nation in the Nation Arsenal before selecting it.';
+      this.render();
+      return;
+    }
+    const canonicalAction = action.type === 'select-country'
+      ? action.deployment
+        ? action
+        : this.countrySelectionAction(action.countryId)
+      : action;
     if (this.host && this.hostModel) {
-      const result = this.hostModel.apply(this.host.hostPeerId, action, this.lobby?.revision);
+      const result = this.hostModel.apply(
+        this.host.hostPeerId,
+        canonicalAction,
+        this.lobby?.revision,
+      );
       if (!result.accepted) this.error = result.reason ?? 'Lobby action rejected.';
       this.publishLobby();
       this.render();
-      if (result.accepted && action.type === 'start') void this.launchHost();
+      if (result.accepted && canonicalAction.type === 'start') void this.launchHost();
       return;
     }
     if (this.guest && this.lobby) {
       try {
-        this.guest.send({ type: 'lobby-action', revision: this.lobby.revision, action });
+        this.guest.send({
+          type: 'lobby-action',
+          revision: this.lobby.revision,
+          action: canonicalAction,
+        });
       } catch (error) {
         this.error = error instanceof Error ? error.message : 'Lobby action could not be sent.';
       }
@@ -689,6 +809,7 @@ export class MultiplayerLobby {
       .map((id) => content.nations[id])
       .filter((nation): nation is NonNullable<typeof nation> => Boolean(nation)
         && this.openingMetrics.byNation.has(nation!.id)
+        && this.isCountryAvailableToAccount(nation!.id)
         && !claimed.has(nation!.id)
         && (this.pickerContinent === 'ALL' || nation!.continent === this.pickerContinent)
         && (!query || `${nation!.name} ${nation!.sigil}`.toLowerCase().includes(query)))
@@ -718,6 +839,11 @@ export class MultiplayerLobby {
       return;
     }
     this.preferredCountryAttempted = true;
+    if (!this.isCountryAvailableToAccount(preferred)) {
+      this.pickerPreviewCountryId = this.availablePickerNationIds()[0] ?? this.pickerPreviewCountryId;
+      this.status = `${this.resolvedScenario.content.nations[preferred]?.name ?? 'That country'} is not unlocked on this account. Choose an unlocked nation.`;
+      return;
+    }
     this.pickerPreviewCountryId = preferred;
     if (this.claimedCountryIds().has(preferred)) {
       this.status = `${this.resolvedScenario.content.nations[preferred]?.name ?? 'That country'} is already claimed. Choose another nation.`;
@@ -726,7 +852,7 @@ export class MultiplayerLobby {
     if (this.hostModel && this.host) {
       const result = this.hostModel.apply(
         this.host.hostPeerId,
-        { type: 'select-country', countryId: preferred },
+        this.countrySelectionAction(preferred),
         this.lobby.revision,
       );
       if (result.accepted) this.lobby = this.hostModel.snapshot();
@@ -737,7 +863,7 @@ export class MultiplayerLobby {
       this.guest?.send({
         type: 'lobby-action',
         revision: this.lobby.revision,
-        action: { type: 'select-country', countryId: preferred },
+        action: this.countrySelectionAction(preferred),
       });
     } catch (error) {
       this.error = error instanceof Error ? error.message : 'Your preferred country could not be selected.';
@@ -754,12 +880,38 @@ export class MultiplayerLobby {
       claimedCountryIds: this.claimedCountryIds(),
       claimantNames: this.claimantNames(),
       selectedCountryId: this.localPlayer()?.countryId ?? undefined,
-      content: this.resolvedScenario.content,
+      content: this.accountFilteredPickerContent(),
       scenarioConfig: this.lobby?.scenario ?? this.resolvedScenario.config,
       scenarioEditable: Boolean(this.host && this.lobby?.hostPeerId === this.host.hostPeerId),
+      availableCountryIds: this.availableCountryIds,
+      countryMasteryLevels: this.countryMasteryLevels,
     });
     this.pickerPreviewCountryId = picker.previewCountryId;
     return picker.html;
+  }
+
+  private isCountryAvailableToAccount(countryId: string): countryId is PlayerId {
+    const nation = this.resolvedScenario.content.nations[countryId as PlayerId];
+    return Boolean(nation
+      && nation.kind !== 'rogue-ai'
+      && this.openingMetrics.byNation.has(countryId as PlayerId)
+      && (!this.availableCountryIds || this.availableCountryIds.has(countryId)));
+  }
+
+  /**
+   * The shared picker historically ignored account filtering in lobby context.
+   * Keep that reusable renderer unchanged while supplying a read-only roster
+   * view containing only the local commander's unlocks. Remote lobby seats
+   * continue to synchronize through the authoritative host model unchanged.
+   */
+  private accountFilteredPickerContent(): ResolvedScenarioV2['content'] {
+    if (!this.availableCountryIds) return this.resolvedScenario.content;
+    return {
+      ...this.resolvedScenario.content,
+      nationIds: this.resolvedScenario.content.nationIds.filter((countryId) => (
+        this.isCountryAvailableToAccount(countryId)
+      )),
+    };
   }
 
   private async copyCode(code: string, success: string): Promise<void> {
@@ -784,30 +936,67 @@ export class MultiplayerLobby {
     }).join('')}</div>`;
   }
 
+  private renderDeploymentSummary(): string {
+    const scenario = this.lobby?.scenario ?? this.resolvedScenario.config;
+    const countryId = this.localPlayer()?.countryId
+      ?? this.options.preferredCountryId
+      ?? this.pickerPreviewCountryId;
+    const country = this.resolvedScenario.content.nations[countryId];
+    const mastery = this.countryMasteryLevels?.get(countryId);
+    return `<section class="mp-deployment-summary" aria-label="Selected co-op deployment"><div class="mp-deployment-summary__sigil" aria-hidden="true">${country?.sigil ?? '◇'}</div><div class="mp-deployment-summary__item"><span>YOUR CO-OP NATION</span><strong>${escapeHtml(country?.name ?? 'Nation pending')}</strong><small>${mastery ? `Mastery level ${mastery}` : 'Your unlocked command'}</small></div><div class="mp-deployment-summary__item is-mission"><span>SHARED MISSION</span><strong>${escapeHtml(gameModeLabel(scenario.mode))}</strong><small>${escapeHtml(gameModeBrief(scenario.mode))}</small></div></section>`;
+  }
+
   private renderMenu(): string {
-    return `<div class="mp-lobby__intro mp-lobby__intro--matchmaking"><div class="panel-kicker">LIVE MATCHMAKING · NO CODES</div><h1>Find commanders who want to play now</h1><p>Enter the public queue and join an open compatible lobby. More commanders can keep joining until its host starts the campaign.</p><div class="mp-matchmaking-form"><label class="mp-field"><span>YOUR NAME</span><input id="mp-player-name" maxlength="40" value="${escapeHtml(this.displayName)}" autocomplete="nickname"></label><button class="primary-button mp-find-match" data-mp-action="find-match"><b>FIND A LOBBY</b><small>Wait with everyone playing now</small></button></div><div class="mp-private-divider"><span>PRIVATE GAME WITH FRIENDS</span></div><div class="mp-choice mp-choice--private"><button class="secondary-button" data-mp-action="show-host"><b>HOST PRIVATE ROOM</b><small>Create direct invites</small></button><button class="secondary-button" data-mp-action="show-guest"><b>JOIN PRIVATE ROOM</b><small>Use a friend’s invite</small></button></div><small class="mp-caveat">Public matchmaking automates discovery and signaling. Campaign traffic remains peer-to-peer and the elected host tab must stay open.</small></div>`;
+    const privatePanel = this.advancedPrivateOpen
+      ? `<div class="mp-private-panel"><div class="mp-choice mp-choice--private"><button class="secondary-button" data-mp-action="show-host"><b>HOST PRIVATE ROOM</b><small>Create a direct invite</small></button><button class="secondary-button" data-mp-action="show-guest"><b>JOIN PRIVATE ROOM</b><small>Use a friend’s invite</small></button></div><small class="mp-caveat">Private rooms use direct browser connections and require an invite exchange.</small></div>`
+      : '';
+    return `<div class="mp-lobby__intro mp-lobby__intro--matchmaking"><div class="panel-kicker">CO-OP MULTIPLAYER</div><h1>Find your command team</h1>${this.renderDeploymentSummary()}<p class="mp-one-line-help">One nation each · permanent team · shared victory or defeat.</p><div class="mp-matchmaking-form"><label class="mp-field"><span>COMMANDER NAME</span><input id="mp-player-name" maxlength="40" value="${escapeHtml(this.displayName)}" autocomplete="nickname"></label><button class="primary-button mp-find-match" data-mp-action="find-match"><b>START MATCHMAKING</b><small>Join the live public queue</small></button></div><button class="mp-private-toggle" data-mp-action="toggle-private" aria-expanded="${this.advancedPrivateOpen}"><b>ADVANCED / PRIVATE</b><small>${this.advancedPrivateOpen ? 'Hide direct-connect options' : 'Play by direct invite instead'}</small></button>${privatePanel}</div>`;
   }
 
   private renderMatchmaking(): string {
     const matched = this.matchmakingParticipants.length > 0;
-    const players = matched
-      ? `<div class="mp-matchmaking__players">${this.matchmakingParticipants.map((player) => `<span>${escapeHtml(player.displayName)}</span>`).join('')}</div>`
-      : `<div class="mp-matchmaking__count"><b>${this.queuedPlayers}</b><span>compatible commander${this.queuedPlayers === 1 ? '' : 's'} waiting</span></div>`;
-    return `<div class="mp-matchmaking"><div class="mp-matchmaking__radar ${matched ? 'is-matched' : ''}" aria-hidden="true"><i></i><i></i><b>${matched ? '✓' : '⌁'}</b></div><div class="panel-kicker">${matched ? 'OPEN LOBBY FOUND' : `QUEUE POSITION ${this.queuePosition}`}</div><h2>${matched ? 'Joining the shared lobby' : 'Searching for commanders'}</h2><p>${matched ? 'No codes are needed. The room stays open to new players until the host starts.' : 'Keep this tab open. Everyone on the same game version can meet in one open lobby.'}</p>${players}<button class="secondary-button" data-mp-action="cancel-matchmaking">${matched ? 'LEAVE LOBBY' : 'CANCEL SEARCH'}</button></div>`;
+    const participants = matched ? this.matchmakingParticipants : [{
+      clientId: 'local-search', displayName: this.displayName.trim() || 'Commander',
+    }];
+    const players = `<section class="mp-matchmaking__roster" aria-label="Matchmaking players"><header><span>PLAYERS</span><b>${matched ? `${participants.length} FOUND` : `${this.queuedPlayers} SEARCHING`}</b></header><div class="mp-matchmaking__players">${participants.map((player, index) => `<span><i>${index === 0 ? 'YOU' : 'COMMANDER'}</i>${escapeHtml(player.displayName)}</span>`).join('')}</div></section>`;
+    return `<div class="mp-matchmaking"><div class="mp-matchmaking__radar ${matched ? 'is-matched' : ''}" aria-hidden="true"><i></i><i></i><b>${matched ? '✓' : '⌁'}</b></div><div class="panel-kicker">${matched ? 'CO-OP TEAM FOUND' : `QUEUE POSITION ${this.queuePosition}`}</div><h2>${matched ? 'Opening your command room' : 'Searching for teammates'}</h2>${this.renderDeploymentSummary()}<p class="mp-one-line-help">${matched ? 'Your team is connecting now; no extra setup is needed.' : 'Keep this screen open while we find commanders for the same mission.'}</p>${players}<button class="secondary-button" data-mp-action="cancel-matchmaking">${matched ? 'LEAVE TEAM' : 'CANCEL SEARCH'}</button></div>`;
+  }
+
+  private renderDirectMatchRoom(isHost: boolean): string {
+    const local = this.localPlayer();
+    const connected = this.lobby?.players.filter((player) => player.connected).length ?? 0;
+    const block = isHost ? this.hostModel?.startBlockReason() : undefined;
+    const mode = this.lobby?.scenario.mode ?? this.resolvedScenario.config.mode;
+    let action: string;
+    if (!local?.countryId) {
+      action = '<button class="primary-button mp-room__next" disabled>CONFIRMING NATION…</button>';
+    } else if (!local.ready) {
+      action = '<button class="primary-button mp-room__next" data-mp-action="toggle-ready">READY UP</button>';
+    } else if (isHost && !block) {
+      action = `<button class="primary-button mp-room__next" data-mp-action="start">START ${escapeHtml(gameModeLabel(mode).toUpperCase())}</button>`;
+    } else if (isHost) {
+      action = '<button class="primary-button mp-room__next" disabled>WAITING FOR SQUAD</button>';
+    } else {
+      action = '<button class="secondary-button mp-room__next is-ready" data-mp-action="toggle-ready">✓ READY · CANCEL</button>';
+    }
+    const connection = isHost ? 'ROOM LEADER' : connectionLabel(this.guest?.state ?? 'connecting').toUpperCase();
+    return `<div class="mp-direct-room"><div class="mp-room__head"><div><div class="panel-kicker">CO-OP TEAM</div><h2>${isHost ? 'Confirm the deployment' : 'Prepare for deployment'}</h2></div><span>${connected}/8 · ${escapeHtml(connection)}</span></div>${this.renderDeploymentSummary()}<p class="mp-one-line-help">Your countries stay independent; allied territory carries team supply. Victory and defeat are shared, and disconnected seats can rejoin.</p>${this.renderPlayers()}<div class="mp-direct-room__next">${action}${block && local?.ready ? `<small>${escapeHtml(block)}</small>` : ''}</div></div>`;
   }
 
   private renderHost(): string {
+    if (this.directMatchmaking && this.host && this.lobby) return this.renderDirectMatchRoom(true);
     if (!this.host) return `<div class="mp-setup"><div class="panel-kicker">HOST A DIRECT GAME</div><h2>Create your room</h2><label class="mp-field"><span>YOUR NAME</span><input id="mp-player-name" maxlength="40" value="${escapeHtml(this.displayName)}" autocomplete="nickname"></label><button class="primary-button" data-mp-action="create-room">CREATE ROOM</button></div>`;
     const local = this.localPlayer();
     const block = this.hostModel?.startBlockReason();
-    const rail = `<div class="mp-room__rail"><div class="mp-room__head"><div><div class="panel-kicker">HOST ROOM · ${escapeHtml(this.host.roomId.slice(-8).toUpperCase())}</div><h2>Commanders</h2></div><span>${this.lobby?.players.filter((player) => player.connected).length ?? 1}/8 CONNECTED</span></div>${this.renderPlayers()}<div class="mp-connect-grid"><section><h3>1 · Invite one friend</h3><p>Create a private code and send it to that friend.</p>${this.inviteCode ? `<textarea readonly aria-label="Host invite code">${escapeHtml(this.inviteCode)}</textarea><button class="secondary-button" data-mp-action="copy-invite">COPY INVITE</button>` : '<button class="secondary-button" data-mp-action="create-invite">CREATE FRIEND INVITE</button>'}</section><section><h3>2 · Accept their answer</h3><p>Paste the answer they send back.</p><textarea id="mp-answer-input" placeholder="Paste friend answer…">${escapeHtml(this.pastedAnswer)}</textarea><button class="secondary-button" data-mp-action="accept-answer">CONNECT FRIEND</button></section></div><div class="mp-room__actions"><button class="secondary-button ${local?.ready ? 'is-ready' : ''}" data-mp-action="toggle-ready" ${local?.countryId ? '' : 'disabled'}>${local?.ready ? '✓ READY' : 'MARK READY'}</button><button class="primary-button" data-mp-action="start" ${block ? 'disabled' : ''}>START CAMPAIGN</button></div>${block ? `<small class="mp-start-note">${escapeHtml(block)}</small>` : ''}</div>`;
+    const rail = `<div class="mp-room__rail"><div class="mp-room__head"><div><div class="panel-kicker">CO-OP HOST · ${escapeHtml(this.host.roomId.slice(-8).toUpperCase())}</div><h2>Your team</h2></div><span>${this.lobby?.players.filter((player) => player.connected).length ?? 1}/8 CONNECTED</span></div><p class="mp-one-line-help">One nation each · permanent team · shared victory or defeat · reconnect enabled.</p>${this.renderPlayers()}<div class="mp-connect-grid"><section><h3>1 · Invite one friend</h3><p>Create a private code and send it to that friend.</p>${this.inviteCode ? `<textarea readonly aria-label="Host invite code">${escapeHtml(this.inviteCode)}</textarea><button class="secondary-button" data-mp-action="copy-invite">COPY INVITE</button>` : '<button class="secondary-button" data-mp-action="create-invite">CREATE FRIEND INVITE</button>'}</section><section><h3>2 · Accept their answer</h3><p>Paste the answer they send back.</p><textarea id="mp-answer-input" placeholder="Paste friend answer…">${escapeHtml(this.pastedAnswer)}</textarea><button class="secondary-button" data-mp-action="accept-answer">CONNECT FRIEND</button></section></div><div class="mp-room__actions"><button class="secondary-button ${local?.ready ? 'is-ready' : ''}" data-mp-action="toggle-ready" ${local?.countryId ? '' : 'disabled'}>${local?.ready ? '✓ READY' : 'MARK READY'}</button><button class="primary-button" data-mp-action="start" ${block ? 'disabled' : ''}>START CO-OP</button></div>${block ? `<small class="mp-start-note">${escapeHtml(block)}</small>` : ''}</div>`;
     return `<div class="mp-room mp-room--with-picker">${rail}${this.renderNationPicker()}</div>`;
   }
 
   private renderGuest(): string {
+    if (this.directMatchmaking && this.guest && this.lobby) return this.renderDirectMatchRoom(false);
     if (!this.guest) return `<div class="mp-setup"><div class="panel-kicker">JOIN A DIRECT GAME</div><h2>Paste your friend’s invite</h2><label class="mp-field"><span>YOUR NAME</span><input id="mp-player-name" maxlength="40" value="${escapeHtml(this.displayName)}" autocomplete="nickname"></label><label class="mp-field"><span>HOST INVITE</span><textarea id="mp-invite-input" placeholder="Paste the long Frontier Command invite code…">${escapeHtml(this.pastedInvite)}</textarea></label><button class="primary-button" data-mp-action="join-room">CREATE ANSWER</button></div>`;
     const local = this.localPlayer();
-    const rail = `<div class="mp-room__rail"><div class="mp-room__head"><div><div class="panel-kicker">GUEST · ${escapeHtml(this.guest.hostName.toUpperCase())}</div><h2>Multiplayer lobby</h2></div><span>${escapeHtml(connectionLabel(this.guest.state).toUpperCase())}</span></div>${this.answerCode ? `<div class="mp-answer-callout"><h3>Send this answer back to the host</h3><p>The connection completes only after the host pastes it.</p><textarea readonly aria-label="Friend answer code">${escapeHtml(this.answerCode)}</textarea><button class="secondary-button" data-mp-action="copy-answer">COPY ANSWER</button></div>` : ''}${this.renderPlayers()}${this.lobby ? `<div class="mp-room__actions"><button class="secondary-button ${local?.ready ? 'is-ready' : ''}" data-mp-action="toggle-ready" ${local?.countryId ? '' : 'disabled'}>${local?.ready ? '✓ READY' : 'MARK READY'}</button><span>Only the host starts the shared campaign.</span></div>` : ''}</div>`;
+    const rail = `<div class="mp-room__rail"><div class="mp-room__head"><div><div class="panel-kicker">CO-OP GUEST · ${escapeHtml(this.guest.hostName.toUpperCase())}</div><h2>Your team</h2></div><span>${escapeHtml(connectionLabel(this.guest.state).toUpperCase())}</span></div><p class="mp-one-line-help">Your nation stays yours. Teammates cannot fight each other; the outcome is shared.</p>${this.answerCode ? `<div class="mp-answer-callout"><h3>Send this answer back to the host</h3><p>The connection completes only after the host pastes it.</p><textarea readonly aria-label="Friend answer code">${escapeHtml(this.answerCode)}</textarea><button class="secondary-button" data-mp-action="copy-answer">COPY ANSWER</button></div>` : ''}${this.renderPlayers()}${this.lobby ? `<div class="mp-room__actions"><button class="secondary-button ${local?.ready ? 'is-ready' : ''}" data-mp-action="toggle-ready" ${local?.countryId ? '' : 'disabled'}>${local?.ready ? '✓ READY' : 'MARK READY'}</button><span>Only the host starts the shared campaign.</span></div>` : ''}</div>`;
     return this.lobby
       ? `<div class="mp-room mp-room--with-picker">${rail}${this.renderNationPicker()}</div>`
       : `<div class="mp-room">${rail}</div>`;
@@ -823,8 +1012,9 @@ export class MultiplayerLobby {
     // state instead of the entry route, otherwise a public room renders the
     // picker inside the unconstrained setup-card layout and the preview scrolls
     // out of view beside the long country list.
-    const hasPicker = Boolean(this.mode !== 'menu' && this.lobby && (this.host || this.guest));
-    this.root.innerHTML = `<section class="multiplayer-lobby-card ${hasPicker ? 'has-country-picker' : ''}"><button class="modal-close" data-mp-action="${this.mode === 'menu' ? 'close' : 'back'}" aria-label="${this.mode === 'menu' ? 'Close multiplayer' : 'Back'}">×</button>${content}<footer class="mp-status ${this.error ? 'has-error' : ''}"><i></i><span>${escapeHtml(this.error || this.status)}</span>${this.busy ? '<b>WORKING…</b>' : ''}</footer></section>`;
+    const hasPicker = Boolean(!this.directMatchmaking && this.mode !== 'menu' && this.lobby && (this.host || this.guest));
+    const closesLobby = this.directMatchmaking || this.mode === 'menu';
+    this.root.innerHTML = `<section class="multiplayer-lobby-card ${hasPicker ? 'has-country-picker' : ''} ${this.directMatchmaking ? 'is-direct-matchmaking' : ''}"><button class="modal-close" data-mp-action="${closesLobby ? 'close' : 'back'}" aria-label="${closesLobby ? 'Close multiplayer' : 'Back'}">×</button>${content}<footer class="mp-status ${this.error ? 'has-error' : ''}"><i></i><span>${escapeHtml(this.error || this.status)}</span>${this.busy ? '<b>WORKING…</b>' : ''}</footer></section>`;
     const pickerGrid = this.root.querySelector<HTMLElement>('.country-select--lobby .country-grid');
     if (pickerGrid) pickerGrid.scrollTop = this.pickerGridScrollTop;
   }
@@ -848,11 +1038,25 @@ export class MultiplayerLobby {
       resolved.config.seed,
       resolved.content,
     ));
+    if (!this.availableCountryIds) {
+      this.pickerPreviewCountryId = resolved.content.nations[previousPreviewCountryId]
+        ? previousPreviewCountryId
+        : resolved.config.mode === 'random-world'
+          ? this.openingMetrics.ranking[0]?.player.id ?? resolved.content.nationIds[0]!
+          : resolved.content.nationIds.find((id) => id === 'usa')
+            ?? resolved.content.nationIds[0]!;
+      if (previousMode !== resolved.config.mode) this.pickerGridScrollTop = 0;
+      return;
+    }
     this.pickerPreviewCountryId = resolved.content.nations[previousPreviewCountryId]
+      && this.isCountryAvailableToAccount(previousPreviewCountryId)
       ? previousPreviewCountryId
       : resolved.config.mode === 'random-world'
-        ? this.openingMetrics.ranking[0]?.player.id ?? resolved.content.nationIds[0]!
-        : resolved.content.nationIds.find((id) => id === 'usa')
+        ? this.availablePickerNationIds()[0]
+          ?? this.openingMetrics.ranking.find(({ player }) => this.isCountryAvailableToAccount(player.id))?.player.id
+          ?? resolved.content.nationIds[0]!
+        : this.availablePickerNationIds()[0]
+          ?? resolved.content.nationIds.find((id) => id === 'usa' && this.isCountryAvailableToAccount(id))
           ?? resolved.content.nationIds[0]!;
     if (previousMode !== resolved.config.mode) this.pickerGridScrollTop = 0;
   }

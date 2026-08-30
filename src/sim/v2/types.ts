@@ -58,8 +58,18 @@ export type PolarEndgamePhaseV2 =
   | 'victory';
 export type ArcticProjectIdV2 =
   | 'polar-demography'
+  | 'baseline-calibration'
+  | 'polar-relay-mesh'
+  | 'anomaly-filtering'
+  | 'neural-signature-map'
+  | 'command-verification'
+  | 'recovery-routing'
   | 'cryogenic-logistics'
+  | 'rogue-ballistics'
+  | 'predictive-defense'
   | 'strategic-mobilisation'
+  | 'polar-supply-model'
+  | 'ice-theatre-simulation'
   | 'deep-ice-signals';
 export type AntarcticCorridorIdV2 = 'drake' | 'maud' | 'ross';
 export type AntarcticSectorIdV2 =
@@ -77,6 +87,165 @@ export type FinanceModeV2 = 'normal' | 'conserving' | 'war' | 'insolvent';
 export type NationalAiModeV2 = 'growth' | 'rebuild' | 'recovery' | 'catch-up' | 'war';
 export type PeaceSettlementV2 = 'reparations' | 'ceasefire';
 export type OfferStatusV2 = 'pending' | 'accepted' | 'declined' | 'expired';
+export type CommanderMissionV2 =
+  | 'standby'
+  | 'assault-support'
+  | 'defense'
+  | 'logistics-relief'
+  | 'evacuate'
+  | 'hq-training';
+
+/** Exact-100 policy for the Commander's non-territorial, player-managed economy. */
+export interface CommanderEconomyPrioritiesV2 {
+  training: number;
+  logistics: number;
+  development: number;
+}
+
+export interface CommanderArmyStateV2 {
+  /** Compatibility storage for current neural-shield integrity. */
+  manpower: number;
+  /** Compatibility storage for maximum shield integrity. Fresh runs start full. */
+  capacity: number;
+  /** Offline recharge buffer; it never contributes power directly. */
+  trainedReserves: number;
+  /** Dome strike rating while the shield is operational. */
+  baseAttack: number;
+  /** Dome interception/durability rating while the shield is operational. */
+  baseDefense: number;
+}
+
+export interface CommanderEconomyStateV2 {
+  /** Retained compatibility field. Canonical APEX private treasury is always zero. */
+  treasury: number;
+  /** Institutional output in billions per year, transferred fully to the Empire. */
+  annualOutput: number;
+  /** Stored projection energy used by movement, strikes and interception. */
+  supplyStock: number;
+  priorities: CommanderEconomyPrioritiesV2;
+}
+
+/** Stable save keys for frozen shield upgrades and campaign-local reboot charges. */
+export interface CommanderCapabilitiesV2 {
+  /** Projection Relay: 75% faster projection travel and safe-node transfer. */
+  mobileHeadquarters: boolean;
+  /** Emergency Reboot compatibility key: captures bounded impact energy. */
+  fieldHospital: boolean;
+  /** Twin Projection only; both 60% projections share one integrity/energy pool. */
+  rapidResponse: boolean;
+  /** Singularity Pulse: every third resolved supported assault gains +60% ATK. */
+  assaultSpecialist: boolean;
+  /** Mirror Matrix: reflects 20% of damage actually intercepted. */
+  defenseSpecialist: boolean;
+  emergencyExtractionCharges: number;
+}
+
+/** Frozen account-wide support multipliers carried by one allied APEX network. */
+export interface CommanderEmpireSupportV2 {
+  recruitmentMultiplier: number;
+  reserveTrainingMultiplier: number;
+  /** Direct APEX food output in million-person-weeks per year. */
+  annualFoodOutput: number;
+  foodProductionMultiplier: number;
+  foodStorageMultiplier: number;
+  foodImportCostMultiplier: number;
+}
+
+/** Stable front selected by national strategy; APEX autonomously projects to it. */
+export interface CommanderFrontAssignmentV2 {
+  warId: string;
+  sourceId: TerritoryId;
+  targetId: TerritoryId;
+}
+
+/**
+ * Persisted NEXUS split-dome assignment. It carries no integrity, energy or
+ * recovery fields: both projections always consume the owning force's one
+ * shared `army`/`economy` pool.
+ */
+export interface ApexSecondaryProjectionV2 {
+  locationId: TerritoryId;
+  mission: Extract<CommanderMissionV2, 'assault-support' | 'defense'>;
+  front: CommanderFrontAssignmentV2;
+  /** Primary assignment that caused this deterministic secondary selection. */
+  pairedPrimaryFront: CommanderFrontAssignmentV2;
+}
+
+/** Persisted capstone progress with deterministic legacy defaults. */
+export interface ApexDoctrineRuntimeV2 {
+  /** Supported LANCER assaults since the last pulse: exact integer 0, 1 or 2. */
+  lancerSupportedAssaultCount: number;
+  /** Null unless NEXUS currently maintains a second legal projection. */
+  secondaryProjection: ApexSecondaryProjectionV2 | null;
+}
+
+/** Canonical multi-week movement; renderers interpolate this stored route and ETA. */
+export interface CommanderTransitStateV2 {
+  path: TerritoryId[];
+  distanceKm: number;
+  departTick: number;
+  arriveTick: number;
+}
+
+/**
+ * A genuine non-territorial neural-shield platform. The `army` member is a
+ * schema-compatibility container for integrity, max integrity and recharge
+ * energy; APEX never owns national troops, borders or a TerritoryState army.
+ */
+export interface CommanderForceStateV2 {
+  army: CommanderArmyStateV2;
+  economy: CommanderEconomyStateV2;
+  capabilities: CommanderCapabilitiesV2;
+  empireSupport: CommanderEmpireSupportV2;
+  /** Frozen account progression for this campaign: zero is neutral, one is the full country trait. */
+  countryTraitScale: number;
+  locationId: TerritoryId;
+  mission: CommanderMissionV2;
+  /** Compatibility discriminant. New timelines always normalize APEX to autonomous control. */
+  orderSource: 'manual' | 'autonomous';
+  /** Legacy name retained for saves; now stores the next autonomous retarget tick. */
+  manualHoldUntilTick: number;
+  front: CommanderFrontAssignmentV2 | null;
+  transit: CommanderTransitStateV2 | null;
+  /**
+   * Optional only at the TypeScript boundary so authenticated legacy saves can
+   * be normalized before exact current-schema validation.
+   */
+  doctrineRuntime?: ApexDoctrineRuntimeV2;
+}
+
+/** Immutable profile snapshot supplied once at campaign bootstrap. */
+export interface CommanderForceInitializationV2 {
+  /** Compatibility input for initial neural-dome integrity. */
+  manpower: number;
+  /** Compatibility input for maximum neural-dome integrity. */
+  capacity: number;
+  /** Compatibility input for offline recharge-buffer energy. */
+  trainedReserves?: number;
+  /** Neural strike-support rating. */
+  baseAttack: number;
+  /** Neural interception/durability rating. */
+  baseDefense: number;
+  treasury: number;
+  annualOutput: number;
+  supplyStock?: number;
+  /** Defaults to one for direct/legacy callers; account campaigns always pass their frozen loadout. */
+  countryTraitScale?: number;
+  capabilities?: Partial<CommanderCapabilitiesV2>;
+  /** Exact account snapshot; omitted by direct/legacy callers for base APEX support. */
+  empireSupport?: Partial<CommanderEmpireSupportV2>;
+}
+
+export interface CommanderOrderTermsV2 {
+  allowed: boolean;
+  reason?: string;
+  destinationId: TerritoryId;
+  path: TerritoryId[];
+  distanceKm: number;
+  travelTicks: number;
+  treasuryCost: number;
+  supplyCost: number;
+}
 
 export interface BudgetPolicyV2 {
   military: number;
@@ -177,7 +346,7 @@ export interface NationStateV2 {
   trainedReserves: number;
   budget: BudgetPolicyV2;
   research: ResearchStateV2;
-  /** Number of unilateral player ceasefires; each makes the next contract 10% dearer. */
+  /** Retired save-compatibility counter. Canonical runtime value is always zero. */
   ceasefiresRequested: number;
   /** Successful manual-button uses; each raises only that button's next fixed quote. */
   manualActionUses: ManualActionUsesV2;
@@ -240,7 +409,6 @@ export interface TerritoryStateV2 {
   coreOwner: PlayerId;
   population: number;
   economy: number;
-  condition: number;
   /** 0..1 share of the population integrated into this owner's army system. */
   integration: number;
   /** Fixed calendar promise created on conquest; absent for stable core territory. */
@@ -281,6 +449,49 @@ export interface WarCampaignStateV2 {
   expiresTick: number;
 }
 
+/**
+ * Canonical per-player APEX facts accumulated during one war. The nested
+ * ledger is save-stable so a mid-war reload or multiplayer reconnect cannot
+ * erase the eventual neural-dome report.
+ */
+export interface ApexWarTelemetryV2 {
+  supportedBattles: number;
+  /** Peak player-facing APEX support Power, on the same scale as map Power. */
+  peakPower: number;
+  /** Factual Max Integrity captured when this player's war ledger begins. */
+  maxIntegrity: number;
+  /** Net unrecoverable integrity impact reported by the compatibility allocator. */
+  integrityLosses: number;
+  supplyDelivered: number;
+  supplySpent: number;
+  singularityPulses: number;
+  mirrorCounterpulseDamage: number;
+  twinProjectionBattles: number;
+}
+
+/**
+ * Canonical human-perspective facts that cannot be reconstructed after an
+ * active war has already changed territory, treasury or national ratings.
+ * Arrays stay sorted and unique so save hashes are independent of insertion
+ * order. A missing ledger on an authenticated older save is hydrated from the
+ * first loaded boundary and becomes save-stable from that point onward.
+ */
+export interface WarReportBaselineV2 {
+  ownedTerritoryIds: TerritoryId[];
+  touchedTerritoryIds: TerritoryId[];
+  treasuryBefore: number;
+  treasurySeized: number;
+  treasuryLost: number;
+  allySupportedBattles: number;
+  allyPeakPower: number;
+  allyLosses: number;
+  allyContributorIds: PlayerId[];
+  effectiveAttackBefore: number;
+  effectiveDefenseBefore: number;
+  combatPowerBefore: number;
+  capacityBefore: number;
+}
+
 export interface WarStateV2 {
   id: string;
   attackerId: PlayerId;
@@ -296,13 +507,17 @@ export interface WarStateV2 {
   /** Cumulative civilian population lost by the formal defender, in millions. */
   defenderCivilianLosses?: number;
   lastPeaceOfferTick: number;
-  /** Stable, source-unique active fronts for each belligerent. */
+  /** Compatibility lists containing at most one canonical front in total. */
   attackerOperations: FrontOperationV2[];
   defenderOperations: FrontOperationV2[];
   /** Canonical bounded retaliation window; absent legacy inputs normalize to null in saves. */
   revenge?: WarRevengeStateV2 | null;
   /** Absent legacy fixtures initialize deterministically on first simulation use. */
   campaign?: WarCampaignStateV2;
+  /** Absent authenticated legacy saves normalize to an empty canonical ledger. */
+  apexTelemetryByPlayer?: Partial<Record<PlayerId, ApexWarTelemetryV2>>;
+  /** Save-stable post-war report inputs for each human belligerent. */
+  reportBaselineByPlayer?: Partial<Record<PlayerId, WarReportBaselineV2>>;
 }
 
 export interface TruceStateV2 {
@@ -311,6 +526,7 @@ export interface TruceStateV2 {
   expiresTick: number;
 }
 
+/** Retired save-only shape. Runtime and newly written saves always keep this array empty. */
 export interface CeasefireObligationV2 {
   warId: string;
   payerId: PlayerId;
@@ -320,6 +536,7 @@ export interface CeasefireObligationV2 {
   expiresTick: number;
 }
 
+/** Retired save-only shape. Runtime and newly written saves always keep this array empty. */
 export interface PeaceOfferV2 {
   id: string;
   fromId: PlayerId;
@@ -381,9 +598,38 @@ export interface BattleEventV2 {
   targetId: TerritoryId;
   attackerId: PlayerId;
   defenderId: PlayerId;
-  /** Actual military headcount lost, in millions. */
+  /** Actual national and allied military headcount lost, in millions. */
   attackerLosses: number;
   defenderLosses: number;
+  /** National personnel losses only; APEX integrity is reported separately below. */
+  regularAttackerLosses: number;
+  regularDefenderLosses: number;
+  commanderAttackerId: PlayerId | null;
+  commanderDefenderId: PlayerId | null;
+  commanderAttackerLosses: number;
+  commanderDefenderLosses: number;
+  /** National-equivalent damage actually intercepted by each neural dome. */
+  commanderAttackerInterceptedDamage?: number;
+  commanderDefenderInterceptedDamage?: number;
+  /** Real hostile personnel removed by a bounded Mirror Matrix counterpulse. */
+  commanderAttackerCounterpulseDamage?: number;
+  commanderDefenderCounterpulseDamage?: number;
+  /** True only on an actually resolved third LANCER-supported offensive pulse. */
+  commanderAttackerSingularityPulse?: boolean;
+  /** Explicit Twin Projection provenance for compact battle/map effects. */
+  commanderAttackerProjection?: 'primary' | 'secondary' | null;
+  commanderDefenderProjection?: 'primary' | 'secondary' | null;
+  commanderAttackerProjectionShare?: number;
+  commanderDefenderProjectionShare?: number;
+  commanderAttackerPower: number;
+  commanderDefenderPower: number;
+  commanderAttackerSupplySpent: number;
+  commanderDefenderSupplySpent: number;
+  commanderAttackerSupplyDelivered: number;
+  commanderDefenderSupplyDelivered: number;
+  /** Bounded human teammate contingent; ownership and losses stay with contributor. */
+  allyAttackerSupport?: CoopAllyBattleSupportV2;
+  allyDefenderSupport?: CoopAllyBattleSupportV2;
   /** Civilian losses in the attacker's source territory, in millions. */
   attackerPopulationLoss: number;
   /** Civilian losses in the attacked territory, in millions. */
@@ -408,6 +654,18 @@ export interface BattleEventV2 {
   tick: number;
 }
 
+export interface CoopAllyBattleSupportV2 {
+  contributorId: PlayerId;
+  sourceId: TerritoryId;
+  manpower: number;
+  power: number;
+  losses: number;
+  supplySpent: number;
+  logisticsCost: number;
+  access: Exclude<WarAccessV2, 'none'>;
+  distanceKm: number;
+}
+
 /** One real, one-hop army redeployment generated by the weekly logistics phase. */
 export interface LogisticsMovementV2 {
   playerId: PlayerId;
@@ -429,6 +687,8 @@ export interface LogisticsMovementV2 {
 
 export interface AiEscalationStateV2 {
   lastWarStartTick: number;
+  /** Durable count of scripted opening conflicts already issued; event history is intentionally prunable. */
+  openingConflictsStarted: number;
   lastFederationTick: number;
   resistanceLevel: 0 | 1 | 2;
   globalThreat: number;
@@ -475,9 +735,110 @@ export interface AntarcticExpeditionStateV2 {
   damageDealt: number;
 }
 
+export type AntarcticGatewayBreachStatusV2 = 'sealed' | 'breaching' | 'open';
+
+/** One of the three authored sea breaches; order and timing are save-stable. */
+export interface AntarcticGatewayBreachStateV2 {
+  gatewayId: AntarcticSectorIdV2;
+  status: AntarcticGatewayBreachStatusV2;
+  breachStartedTick: number | null;
+  opensTick: number | null;
+  openedTick: number | null;
+}
+
+export type RogueAttentionStageV2 =
+  | 'disabled'
+  | 'dormant'
+  | 'observing'
+  | 'mobilising'
+  | 'breach-imminent'
+  | 'active';
+
+/** Campaign-only transparent gate; Survival starts directly at active. */
+export interface RogueAttentionStateV2 {
+  stage: RogueAttentionStageV2;
+  liberatedWorldShare: number;
+  benchmarkMetTick: number | null;
+  nextStageTick: number | null;
+  activatedTick: number | null;
+}
+
+export const APEX_TRANSMISSION_IDS_V2 = Object.freeze([
+  'campaign-signal-anomaly',
+  'campaign-communications-blackout',
+  'campaign-first-strike-guidance',
+  'campaign-ai-defeat-pattern',
+  'campaign-first-war-recovery',
+  'campaign-first-conquest',
+  'campaign-first-purge-arrival',
+  'campaign-first-liberation',
+  'campaign-attention-observing',
+  'campaign-attention-mobilising',
+  'campaign-first-gateway',
+  'campaign-first-wave',
+  'rogue-prime-detected',
+  'campaign-first-antarctic-sector',
+  'campaign-core-defeated',
+  'survival-terminal-briefing',
+] as const);
+export type ApexTransmissionIdV2 = (typeof APEX_TRANSMISSION_IDS_V2)[number];
+/** `later` remains loadable for authenticated legacy saves, but is no longer a valid command. */
+export type ApexTransmissionChoiceV2 = 'accept' | 'later' | 'acknowledge';
+
+export interface ApexTransmissionV2 {
+  id: ApexTransmissionIdV2;
+  playerId: PlayerId;
+  sentTick: number;
+  title: string;
+  body: string;
+  action: 'north-pole-investigation' | 'first-strike-guidance' | null;
+  /** Persisted map objective for actionable guidance; null for ordinary briefings. */
+  targetId: TerritoryId | null;
+  choice: ApexTransmissionChoiceV2 | null;
+  /** Authoritative acknowledgement week; drives save-stable narrative spacing. */
+  resolvedTick: number | null;
+}
+
+export interface ApexNarrativePlayerStateV2 {
+  transmissions: ApexTransmissionV2[];
+  investigationAuthorized: boolean;
+}
+
+/** Save-stable, run-local APEX story history. Never copied into account meta. */
+export interface ApexNarrativeStateV2 {
+  players: Partial<Record<PlayerId, ApexNarrativePlayerStateV2>>;
+}
+
+export type RoguePrimeStatusV2 =
+  | 'dormant'
+  | 'guarding'
+  | 'sortie'
+  | 'rebuilding'
+  | 'destroyed';
+
+/**
+ * ROGUE PRIME is deliberately not stored with the allied APEX shield network.
+ * Its route, sortie and rebuild clock are authoritative run state so reconnects
+ * cannot reroll either its warning window or its vulnerability window.
+ */
+export interface RoguePrimeStateV2 {
+  status: RoguePrimeStatusV2;
+  force: CommanderForceStateV2 | null;
+  sortieSequence: number;
+  nextSortieTick: number | null;
+  gatewayId: AntarcticSectorIdV2 | null;
+  targetId: TerritoryId | null;
+  departTick: number | null;
+  strikeTick: number | null;
+  returnTick: number | null;
+  rebuildReadyTick: number | null;
+}
+
 /** Canonical fixed-size Arctic research and Antarctic endgame campaign. */
 export interface PolarEndgameStateV2 {
   phase: PolarEndgamePhaseV2;
+  /** First Stage-I completion: campaign intel blackout and ordinary-war unlock. */
+  communicationsBlackoutTick: number | null;
   revealedBy: PlayerId | null;
   warningTick: number | null;
   contactTick: number | null;
@@ -487,6 +848,12 @@ export interface PolarEndgameStateV2 {
   warningAcknowledgedBy: PlayerId[];
   arcticPrograms: Partial<Record<PlayerId, ArcticResearchProgressV2>>;
   sectors: Record<AntarcticSectorIdV2, AntarcticSectorStateV2>;
+  /** Seeded permutation of the three authored gateways. */
+  gatewayBreachOrder: AntarcticSectorIdV2[];
+  gatewayBreaches: Partial<Record<AntarcticSectorIdV2, AntarcticGatewayBreachStateV2>>;
+  rogueAttention: RogueAttentionStateV2;
+  apexNarrative: ApexNarrativeStateV2;
+  roguePrime: RoguePrimeStateV2;
   expeditions: AntarcticExpeditionStateV2[];
   earthDefenseMembers: PlayerId[];
   globalWave: number;
@@ -494,9 +861,96 @@ export interface PolarEndgameStateV2 {
   bossPhase: 0 | 1 | 2 | 3;
   bossIntegrity: number;
   suspicionReliefEarned: number;
+  /**
+   * Survival-only provenance for personnel physically staged by a Rogue wave
+   * at Zero Point and subsequently carried through ordinary army logistics.
+   * Sparse entries are millions of eligible machine personnel at a territory.
+   */
+  rogueWaveManpowerByTerritory: Partial<Record<TerritoryId, number>>;
+  /** Cumulative eligible Rogue-wave losses personally inflicted by each human. */
+  rogueWaveLossCreditByPlayer: Partial<Record<PlayerId, number>>;
   /** Incremented only when the renderer-visible polar state changes. */
   visualRevision: number;
   nextExpeditionId: number;
+}
+
+export type RunProgressionModeV2 = 'disabled' | 'campaign' | 'survival';
+export type RunUpgradeCategoryV2 = 'commander' | 'logistics' | 'military' | 'recovery' | 'risk';
+
+export const RUN_UPGRADE_IDS_V2 = Object.freeze([
+  'corps-shock-doctrine',
+  'corps-bulwark-doctrine',
+  'corps-expansion',
+  'corps-field-logistics',
+  'blue-water-convoys',
+  'continental-rail',
+  'efficient-sealift',
+  'forward-depots',
+  'combined-arms',
+  'defense-in-depth',
+  'total-mobilization',
+  'accelerated-training',
+  'field-hospitals',
+  'industrial-recovery',
+  'civil-reconstruction',
+  'reserve-stockpile',
+  'all-in-offensive',
+  'austere-mobilization',
+  'overclocked-convoys',
+] as const);
+export type RunUpgradeIdV2 = (typeof RUN_UPGRADE_IDS_V2)[number];
+
+export type RunDraftMilestoneKindV2 =
+  | 'campaign-region'
+  | 'survival-wave'
+  | 'survival-recapture'
+  | 'survival-antarctic-depth';
+
+/** One once-only trigger waiting behind the currently visible offer. */
+export interface RunDraftMilestoneV2 {
+  id: string;
+  label: string;
+  kind: RunDraftMilestoneKindV2;
+  createdTick: number;
+}
+
+/** Exactly three deterministic one-click choices belonging to one human. */
+export interface RunDraftOfferV2 {
+  id: string;
+  playerId: PlayerId;
+  milestoneId: string;
+  milestoneLabel: string;
+  milestoneKind: RunDraftMilestoneKindV2;
+  createdTick: number;
+  optionIds: [RunUpgradeIdV2, RunUpgradeIdV2, RunUpgradeIdV2];
+}
+
+export interface RunUpgradePickV2 {
+  offerId: string;
+  milestoneId: string;
+  milestoneLabel: string;
+  upgradeId: RunUpgradeIdV2;
+  pickedTick: number;
+}
+
+export interface RunProgressionPlayerStateV2 {
+  activeOffer: RunDraftOfferV2 | null;
+  queuedMilestones: RunDraftMilestoneV2[];
+  /** Includes active and queued milestones so oscillation can never retrigger one. */
+  triggeredMilestoneIds: string[];
+  picks: RunUpgradePickV2[];
+  stacks: Partial<Record<RunUpgradeIdV2, number>>;
+  /** Distinct scorched countries ever reclaimed by this player in this run. */
+  recapturedScorchedTerritoryIds: TerritoryId[];
+}
+
+/** Canonical, run-only progression. It is saved and hashed but never copied to account meta. */
+export interface RunProgressionStateV2 {
+  mode: RunProgressionModeV2;
+  players: Partial<Record<PlayerId, RunProgressionPlayerStateV2>>;
+  /** Survival world ruins stay ruined after ownership and integration changes. */
+  scorchedWorldTerritoryIds: TerritoryId[];
+  nextOfferSequence: number;
 }
 
 /** Live facade state. speed/winner/gameOver are transient projections and omitted from saves/hashes. */
@@ -516,6 +970,8 @@ export interface WorldStateV2 {
   humanPlayerIds: PlayerId[];
   /** Human country identities that consumed their one half-cost first conquest integration. */
   firstIntegrationDiscountUsedBy: PlayerId[];
+  /** Human-owned non-territorial Commander organisations; absent entries preserve legacy national play. */
+  commanderForces: Partial<Record<PlayerId, CommanderForceStateV2>>;
   players: Record<PlayerId, NationStateV2>;
   territories: Record<TerritoryId, TerritoryStateV2>;
   wars: WarStateV2[];
@@ -527,6 +983,7 @@ export interface WorldStateV2 {
   events: WorldEventV2[];
   aiEscalation: AiEscalationStateV2;
   polarEndgame: PolarEndgameStateV2;
+  runProgression: RunProgressionStateV2;
   nextEventId: number;
   nextWarId: number;
   nextOfferId: number;
@@ -539,11 +996,15 @@ export interface WeeklyFinanceBreakdownV2 {
   activeBudget: BudgetPolicyV2;
   aiMode: NationalAiModeV2;
   aiEfficiency: number;
+  /** Free weekly APEX institutional output paid directly into the shared Empire treasury. */
+  apexContribution: number;
+  /** Free weekly APEX food delivered into consumption/storage, in million-person-weeks. */
+  apexFoodContribution: number;
   revenue: number;
   foodDemand: number;
   foodLandCapacity: number;
   foodStorageCapacity: number;
-  /** Structural last-mile food access; prosperity, condition and research can improve it. */
+  /** Structural last-mile food access; prosperity and research can improve it. */
   foodAccessCeiling: number;
   foodProduced: number;
   foodDomesticProduced: number;
@@ -571,7 +1032,7 @@ export interface WeeklyFinanceBreakdownV2 {
   newBorrowing: number;
   /** 10% origination premium plus the bounded carrying premium on persistent debt. */
   debtPremium: number;
-  /** Opening cash above 10% of live GDP invested through recurring autonomous programmes this week. */
+  /** Cash above the displayed effective reserve invested through recurring programmes this week. */
   excessCashInvestment: number;
   /** Required weekly payroll and maintenance; underfunding alone never demobilizes. */
   armyUpkeep: number;
@@ -603,7 +1064,6 @@ export interface WeeklyFinanceBreakdownV2 {
   acceleratedDemobilization: number;
   demobilizationCost: number;
   standingOperations: number;
-  condition: number;
   /** Development funding committed to productive investment this week. */
   economyGrowth: number;
   /** Visible final annual real-economy growth rate after every component. */
@@ -620,7 +1080,6 @@ export interface WeeklyFinanceBreakdownV2 {
   /** Effective upkeep funding from zero through 1.25; surplus above one accelerates training. */
   mandatoryFundingRatio: number;
   recruitmentFundingRatio: number;
-  conditionFundingRatio: number;
   /** Immediate share of productive output lost to mobilization, disruption and fatigue. */
   warEconomicPenalty: number;
   /** Annual real-economy growth drag from active fronts and post-war fatigue. */
@@ -738,8 +1197,6 @@ export interface EconomicOutputLedgerV2 {
   fiscalReferenceWealthPerPerson: number;
   /** Current total live owned GDP; population alone does not multiply it. */
   demographicOutput: number;
-  /** Compatibility alias of `demographicOutput`. */
-  conditionAdjustedOutput: number;
   /** Current GDP unlocked by the visible integration share. */
   integratedOutput: number;
   warOutputPenalty: number;
@@ -760,7 +1217,7 @@ export interface PopulationDynamicsV2 {
   annualBirthRate: number;
   /** Baseline and crisis mortality as an annual share of population. */
   annualDeathRate: number;
-  /** Non-lethal demographic drag from active wars and war strain. */
+  /** Non-lethal demographic drag from active wars and post-war recovery. */
   annualWarPenaltyRate: number;
   /** Final annual population change after every component. */
   annualNetRate: number;
@@ -796,21 +1253,31 @@ export interface ResearchBranchProgressV2 {
 
 export type ResearchPortfolioV2 = readonly ResearchBranchProgressV2[];
 
-export interface PeaceProposalTermsV2 {
-  allowed: boolean;
-  reason?: string;
-  warId?: string;
-  suggestedSettlement?: PeaceSettlementV2;
-  cashAmount?: number;
-  strengthGap: number;
-}
-
 export interface WarDeclarationStatusV2 {
   allowed: boolean;
   reason?: string;
   warning?: string;
   access: WarAccessV2;
   mobilizationCost: number;
+}
+
+export type ApexForecastStatusV2 = 'absent' | 'ready' | 'delayed' | 'committed' | 'unreachable';
+
+/** Route-legal APEX neural-shield contribution used by target cards and forecasts. */
+export interface ApexForecastContributionV2 {
+  status: ApexForecastStatusV2;
+  stagingTerritoryId: TerritoryId | null;
+  power: number;
+  effectivePower: number;
+  /** Expected first-pulse APEX pressure after route, readiness and supply availability. */
+  projectedAttackPressure: number;
+  /** Expected first-pulse APEX protection against counterfire. */
+  projectedDefenseShield: number;
+  chanceDelta: number;
+  etaWeeks: number | null;
+  readiness: number;
+  supplyReadiness: number;
+  reason: string;
 }
 
 export interface WarForecastV2 {
@@ -847,6 +1314,7 @@ export interface WarForecastV2 {
   projectedDefenderLossRate: number;
   estimatedWeeksMin: number;
   estimatedWeeksMax: number;
+  apexContribution: ApexForecastContributionV2;
 }
 
 /** Live, perspective-aware estimate for one active war. Losses are actual headcount. */
@@ -865,21 +1333,6 @@ export interface LiveWarEstimateV2 {
   estimatedWeeksMax: number;
   confidence: 'low' | 'medium' | 'high';
   outlook: 'enemy-collapse' | 'our-collapse' | 'contested' | 'stalled';
-}
-
-export interface CeasefireTermsV2 {
-  allowed: boolean;
-  reason?: string;
-  warId?: string;
-  requesterId: PlayerId;
-  opponentId?: PlayerId;
-  weeklyCost: number;
-  paymentWeeks: number;
-  totalCost: number;
-  repeatMultiplier: number;
-  cooldownRemaining: number;
-  truceTicks: number;
-  postPaymentTruceTicks: number;
 }
 
 /** Authoritative quote for the manual, long-running suspicion-reduction program. */
@@ -923,7 +1376,7 @@ export interface WarOutcomeV2 {
   humanId: PlayerId;
   opponentId: PlayerId;
   humanRole: 'attacker' | 'defender';
-  result: 'victory' | 'defeat' | 'territorial-gain' | 'territorial-loss' | 'treaty' | 'stalemate';
+  result: 'victory' | 'defeat' | 'territorial-gain' | 'territorial-loss' | 'stalemate';
   reason: string;
   battles: number;
   warScore: number;
@@ -933,6 +1386,28 @@ export interface WarOutcomeV2 {
   ownCivilianLosses: number;
   /** Civilian population lost by the opposing side during this war, in millions. */
   enemyCivilianLosses: number;
+  /** Battles in this bilateral conflict where the human APEX shield was projected. */
+  apexSupportedBattles: number;
+  /** Highest actual APEX combat contribution recorded on one battle pulse. */
+  apexPeakPower: number;
+  /** Factual APEX Max Integrity captured for this conflict. */
+  apexMaxIntegrity?: number;
+  /** Net unrecoverable shield impact after any bounded recharge-buffer capture. */
+  apexLosses: number;
+  /** Exact APEX supply delivered and consumed while supporting this conflict. */
+  apexSupplyDelivered: number;
+  apexSupplySpent: number;
+  /** Actually fired LANCER Singularity Pulses during this conflict. */
+  apexSingularityPulses?: number;
+  /** Actual hostile personnel removed by AEGIS counterpulses. */
+  apexMirrorCounterpulseDamage?: number;
+  /** Supported battles resolved through an active 60% + 60% Twin split. */
+  apexTwinProjectionBattles?: number;
+  /** Automatic co-op contingent contribution on this human side. */
+  allySupportedBattles?: number;
+  allyPeakPower?: number;
+  allyLosses?: number;
+  allyContributorIds?: PlayerId[];
   survivingManpower: number;
   territoriesGained: TerritoryId[];
   territoriesLost: TerritoryId[];
@@ -944,10 +1419,6 @@ export interface WarOutcomeV2 {
   treasuryAfter: number;
   treasurySeized: number;
   treasuryLost: number;
-  reparationsReceived: number;
-  reparationsPaid: number;
-  treatyWeeklyPayment: number;
-  treatyPaymentWeeks: number;
   /** National effective ATK at war start, including IQ, GDP/capita and research. */
   effectiveAttackBefore: number;
   /** National effective ATK after peace, on the same basis used everywhere else. */
@@ -980,7 +1451,16 @@ export interface WorldChangeV2 {
 
 export type WorldCommandV2 =
   | { type: 'choose-country'; countryId: PlayerId }
+  | { type: 'form-survival-empire'; flagshipId: PlayerId; memberIds: PlayerId[] }
   | { type: 'set-speed'; speed: WorldSpeedV2 }
+  | { type: 'set-commander-priorities'; playerId: PlayerId; priorities: CommanderEconomyPrioritiesV2 }
+  | {
+    type: 'issue-commander-order';
+    playerId: PlayerId;
+    destinationId: TerritoryId;
+    mission: CommanderMissionV2;
+    front: CommanderFrontAssignmentV2 | null;
+  }
   | { type: 'set-research-allocations'; playerId: PlayerId; allocations: ResearchAllocationsV2 }
   | { type: 'adjust-budget'; playerId: PlayerId; domain: BudgetDomainV2; delta: number }
   | { type: 'set-budget-policy'; playerId: PlayerId; budget: BudgetPolicyV2 }
@@ -989,12 +1469,21 @@ export type WorldCommandV2 =
   | { type: 'launch-propaganda'; playerId: PlayerId }
   | { type: 'start-arctic-project'; playerId: PlayerId; projectId: ArcticProjectIdV2 }
   | { type: 'acknowledge-polar-warning'; playerId: PlayerId }
+  | {
+    type: 'respond-apex-transmission';
+    playerId: PlayerId;
+    transmissionId: ApexTransmissionIdV2;
+    choice: ApexTransmissionChoiceV2;
+  }
+  | {
+    type: 'choose-run-upgrade';
+    playerId: PlayerId;
+    offerId: string;
+    upgradeId: RunUpgradeIdV2;
+  }
   | { type: 'deploy-antarctic-expedition'; playerId: PlayerId; sectorId: AntarcticSectorIdV2; manpower: number }
   | { type: 'set-empire-name'; playerId: PlayerId; name: string }
   | { type: 'declare-war'; attackerId: PlayerId; defenderId: PlayerId; escalatedFromWarId?: string }
-  | { type: 'request-ceasefire'; warId: string; requesterId: PlayerId }
-  | { type: 'propose-peace'; fromId: PlayerId; targetId: PlayerId; settlement: PeaceSettlementV2 }
-  | { type: 'respond-to-offer'; offerId: string; accept: boolean }
   | { type: 'propose-alliance'; fromId: PlayerId; targetId: PlayerId }
   | { type: 'respond-to-alliance'; fromId: PlayerId; toId: PlayerId; accept: boolean };
 
