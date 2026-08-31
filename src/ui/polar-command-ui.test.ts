@@ -22,7 +22,7 @@ describe('polar command UI', () => {
     expect(dock.match(/data-panel=/g)).toHaveLength(5);
     expect(dock).toContain('data-panel="war"');
     expect(dock).toContain('data-panel="commander"');
-    expect(dock).toContain('<b>APEX</b>');
+    expect(dock).toContain('<b>EONSCAR</b>');
     expect(dock).toContain('data-panel="nation"');
     expect(dock).toContain('data-panel="research"');
     expect(dock).toContain('data-panel="economy"');
@@ -77,12 +77,12 @@ describe('polar command UI', () => {
     expect(completed).not.toContain('.map((project');
   });
 
-  it('uses the single APEX transmission overlay and no legacy polar warning', () => {
+  it('uses the single EONSCAR transmission overlay and no legacy polar warning', () => {
     expect(worldUiSource).not.toContain('renderPolarWarning');
     expect(worldUiSource).not.toContain('data-action="acknowledge-polar-warning"');
     expect(worldUiSource).not.toContain('polar-warning-backdrop');
     expect(worldUiSource).toContain('SECURE ALLIED CHANNEL');
-    expect(worldUiSource).toContain('APEX SIGNAL ANALYSIS · STAGE');
+    expect(worldUiSource).toContain('EONSCAR SIGNAL ANALYSIS · STAGE');
     expect(worldUiSource).toContain('data-polar-region="antarctica"');
   });
 

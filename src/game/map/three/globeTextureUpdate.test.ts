@@ -279,7 +279,7 @@ describe('globe political texture update cache', () => {
     expect(globeTextureSource).toContain('this.realmExpansionRedrawBatch.cancel();');
   });
 
-  it('keeps transient war, APEX-route and detected-logistics visibility out of the political atlas', () => {
+  it('keeps transient war, EONSCAR-route and detected-logistics visibility out of the political atlas', () => {
     const warCase = textureEngine();
     const countryId = COUNTRIES[0]!.id;
     const remoteId = COUNTRIES[1]!.id;

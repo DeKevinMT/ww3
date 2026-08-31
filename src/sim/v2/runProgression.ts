@@ -153,7 +153,7 @@ export function chooseRunUpgradeV2(
 ): CommandResultV2 {
   return {
     accepted: false,
-    reason: 'Timeline adaptation cards were retired; use APEX talents and nation mastery.',
+    reason: 'Timeline adaptation cards were retired; use EONSCAR talents and nation mastery.',
   };
 }
 

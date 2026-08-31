@@ -286,7 +286,7 @@ describe('Greenland to Africa post-conquest replenishment', () => {
     expect(result.recruited).toBeGreaterThan(0);
   });
 
-  it('lets APEX improve the same bounded replenishment loop without changing the route', () => {
+  it('lets EONSCAR improve the same bounded replenishment loop without changing the route', () => {
     const withApex = conqueredGreenlandBeachhead();
     prepareLowStaffedBeachhead(withApex);
     const neutralSupport = structuredClone(withApex);

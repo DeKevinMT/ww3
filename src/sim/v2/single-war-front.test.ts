@@ -99,7 +99,7 @@ function multipleBorderState(seed = 91_001): { state: WorldStateV2; war: WarStat
 }
 
 describe('one bilateral war is one canonical front', () => {
-  it('keeps the declaring attacker and APEX-facing assault on the first pulse', () => {
+  it('keeps the declaring attacker and EONSCAR-facing assault on the first pulse', () => {
     const state = createWorldStateV2(91_000);
     state.wars = [];
     enterPostBlackoutCampaignForTestV2(state);

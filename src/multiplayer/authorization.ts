@@ -48,7 +48,7 @@ export function authorizeMultiplayerCommandV2(
       return command.playerId === seatCountryId
         ? allowed() : rejected('You can only manage your own country.');
     case 'choose-run-upgrade':
-      return rejected('Timeline adaptation cards were retired; use APEX talents and nation mastery.');
+      return rejected('Timeline adaptation cards were retired; use EONSCAR talents and nation mastery.');
     case 'declare-war':
       if (command.escalatedFromWarId !== undefined) {
         return rejected('Coalition escalation is reserved for the world AI.');

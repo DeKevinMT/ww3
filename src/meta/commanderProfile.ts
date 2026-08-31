@@ -468,7 +468,7 @@ export function commanderDoctrineRequirementMetV1(
 export const COMMANDER_TALENTS_V1: readonly CommanderTalentDefinitionV1[] = [
   {
     id: 'science-corps', branch: 'offensive', tier: 1, label: 'Forward Shield',
-    description: 'Makes APEX spend less Energy while shielding an attacking army.',
+    description: 'Makes EONSCAR spend less Energy while shielding an attacking army.',
     perRank: '+0.40% attack-side Energy efficiency per effective rank.',
     prerequisites: [], outsideBranchPoints: 0,
     milestones: [
@@ -480,7 +480,7 @@ export const COMMANDER_TALENTS_V1: readonly CommanderTalentDefinitionV1[] = [
   },
   {
     id: 'treasury-reserve', branch: 'offensive', tier: 2, label: 'Front Projection',
-    description: 'Preserves attack-side shield efficiency when APEX covers several fronts.',
+    description: 'Preserves attack-side shield efficiency when EONSCAR covers several fronts.',
     perRank: '+0.35% of otherwise-lost multi-front shield efficiency retained per effective rank.',
     prerequisites: [{ talentId: 'science-corps', rank: 3 }], outsideBranchPoints: 2,
     milestones: [
@@ -493,7 +493,7 @@ export const COMMANDER_TALENTS_V1: readonly CommanderTalentDefinitionV1[] = [
   {
     id: 'elite-vanguard', branch: 'offensive', tier: 3, label: 'Shield Charge',
     description: 'Builds attack-side Energy efficiency across consecutive supported attacks, then unlocks Overdrive.',
-    perRank: '+0.50% attack-side Energy efficiency per stored charge and effective rank. APEX stores up to two charges.',
+    perRank: '+0.50% attack-side Energy efficiency per stored charge and effective rank. EONSCAR stores up to two charges.',
     prerequisites: [{ talentId: 'treasury-reserve', rank: 3 }], outsideBranchPoints: 4,
     milestones: [
       { rank: 5, label: 'Overdrive', description: '+0.93% efficiency per charge · unlock: every third supported attack uses half Energy.' },
@@ -504,7 +504,7 @@ export const COMMANDER_TALENTS_V1: readonly CommanderTalentDefinitionV1[] = [
   },
   {
     id: 'volunteer-brigade', branch: 'defensive', tier: 1, label: 'Energy Efficiency',
-    description: 'Makes every point of APEX Energy stop more incoming damage.',
+    description: 'Makes every point of EONSCAR Energy stop more incoming damage.',
     perRank: '+0.50% damage blocked per Energy per effective rank. The 20% Max Energy hit limit stays unchanged.',
     prerequisites: [], outsideBranchPoints: 0,
     milestones: [
@@ -528,7 +528,7 @@ export const COMMANDER_TALENTS_V1: readonly CommanderTalentDefinitionV1[] = [
   },
   {
     id: 'doctrine-command', branch: 'defensive', tier: 3, label: 'Adaptive Shield',
-    description: 'Makes APEX spend less Energy while shielding a defending army.',
+    description: 'Makes EONSCAR spend less Energy while shielding a defending army.',
     perRank: '+1% defensive Energy efficiency per effective rank.',
     prerequisites: [{ talentId: 'civil-defense', rank: 3 }], outsideBranchPoints: 4,
     milestones: [
@@ -576,7 +576,7 @@ export const COMMANDER_TALENTS_V1: readonly CommanderTalentDefinitionV1[] = [
   },
   {
     id: 'mobile-logistics', branch: 'military-command', tier: 1, label: 'Army Attack',
-    description: 'Raises national Army Attack while APEX is online.',
+    description: 'Raises national Army Attack while EONSCAR is online.',
     perRank: '+0.55% Army Attack per effective rank. Shared ceiling: +35%.',
     prerequisites: [], outsideBranchPoints: 0,
     milestones: [
@@ -588,7 +588,7 @@ export const COMMANDER_TALENTS_V1: readonly CommanderTalentDefinitionV1[] = [
   },
   {
     id: 'combat-recovery', branch: 'military-command', tier: 2, label: 'Army Defense',
-    description: 'Raises national Army Defense while APEX is online.',
+    description: 'Raises national Army Defense while EONSCAR is online.',
     perRank: '+0.40% Army Defense per effective rank. Shared ceiling: +35%.',
     prerequisites: [{ talentId: 'mobile-logistics', rank: 3 }], outsideBranchPoints: 2,
     milestones: [
@@ -909,7 +909,7 @@ export function commanderTalentAllocationQuoteV1(
   const requiredLevel = commanderTalentRankLevelRequirementV1(targetRank);
   if (!definition) {
     return {
-      talentId, targetRank, requiredLevel, available: false, reason: 'Unknown APEX shield node.',
+      talentId, targetRank, requiredLevel, available: false, reason: 'Unknown EONSCAR shield node.',
     };
   }
   // Existing accounts may already own ranks under the legacy flat tree. Those
@@ -979,7 +979,7 @@ export function commanderTalentAllocationQuoteV1(
       targetRank,
       requiredLevel,
       available: false,
-      reason: `Rank ${targetRank} unlocks at APEX level ${requiredLevel}.`,
+      reason: `Rank ${targetRank} unlocks at EONSCAR level ${requiredLevel}.`,
     };
   }
   if (commanderTalentPointsAvailableV1(profile) < 1) {
@@ -988,7 +988,7 @@ export function commanderTalentAllocationQuoteV1(
       targetRank,
       requiredLevel,
       available: false,
-      reason: 'Earn another APEX level for a shield point.',
+      reason: 'Earn another EONSCAR level for a shield point.',
     };
   }
   return { talentId, targetRank, requiredLevel, available: true };
@@ -1188,8 +1188,8 @@ export function createCommanderProfileV1(
     schemaVersion: COMMANDER_PROFILE_SCHEMA_VERSION,
     revision: 1,
     commanderId,
-    displayName: 'APEX',
-    empireName: 'Frontier Alliance',
+    displayName: 'COMMANDER',
+    empireName: 'Eonscar Coalition',
     empireFlag: { kind: 'country', countryId: STARTER_COUNTRY_ID },
     commandCredits: STARTING_COMMAND_CREDITS_V1,
     commanderXp: 0,
@@ -1408,6 +1408,8 @@ export function normalizeCommanderProfileV1(input: unknown, now = Date.now()): C
   const normalizedDisplayName = typeof source.displayName === 'string'
     ? source.displayName.trim().slice(0, 28)
     : '';
+  const usesLegacyDefaultIdentity = ['commander', 'apex', 'eonscar']
+    .includes(normalizedDisplayName.toLocaleLowerCase('en-US'));
   const completedCampaigns = Math.floor(finiteNonNegative(source.completedCampaigns));
   const empireFlagSource = source.empireFlag;
   const empireFlag: EmpireFlagIdentityV1 = empireFlagSource
@@ -1457,14 +1459,13 @@ export function normalizeCommanderProfileV1(input: unknown, now = Date.now()): C
     revision: Math.max(1, Math.floor(finiteNonNegative(source.revision, 1))),
     commanderId: typeof source.commanderId === 'string' && source.commanderId.length > 0
       ? source.commanderId : createCommanderProfileV1(now).commanderId,
-    displayName: normalizedDisplayName === 'Commander'
-      ? 'APEX' : normalizedDisplayName || 'APEX',
+    displayName: usesLegacyDefaultIdentity ? 'COMMANDER' : normalizedDisplayName || 'COMMANDER',
     empireName: typeof source.empireName === 'string'
       && /^[\p{L}\p{N}][\p{L}\p{N} .,'’&-]{2,35}$/u.test(
         source.empireName.trim().replace(/\s+/g, ' '),
       )
       ? source.empireName.trim().replace(/\s+/g, ' ')
-      : 'Frontier Alliance',
+      : 'Eonscar Coalition',
     empireFlag,
     commandCredits: hasLiveCreditLedger
       ? sourceCreditBalance : STARTING_COMMAND_CREDITS_V1,
@@ -2071,7 +2072,7 @@ export function allocateCommanderTalentV1(
   now = Date.now(),
 ): ProgressionActionResultV1 {
   if (!COMMANDER_TALENT_IDS_V1.includes(talentId)) {
-    return { accepted: false, profile, reason: 'Unknown APEX shield node.' };
+    return { accepted: false, profile, reason: 'Unknown EONSCAR shield node.' };
   }
   const talents = normalizeCommanderTalents(profile.commanderTalents, profile.commanderLevel);
   const quote = commanderTalentAllocationQuoteV1(profile, talentId);
@@ -2099,7 +2100,7 @@ export function selectCommanderDoctrineV1(
   now = Date.now(),
 ): ProgressionActionResultV1 {
   if (!isCommanderDoctrineV1(doctrine)) {
-    return { accepted: false, profile, reason: 'Unknown APEX doctrine.' };
+    return { accepted: false, profile, reason: 'Unknown EONSCAR doctrine.' };
   }
   const definition = COMMANDER_DOCTRINES_V1.find((entry) => entry.id === doctrine)!;
   const talents = normalizeCommanderTalents(profile.commanderTalents, profile.commanderLevel);
@@ -2111,7 +2112,7 @@ export function selectCommanderDoctrineV1(
     };
   }
   if (profile.activeDoctrine === doctrine) {
-    return { accepted: false, profile, reason: 'That APEX doctrine is already active.' };
+    return { accepted: false, profile, reason: 'That EONSCAR doctrine is already active.' };
   }
   return {
     accepted: true,
@@ -2130,7 +2131,7 @@ export function respecCommanderTalentsV1(
   now = Date.now(),
 ): ProgressionActionResultV1 {
   if (commanderTalentPointsSpentV1(profile) === 0) {
-    return { accepted: false, profile, reason: 'No APEX talent points are invested.' };
+    return { accepted: false, profile, reason: 'No EONSCAR talent points are invested.' };
   }
   return {
     accepted: true,
@@ -2398,7 +2399,7 @@ export function renameCommanderV1(
 ): ProgressionActionResultV1 {
   const displayName = requestedName.trim().replace(/\s+/g, ' ').slice(0, 28);
   if (displayName.length < 3) {
-    return { accepted: false, profile, reason: 'APEX name needs at least 3 characters.' };
+    return { accepted: false, profile, reason: 'EONSCAR name needs at least 3 characters.' };
   }
   return {
     accepted: true,

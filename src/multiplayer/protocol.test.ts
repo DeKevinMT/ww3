@@ -89,7 +89,7 @@ describe('multiplayer protocol', () => {
     })).toThrow(/nextClientSequence/i);
   });
 
-  it('validates a country, mastery, APEX and doctrine as one exact deployment action', () => {
+  it('validates a country, mastery, EONSCAR and doctrine as one exact deployment action', () => {
     const belgium = nationIdV2('bel');
     const neutral = createNeutralMultiplayerDeploymentSnapshotV1(belgium);
     const deployment = {
@@ -193,7 +193,7 @@ describe('multiplayer protocol', () => {
     expect(() => validateProtocolMessage(command)).toThrow(/retired/i);
   });
 
-  it('round-trips only canonical APEX narrative responses', () => {
+  it('round-trips only canonical EONSCAR narrative responses', () => {
     const command = {
       type: 'command',
       requestId: 'request_apex_story',
@@ -625,7 +625,7 @@ describe('multiplayer protocol', () => {
     expect(code).toMatch(/^FCMP1\.[A-Za-z0-9_-]+$/);
     expect(decodeSignalCode(`  ${code}  `)).toEqual(signal);
     expect(() => assertSignalCompatibility(signal, 'different-rules')).toThrow(/rules do not match/i);
-    expect(() => decodeSignalCode('not-a-direct-code')).toThrow(/not an APEX: Reclamation/i);
+    expect(() => decodeSignalCode('not-a-direct-code')).toThrow(/not an EONSCAR Direct Connect/i);
   });
 
   it('round-trips the matching complete answer and rejects cross-room use', () => {

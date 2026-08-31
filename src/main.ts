@@ -60,6 +60,12 @@ import {
   multiplayerDeploymentsFromLobby,
   multiplayerSeatsFromLobby,
 } from './multiplayer/orchestration';
+import {
+  CAMPAIGN_SINGLE_PLAYER_REASON_V2,
+  DEFAULT_MULTIPLAYER_GAME_MODE_V2,
+  isMultiplayerGameModeV2,
+  type MultiplayerGameModeV2,
+} from './multiplayer/modes';
 import type { PlayerId } from './sim/v2/types';
 import { WorldEngineV2 } from './sim/v2/WorldEngineV2';
 import { synchronizeArmyCapacityV2 } from './sim/v2/capacity';
@@ -97,7 +103,7 @@ import {
   type LoadingTipAudience,
 } from './ui/loadingTips';
 import { IntroOpeningMetricsCacheV2, WorldUIV2 } from './ui/WorldUIV2';
-import './ui/ApexReclamationTheme.css';
+import './ui/EonscarTheme.css';
 
 const mapErrors = validateMap();
 if (mapErrors.length > 0) throw new Error(`Invalid map:\n${mapErrors.join('\n')}`);
@@ -230,7 +236,7 @@ const gameVersionBadge = document.createElement('aside');
 const compactGameVersion = V2_RULES_VERSION.match(/v\d+(?:\.\d+)*/i)?.[0] ?? V2_RULES_VERSION;
 gameVersionBadge.className = 'game-version-badge';
 gameVersionBadge.textContent = compactGameVersion.toUpperCase();
-gameVersionBadge.setAttribute('aria-label', 'APEX: Reclamation ' + compactGameVersion);
+gameVersionBadge.setAttribute('aria-label', 'EONSCAR ' + compactGameVersion);
 document.body.append(gameVersionBadge);
 const worldMapRenderer = createWorldMapRenderer();
 let startupLoaderState: 'idle' | 'active' | 'complete' = startupLoader?.isConnected
@@ -239,6 +245,7 @@ let startupLoaderFallbackTimer: number | undefined;
 let startupLoaderShownAt = performance.now();
 const BOOT_LOADER_MIN_VISIBLE_MS = 450;
 const STARTUP_LOADER_MIN_VISIBLE_MS = 2_800;
+// Keep the legacy key readable so returning players retain their tip history.
 const LAST_LOADING_TIP_STORAGE_KEY = 'frontier-command:last-loading-tip:v1';
 let currentLoadingTipId: string | undefined;
 
@@ -295,7 +302,7 @@ function showDeploymentLoader(countryId: PlayerId, scenario: ScenarioConfigV2): 
   showStartupLoader();
 }
 
-function setDeploymentLoaderStage(stage: 'map' | 'apex'): void {
+function setDeploymentLoaderStage(stage: 'map' | 'eonscar'): void {
   if (startupLoader?.dataset.loaderVariant === 'deployment') {
     startupLoader.dataset.loaderStage = stage;
   }
@@ -328,7 +335,7 @@ async function dismissStartupLoaderAfterMapFrame(): Promise<void> {
     // that intermediate map underneath the loader.
     await renderer.waitForMapReady();
     if (startupLoaderState !== 'active') return;
-    setDeploymentLoaderStage('apex');
+    setDeploymentLoaderStage('eonscar');
     // Keep the cover up long enough for the opening camera flight and label
     // collision pass to settle, then request a fresh final frame. This avoids
     // revealing a globe that still visibly recentres itself.
@@ -731,7 +738,7 @@ async function beginStoredCampaign(engine: WorldEngineV2, countryId: PlayerId): 
     resolveCommanderForceInitializationV1(loadout),
   );
   if (!commanderInitialized.accepted) {
-    console.error('The APEX neural shield could not be initialized.', commanderInitialized.reason);
+    console.error('The EONSCAR neural shield could not be initialized.', commanderInitialized.reason);
     return false;
   }
   const rosterCountryIds = scenario.mode === 'survival'
@@ -1113,6 +1120,9 @@ function attachGuestStatus(
 }
 
 async function launchHostGame(launch: MultiplayerHostLaunch): Promise<void> {
+  if (!isMultiplayerGameModeV2(launch.scenario.mode)) {
+    throw new Error(CAMPAIGN_SINGLE_PLAYER_REASON_V2);
+  }
   const seats = multiplayerSeatsFromLobby(launch.lobby);
   const deployments = multiplayerDeploymentsFromLobby(launch.lobby);
   const controllerNames = multiplayerControllerNamesFromLobby(launch.lobby);
@@ -1178,6 +1188,9 @@ async function launchHostGame(launch: MultiplayerHostLaunch): Promise<void> {
 }
 
 async function launchGuestGame(launch: MultiplayerGuestLaunch): Promise<void> {
+  if (!isMultiplayerGameModeV2(launch.scenario.mode)) {
+    throw new Error(CAMPAIGN_SINGLE_PLAYER_REASON_V2);
+  }
   const seats = multiplayerSeatsFromLobby(launch.lobby);
   const deployments = multiplayerDeploymentsFromLobby(launch.lobby);
   const controllerNames = multiplayerControllerNamesFromLobby(launch.lobby);
@@ -1274,7 +1287,9 @@ async function launchGuestGame(launch: MultiplayerGuestLaunch): Promise<void> {
 function resumeStoredGuestMatch(): void {
   if (activeGuestReconnect || activeSession || activeLobby) return;
   const stored = loadGuestReconnectSessionV1(window.sessionStorage);
-  if (!stored || stored.rulesVersion !== V2_RULES_VERSION) {
+  if (!stored
+    || stored.rulesVersion !== V2_RULES_VERSION
+    || !isMultiplayerGameModeV2(stored.scenario.mode)) {
     clearActiveGuestReconnectSession();
     showCommanderMenu();
     return;
@@ -1368,14 +1383,16 @@ function resumeStoredGuestMatch(): void {
 
 function openMultiplayerLobby(
   preferredCountryId?: PlayerId,
-  requestedMode?: GameModeV2,
+  requestedMode?: MultiplayerGameModeV2,
 ): void {
   if (activeLobby || activeSession) return;
   const liveEngine = activeEngine;
   const pausedEngine = liveEngine ?? (() => {
     const scenario = resolveScenarioV2(requestedMode
       ? { mode: requestedMode, seed: randomSeed() }
-      : activeScenario);
+      : isMultiplayerGameModeV2(activeScenario.mode)
+        ? activeScenario
+        : { mode: DEFAULT_MULTIPLAYER_GAME_MODE_V2, seed: randomSeed() });
     return new WorldEngineV2(scenario.config.seed, scenario.content);
   })();
   const previousSpeed = liveEngine?.state.speed;
@@ -1433,7 +1450,9 @@ async function bootstrapCommanderExperience(): Promise<void> {
     commanderProfile = await commanderDatabase.saveProfile(commanderProfile);
   }
   activeGuestReconnectSession = loadGuestReconnectSessionV1(window.sessionStorage);
-  if (activeGuestReconnectSession?.rulesVersion !== V2_RULES_VERSION) {
+  if (activeGuestReconnectSession
+    && (activeGuestReconnectSession.rulesVersion !== V2_RULES_VERSION
+      || !isMultiplayerGameModeV2(activeGuestReconnectSession.scenario.mode))) {
     clearActiveGuestReconnectSession();
   }
   showCommanderMenu(true);

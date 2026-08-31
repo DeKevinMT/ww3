@@ -37,7 +37,7 @@ function conqueredHumanState(seed: number) {
 }
 
 describe('human territorial defeat', () => {
-  it('ends the timeline when the last land is lost even while APEX still exists', () => {
+  it('ends the timeline when the last land is lost even while EONSCAR still exists', () => {
     const { state, humanId, victorId } = conqueredHumanState(290_001);
     expect(state.commanderForces[humanId]).toBeDefined();
     expect(selectHumanEmpireDefeatWinnerV2(state)).toBe(victorId);
@@ -66,7 +66,7 @@ describe('human territorial defeat', () => {
     expect(selectHumanEmpireDefeatWinnerV2(state)).toBeUndefined();
   });
 
-  it('ends a landed empire when APEX is the only military force left', () => {
+  it('ends a landed empire when EONSCAR is the only military force left', () => {
     const state = createWorldStateV2(290_004, WORLD_CONTENT_V2);
     const humanId = state.humanPlayerId;
     expect(initializeCommanderForceV2(

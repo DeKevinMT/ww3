@@ -14,7 +14,7 @@ import { WORLD_CONTENT_V2 } from './content';
 import {
   APEX_FIRST_AI_WAR_OBSERVATION_TICKS_V2,
   APEX_FIRST_TRANSMISSION_TICK_V2,
-  APEX_TRANSMISSION_MIN_SPACING_TICKS_V2,
+  APEX_TUTORIAL_TRANSMISSION_MIN_SPACING_TICKS_V2,
   processApexNarrativeV2,
   respondToApexTransmissionV2,
 } from './apexNarrative';
@@ -69,7 +69,7 @@ function finishSignalTriangulation(seed: number) {
   return { state, playerId };
 }
 
-describe('post-blackout APEX first-strike guidance', () => {
+describe('post-blackout EONSCAR first-strike guidance', () => {
   it('runs the authoritative beginner chronology in order without message bursts', () => {
     const engine = new WorldEngineV2(84_100);
     const playerId = engine.state.humanPlayerId;
@@ -124,8 +124,9 @@ describe('post-blackout APEX first-strike guidance', () => {
       .toHaveLength(1);
     const guidance = engine.apexTransmissions(playerId)
       .find((item) => item.id === 'campaign-first-strike-guidance')!;
-    expect(guidance.sentTick).toBe(pattern!.sentTick + APEX_TRANSMISSION_MIN_SPACING_TICKS_V2);
-    expect(guidance.sentTick).toBe(31);
+    expect(guidance.sentTick)
+      .toBe(pattern!.sentTick + APEX_TUTORIAL_TRANSMISSION_MIN_SPACING_TICKS_V2);
+    expect(guidance.sentTick).toBe(37);
     expect(engine.respondApexTransmission(
       playerId, 'campaign-first-strike-guidance', 'acknowledge',
     )).toEqual({ accepted: true });
@@ -159,7 +160,7 @@ describe('post-blackout APEX first-strike guidance', () => {
     expect(respondToApexTransmissionV2(
       state, playerId, 'campaign-communications-blackout', 'acknowledge',
     )).toEqual({ accepted: true });
-    state.tick += APEX_TRANSMISSION_MIN_SPACING_TICKS_V2;
+    state.tick += APEX_TUTORIAL_TRANSMISSION_MIN_SPACING_TICKS_V2;
     startManipulatedWar(state);
     const firstWarTick = state.tick;
     expect(processApexNarrativeV2(state, WORLD_CONTENT_V2)).toBe(0);
@@ -183,7 +184,7 @@ describe('post-blackout APEX first-strike guidance', () => {
     expect(warDeclarationStatusV2(
       state, WORLD_CONTENT_V2, target!.opponentId, playerId,
     )).toMatchObject({ allowed: false, reason: CAMPAIGN_HUMAN_WAR_STORY_LOCK_REASON_V2 });
-    state.tick += APEX_TRANSMISSION_MIN_SPACING_TICKS_V2 - 1;
+    state.tick += APEX_TUTORIAL_TRANSMISSION_MIN_SPACING_TICKS_V2 - 1;
     expect(processCampaignFirstStrikeGuidanceV2(state, WORLD_CONTENT_V2)).toBe(0);
     state.tick += 1;
     expect(processCampaignFirstStrikeGuidanceV2(state, WORLD_CONTENT_V2)).toBe(1);
@@ -254,7 +255,7 @@ describe('post-blackout APEX first-strike guidance', () => {
         blackout.resolvedTick = state.tick;
       }
     }
-    state.tick += APEX_TRANSMISSION_MIN_SPACING_TICKS_V2;
+    state.tick += APEX_TUTORIAL_TRANSMISSION_MIN_SPACING_TICKS_V2;
     processApexNarrativeV2(state, WORLD_CONTENT_V2);
     for (const humanId of state.humanPlayerIds) {
       const blackout = state.polarEndgame.apexNarrative.players[humanId]!.transmissions
@@ -263,7 +264,7 @@ describe('post-blackout APEX first-strike guidance', () => {
       blackout!.choice = 'acknowledge';
       blackout!.resolvedTick = state.tick;
     }
-    state.tick += APEX_TRANSMISSION_MIN_SPACING_TICKS_V2;
+    state.tick += APEX_TUTORIAL_TRANSMISSION_MIN_SPACING_TICKS_V2;
     startManipulatedWar(state);
     state.tick += APEX_FIRST_AI_WAR_OBSERVATION_TICKS_V2;
     expect(processApexNarrativeV2(state, WORLD_CONTENT_V2)).toBe(2);
@@ -272,7 +273,7 @@ describe('post-blackout APEX first-strike guidance', () => {
         state, humanId, 'campaign-ai-defeat-pattern', 'acknowledge',
       )).toEqual({ accepted: true });
     }
-    state.tick += APEX_TRANSMISSION_MIN_SPACING_TICKS_V2;
+    state.tick += APEX_TUTORIAL_TRANSMISSION_MIN_SPACING_TICKS_V2;
     expect(processCampaignFirstStrikeGuidanceV2(state, WORLD_CONTENT_V2)).toBe(2);
     for (const humanId of state.humanPlayerIds) {
       const transmission = state.polarEndgame.apexNarrative.players[humanId]!
@@ -294,7 +295,7 @@ describe('post-blackout APEX first-strike guidance', () => {
     expect(respondToApexTransmissionV2(
       state, playerId, 'campaign-communications-blackout', 'acknowledge',
     )).toEqual({ accepted: true });
-    state.tick += APEX_TRANSMISSION_MIN_SPACING_TICKS_V2;
+    state.tick += APEX_TUTORIAL_TRANSMISSION_MIN_SPACING_TICKS_V2;
     startManipulatedWar(state);
     const warTick = state.tick;
     expect(processApexNarrativeV2(state, WORLD_CONTENT_V2)).toBe(0);
@@ -317,7 +318,7 @@ describe('post-blackout APEX first-strike guidance', () => {
     expect(respondToApexTransmissionV2(
       state, playerId, 'campaign-communications-blackout', 'acknowledge',
     )).toEqual({ accepted: true });
-    state.tick += APEX_TRANSMISSION_MIN_SPACING_TICKS_V2;
+    state.tick += APEX_TUTORIAL_TRANSMISSION_MIN_SPACING_TICKS_V2;
     const conflictTick = state.tick;
     addWorldEventV2(
       state,

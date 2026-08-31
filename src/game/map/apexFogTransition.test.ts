@@ -9,7 +9,7 @@ import {
 import worldMapSceneSource from './WorldMapScene.ts?raw';
 import threeGlobeSceneSource from './three/ThreeGlobeScene.ts?raw';
 
-describe('APEX light relevance veil activation', () => {
+describe('EONSCAR light relevance veil activation', () => {
   it('retires every hold and fade duration', () => {
     expect(APEX_FOG_MESSAGE_HOLD_MS).toBe(0);
     expect(APEX_FOG_FADE_DURATION_MS).toBe(0);

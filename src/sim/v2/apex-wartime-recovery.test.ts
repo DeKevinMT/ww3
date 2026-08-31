@@ -87,7 +87,7 @@ function advanceCommander(state: WorldStateV2, weeks: number): void {
   }
 }
 
-describe('APEX shield-Energy recovery cadence', () => {
+describe('EONSCAR shield-Energy recovery cadence', () => {
   it('freezes low active Energy and Reserve Energy across every simultaneous war', () => {
     const state = createWorldStateV2(92_101, WORLD_CONTENT_V2);
     installDamagedApex(state);

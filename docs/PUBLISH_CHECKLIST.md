@@ -16,7 +16,7 @@
 
 - [ ] Fullscreen recommendation can enter fullscreen or continue windowed; Esc/F11 guidance is visible.
 - [ ] A country can be selected and the map opens centred after the loader.
-- [ ] Topbar Economy, Population, Army readiness, APEX Energy and live war supply render clearly.
+- [ ] Topbar Economy, Population, Army readiness, EONSCAR Energy and live war supply render clearly.
 - [ ] Border rendering has one sharp outline at close zoom and integration borders remain sharp.
 - [ ] North Pole opens sequential research with real bonuses, costs, time and progress.
 - [ ] Attack Review shows compact costs, signed Economy/Population impact, IQ and GDP-per-person fusion.

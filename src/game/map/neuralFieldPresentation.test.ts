@@ -34,7 +34,7 @@ function activationEngine(
   } as unknown as WorldMapEngineContract;
 }
 
-describe('digital APEX/PRIME field presentation', () => {
+describe('digital EONSCAR/PRIME field presentation', () => {
   it('rebuilds dome and route geometry only when their authored placement changes', () => {
     const stationary = {
       id: 'human',
@@ -148,7 +148,7 @@ describe('digital APEX/PRIME field presentation', () => {
     });
   });
 
-  it('presents active APEX strength only as bounded neural-shield Energy', () => {
+  it('presents active EONSCAR strength only as bounded neural-shield Energy', () => {
     const force = (integrity: number, maxIntegrity: number, mission = 'standby') => ({
       mission,
       shield: {
@@ -165,13 +165,13 @@ describe('digital APEX/PRIME field presentation', () => {
       integrity: 1,
       percent: 100,
       visible: true,
-      label: 'APEX 100%',
+      label: 'EONSCAR 100%',
     });
     expect(apexShieldPresentation(force(0.42, 1))).toEqual({
       integrity: 0.42,
       percent: 42,
       visible: true,
-      label: 'APEX 42%',
+      label: 'EONSCAR 42%',
     });
     expect(apexShieldPresentation(force(0, 1))).toMatchObject({
       integrity: 0,
@@ -229,7 +229,7 @@ describe('digital APEX/PRIME field presentation', () => {
     expect(projections.map((entry) => entry.locationId)).toEqual(['sen']);
     expect(projections.map((entry) => entry.combatShare)).toEqual([1]);
     expect(projections.map((entry) => entry.percent)).toEqual([73]);
-    expect(projections.map((entry) => entry.label)).toEqual(['APEX 73% · ◆']);
+    expect(projections.map((entry) => entry.label)).toEqual(['EONSCAR 73% · ◆']);
     expect(projections.every((entry) => entry.split === false)).toBe(true);
     expect(projections.every((entry) => entry.singularityCharged)).toBe(true);
 

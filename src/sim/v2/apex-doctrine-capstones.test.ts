@@ -100,7 +100,7 @@ function war(
   };
 }
 
-describe('APEX doctrine capstones', () => {
+describe('EONSCAR doctrine capstones', () => {
   it('rejects multi-capstone launches, runtime state and authenticated mixed current saves', () => {
     const rejectedState = createWorldStateV2(95_000, WORLD_CONTENT_V2);
     const rejectedPlayerId = rejectedState.humanPlayerId;
@@ -278,7 +278,7 @@ describe('APEX doctrine capstones', () => {
     expect(force.shield.rechargeBuffer).toBeCloseTo(0.00005, 12);
   });
 
-  it('never reflects intercepted damage from the human APEX shield', () => {
+  it('never reflects intercepted damage from the human EONSCAR shield', () => {
     const baseInput = {
       requestedDamage: 0.1,
       nationalManpower: 1,

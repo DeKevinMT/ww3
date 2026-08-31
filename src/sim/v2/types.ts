@@ -1074,7 +1074,7 @@ export interface WeeklyFinanceBreakdownV2 {
   ceasefireIncome: number;
   /** Mandatory weekly administration and reconstruction cost for unfinished integrations. */
   integrationCost: number;
-  /** Weekly state operations: starts at 20% of tax revenue and can fall toward 15% through research. */
+  /** Weekly state operations: starts at 30% of tax revenue and can fall toward 25% through research. */
   baseOperatingCost: number;
   /** Principal newly borrowed this week because committed payments exceeded liquidity. */
   newBorrowing: number;

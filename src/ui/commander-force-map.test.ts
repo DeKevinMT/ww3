@@ -42,8 +42,8 @@ function apexInitialization(options: {
   };
 }
 
-describe('APEX neural-dome map snapshot', () => {
-  it('projects Energy without merging APEX into a territory army', () => {
+describe('EONSCAR neural-dome map snapshot', () => {
+  it('projects Energy without merging EONSCAR into a territory army', () => {
     const engine = new WorldEngineV2(81_551);
     const belgium = nationIdV2('bel');
     expect(engine.chooseCountry(belgium)).toEqual({ accepted: true });
@@ -116,7 +116,7 @@ describe('APEX neural-dome map snapshot', () => {
     expect(projected).not.toHaveProperty('army');
   });
 
-  it('projects ROGUE PRIME as a hostile polar sidecar instead of a human APEX entry', () => {
+  it('projects ROGUE PRIME as a hostile polar sidecar instead of a human EONSCAR entry', () => {
     const engine = new WorldEngineV2(81_553);
     const belgium = nationIdV2('bel');
     expect(engine.chooseCountry(belgium)).toEqual({ accepted: true });
@@ -194,7 +194,7 @@ describe('APEX neural-dome map snapshot', () => {
     });
   });
 
-  it('anchors a legacy lost-Greenland save to the surviving empire without adding APEX to its army', () => {
+  it('anchors a legacy lost-Greenland save to the surviving empire without adding EONSCAR to its army', () => {
     const engine = new WorldEngineV2(81_554);
     const greenland = nationIdV2('grl');
     const guineaBissau = nationIdV2('gnb');

@@ -19,6 +19,12 @@ import { createNeutralMultiplayerDeploymentSnapshotV1 } from '../multiplayer/dep
 import { HostLobbyModel } from '../multiplayer/lobbyModel';
 import { MatchmakingClient, matchmakingServiceUrl } from '../multiplayer/matchmakingClient';
 import type { MatchmakingParticipant, MatchmakingServerMessage } from '../multiplayer/matchmakingProtocol';
+import {
+  CAMPAIGN_SINGLE_PLAYER_REASON_V2,
+  DEFAULT_MULTIPLAYER_GAME_MODE_V2,
+  isMultiplayerGameModeV2,
+  type MultiplayerGameModeV2,
+} from '../multiplayer/modes';
 import type {
   LobbyAction,
   LobbyPlayer,
@@ -77,7 +83,7 @@ export interface MultiplayerAccountCountries {
 type LobbyMode = 'menu' | 'matchmaking' | 'host' | 'guest';
 
 /** Public queues are mode-specific; peer handshakes still use V2_RULES_VERSION. */
-export function multiplayerQueueCompatibilityKey(mode: GameModeV2): string {
+export function multiplayerQueueCompatibilityKey(mode: MultiplayerGameModeV2): string {
   return `${V2_RULES_VERSION}:${mode}`;
 }
 
@@ -177,9 +183,12 @@ export class MultiplayerLobby {
     this.countryMasteryLevels = options.countryMasteryLevels;
     this.deploymentSnapshots = options.deploymentSnapshots;
     const initialScenario = normalizeScenarioConfigV2(options.scenarioConfig ?? {
-      mode: 'standard-2026',
+      mode: DEFAULT_MULTIPLAYER_GAME_MODE_V2,
       seed: freshScenarioSeedV2(),
     });
+    if (!isMultiplayerGameModeV2(initialScenario.mode)) {
+      throw new Error(CAMPAIGN_SINGLE_PLAYER_REASON_V2);
+    }
     this.resolvedScenario = resolveScenarioV2(initialScenario);
     this.openingMetrics = new IntroOpeningMetricsCacheV2().read(new WorldEngineV2(
       this.resolvedScenario.config.seed,
@@ -195,7 +204,7 @@ export class MultiplayerLobby {
     this.root.className = 'multiplayer-lobby-layer';
     this.root.setAttribute('role', 'dialog');
     this.root.setAttribute('aria-modal', 'true');
-    this.root.setAttribute('aria-label', 'APEX: Reclamation multiplayer lobby');
+    this.root.setAttribute('aria-label', 'EONSCAR multiplayer lobby');
     this.root.addEventListener('click', this.onClick);
     this.root.addEventListener('input', this.onInput);
     this.root.addEventListener('change', this.onChange);
@@ -350,9 +359,13 @@ export class MultiplayerLobby {
         break;
       }
       case 'start': this.applyLocalAction({ type: 'start' }); break;
-      case 'scenario-standard': this.changeScenario('standard-2026'); break;
+      case 'scenario-survival': this.changeScenario('survival'); break;
       case 'scenario-random': this.changeScenario('random-world'); break;
-      case 'scenario-reroll': this.changeScenario(this.lobby?.scenario.mode ?? 'random-world', true); break;
+      case 'scenario-reroll': {
+        const mode = this.lobby?.scenario.mode ?? 'random-world';
+        if (isMultiplayerGameModeV2(mode)) this.changeScenario(mode, true);
+        break;
+      }
       case 'continent-filter': {
         this.capturePickerScroll();
         this.pickerContinent = target.dataset.continent ?? 'ALL';
@@ -384,6 +397,10 @@ export class MultiplayerLobby {
   private async startMatchmaking(): Promise<void> {
     const name = this.displayName.trim();
     if (!name) return this.setError(undefined, 'Enter your name first.');
+    const mode = this.resolvedScenario.config.mode;
+    if (!isMultiplayerGameModeV2(mode)) {
+      return this.setError(undefined, CAMPAIGN_SINGLE_PLAYER_REASON_V2);
+    }
     const url = matchmakingServiceUrl();
     if (!url) {
       return this.setError(undefined, 'Public matchmaking is not configured yet. You can still use a private room below.');
@@ -400,7 +417,7 @@ export class MultiplayerLobby {
     try {
       this.matchmaker = new MatchmakingClient({
         url,
-        rulesVersion: multiplayerQueueCompatibilityKey(this.resolvedScenario.config.mode),
+        rulesVersion: multiplayerQueueCompatibilityKey(mode),
         displayName: name,
         onOpen: () => {
           this.busy = false;
@@ -693,7 +710,7 @@ export class MultiplayerLobby {
         scenario: { ...this.lobby.scenario },
       })).catch((error) => {
         this.launched = false;
-        this.setError(error, 'The multiplayer campaign could not start.');
+        this.setError(error, 'The multiplayer operation could not start.');
       });
     }
   }
@@ -774,7 +791,7 @@ export class MultiplayerLobby {
         launchLobby.revision,
       );
       if (recovery?.accepted) this.publishLobby();
-      this.setError(error, 'The multiplayer campaign could not start.');
+      this.setError(error, 'The multiplayer operation could not start.');
     }
   }
 
@@ -992,7 +1009,7 @@ export class MultiplayerLobby {
     }
     const connection = isHost ? 'ROOM LEADER' : connectionLabel(this.guest?.state ?? 'connecting').toUpperCase();
     const missionHelp = survival
-      ? 'Human commands keep separate armies, APEX shields and logistics. The Arctic Dawnline remains a full-strength NPC ally; victory and defeat are shared.'
+      ? 'Human commands keep separate armies, EONSCAR shields and logistics. The Arctic Dawnline remains a full-strength NPC ally; victory and defeat are shared.'
       : 'Your countries stay independent; allied territory carries team supply. Victory and defeat are shared, and disconnected seats can rejoin.';
     return `<div class="mp-direct-room"><div class="mp-room__head"><div><div class="panel-kicker">CO-OP TEAM</div><h2>${isHost ? 'Confirm the deployment' : 'Prepare for deployment'}</h2></div><span>${connected}/${survival ? 2 : 8} · ${escapeHtml(connection)}</span></div>${this.renderDeploymentSummary()}<p class="mp-one-line-help">${missionHelp}</p>${this.renderPlayers()}<div class="mp-direct-room__next">${action}${block && local?.ready ? `<small>${escapeHtml(block)}</small>` : ''}</div></div>`;
   }
@@ -1012,13 +1029,13 @@ export class MultiplayerLobby {
 
   private renderGuest(): string {
     if (this.directMatchmaking && this.guest && this.lobby) return this.renderDirectMatchRoom(false);
-    if (!this.guest) return `<div class="mp-setup"><div class="panel-kicker">JOIN A DIRECT GAME</div><h2>Paste your friend’s invite</h2><label class="mp-field"><span>YOUR NAME</span><input id="mp-player-name" maxlength="40" value="${escapeHtml(this.displayName)}" autocomplete="nickname"></label><label class="mp-field"><span>HOST INVITE</span><textarea id="mp-invite-input" placeholder="Paste the long APEX: Reclamation invite code…">${escapeHtml(this.pastedInvite)}</textarea></label><button class="primary-button" data-mp-action="join-room">CREATE ANSWER</button></div>`;
+    if (!this.guest) return `<div class="mp-setup"><div class="panel-kicker">JOIN A DIRECT GAME</div><h2>Paste your friend’s invite</h2><label class="mp-field"><span>YOUR NAME</span><input id="mp-player-name" maxlength="40" value="${escapeHtml(this.displayName)}" autocomplete="nickname"></label><label class="mp-field"><span>HOST INVITE</span><textarea id="mp-invite-input" placeholder="Paste the long EONSCAR invite code…">${escapeHtml(this.pastedInvite)}</textarea></label><button class="primary-button" data-mp-action="join-room">CREATE ANSWER</button></div>`;
     const local = this.localPlayer();
     const survival = this.lobby?.scenario.mode === 'survival';
     const help = survival
-      ? 'You keep your own nation, Army, APEX and logistics beside the host. The Arctic Dawnline remains an NPC ally.'
+      ? 'You keep your own nation, Army, EONSCAR and logistics beside the host. The Arctic Dawnline remains an NPC ally.'
       : 'Your nation stays yours. Teammates cannot fight each other; the outcome is shared.';
-    const rail = `<div class="mp-room__rail"><div class="mp-room__head"><div><div class="panel-kicker">CO-OP GUEST · ${escapeHtml(this.guest.hostName.toUpperCase())}</div><h2>Your team</h2></div><span>${escapeHtml(connectionLabel(this.guest.state).toUpperCase())}</span></div><p class="mp-one-line-help">${help}</p>${this.answerCode ? `<div class="mp-answer-callout"><h3>Send this answer back to the host</h3><p>The connection completes only after the host pastes it.</p><textarea readonly aria-label="Friend answer code">${escapeHtml(this.answerCode)}</textarea><button class="secondary-button" data-mp-action="copy-answer">COPY ANSWER</button></div>` : ''}${this.renderPlayers()}${this.lobby ? `<div class="mp-room__actions"><button class="secondary-button ${local?.ready ? 'is-ready' : ''}" data-mp-action="toggle-ready" ${local?.countryId ? '' : 'disabled'}>${local?.ready ? '✓ READY' : 'MARK READY'}</button><span>Only the host starts the shared campaign.</span></div>` : ''}</div>`;
+    const rail = `<div class="mp-room__rail"><div class="mp-room__head"><div><div class="panel-kicker">CO-OP GUEST · ${escapeHtml(this.guest.hostName.toUpperCase())}</div><h2>Your team</h2></div><span>${escapeHtml(connectionLabel(this.guest.state).toUpperCase())}</span></div><p class="mp-one-line-help">${help}</p>${this.answerCode ? `<div class="mp-answer-callout"><h3>Send this answer back to the host</h3><p>The connection completes only after the host pastes it.</p><textarea readonly aria-label="Friend answer code">${escapeHtml(this.answerCode)}</textarea><button class="secondary-button" data-mp-action="copy-answer">COPY ANSWER</button></div>` : ''}${this.renderPlayers()}${this.lobby ? `<div class="mp-room__actions"><button class="secondary-button ${local?.ready ? 'is-ready' : ''}" data-mp-action="toggle-ready" ${local?.countryId ? '' : 'disabled'}>${local?.ready ? '✓ READY' : 'MARK READY'}</button><span>Only the host starts the shared operation.</span></div>` : ''}</div>`;
     return this.lobby
       ? `<div class="mp-room mp-room--with-picker">${rail}${this.renderNationPicker()}</div>`
       : `<div class="mp-room">${rail}</div>`;
@@ -1041,7 +1058,7 @@ export class MultiplayerLobby {
     if (pickerGrid) pickerGrid.scrollTop = this.pickerGridScrollTop;
   }
 
-  private changeScenario(mode: GameModeV2, reroll = false): void {
+  private changeScenario(mode: MultiplayerGameModeV2, reroll = false): void {
     const current = this.lobby?.scenario ?? this.resolvedScenario.config;
     const scenario = normalizeScenarioConfigV2({
       mode,

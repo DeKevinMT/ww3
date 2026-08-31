@@ -1,4 +1,9 @@
 import type { GameModeV2 } from '../sim/v2/scenarios';
+import eonscarLogoUrl from '../assets/brand/eonscar-logo-transparent.png?url';
+import {
+  isMultiplayerGameModeV2,
+  type MultiplayerGameModeV2,
+} from '../multiplayer/modes';
 import {
   BASE_COMMANDER_FORCE_V1,
   COMMANDER_DOCTRINES_V1,
@@ -81,8 +86,8 @@ export interface CommanderMenuOptionsV1 {
   }>;
   /** A solo run always starts from the nation-first deployment flow. */
   onStartMode: (mode: GameModeV2, countryId: string, replaceExistingCampaign: boolean) => void;
-  /** Multiplayer keeps its own shared country-seat flow outside solo deployment. */
-  onMultiplayerRequested?: (mode: GameModeV2, countryId: string) => void;
+  /** Co-op is a separate Survival/Alternative Universe flow; Campaign is always solo. */
+  onMultiplayerRequested?: (mode: MultiplayerGameModeV2, countryId: string) => void;
   onContinueCampaign: () => void;
   onSurrenderCampaign: () => void;
   onResumeMultiplayer?: () => void;
@@ -128,21 +133,21 @@ const TALENT_BRANCH_PRESENTATION: Readonly<Record<CommanderTalentBranchV1, {
 }>> = {
   offensive: {
     label: 'Assault Shield',
-    kicker: 'APEX FORWARD DEFENCE',
+    kicker: 'EONSCAR FORWARD DEFENCE',
     icon: '△',
     color: '#ff8f67',
     description: 'Spend less Energy protecting attacks, retain efficiency across fronts and charge Overdrive.',
   },
   defensive: {
     label: 'Reactive Matrix',
-    kicker: 'APEX INTERCEPTION',
+    kicker: 'EONSCAR INTERCEPTION',
     icon: '⬡',
     color: '#59dcff',
     description: 'Block more damage per Energy, recover impact charge and strengthen defensive shielding.',
   },
   'shield-core': {
     label: 'Energy Core',
-    kicker: 'APEX ENDURANCE',
+    kicker: 'EONSCAR ENDURANCE',
     icon: '◎',
     color: '#b58cff',
     description: 'Expand Max Energy, recharge speed, Backup Energy and one emergency reboot.',
@@ -649,10 +654,10 @@ export function renderCommanderTalentBranchesV1(
     ? 'AVAILABLE NOW'
     : selectedQuote.unmetPrerequisite || selectedQuote.unmetBreadth ? 'BUILD REQUIRED'
       : profile.commanderLevel < selectedQuote.requiredLevel
-        ? `APEX LEVEL ${selectedQuote.requiredLevel}` : 'NO FREE POINT';
+        ? `EONSCAR LEVEL ${selectedQuote.requiredLevel}` : 'NO FREE POINT';
   const inspector = `<section class="commander-talent-inspector commander-talent-inspector--${selectedTalent.branch}" style="--branch:${selectedBranch.color}">
     <header><div><span>${selectedBranch.label.toUpperCase()} · TIER ${selectedTalent.tier}</span><h2>${escapeHtml(selectedTalent.label)}</h2><p>${escapeHtml(selectedTalent.description)}</p></div><b>${inspectorState}</b></header>
-    <div class="commander-talent-inspector__stats"><article><small>CURRENT · RANK ${selectedRank}</small><strong>${escapeHtml(commanderTalentEffectCopyV1(selectedTalent.id, selectedRank, 'current'))}</strong>${selectedChangesMaxIntegrity ? `<em>APEX TOTAL · ${shieldHp(currentMaxIntegrity)} MAX ENERGY</em>` : ''}</article><article class="is-next"><small>NEXT RANK · ${selectedQuote.targetRank} · LV ${selectedQuote.requiredLevel}</small><strong>${escapeHtml(commanderTalentEffectCopyV1(selectedTalent.id, selectedRank, 'next'))}</strong>${selectedChangesMaxIntegrity ? `<em>TALENT GAIN · +${scaledDelta(nextRankMaxIntegrity - currentMaxIntegrity)} MAX ENERGY</em>` : ''}</article></div>
+    <div class="commander-talent-inspector__stats"><article><small>CURRENT · RANK ${selectedRank}</small><strong>${escapeHtml(commanderTalentEffectCopyV1(selectedTalent.id, selectedRank, 'current'))}</strong>${selectedChangesMaxIntegrity ? `<em>EONSCAR TOTAL · ${shieldHp(currentMaxIntegrity)} MAX ENERGY</em>` : ''}</article><article class="is-next"><small>NEXT RANK · ${selectedQuote.targetRank} · LV ${selectedQuote.requiredLevel}</small><strong>${escapeHtml(commanderTalentEffectCopyV1(selectedTalent.id, selectedRank, 'next'))}</strong>${selectedChangesMaxIntegrity ? `<em>TALENT GAIN · +${scaledDelta(nextRankMaxIntegrity - currentMaxIntegrity)} MAX ENERGY</em>` : ''}</article></div>
     <div class="commander-talent-inspector__path"><span>PATH REQUIREMENT</span><strong>${escapeHtml(pathRequirement)}</strong><small>${escapeHtml(selectedQuote.reason ?? selectedTalent.perRank)}</small></div>
     <ol class="commander-talent-inspector__milestones">${selectedMilestones}</ol>
     <footer><em>${selectedPips}</em><button data-action="allocate-commander-talent" data-talent="${selectedTalent.id}" ${selectedQuote.available ? '' : 'disabled'}>${selectedQuote.available ? 'ADD TALENT POINT · 1 PT' : inspectorState}</button></footer>
@@ -693,8 +698,8 @@ export function renderCommanderTalentBranchesV1(
     </section>`;
   }).join('');
 
-  return `<section class="commander-shield-tree" aria-label="APEX specialization tree with three APEX paths and one Army path">
-    <header class="commander-shield-core"><i aria-hidden="true"><b>AX</b></i><div><span>EMPIRE ENERGY SHIELD</span><strong>APEX CORE</strong><small>ENERGY ${shieldHp(currentMaxIntegrity)} / ${shieldHp(currentMaxIntegrity)} · NEXT LEVEL +${scaledDelta(nextLevelMaxIntegrity - currentMaxIntegrity)} ENERGY</small></div><b>${commanderTalentPointsAvailableV1(profile)} <small>TALENT POINT${commanderTalentPointsAvailableV1(profile) === 1 ? '' : 'S'}</small></b></header>
+  return `<section class="commander-shield-tree" aria-label="EONSCAR specialization tree with three EONSCAR paths and one Army path">
+    <header class="commander-shield-core"><i class="eonscar-sigil-frame" aria-hidden="true"><img src="${eonscarLogoUrl}" alt=""></i><div><span>EMPIRE ENERGY SHIELD</span><strong>EONSCAR CORE</strong><small>ENERGY ${shieldHp(currentMaxIntegrity)} / ${shieldHp(currentMaxIntegrity)} · NEXT LEVEL +${scaledDelta(nextLevelMaxIntegrity - currentMaxIntegrity)} ENERGY</small></div><b>${commanderTalentPointsAvailableV1(profile)} <small>TALENT POINT${commanderTalentPointsAvailableV1(profile) === 1 ? '' : 'S'}</small></b></header>
     ${inspector}
     <div class="commander-talent-lanes">${lanes}</div>
   </section>`;
@@ -954,7 +959,9 @@ export class CommanderMenuV1 {
          }
        }
        if (MODE_PRESENTATION[mode]) {
-         if (this.multiplayerDeployment && this.options.onMultiplayerRequested) {
+         if (this.multiplayerDeployment
+           && isMultiplayerGameModeV2(mode)
+           && this.options.onMultiplayerRequested) {
            this.options.onMultiplayerRequested(mode, countryId);
          } else {
            this.options.onStartMode(mode, countryId, false);
@@ -1098,14 +1105,14 @@ export class CommanderMenuV1 {
     if (action === 'respec-commander-talents') {
       this.consumeProgressionResult(
         this.options.onRespecCommanderTalents(),
-        'All shield points refunded for free. APEX level and XP are unchanged.',
+        'All shield points refunded for free. EONSCAR level and XP are unchanged.',
       );
     }
   };
 
   private consumeProgressionResult(
     result: ProgressionActionResultV1,
-    acceptedMessage = 'APEX profile saved.',
+    acceptedMessage = 'EONSCAR profile saved.',
   ): void {
     this.profile = result.profile;
     this.statusMessage = result.accepted ? acceptedMessage : result.reason ?? 'Action unavailable.';
@@ -1253,10 +1260,10 @@ export class CommanderMenuV1 {
   private renderProfileStrip(linkToTalents = true): string {
     const progress = commanderLevelProgressV1(this.profile);
     const xpLabel = `${compact(progress.xpIntoLevel)} / ${compact(progress.xpForNextLevel)} XP`;
-    const levelContent = `<span><small>APEX LEVEL</small><strong>LV ${progress.level}</strong></span><span class="commander-profile-strip__xp"><b style="--progress:${progress.progressPercent}%"><i></i></b><em>${xpLabel}</em></span>${progress.availableTalentPoints > 0 ? `<mark>${progress.availableTalentPoints} PT${progress.availableTalentPoints === 1 ? '' : 'S'} FREE</mark>` : ''}`;
+    const levelContent = `<span><small>EONSCAR LEVEL</small><strong>LV ${progress.level}</strong></span><span class="commander-profile-strip__xp"><b style="--progress:${progress.progressPercent}%"><i></i></b><em>${xpLabel}</em></span>${progress.availableTalentPoints > 0 ? `<mark>${progress.availableTalentPoints} PT${progress.availableTalentPoints === 1 ? '' : 'S'} FREE</mark>` : ''}`;
     return `<header class="commander-profile-strip">
-      <div class="commander-profile-strip__identity"><i>AX</i><div><small>APEX: RECLAMATION · GLOBAL ACCOUNT</small><strong>${escapeHtml(this.profile.displayName)}</strong></div></div>
-      ${linkToTalents ? `<button class="commander-profile-strip__level" data-action="open-talents" aria-label="Open APEX shield specialization">${levelContent}</button>` : `<div class="commander-profile-strip__level is-static">${levelContent}</div>`}
+      <div class="commander-profile-strip__identity"><i class="eonscar-sigil-frame" aria-hidden="true"><img src="${eonscarLogoUrl}" alt=""></i><div><small>EONSCAR · GLOBAL ACCOUNT</small><strong>${escapeHtml(this.profile.displayName)}</strong></div></div>
+      ${linkToTalents ? `<button class="commander-profile-strip__level" data-action="open-talents" aria-label="Open EONSCAR shield specialization">${levelContent}</button>` : `<div class="commander-profile-strip__level is-static">${levelContent}</div>`}
       <div class="commander-profile-strip__record"><span class="commander-profile-strip__credits"><b>${this.profile.commandCredits}</b> Credits</span><span><b>${this.profile.unlockedCountryIds.length}</b> nations</span><span><b>${this.profile.victories}</b> victories</span><span><b>${this.profile.completedCampaigns}</b> campaigns</span></div>
     </header>`;
   }
@@ -1310,7 +1317,7 @@ export class CommanderMenuV1 {
     const country = this.empireFlagCountry();
     const flag = country
       ? countryFlagHtml(country.id, country.sigil, true)
-      : '<span class="commander-theater__fallback-mark">AX</span>';
+      : `<span class="commander-theater__fallback-mark"><img src="${eonscarLogoUrl}" alt=""></span>`;
     return `<section class="commander-empire-flag" aria-label="Empire flag">
       <button type="button" class="commander-empire-flag__current" data-action="toggle-empire-flag-picker" aria-expanded="${this.empireFlagPickerOpen}" aria-controls="commander-empire-flag-picker"><i class="country-flag">${flag}</i><span><small>EMPIRE FLAG</small><strong>${escapeHtml(country?.name ?? 'Choose a world flag')}</strong></span><b>${this.empireFlagPickerOpen ? 'CLOSE' : 'CHANGE'}</b></button>
       ${this.empireFlagPickerOpen ? `<div class="commander-flag-picker" id="commander-empire-flag-picker"><label><span>FIND A FLAG</span><input id="commander-empire-flag-search" type="search" autocomplete="off" placeholder="Country or region" value="${escapeHtml(this.empireFlagSearch)}"><b data-empire-flag-count>${this.filteredEmpireFlagCountries().length} FLAGS</b></label><div class="commander-flag-picker__grid" data-empire-flag-results data-commander-scroll data-scroll-session="commander:empire-flags">${this.renderEmpireFlagResults()}</div></div>` : ''}
@@ -1325,8 +1332,8 @@ export class CommanderMenuV1 {
   ): string {
     if (this.profile.campaignProgressionTutorialState !== 'ready') return '';
     const talentAction = hasActionableApexTalent
-      ? `SPEND ${apexTalentPoints} APEX POINT${apexTalentPoints === 1 ? '' : 'S'}`
-      : 'OPEN APEX TALENTS';
+      ? `SPEND ${apexTalentPoints} EONSCAR POINT${apexTalentPoints === 1 ? '' : 'S'}`
+      : 'OPEN EONSCAR TALENTS';
     const masteryAction = nationMasteryPoints > 0
       ? `SPEND ${nationMasteryPoints} NATION POINT${nationMasteryPoints === 1 ? '' : 'S'}`
       : 'OPEN NATION ARSENAL';
@@ -1337,7 +1344,7 @@ export class CommanderMenuV1 {
       <section class="commander-progression-tutorial" role="dialog" aria-modal="true" aria-labelledby="commander-progression-tutorial-title">
         <header><span>FIRST CAMPAIGN COMPLETE</span><h2 id="commander-progression-tutorial-title">Spend the power you earned</h2><p>Level gains unlock points, but unspent points give no bonus. Assign them before your next timeline.</p></header>
         <div class="commander-progression-tutorial__choices">
-          <article class="${hasActionableApexTalent ? 'has-unspent' : ''}"><div><span>APEX TALENT POINTS</span><strong>${apexTalentPoints > 0 ? `${apexTalentPoints} UNSPENT` : 'BUILD READY'}</strong><p>Account-wide upgrades for APEX and its support of every national Army.</p></div><button data-action="tutorial-open-talents">${talentAction} →</button></article>
+          <article class="${hasActionableApexTalent ? 'has-unspent' : ''}"><div><span>EONSCAR TALENT POINTS</span><strong>${apexTalentPoints > 0 ? `${apexTalentPoints} UNSPENT` : 'BUILD READY'}</strong><p>Account-wide upgrades for EONSCAR and its support of every national Army.</p></div><button data-action="tutorial-open-talents">${talentAction} →</button></article>
           <article class="${nationMasteryPoints > 0 ? 'has-unspent' : ''}"><div><span>NATION MASTERY POINTS</span><strong>${masteryStatus}</strong><p>Nation-specific Army upgrades. Spend each point in the Nation Arsenal.</p></div><button data-action="tutorial-open-arsenal">${masteryAction} →</button></article>
         </div>
         <aside><b>KEEP THEM SEPARATE</b><span>Credits only pay for Survival entry. Defeating a nation in Campaign unlocks it; neither system uses upgrade points.</span></aside>
@@ -1422,7 +1429,7 @@ export class CommanderMenuV1 {
     const empireFlagCountry = this.empireFlagCountry();
     const theaterFlag = empireFlagCountry
       ? `<i class="country-flag">${countryFlagHtml(empireFlagCountry.id, empireFlagCountry.sigil, true)}</i>`
-      : '<i class="commander-theater__fallback-mark">AX</i>';
+      : `<i class="commander-theater__fallback-mark"><img src="${eonscarLogoUrl}" alt=""></i>`;
     const deploymentRouteHtml = !campaign && !multiplayerResume && flagship
       ? `<section class="commander-theater__deployment-route" aria-label="Deployment route">
           <article class="is-flagship"><small>${flagship.quote.starterEligible ? 'FREE STARTER NATION' : 'YOUR FLAGSHIP'}</small><span><i class="country-flag">${countryFlagHtml(flagship.id, flagship.sigil)}</i><strong>${escapeHtml(flagship.shortName)}</strong></span><b>${compact(flagshipPower)} <em>POWER</em></b></article>
@@ -1433,7 +1440,7 @@ export class CommanderMenuV1 {
     const primaryOperation = multiplayerResume
       ? `<section class="commander-theater__save-choice is-multiplayer-rejoin"><div><span>ACTIVE MULTIPLAYER MATCH</span><strong>${escapeHtml(multiplayerCountry?.shortName ?? multiplayerResume.countryId.toUpperCase())} · ${escapeHtml(multiplayerMode!.label)}</strong><small>Reconnect to the same reserved country and synchronize the host's latest week.</small></div><button class="primary-button" data-action="resume-multiplayer">REJOIN MATCH</button><button class="ghost-button" data-action="discard-multiplayer-resume">LEAVE MATCH</button></section>`
       : campaign && this.activeCampaignChoiceOpen
-      ? `<section class="commander-theater__save-choice"><div><span>END ACTIVE TIMELINE?</span><strong>APEX secures the campaign record.</strong><small>Earned APEX XP and Nation Mastery XP are settled exactly like any completed run.</small></div><button class="primary-button" data-action="continue-campaign">CONTINUE CURRENT</button><button class="secondary-button" data-action="surrender-active-campaign">END &amp; CLAIM PROGRESS</button><button class="ghost-button" data-action="cancel-active-campaign-choice">CANCEL</button></section>`
+      ? `<section class="commander-theater__save-choice"><div><span>END ACTIVE TIMELINE?</span><strong>EONSCAR secures the campaign record.</strong><small>Earned EONSCAR XP and Nation Mastery XP are settled exactly like any completed run.</small></div><button class="primary-button" data-action="continue-campaign">CONTINUE CURRENT</button><button class="secondary-button" data-action="surrender-active-campaign">END &amp; CLAIM PROGRESS</button><button class="ghost-button" data-action="cancel-active-campaign-choice">CANCEL</button></section>`
       : campaign ? `<div class="commander-theater__actions"><button class="primary-button commander-theater__primary" data-action="continue-campaign"><span>RETURN TO THE FRONT</span><strong>CONTINUE CAMPAIGN</strong></button><button class="secondary-button" data-action="open-country-picker">START NEW TIMELINE</button></div>`
       : '<div class="commander-theater__actions"><button class="primary-button commander-theater__primary" data-action="open-country-picker"><span>NATION FIRST · MODE SECOND</span><strong>CHOOSE YOUR NATION →</strong></button></div>';
     const nextProgressionHtml = nextProgression ? `<div class="commander-strategy-strip__progression">
@@ -1442,9 +1449,9 @@ export class CommanderMenuV1 {
       ? '<div class="commander-strategy-strip__progression"><div><small>NEXT PROGRESSION</small><strong>No direct target</strong><span>Expand the empire to open a land border or naval route.</span></div></div>'
       : '<div class="commander-strategy-strip__progression"><div><small>ROSTER STATUS</small><strong>World roster complete</strong><span>Every nation is under your command.</span></div></div>';
     const apexMetaCard = force ? `<section class="commander-meta-card commander-meta-card--apex ${hasActionableTalentPoint ? 'has-unspent' : ''}" data-loadout-country="${summaryCountry?.id ?? ''}" data-army-attack-bonus="${forceAttackBonus}" data-army-defense-bonus="${forceDefenseBonus}">
-      <header><span>APEX TALENTS</span><strong>EMPIRE SHIELD</strong>${hasActionableTalentPoint ? `<mark>${commanderProgress.availableTalentPoints} UNSPENT</mark>` : commanderProgress.availableTalentPoints > 0 ? `<small>${commanderProgress.availableTalentPoints} SAVED · LEVEL GATED</small>` : '<small>ALL POINTS SPENT</small>'}</header>
+      <header><span>EONSCAR TALENTS</span><strong>EMPIRE SHIELD</strong>${hasActionableTalentPoint ? `<mark>${commanderProgress.availableTalentPoints} UNSPENT</mark>` : commanderProgress.availableTalentPoints > 0 ? `<small>${commanderProgress.availableTalentPoints} SAVED · LEVEL GATED</small>` : '<small>ALL POINTS SPENT</small>'}</header>
       <div class="commander-meta-card__stats commander-meta-card__stats--apex"><span class="is-power"><small>ENERGY</small><b>${shieldHp(forceShieldIntegrity)} / ${shieldHp(forceMaxShieldIntegrity)}</b></span><span><small>ARMY ATTACK</small><b>+${talentStatNumber(forceAttackBonus)}%</b></span><span><small>ARMY DEFENSE</small><b>+${talentStatNumber(forceDefenseBonus)}%</b></span><span><small>ENERGY RECHARGE</small><b>+${talentStatNumber(forceRechargeBonus)}%</b></span></div>
-      <button class="commander-meta-card__cta ${hasActionableTalentPoint ? 'is-actionable' : ''}" data-action="open-talents">${hasActionableTalentPoint ? `SPEND ${commanderProgress.availableTalentPoints} APEX TALENT POINT${commanderProgress.availableTalentPoints === 1 ? '' : 'S'}` : 'VIEW APEX TALENTS'} →</button>
+      <button class="commander-meta-card__cta ${hasActionableTalentPoint ? 'is-actionable' : ''}" data-action="open-talents">${hasActionableTalentPoint ? `SPEND ${commanderProgress.availableTalentPoints} EONSCAR TALENT POINT${commanderProgress.availableTalentPoints === 1 ? '' : 'S'}` : 'VIEW EONSCAR TALENTS'} →</button>
     </section>` : '';
     const arsenalMetaCard = `<section class="commander-meta-card commander-meta-card--arsenal ${totalUnspentMasteryPoints > 0 ? 'has-unspent' : ''}">
       <header><span>NATION ARSENAL</span><strong>NATIONAL MASTERY</strong>${totalUnspentMasteryPoints > 0 ? `<mark>${totalUnspentMasteryPoints} UNSPENT</mark>` : '<small>ALL POINTS SPENT</small>'}</header>
@@ -1457,7 +1464,7 @@ export class CommanderMenuV1 {
         <section class="commander-command-stage">
           <article class="commander-theater ${campaign ? 'has-active-operation' : 'is-deployment-ready'}">
             <div class="commander-theater__flag-echo" aria-hidden="true">${theaterFlag}</div>
-            <div class="commander-theater__brand" aria-label="APEX: Reclamation"><span>APEX</span><strong>RECLAMATION</strong></div>
+            <div class="commander-theater__brand" aria-label="EONSCAR — EONSCAR remembers"><img src="${eonscarLogoUrl}" alt=""><span><strong>EONSCAR</strong><small>EONSCAR REMEMBERS.</small></span></div>
             <header class="commander-theater__status">${theaterStatus}</header>
             <div class="commander-theater__deployment-core ${deploymentRouteHtml ? 'has-deployment-route' : ''}">
               <div class="commander-theater__brief">
@@ -1481,12 +1488,12 @@ export class CommanderMenuV1 {
           ${apexMetaCard}
           ${arsenalMetaCard}
           ${this.renderEmpireFlagPicker()}
-          <details class="commander-account-settings"><summary>ACCOUNT IDENTITY &amp; RESET</summary><div><label class="commander-identity-field"><span>APEX NAME</span><div><input id="commander-name" maxlength="28" value="${escapeHtml(this.profile.displayName)}" aria-label="APEX name"><button data-action="rename-commander">SAVE</button></div></label><label class="commander-identity-field"><span>EMPIRE</span><div><input id="empire-account-name" maxlength="36" value="${escapeHtml(this.profile.empireName)}" aria-label="Empire name"><button data-action="rename-empire">SAVE</button></div></label><button class="ghost-button commander-reset-account" data-action="open-reset-account">RESET ACCOUNT &amp; SAVES</button></div></details>
+          <details class="commander-account-settings"><summary>ACCOUNT IDENTITY &amp; RESET</summary><div><label class="commander-identity-field"><span>COMMANDER NAME</span><div><input id="commander-name" maxlength="28" value="${escapeHtml(this.profile.displayName)}" aria-label="Commander name"><button data-action="rename-commander">SAVE</button></div></label><label class="commander-identity-field"><span>EMPIRE</span><div><input id="empire-account-name" maxlength="36" value="${escapeHtml(this.profile.empireName)}" aria-label="Empire name"><button data-action="rename-empire">SAVE</button></div></label><button class="ghost-button commander-reset-account" data-action="open-reset-account">RESET ACCOUNT &amp; SAVES</button></div></details>
         </aside>
         ${this.statusMessage ? `<div class="commander-status">${escapeHtml(this.statusMessage)}</div>` : ''}
       </main>
-      ${this.deleteConfirmationOpen ? `<div class="modal-backdrop"><section class="modal-card commander-delete-modal"><div class="panel-kicker">DELETE ACTIVE SAVE</div><h2>Abandon this campaign?</h2><p>The in-progress campaign will be removed. Your nation unlocks, mastery and APEX progress remain safe.</p><div><button class="ghost-button" data-action="cancel-delete-campaign">CANCEL</button><button class="primary-button" data-action="confirm-delete-campaign">DELETE SAVE</button></div></section></div>` : ''}
-      ${this.resetConfirmationOpen ? `<div class="modal-backdrop"><section class="modal-card commander-delete-modal commander-reset-modal"><div class="panel-kicker">RESET ALL LOCAL PROGRESSION</div><h2>Start over completely?</h2><p>This permanently removes the active timeline, nation unlocks, mastery XP, APEX levels and talents on this device. A new account keeps only ${escapeHtml(starterCountry?.name ?? 'its free starter nation')}.</p><div><button class="ghost-button" data-action="cancel-reset-account">KEEP MY SAVE</button><button class="primary-button" data-action="confirm-reset-account">RESET EVERYTHING</button></div></section></div>` : ''}
+      ${this.deleteConfirmationOpen ? `<div class="modal-backdrop"><section class="modal-card commander-delete-modal"><div class="panel-kicker">DELETE ACTIVE SAVE</div><h2>Abandon this campaign?</h2><p>The in-progress campaign will be removed. Your nation unlocks, mastery and EONSCAR progress remain safe.</p><div><button class="ghost-button" data-action="cancel-delete-campaign">CANCEL</button><button class="primary-button" data-action="confirm-delete-campaign">DELETE SAVE</button></div></section></div>` : ''}
+      ${this.resetConfirmationOpen ? `<div class="modal-backdrop"><section class="modal-card commander-delete-modal commander-reset-modal"><div class="panel-kicker">RESET ALL LOCAL PROGRESSION</div><h2>Start over completely?</h2><p>This permanently removes the active timeline, nation unlocks, mastery XP, EONSCAR levels and talents on this device. A new account keeps only ${escapeHtml(starterCountry?.name ?? 'its free starter nation')}.</p><div><button class="ghost-button" data-action="cancel-reset-account">KEEP MY SAVE</button><button class="primary-button" data-action="confirm-reset-account">RESET EVERYTHING</button></div></section></div>` : ''}
       ${this.renderCampaignProgressionTutorial(
         commanderProgress.availableTalentPoints,
         hasActionableTalentPoint,
@@ -1515,7 +1522,7 @@ export class CommanderMenuV1 {
       force.capabilities?.forceMultiplier ? 'THEATER MESH' : undefined,
     ].filter((entry): entry is string => Boolean(entry));
     return `<section class="commander-deployment-loadout" data-loadout-country="${country.id}" data-shield-integrity="100" data-army-attack-bonus="${attackBonus}" data-army-defense-bonus="${defenseBonus}">
-      <header><div><span>${frozenLoadout ? 'ACTIVE SAVE · FROZEN LOADOUT' : 'DEPLOYMENT LOADOUT PREVIEW'}</span><strong>APEX DOME + ${escapeHtml(country.shortName)}</strong></div><b>APEX LV ${loadout.commanderLevel}</b></header>
+      <header><div><span>${frozenLoadout ? 'ACTIVE SAVE · FROZEN LOADOUT' : 'DEPLOYMENT LOADOUT PREVIEW'}</span><strong>EONSCAR DOME + ${escapeHtml(country.shortName)}</strong></div><b>EONSCAR LV ${loadout.commanderLevel}</b></header>
       <div class="commander-deployment-loadout__corps">
         <article class="is-power"><span>ENERGY</span><strong>${shieldHp(force.shield.integrity)} / ${shieldHp(force.shield.maxIntegrity)}</strong><small>Fully charged at deployment</small></article>
         <article class="is-defense"><span>SHIELD ABSORPTION</span><strong>75%</strong><small>Incoming Army damage · Energy limited</small></article>
@@ -1591,9 +1598,9 @@ export class CommanderMenuV1 {
       ? countryMasteredMilitaryPowerV1(this.profile, country) : country.militaryPower;
     return `<section class="commander-country-detail commander-country-detail--deployment ${unlocked ? 'is-owned' : 'is-locked'}" tabindex="0" role="region" aria-label="${escapeHtml(country.name)} deployment intelligence" data-commander-scroll data-scroll-session="commander:deployment-detail:${escapeHtml(country.id)}" style="--country:${country.cssColor}">
       <header><i class="country-flag country-flag--large">${countryFlagHtml(country.id, country.sigil, true)}</i><div>${unlocked ? '' : '<span>CAMPAIGN TARGET</span>'}<h2>${escapeHtml(country.name)}</h2><p><b>${compact(displayedPower)} POWER</b><span>${unlocked && displayedPower > country.militaryPower ? `Base ${compact(country.militaryPower)} · ` : ''}#${country.quote.strengthRank} military · ${escapeHtml(country.subregion)}</span></p></div>${unlocked ? `<aside><small>COUNTRY MASTERY</small><strong>LV ${mastery.level}</strong><span>${mastery.victories} victories</span></aside>` : ''}</header>
-      ${unlocked ? `<div class="commander-country-detail__launch"><div><span>SELECTED FLAGSHIP</span><strong>${escapeHtml(country.shortName)} + APEX</strong></div><button class="primary-button" data-action="confirm-start-country" data-country="${country.id}">CONFIRM ${escapeHtml(country.shortName.toUpperCase())} →</button></div>` : ''}
+      ${unlocked ? `<div class="commander-country-detail__launch"><div><span>SELECTED FLAGSHIP</span><strong>${escapeHtml(country.shortName)} + EONSCAR</strong></div><button class="primary-button" data-action="confirm-start-country" data-country="${country.id}">CONFIRM ${escapeHtml(country.shortName.toUpperCase())} →</button></div>` : ''}
       ${this.renderCountryOpeningIntel(country)}
-      ${unlocked ? `<details class="commander-country-loadout-details"><summary><span>APEX &amp; META LOADOUT</span><b>VIEW COMPLETE BUILD</b></summary>${this.renderCommanderLoadoutSummary(country)}</details>`
+      ${unlocked ? `<details class="commander-country-loadout-details"><summary><span>EONSCAR &amp; META LOADOUT</span><b>VIEW COMPLETE BUILD</b></summary>${this.renderCommanderLoadoutSummary(country)}</details>`
         : `<div class="commander-unlock-panel is-campaign-locked"><span>LOCKED NATION</span><strong>DEFEAT IN CAMPAIGN</strong><p>Defeat ${escapeHtml(country.name)} in a standard Campaign war to add it permanently to your roster. Alternative Universe and Survival do not unlock nations.</p></div>`}
       <button class="secondary-button commander-country-detail__arsenal" data-action="open-selected-country-arsenal">OPEN ${escapeHtml(country.shortName.toUpperCase())} IN NATION ARSENAL</button>
     </section>`;
@@ -1623,22 +1630,24 @@ export class CommanderMenuV1 {
     const survivalQuote = quoteSurvivalDeploymentCreditsV1(this.profile);
     const modeCards = (['standard-2026', 'survival'] as const).map((mode) => {
       const item = MODE_PRESENTATION[mode];
+      const multiplayerEligible = isMultiplayerGameModeV2(mode);
+      const multiplayerActive = multiplayerEligible && this.multiplayerDeployment;
       const modeNote = mode === 'survival'
         ? survivalQuote.affordable
-          ? `${this.profile.unlockedCountryIds.length} owned nation${this.profile.unlockedCountryIds.length === 1 ? '' : 's'} form${this.profile.unlockedCountryIds.length === 1 ? 's' : ''} your empire. ${this.multiplayerDeployment ? `${survivalQuote.cost} Credits per commander seat. ` : ''}XP and Mastery still progress; Survival awards no Credits.`
+          ? `${this.profile.unlockedCountryIds.length} owned nation${this.profile.unlockedCountryIds.length === 1 ? '' : 's'} form${this.profile.unlockedCountryIds.length === 1 ? 's' : ''} your empire. ${multiplayerActive ? `${survivalQuote.cost} Credits per commander seat. ` : ''}XP and Mastery still progress; Survival awards no Credits.`
           : `You need ${survivalQuote.cost} Credits. Earn them through meaningful Campaign activity.`
-        : 'Defeat nations to unlock them permanently. Meaningful Campaign activity earns Credits.';
-      const action = this.multiplayerDeployment ? 'OPEN LOBBY'
+        : 'Single-player only. Defeat nations to unlock them permanently and earn Credits.';
+      const action = multiplayerActive ? 'OPEN LOBBY'
         : mode === 'survival' ? 'DEPLOY YOUR EMPIRE' : 'BEGIN CAMPAIGN';
       const unavailable = mode === 'survival' && !survivalQuote.affordable;
       const badge = mode === 'survival'
         ? `${item.badge} · ${SURVIVAL_DEPLOYMENT_CREDIT_COST_V1} CREDITS · BALANCE ${survivalQuote.balance}`
-        : 'EARNS CREDITS';
-      return `<button type="button" class="commander-mode-card commander-mode-card--${mode} ${unavailable ? 'is-unavailable' : ''}" data-action="start-mode" data-mode="${mode}" data-country="${country.id}" aria-label="${action.toLocaleLowerCase('en')} with ${escapeHtml(country.name)}${unavailable ? `; insufficient Credits, ${survivalQuote.balance} of ${survivalQuote.cost}` : ''}" ${unavailable ? 'aria-disabled="true"' : ''}><span>${item.kicker}</span><strong>${item.label}</strong><p>${item.description}</p><small>${escapeHtml(modeNote)}</small><span class="commander-mode-card__footer"><b>${badge}</b><em>${unavailable ? 'INSUFFICIENT CREDITS' : `${action} →`}</em></span></button>`;
+        : 'SINGLE-PLAYER · EARNS CREDITS';
+      return `<button type="button" class="commander-mode-card commander-mode-card--${mode} ${unavailable ? 'is-unavailable' : ''}" data-action="start-mode" data-mode="${mode}" data-country="${country.id}" data-multiplayer="${multiplayerEligible}" aria-label="${action.toLocaleLowerCase('en')} with ${escapeHtml(country.name)}${unavailable ? `; insufficient Credits, ${survivalQuote.balance} of ${survivalQuote.cost}` : ''}" ${unavailable ? 'aria-disabled="true"' : ''}><span>${item.kicker}</span><strong>${item.label}</strong><p>${item.description}</p><small>${escapeHtml(modeNote)}</small><span class="commander-mode-card__footer"><b>${badge}</b><em>${unavailable ? 'INSUFFICIENT CREDITS' : `${action} →`}</em></span></button>`;
     }).join('');
     const alternative = MODE_PRESENTATION['random-world'];
     const multiplayerControl = this.options.onMultiplayerRequested
-      ? `<section class="commander-multiplayer-control"><button type="button" class="commander-multiplayer-toggle ${this.multiplayerDeployment ? 'is-active' : ''}" data-action="toggle-multiplayer" role="switch" aria-checked="${this.multiplayerDeployment}"><i aria-hidden="true"><b></b></i><div><span>CO-OP</span><strong>${this.multiplayerDeployment ? 'FIND A TEAM' : 'PLAY SOLO'}</strong><small>${this.multiplayerDeployment ? 'One nation each, permanent team, shared victory or defeat.' : 'Turn on to play this mission with teammates.'}</small></div><b>${this.multiplayerDeployment ? 'ON' : 'OFF'}</b></button></section>`
+      ? `<section class="commander-multiplayer-control"><button type="button" class="commander-multiplayer-toggle ${this.multiplayerDeployment ? 'is-active' : ''}" data-action="toggle-multiplayer" role="switch" aria-checked="${this.multiplayerDeployment}"><i aria-hidden="true"><b></b></i><div><span>CO-OP · SURVIVAL &amp; FUN MODE</span><strong>${this.multiplayerDeployment ? 'FIND A TEAM' : 'PLAY SOLO'}</strong><small>${this.multiplayerDeployment ? 'One nation each, permanent team, shared victory or defeat. Campaign stays single-player.' : 'Turn on for Survival or Alternative Universe. Campaign is always single-player.'}</small></div><b>${this.multiplayerDeployment ? 'ON' : 'OFF'}</b></button></section>`
       : '';
     const alternativeAction = this.multiplayerDeployment ? 'OPEN LOBBY' : 'ENTER FUN MODE';
     const displayedPower = countryMasteredMilitaryPowerV1(this.profile, country);
@@ -1667,8 +1676,8 @@ export class CommanderMenuV1 {
     return `<div class="commander-menu-shell commander-menu-shell--talents">
       ${this.renderProfileStrip()}
       <main class="commander-talents">
-        <header class="commander-talents__heading"><button class="ghost-button" data-action="home">← MAIN MENU</button><div><span>APEX EVOLUTION MATRIX</span><h1>APEX Specialization</h1><p>Three paths evolve APEX itself. Empire Warfare is the single path that improves your national Army. Every APEX level grants one point.</p></div><aside><small>ONE POINT PER LEVEL</small><strong>${progress.availableTalentPoints}</strong><span>POINT${progress.availableTalentPoints === 1 ? '' : 'S'} AVAILABLE</span></aside></header>
-        <div class="commander-talents__scroll" tabindex="0" role="region" aria-label="APEX talent progression" data-commander-scroll data-scroll-session="commander:talents">
+        <header class="commander-talents__heading"><button class="ghost-button" data-action="home">← MAIN MENU</button><div><span>EONSCAR EVOLUTION MATRIX</span><h1>EONSCAR Specialization</h1><p>Three paths evolve EONSCAR itself. Empire Warfare is the single path that improves your national Army. Every EONSCAR level grants one point.</p></div><aside><small>ONE POINT PER LEVEL</small><strong>${progress.availableTalentPoints}</strong><span>POINT${progress.availableTalentPoints === 1 ? '' : 'S'} AVAILABLE</span></aside></header>
+        <div class="commander-talents__scroll" tabindex="0" role="region" aria-label="EONSCAR talent progression" data-commander-scroll data-scroll-session="commander:talents">
         ${this.statusMessage ? `<div class="commander-status">${escapeHtml(this.statusMessage)}</div>` : ''}
         <section class="commander-talent-toolbar"><div><span>ACTIVE CAPSTONE</span><strong>${escapeHtml(activeDoctrine?.label ?? 'NO CAPSTONE ACTIVE')}</strong><small>Only one capstone can be active. All values freeze into a new campaign.</small></div><b>${spentPoints} INVESTED · ENDLESS AFTER RANK 15</b><button class="ghost-button" data-action="respec-commander-talents" ${spentPoints === 0 ? 'disabled' : ''}>FREE FULL RESPEC</button></section>
         ${renderCommanderTalentBranchesV1(this.profile, this.selectedTalentId)}

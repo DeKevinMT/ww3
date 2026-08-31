@@ -23,7 +23,7 @@ describe('Campaign prologue cadence', () => {
         id: 'campaign-signal-anomaly',
         playerId,
         sentTick: 6,
-        title: 'APEX online',
+        title: 'EONSCAR online',
         body: 'Signal Triangulation completed.',
         action: 'north-pole-investigation',
         targetId: null,

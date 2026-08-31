@@ -10,7 +10,7 @@ describe('premium globe presentation budget', () => {
       globeSceneSource.indexOf('private createAuthoredGatewayRoutes'),
     );
     expect(globeSceneSource).toContain(
-      "../../../assets/apex-galaxy-map-bg.jpg?url",
+      "../../../assets/eonscar-galaxy-map-bg.jpg?url",
     );
     expect(backdropSource.match(/new THREE\.TextureLoader\(\)/g)).toHaveLength(1);
     expect(backdropSource).toContain('this.scene.background = loadedTexture;');
@@ -74,7 +74,7 @@ describe('premium globe presentation budget', () => {
     expect(atmosphereSource).not.toContain('onBeforeRender');
   });
 
-  it('renders APEX as one bounded distributed empire network without a human marker', () => {
+  it('renders EONSCAR as one bounded distributed empire network without a human marker', () => {
     const updateSource = globeSceneSource.slice(
       globeSceneSource.indexOf('private updateCommanderForces'),
       globeSceneSource.indexOf('private animateCommanderForceVisual'),

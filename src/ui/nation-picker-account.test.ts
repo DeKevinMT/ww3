@@ -135,16 +135,40 @@ describe('account-aware campaign nation picker', () => {
       sort: 'power',
       context: 'lobby',
       content: engine.content,
-      scenarioConfig: campaign,
+      scenarioConfig: normalizeScenarioConfigV2({ mode: 'random-world', seed: 20_260_829 }),
     });
 
     expect(rendered.html).toContain('data-country="bel"');
     expect(rendered.html).toContain('data-country="usa"');
     expect(rendered.html).not.toContain('data-country="rai"');
     expect(rendered.html).not.toContain('MASTERY LV');
-    expect(rendered.html).toContain('data-mp-action="scenario-standard"');
-    expect(rendered.html).toContain('<b>CAMPAIGN</b>');
-    expect(rendered.html).not.toContain('STANDARD 2026');
+    expect(rendered.html).not.toContain('data-mp-action="scenario-standard"');
+    expect(rendered.html).not.toContain('<b>CAMPAIGN</b>');
+    expect(rendered.html).toContain('data-mp-action="scenario-survival"');
+    expect(rendered.html).toContain('data-mp-action="scenario-random"');
+  });
+
+  it('never offers the legacy play-with-friends entry from Campaign', () => {
+    const common = {
+      previewCountryId: belgium,
+      searchQuery: '',
+      continent: 'ALL',
+      sort: 'power' as const,
+      context: 'campaign' as const,
+      content: engine.content,
+      showMultiplayerButton: true,
+    };
+    const campaignPicker = renderNationPickerV2(opening, {
+      ...common,
+      scenarioConfig: campaign,
+    });
+    const alternativePicker = renderNationPickerV2(opening, {
+      ...common,
+      scenarioConfig: normalizeScenarioConfigV2({ mode: 'random-world', seed: 93 }),
+    });
+
+    expect(campaignPicker.html).not.toContain('data-action="open-multiplayer"');
+    expect(alternativePicker.html).toContain('data-action="open-multiplayer"');
   });
 
   it('threads account choices through WorldUI and guards direct selection actions', () => {
@@ -179,7 +203,7 @@ describe('account-aware campaign nation picker', () => {
     expect(mainSource).toContain('onStartMode: (mode, countryId, replaceExistingCampaign) =>');
     expect(mainSource).toContain('if (campaignSlot && !replaceExistingCampaign)');
     expect(mainSource).toContain('onMultiplayerRequested: (mode, countryId) => openMultiplayerLobby(');
-    expect(mainSource).toContain('countryId as PlayerId,\n      mode,');
+    expect(mainSource).toMatch(/countryId as PlayerId,\s+mode,/);
     expect(mainSource).toContain(
       'directMatchmaking: preferredCountryId !== undefined && requestedMode !== undefined',
     );
@@ -201,7 +225,8 @@ describe('account-aware campaign nation picker', () => {
   });
 
   it('defaults the legacy/shared picker to the strongest available account nation, not USA', () => {
-    const constructorStart = worldUiSource.indexOf('constructor(\n    private readonly engine');
+    const classStart = worldUiSource.indexOf('export class WorldUIV2');
+    const constructorStart = worldUiSource.indexOf('constructor(', classStart);
     const constructorEnd = worldUiSource.indexOf('private viewerPlayerId()', constructorStart);
     const constructorSource = worldUiSource.slice(constructorStart, constructorEnd);
     expect(constructorSource).toContain('initialIntroMetrics.ranking.find');

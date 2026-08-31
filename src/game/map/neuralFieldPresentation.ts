@@ -102,7 +102,7 @@ export function apexShieldPresentation(
     integrity,
     percent,
     visible,
-    label: visible ? `APEX ${percent}%` : '',
+    label: visible ? `EONSCAR ${percent}%` : '',
   };
 }
 
@@ -130,7 +130,7 @@ export function apexProjectionPresentations(
   const shield = apexShieldPresentation(force);
   if (!force || !shield.visible) return [];
   const singularityCharged = force.doctrineRuntime?.lancerSupportedAssaultCount === 2;
-  const label = `APEX ${shield.percent}%${singularityCharged ? ' · ◆' : ''}`;
+  const label = `EONSCAR ${shield.percent}%${singularityCharged ? ' · ◆' : ''}`;
   const primary: ApexProjectionPresentation = Object.freeze({
     projection: 'primary',
     locationId: force.locationId,

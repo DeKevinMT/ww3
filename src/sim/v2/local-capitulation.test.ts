@@ -155,7 +155,7 @@ describe('local formation capitulation', () => {
     expect(fixture.target.owner).toBe(attackerId);
   });
 
-  it('does not let remaining APEX Integrity keep a one-percent army alive', () => {
+  it('does not let remaining EONSCAR Integrity keep a one-percent army alive', () => {
     const fixture = battleFixture(71_003, 0.01);
     fixture.state.humanPlayerId = defenderId;
     fixture.state.humanPlayerIds = [defenderId];

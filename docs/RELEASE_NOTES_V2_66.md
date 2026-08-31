@@ -1,4 +1,4 @@
-# Frontier Command v2.66 - Strategic Rebalance
+# EONSCAR v2.66 - Strategic Rebalance
 
 Version 2.66 sharpens the globe presentation and makes conquest, defense and escalation more readable without increasing the steady-state render workload.
 

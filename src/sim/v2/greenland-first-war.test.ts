@@ -62,7 +62,7 @@ function battlesAgainst(engine: WorldEngineV2, defenderId: PlayerId): number {
 }
 
 describe('Greenland first campaign war cadence', () => {
-  it('guides the real APEX opening toward the safest reachable beachhead with honest logistics', () => {
+  it('guides the real EONSCAR opening toward the safest reachable beachhead with honest logistics', () => {
     const engine = greenlandEngine(84_105);
     engine.state.polarEndgame.apexNarrative.players[GREENLAND]!.transmissions.unshift({
       id: 'campaign-ai-defeat-pattern',
@@ -98,7 +98,7 @@ describe('Greenland first campaign war cadence', () => {
     expect(target!.preparationWeeks).toBeGreaterThan(0);
   });
 
-  it('uses the normal war clock while APEX reaches the guided front before its first pulse', () => {
+  it('uses the normal war clock while EONSCAR reaches the guided front before its first pulse', () => {
     const engine = greenlandEngine(84_106);
     const battles: Array<{ tick: number; apexId: PlayerId | null }> = [];
     engine.subscribe((_state, change) => {

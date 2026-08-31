@@ -1,17 +1,21 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import globeSceneSource from '../game/map/three/ThreeGlobeScene.ts?raw';
-import mainSource from '../main.ts?raw';
-import worldUiSource from './WorldUIV2.ts?raw';
+import globeSceneSourceRaw from '../game/map/three/ThreeGlobeScene.ts?raw';
+import mainSourceRaw from '../main.ts?raw';
+import worldUiSourceRaw from './WorldUIV2.ts?raw';
 
-const indexSource = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
-const stylesSource = readFileSync(new URL('../styles.css', import.meta.url), 'utf8');
+const normalized = (source: string): string => source.replace(/\r\n/g, '\n');
+const globeSceneSource = normalized(globeSceneSourceRaw);
+const mainSource = normalized(mainSourceRaw);
+const worldUiSource = normalized(worldUiSourceRaw);
+const indexSource = normalized(readFileSync(new URL('../../index.html', import.meta.url), 'utf8'));
+const stylesSource = normalized(readFileSync(new URL('../styles.css', import.meta.url), 'utf8'));
 const criticalStyleStart = indexSource.indexOf('<style id="startup-critical-css">');
 const criticalStyleEnd = indexSource.indexOf('</style>', criticalStyleStart);
 const criticalStyleSource = indexSource.slice(criticalStyleStart, criticalStyleEnd);
 
 describe('boot and timeline deployment loaders', () => {
-  it('paints the cinematic APEX loader before modules or application CSS are available', () => {
+  it('paints the cinematic EONSCAR loader before modules or application CSS are available', () => {
     const moduleTag = '<script type="module" src="/src/main.ts"></script>';
     expect(indexSource).toContain('<meta name="theme-color" content="#030a12" />');
     expect(indexSource).toContain('<meta name="color-scheme" content="dark" />');
@@ -25,10 +29,11 @@ describe('boot and timeline deployment loaders', () => {
     expect(criticalStyleSource).toContain('position: fixed;');
     expect(criticalStyleSource).toContain('inset: 0;');
     expect(criticalStyleSource).toContain('min-height: 100dvh;');
-    expect(criticalStyleSource).toContain('url("./src/assets/apex-reclamation-bg.jpg")');
+    expect(criticalStyleSource).toContain('url("./src/assets/eonscar-command-bg.jpg")');
     expect(criticalStyleSource).toContain('@keyframes startup-uplink-progress');
     expect(criticalStyleSource).toContain('@media (prefers-reduced-motion: reduce)');
-    expect(indexSource).toContain('rel="preload" as="image" href="./src/assets/apex-reclamation-bg.jpg"');
+    expect(indexSource).toContain('rel="preload" as="image" href="./src/assets/eonscar-command-bg.jpg"');
+    expect(indexSource).toContain('rel="preload" as="image" href="./src/assets/brand/eonscar-logo-transparent.png"');
     expect(stylesSource).not.toContain('#startup-loader');
     expect(stylesSource).not.toContain('.startup-loader__');
   });
@@ -38,8 +43,10 @@ describe('boot and timeline deployment loaders', () => {
     expect(indexSource).toContain('id="startup-loader" role="status"');
     expect(indexSource).toContain('aria-live="polite" aria-atomic="true" aria-hidden="false"');
     expect(indexSource).toContain('data-loader-variant="boot" data-loader-stage="boot"');
-    expect(indexSource).toContain('<span class="startup-loader__sr-only">Connecting to APEX account</span>');
-    expect(indexSource).toContain('<span>APEX</span><strong>RECLAMATION</strong>');
+    expect(indexSource).toContain('<span class="startup-loader__sr-only">Connecting to EONSCAR account</span>');
+    expect(indexSource).toContain('<img src="./src/assets/brand/eonscar-logo-transparent.png" alt="" />');
+    expect(indexSource).toContain('<strong>EONSCAR</strong><span>EONSCAR REMEMBERS.</span>');
+    expect(indexSource).not.toContain('RECLAMATION');
     expect(indexSource.match(/class="startup-loader__track"/g)).toHaveLength(1);
     expect(indexSource.match(/data-loader-tip/g)).toHaveLength(1);
     expect(indexSource).toContain('FIELD INTEL');
@@ -47,7 +54,7 @@ describe('boot and timeline deployment loaders', () => {
     expect(indexSource).not.toContain('TIMELINE DEPLOYMENT');
     expect(indexSource).not.toContain('01 · TIMELINE');
     expect(indexSource).not.toContain('02 · WORLD MAP');
-    expect(indexSource).not.toContain('03 · APEX');
+    expect(indexSource).not.toContain('03 · EONSCAR');
     expect(indexSource).toContain('aria-hidden="false"');
     expect(mainSource).toContain("document.querySelector<HTMLElement>('#startup-loader')");
     expect(mainSource).toContain("showFreshLoadingTip('boot');");
@@ -96,7 +103,7 @@ describe('boot and timeline deployment loaders', () => {
     expect(mainSource).toContain('await renderer.waitForMapReady();');
     expect(mainSource).toContain('const STARTUP_LOADER_MIN_VISIBLE_MS = 2_800;');
     expect(mainSource).toContain("setDeploymentLoaderStage('map');");
-    expect(mainSource).toContain("setDeploymentLoaderStage('apex');");
+    expect(mainSource).toContain("setDeploymentLoaderStage('eonscar');");
     expect(mainSource).toContain('STARTUP_LOADER_MIN_VISIBLE_MS - (performance.now() - startupLoaderShownAt)');
     expect(mainSource).toContain('window.setTimeout(resolve, minimumDelayRemaining)');
     expect(mainSource).toContain('await renderer.waitForNextFrame();');

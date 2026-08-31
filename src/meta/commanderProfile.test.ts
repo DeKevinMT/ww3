@@ -128,13 +128,15 @@ describe('global commander progression', () => {
     expect(normalized.pendingCountryUnlockNotificationIds).toEqual([]);
   });
 
-  it('uses APEX for new and legacy-default identities while preserving custom names', () => {
-    const created = createCommanderProfileV1(1, 'apex-identity');
-    expect(created.displayName).toBe('APEX');
+  it('uses COMMANDER for new and legacy-default identities while preserving custom names', () => {
+    const created = createCommanderProfileV1(1, 'eonscar-identity');
+    expect(created.displayName).toBe('COMMANDER');
     expect(normalizeCommanderProfileV1({ ...created, displayName: 'Commander' }, 2).displayName)
-      .toBe('APEX');
+      .toBe('COMMANDER');
     expect(normalizeCommanderProfileV1({ ...created, displayName: 'APEX' }, 3).displayName)
-      .toBe('APEX');
+      .toBe('COMMANDER');
+    expect(normalizeCommanderProfileV1({ ...created, displayName: 'EONSCAR' }, 3).displayName)
+      .toBe('COMMANDER');
     expect(normalizeCommanderProfileV1({ ...created, displayName: 'Mara' }, 4).displayName)
       .toBe('Mara');
   });
@@ -441,7 +443,7 @@ describe('global commander progression', () => {
     const normalized = normalizeCommanderProfileV1(oldProfile, 31);
     expect(normalized.defeatedCountryIds).toEqual([]);
     expect(normalized.pendingCountryUnlockNotificationIds).toEqual([]);
-    expect(normalized.empireName).toBe('Frontier Alliance');
+    expect(normalized.empireName).toBe('Eonscar Coalition');
     expect(normalized.empireFlag).toEqual({ kind: 'country', countryId: STARTER_COUNTRY_ID });
     expect(normalized.activeDoctrine).toBeNull();
   });
@@ -688,7 +690,7 @@ describe('global commander progression', () => {
     expect(owned).toEqual(snapshotBefore);
   });
 
-  it('grants one free shield point per APEX level and keeps capstone protocols exclusive', () => {
+  it('grants one free shield point per EONSCAR level and keeps capstone protocols exclusive', () => {
     const talents = emptyCommanderTalentsV1();
     talents['elite-vanguard'] = 5;
     talents['volunteer-brigade'] = 3;
@@ -935,7 +937,7 @@ describe('global commander progression', () => {
     expect(commanderPulseAttackV1(50, emptyCommanderTalentsV1())).toBe(0);
   });
 
-  it('authors three distinct APEX branches and exactly one national-Army branch', () => {
+  it('authors three distinct EONSCAR branches and exactly one national-Army branch', () => {
     const copy = JSON.stringify(COMMANDER_TALENTS_V1.map((talent) => ({
       label: talent.label,
       description: talent.description,
@@ -972,7 +974,7 @@ describe('global commander progression', () => {
     ]);
   });
 
-  it('gates concentrated talent ranks by APEX level while keeping points distributable', () => {
+  it('gates concentrated talent ranks by EONSCAR level while keeping points distributable', () => {
     expect([1, 2, 3, 4, 5, 6, 10, 11, 15, 16].map(
       commanderTalentRankLevelRequirementV1,
     )).toEqual([1, 2, 3, 5, 7, 11, 27, 35, 67, 79]);

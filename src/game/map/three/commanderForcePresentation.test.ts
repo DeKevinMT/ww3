@@ -30,7 +30,7 @@ const globeForceSyncSource = sceneSource.slice(
   sceneSource.indexOf('private animateCommanderForceVisual'),
 );
 
-describe('autonomous APEX / ROGUE PRIME map presentation', () => {
+describe('autonomous EONSCAR / ROGUE PRIME map presentation', () => {
   it('uses code-native neural fields and never imports the retired robot sprites', () => {
     for (const source of [sceneSource, flatSceneSource]) {
       expect(source).not.toMatch(/apex-robot\.png|rogue-prime\.png/);
@@ -128,7 +128,7 @@ describe('autonomous APEX / ROGUE PRIME map presentation', () => {
     expect(flatSceneSource).not.toMatch(/apexStrike|ApexStrike|laser/i);
   });
 
-  it('keeps human APEX locationless while PRIME still samples canonical travel', () => {
+  it('keeps human EONSCAR locationless while PRIME still samples canonical travel', () => {
     expect(sceneSource).toContain('commanderPointAlongRoute(');
     expect(sceneSource).not.toContain('mapCommanderTransitProgress(viewerForce, engine.state.tick)');
     expect(sceneSource).toContain("this.host.dataset.apexPhysicalMarker = 'none';");
@@ -161,7 +161,7 @@ describe('autonomous APEX / ROGUE PRIME map presentation', () => {
     expect(flatSceneSource).toContain('return;');
   });
 
-  it('removes exhausted distributed APEX coverage while PRIME retains its lifecycle', () => {
+  it('removes exhausted distributed EONSCAR coverage while PRIME retains its lifecycle', () => {
     expect(empireFieldSource).toContain('if (!force || !visible || !apexFieldPresentationActive(engine))');
     expect(empireFieldSource).toContain('return INACTIVE_APEX_EMPIRE_FIELD;');
     expect(sceneSource).not.toContain('mapCommanderRecoveryLifecycleActive(viewerForce)');
@@ -178,7 +178,7 @@ describe('autonomous APEX / ROGUE PRIME map presentation', () => {
     expect(flatSceneSource).toContain('visual.fieldOperational && targetVisible');
   });
 
-  it('keeps APEX and detected PRIME distinct without separate force nameplates', () => {
+  it('keeps EONSCAR and detected PRIME distinct without separate force nameplates', () => {
     expect(sceneSource).toContain("role: 'apex' | 'rogue-prime'");
     expect(flatSceneSource).toContain("role: 'apex' | 'rogue-prime'");
     expect(sceneSource).toContain('STRATEGIC_NEURAL_FIELD_STYLE.roguePrime');
@@ -187,12 +187,12 @@ describe('autonomous APEX / ROGUE PRIME map presentation', () => {
     expect(sceneSource).not.toContain('globe-map__commander-label');
   });
 
-  it('presents viewer APEX as Energy while PRIME retains hostile force support', () => {
+  it('presents viewer EONSCAR as Energy while PRIME retains hostile force support', () => {
     expect(sceneSource).toContain('commanderShieldMapSupportPercent');
     expect(sceneSource).not.toContain('commanderForceMapCombatPower');
     expect(empireFieldSource).toContain('apexShieldPresentation(force)');
     expect(sceneSource).toContain('this.apexEmpireField.percent');
-    expect(sceneSource).not.toContain('APEX supporting with ${compactMapCombatPower(');
+    expect(sceneSource).not.toContain('EONSCAR supporting with ${compactMapCombatPower(');
     expect(sceneSource).not.toMatch(/\+\$\{compactMapCombatPower\([^}]*apex/i);
     expect(sceneSource).toContain('ROGUE PRIME amplifying the Antarctic army by ${primeSupportPercent.toFixed(1)}%');
     expect(flatSceneSource).toContain('apexShieldPresentation');
@@ -203,7 +203,7 @@ describe('autonomous APEX / ROGUE PRIME map presentation', () => {
     expect(flatSceneSource).toContain("setData('accessibleLabel', supportAccessibleLabel)");
   });
 
-  it('never presents human APEX transit or army power', () => {
+  it('never presents human EONSCAR transit or army power', () => {
     expect(sceneSource).not.toContain('const apexInboundTerritoryId = viewerApex?.transit?.path.at(-1);');
     expect(sceneSource).not.toContain('const apexProjections = apexProjectionPresentations(viewerApex);');
     expect(sceneSource).toContain("this.host.dataset.apexPhysicalMarker = 'none';");
@@ -245,7 +245,7 @@ describe('autonomous APEX / ROGUE PRIME map presentation', () => {
     expect(flatSceneSource).toContain('this.neuralPulseSample.singularityOpacity');
   });
 
-  it('gates every APEX production surface behind the viewer first-strike phase', () => {
+  it('gates every EONSCAR production surface behind the viewer first-strike phase', () => {
     expect(sceneSource.match(/apexFieldPresentationActive\(/g)?.length).toBeGreaterThanOrEqual(1);
     expect(empireFieldSource).toContain('apexFieldPresentationActive(engine)');
     expect(flatSceneSource.match(/apexFieldPresentationActive\(/g)?.length).toBeGreaterThanOrEqual(3);

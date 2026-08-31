@@ -27,7 +27,7 @@ describe('power-first War Report', () => {
     expect(report).toContain('FRONT SCORE');
   });
 
-  it('reports factual APEX battle support rather than current-force estimates', () => {
+  it('reports factual EONSCAR battle support rather than current-force estimates', () => {
     const report = warReportSource();
     for (const field of [
       'apexSupportedBattles',
@@ -39,11 +39,11 @@ describe('power-first War Report', () => {
       'apexSingularityPulses',
       'apexTwinProjectionBattles',
     ]) expect(report).toContain(`outcome.${field}`);
-    expect(report).toContain('PEAK +${compactNumber(outcome.apexPeakPower)} APEX SUPPORT');
+    expect(report).toContain('PEAK +${compactNumber(outcome.apexPeakPower)} EONSCAR SUPPORT');
     expect(report).toContain('Math.min(100');
     expect(report).toContain('ENERGY LOSS −${format(apexIntegrityDamage, 1)}%');
     expect(report).toContain('ENERGY DEPLETED');
-    expect(report).toContain('APEX SHIELD');
+    expect(report).toContain('EONSCAR SHIELD');
     expect(report).toContain('SUPPLY ${format(apexSupplyCoverage, 0)}%');
     expect(report).toContain('OVERDRIVE SHIELD ×${outcome.apexSingularityPulses}');
     expect(report).toContain('THEATER MESH · ${outcome.apexTwinProjectionBattles} MULTI-FRONT BATTLES');

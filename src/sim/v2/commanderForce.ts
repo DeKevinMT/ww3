@@ -36,7 +36,7 @@ export const DEFAULT_COMMANDER_PRIORITIES_V2: Readonly<CommanderEconomyPrioritie
   = Object.freeze({ training: 40, logistics: 40, development: 20 });
 
 export const APEX_AUTONOMY_COMMAND_REASON_V2
-  = 'APEX chooses its own deployment and internal allocation; use War fronts to track its assignment.';
+  = 'EONSCAR chooses its own deployment and internal allocation; use War fronts to track its assignment.';
 
 export const COMMANDER_TRAVEL_SPEED_KM_PER_TICK_V2 = 1_200;
 /** Compatibility export: this is now the minimum normal autonomous assignment hold. */
@@ -876,7 +876,7 @@ export function commanderEliteComparisonForRatingsV2(
   const lowerRatio = Math.min(attackRatio, defenseRatio);
   const qualityTier: CommanderQualityTierV2 = lowerRatio >= 2
     ? 'apex-elite' : lowerRatio >= 1.5 ? 'elite' : lowerRatio >= 1.15 ? 'veteran' : 'national';
-  const qualityLabel = qualityTier === 'apex-elite' ? 'APEX DOME'
+  const qualityLabel = qualityTier === 'apex-elite' ? 'EONSCAR DOME'
     : qualityTier === 'elite' ? 'HIGH-ENERGY DOME'
       : qualityTier === 'veteran' ? 'REINFORCED DOME' : 'BASELINE DOME';
   return {
@@ -1223,7 +1223,7 @@ export function selectCommanderForecastMobilityV2(
     reason,
   });
   if (!force || force.shield.integrity <= EPSILON) {
-    return absent('absent', 'No operational APEX neural dome is available.');
+    return absent('absent', 'No operational EONSCAR neural dome is available.');
   }
   if (state.territories[destinationId]?.owner !== playerId) {
     return absent('unreachable', 'The prospective staging territory is not under your control.');
@@ -1233,8 +1233,8 @@ export function selectCommanderForecastMobilityV2(
     return absent(
       presentation?.operationalState === 'recharging' ? 'committed' : 'absent',
       presentation?.operationalState === 'recharging'
-        ? 'APEX is rebuilding the global shield to full Energy.'
-        : 'No operational APEX neural shield is available.',
+        ? 'EONSCAR is rebuilding the global shield to full Energy.'
+        : 'No operational EONSCAR neural shield is available.',
     );
   }
   const network = selectApexEmpireShieldNetworkV2(state, content, playerId);
@@ -1272,8 +1272,8 @@ export function selectCommanderForecastMobilityV2(
       selectApexLancerPulseStatusV2(state, playerId),
     ),
     reason: prospectiveFrontCount === 1
-      ? 'The empire-wide APEX shield can support this front immediately.'
-      : `The empire-wide APEX shield can support this front immediately while sharing energy across ${prospectiveFrontCount} fronts.`,
+      ? 'The empire-wide EONSCAR shield can support this front immediately.'
+      : `The empire-wide EONSCAR shield can support this front immediately while sharing energy across ${prospectiveFrontCount} fronts.`,
   };
 }
 
@@ -1351,14 +1351,14 @@ function quoteAutonomousCommanderOrderV2(
     treasuryCost: 0,
     supplyCost: 0,
   });
-  if (!force) return denied('This human seat has no APEX neural dome in the campaign.');
-  if (!isHumanPlayerV2(state, playerId)) return denied('Only the controlling human can route this APEX neural dome.');
+  if (!force) return denied('This human seat has no EONSCAR neural dome in the campaign.');
+  if (!isHumanPlayerV2(state, playerId)) return denied('Only the controlling human can route this EONSCAR neural dome.');
   if (force.transit && !allowStandbyTransitOverride) {
-    return denied('APEX must finish its current movement before receiving another route.');
+    return denied('EONSCAR must finish its current movement before receiving another route.');
   }
   if (!content.territories[destinationId]) return denied('Unknown Commander destination.');
   if (state.territories[destinationId]?.owner !== playerId) {
-    return denied('APEX can deploy only inside territory controlled by your empire.');
+    return denied('EONSCAR can deploy only inside territory controlled by your empire.');
   }
   const frontStatus = commanderFrontValidityV2(
     state, content, playerId, destinationId, mission, front,
@@ -1616,15 +1616,15 @@ export function initializeCommanderForceV2(
   input: CommanderForceInitializationV2,
 ): CommandResultV2 {
   state.commanderForces ??= {};
-  if (state.tick !== 0) return { accepted: false, reason: 'APEX neural-dome setup is locked after week zero.' };
+  if (state.tick !== 0) return { accepted: false, reason: 'EONSCAR neural-dome setup is locked after week zero.' };
   if (!isHumanPlayerV2(state, playerId) || !state.players[playerId]) {
-    return { accepted: false, reason: 'APEX neural-dome setup requires a living human-controlled country.' };
+    return { accepted: false, reason: 'EONSCAR neural-dome setup requires a living human-controlled country.' };
   }
   if (state.commanderForces[playerId]) {
-    return { accepted: false, reason: 'This human seat already has an APEX neural dome.' };
+    return { accepted: false, reason: 'This human seat already has an EONSCAR neural dome.' };
   }
   if (!initializationValidV2(input)) {
-    return { accepted: false, reason: 'APEX neural-dome profile snapshot is invalid.' };
+    return { accepted: false, reason: 'EONSCAR neural-dome profile snapshot is invalid.' };
   }
   const integrity = round(input.shield.integrity, 9);
   const maxIntegrity = round(input.shield.maxIntegrity, 9);
@@ -1689,7 +1689,7 @@ export function initializeCommanderForceV2(
     playerId,
     force.locationId,
   )) {
-    return { accepted: false, reason: 'Another co-op APEX already protects this territory.' };
+    return { accepted: false, reason: 'Another co-op EONSCAR already protects this territory.' };
   }
   // The marker must exist before capacity and trait contexts are refreshed.
   state.commanderForces[playerId] = force;
@@ -2486,12 +2486,12 @@ export function selectCommanderAutonomyStatusV2(
 ): CommanderAutonomyStatusV2 {
   const force = state.commanderForces?.[playerId];
   if (!force) return {
-    state: 'absent', headline: 'APEX UNAVAILABLE', reason: 'No neural dome is active in this timeline.',
+    state: 'absent', headline: 'EONSCAR UNAVAILABLE', reason: 'No neural dome is active in this timeline.',
     etaWeeks: null, locationId: null, destinationId: null, front: null,
   };
   const network = selectApexEmpireShieldNetworkV2(state, content, playerId);
   if (network?.operationalState === 'recharging') return {
-    state: 'rebuilding', headline: 'APEX NETWORK RECHARGING',
+    state: 'rebuilding', headline: 'EONSCAR NETWORK RECHARGING',
     reason: 'The empire-wide shield is offline until Energy reaches 100%.',
     etaWeeks: null, locationId: force.locationId,
     destinationId: force.locationId, front: null,
@@ -2500,7 +2500,7 @@ export function selectCommanderAutonomyStatusV2(
     const lead = network.fronts[0]!;
     return {
     state: 'supporting',
-    headline: 'APEX EMPIRE SHIELD ENGAGED',
+    headline: 'EONSCAR EMPIRE SHIELD ENGAGED',
     reason: network.fronts.length === 1
       ? 'The full network is reinforcing the active front.'
       : `${network.fronts.length} fronts share one Energy and ATK/DEF pool.`,
@@ -2517,7 +2517,7 @@ export function selectCommanderAutonomyStatusV2(
   const purgeFocusId = selectApexSignalPurgeFocusV2(state, content, playerId);
   if (network?.active && purgeFocusId) {
     return {
-      state: 'monitoring', headline: 'APEX PRIORITY PURGE ACTIVE',
+      state: 'monitoring', headline: 'EONSCAR PRIORITY PURGE ACTIVE',
       reason: 'The distributed network is focusing purge bandwidth here while maintaining Empire coverage.',
       etaWeeks: 0,
       locationId: force.locationId,
@@ -2527,7 +2527,7 @@ export function selectCommanderAutonomyStatusV2(
   }
   return {
     state: network?.active ? 'monitoring' : 'absent',
-    headline: network?.active ? 'APEX EMPIRE SHIELD ONLINE' : 'APEX UNAVAILABLE',
+    headline: network?.active ? 'EONSCAR EMPIRE SHIELD ONLINE' : 'EONSCAR UNAVAILABLE',
     reason: network?.active
       ? `Protecting ${network.coverageTerritoryIds.length} Empire territories.`
       : 'The global shield has no operational Energy.',
@@ -2695,7 +2695,7 @@ function assignAutonomousSignalPurgeV2(
     state,
     'conquest',
     'action',
-    `APEX MOVING TO PURGE: the neural dome is travelling through secured Empire territory to ${content.territories[focusId]?.name ?? focusId}.`,
+    `EONSCAR MOVING TO PURGE: the neural dome is travelling through secured Empire territory to ${content.territories[focusId]?.name ?? focusId}.`,
     focusId,
     playerId,
   );
@@ -3129,7 +3129,7 @@ export function applyApexShieldDamageV2(
         state,
         'war',
         'critical',
-        'APEX EMERGENCY REBOOT · Energy restored to 20%.',
+        'EONSCAR EMERGENCY REBOOT · Energy restored to 20%.',
         force.locationId,
         playerId,
       );
@@ -3160,8 +3160,8 @@ export function applyApexShieldDamageV2(
       'war',
       'critical',
       compatibilityAnchorId
-        ? 'APEX EXHAUSTED · DOME OFFLINE: Energy reached zero and a full network recharge has begun.'
-        : 'APEX EXHAUSTED · DOME OFFLINE: Energy reached zero and no sovereign Empire network remains.',
+        ? 'EONSCAR EXHAUSTED · DOME OFFLINE: Energy reached zero and a full network recharge has begun.'
+        : 'EONSCAR EXHAUSTED · DOME OFFLINE: Energy reached zero and no sovereign Empire network remains.',
       compatibilityAnchorId ?? force.locationId,
       playerId,
     );

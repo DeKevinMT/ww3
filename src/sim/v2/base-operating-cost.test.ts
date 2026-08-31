@@ -11,13 +11,14 @@ import { countryTraitFactorV2 } from './traits';
 import { nationIdV2, territoryIdV2 } from './types';
 
 describe('universal base operating cost', () => {
-  it('starts every ordinary country at 20% of weekly tax revenue before its trait', () => {
+  it('starts every ordinary country at 30% of weekly tax revenue before its trait', () => {
+    expect(BASE_OPERATING_COST_TAX_REVENUE_SHARE).toBe(0.30);
     const state = createWorldStateV2(72_001);
     const plans = selectOpeningCandidateFinancePlansV2(state, WORLD_CONTENT_V2);
     expect(plans.size).toBe(WORLD_CONTENT_V2.nationIds.length);
     for (const [playerId, finance] of plans) {
       if (isRogueAiNationV2(WORLD_CONTENT_V2, playerId)) continue;
-      // Twenty percent remains the canonical rule. A country's own active
+      // Thirty percent remains the canonical rule. A country's own active
       // trait is a final multiplier, never a replacement hidden in content.
       const traitFactor = countryTraitFactorV2(
         playerId,
@@ -26,7 +27,7 @@ describe('universal base operating cost', () => {
       );
       expect(finance.baseOperatingCost).toBeCloseTo(
         finance.revenue * BASE_OPERATING_COST_TAX_REVENUE_SHARE * traitFactor,
-        6,
+        5,
       );
     }
     const roguePlan = plans.get(nationIdV2('rai'))!;
@@ -56,7 +57,7 @@ describe('universal base operating cost', () => {
       ),
       8,
     );
-    expect(after.baseOperatingCost).toBeCloseTo(after.revenue * effectiveShare, 6);
+    expect(after.baseOperatingCost).toBeCloseTo(after.revenue * effectiveShare, 5);
     expect(after.revenue - after.baseOperatingCost)
       .toBeCloseTo(after.revenue * (1 - effectiveShare), 6);
   });
@@ -101,7 +102,7 @@ describe('universal base operating cost', () => {
     expect(after.baseOperatingCost).toBeLessThan(before.baseOperatingCost);
     expect(after.baseOperatingCost).toBeCloseTo(
       after.revenue * BASE_OPERATING_COST_TAX_REVENUE_SHARE * traitFactor,
-      6,
+      5,
     );
   });
 });

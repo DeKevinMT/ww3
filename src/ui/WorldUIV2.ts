@@ -3,6 +3,7 @@ import {
   terrainProfileDisplayPercentages,
   type TerrainProfileEntry,
 } from '../game/data/worldMap';
+import eonscarLogoUrl from '../assets/brand/eonscar-logo-transparent.png?url';
 import {
   battleScreenFocus,
   GAME_AUDIO_CREDITS,
@@ -20,6 +21,7 @@ import {
 import { MapStatsRefreshCadence } from '../game/map/mapStatsCadence';
 import { terrainPresentation } from '../game/terrainPresentation';
 import {
+  BASE_OPERATING_COST_TAX_REVENUE_SHARE,
   CONQUEST_CAPTURE_GUARD_TICKS,
   DEFENSE_RESEARCH_HALF_SATURATION,
   DEFENSE_RESEARCH_MAX_BONUS,
@@ -721,7 +723,7 @@ export function worldTopbarStatsV2(
   });
 }
 
-export function baseOperatingCostLabel(share = 0.20): string {
+export function baseOperatingCostLabel(share = BASE_OPERATING_COST_TAX_REVENUE_SHARE): string {
   const percent = share * 100;
   const decimals = Math.abs(percent - Math.round(percent)) < 0.05 ? 0 : 1;
   return `BASE OPERATIONS · ${format(percent, decimals)}% OF TAX REVENUE`;
@@ -1284,7 +1286,7 @@ export function renderNationPickerV2(
   if (nations.length === 0) {
     const pickerClass = isLobby ? 'country-select country-select--lobby' : 'country-select modal-card';
     return {
-      html: `<section class="${pickerClass}" data-nation-picker="${options.context}"><div class="country-select__empty" role="status"><div class="panel-kicker">APEX ACCOUNT</div><h1>No nations available</h1><p>Unlock a country in the Nation Arsenal before starting this campaign.</p></div></section>`,
+      html: `<section class="${pickerClass}" data-nation-picker="${options.context}"><div class="country-select__empty" role="status"><div class="panel-kicker">EONSCAR ACCOUNT</div><h1>No nations available</h1><p>Unlock a country in the Nation Arsenal before starting this campaign.</p></div></section>`,
       previewCountryId: options.previewCountryId,
       visibleCount: 0,
     };
@@ -1415,7 +1417,9 @@ export function renderNationPickerV2(
   const sortOptions = INTRO_SORT_OPTIONS.map(({ value, label }) => (
     `<option value="${value}" ${options.sort === value ? 'selected' : ''}>${label}</option>`
   )).join('');
-  const multiplayerButton = !isLobby && options.showMultiplayerButton
+  const multiplayerButton = !isLobby
+    && options.showMultiplayerButton
+    && (options.scenarioConfig?.mode ?? content.metadata?.scenarioId) !== 'standard-2026'
     ? '<button class="secondary-button country-preview__multiplayer" data-action="open-multiplayer">PLAY WITH FRIENDS</button>'
     : '';
   const previewUnlocked = !availableCountryIds || availableCountryIds.has(preview.id);
@@ -1428,10 +1432,17 @@ export function renderNationPickerV2(
   const scenario = options.scenarioConfig;
   const scenarioMode = scenario?.mode ?? content.metadata?.scenarioId ?? 'standard-2026';
   const randomWorld = scenarioMode === 'random-world';
+  const survival = scenarioMode === 'survival';
   const scenarioSeed = scenario?.seed ?? content.metadata?.generatedFromSeed;
   const startYear = content.metadata?.startYear ?? 2026;
   const scenarioButtonsDisabled = options.scenarioEditable ? '' : 'disabled aria-disabled="true"';
-  const scenarioControls = scenario && (isLobby || (options.scenarioEditable && !accountManagedSolo)) ? `<div class="scenario-picker" role="group" aria-label="Game mode">
+  const scenarioControls = scenario && isLobby ? `<div class="scenario-picker" role="group" aria-label="Multiplayer mode">
+    <div class="scenario-picker__modes">
+      <button class="${survival ? 'is-active' : ''}" ${actionAttribute}="scenario-survival" ${scenarioButtonsDisabled}><b>SURVIVAL</b><span>Co-op against the Rogue AI</span></button>
+      <button class="${randomWorld ? 'is-active' : ''}" ${actionAttribute}="scenario-random" ${scenarioButtonsDisabled}><b>ALTERNATIVE UNIVERSE</b><span>New balance every seed</span></button>
+    </div>
+    <div class="scenario-picker__seed"><span>${randomWorld ? 'UNIVERSE SEED' : 'SIMULATION SEED'}</span><strong>${scenarioSeed ?? '—'}</strong>${randomWorld && options.scenarioEditable ? `<button ${actionAttribute}="scenario-reroll" title="Generate another Alternative Universe">↻ REROLL</button>` : ''}</div>
+  </div>` : scenario && options.scenarioEditable && !accountManagedSolo ? `<div class="scenario-picker" role="group" aria-label="Game mode">
     <div class="scenario-picker__modes">
       <button class="${randomWorld ? '' : 'is-active'}" ${actionAttribute}="scenario-standard" ${scenarioButtonsDisabled}><b>CAMPAIGN</b><span>Authentic opening data</span></button>
       <button class="${randomWorld ? 'is-active' : ''}" ${actionAttribute}="scenario-random" ${scenarioButtonsDisabled}><b>ALTERNATIVE UNIVERSE</b><span>New balance every seed</span></button>
@@ -1440,7 +1451,7 @@ export function renderNationPickerV2(
   </div>` : '';
   const scenarioDescription = randomWorld
     ? 'Countries keep their geography, but specialized stats and rare outliers rebuild population, economy, military quality and strategic power from the seed.'
-    : 'APEX projects its neural dome autonomously. You choose strategy and targets.';
+    : 'EONSCAR projects its neural dome autonomously. You choose strategy and targets.';
   const sourceLabel = randomWorld
     ? 'Alternative Universe · deterministic generated stats · geography unchanged'
     : 'IQ: learning outcomes · Natural Earth · SIPRI 2025';
@@ -2652,7 +2663,7 @@ export class WorldUIV2 {
       && owner.id === ROGUE_AI_NATION_ID_V2
       && isSurvivalStateV2(this.engine.state);
     const integrationStatus = integrating
-      ? `${rogueRapidAssimilation ? 'RAPID ASSIMILATION' : `${owner.isHuman ? 'APEX ' : ''}SIGNAL PURGE`} ${format(territory.integration * 100)}%${apexPurge ? ` · ${apexPurge.label}` : ''}`
+      ? `${rogueRapidAssimilation ? 'RAPID ASSIMILATION' : `${owner.isHuman ? 'EONSCAR ' : ''}SIGNAL PURGE`} ${format(territory.integration * 100)}%${apexPurge ? ` · ${apexPurge.label}` : ''}`
       : 'LIBERATED CORE';
     const localHuman = owner.id === this.viewerPlayerId();
     const openingMobilisation = definition.initialOwnerId === owner.id
@@ -2920,9 +2931,9 @@ export class WorldUIV2 {
           <span class="country-flag" aria-hidden="true">${this.playerFlagHtml(human, true)}</span><div class="coalition-chip__body"><small><time>${worldDateLabel(state.tick, this.engine.content.metadata?.startYear ?? 2026)}</time>${wars.length ? `<b class="topbar-war-alert">${wars.length === 1 ? 'WAR ACTIVE' : `${wars.length} WARS ACTIVE`}</b>` : ''}</small><div class="command-identity__line"><strong title="${escapeHtml(human.name)}">${escapeHtml(human.shortName)}</strong><button class="v2-rank-badge" data-action="ranking" aria-label="Open global military ranking; ${escapeHtml(human.name)} is military rank ${humanRank} of ${ranking.length} active countries">#${humanRank}/${ranking.length}</button></div></div>
         </div>
         <nav class="strategic-metrics v2-metrics simple-metrics topbar-status" aria-label="Command status">
-          <button type="button" class="top-metric top-metric--economy" data-action="panel" data-panel="economy" title="Empire output, shared cash and annual growth; APEX income is included" aria-label="Open Economy. Empire output ${cash(economy.controlledOutput)}; shared treasury ${cash(human.treasury)}; projected net cashflow ${signedCash(annual(displayedNet))} per year including APEX income; annual growth ${signed(finance.annualEconomyGrowthRate * 100, 2)} percent"><span>ECONOMY</span><strong>${cash(economy.controlledOutput)}<i class="${finance.annualEconomyGrowthRate >= 0 ? 'is-positive' : 'is-negative'}">${signed(finance.annualEconomyGrowthRate * 100, 2)}%</i></strong><small><span>CASH ${cash(human.treasury)}</span><b class="${displayedNet >= 0 ? 'is-positive' : 'is-negative'}">${signedCash(annual(displayedNet))}/YR</b></small></button>
+          <button type="button" class="top-metric top-metric--economy" data-action="panel" data-panel="economy" title="Empire output, shared cash and annual growth; EONSCAR income is included" aria-label="Open Economy. Empire output ${cash(economy.controlledOutput)}; shared treasury ${cash(human.treasury)}; projected net cashflow ${signedCash(annual(displayedNet))} per year including EONSCAR income; annual growth ${signed(finance.annualEconomyGrowthRate * 100, 2)} percent"><span>ECONOMY</span><strong>${cash(economy.controlledOutput)}<i class="${finance.annualEconomyGrowthRate >= 0 ? 'is-positive' : 'is-negative'}">${signed(finance.annualEconomyGrowthRate * 100, 2)}%</i></strong><small><span>CASH ${cash(human.treasury)}</span><b class="${displayedNet >= 0 ? 'is-positive' : 'is-negative'}">${signedCash(annual(displayedNet))}/YR</b></small></button>
           <button type="button" class="top-metric top-metric--population" data-action="panel" data-panel="nation" title="Integrated population and annual change" aria-label="Open Nation. Integrated population ${format(integratedPopulation, 2)} million; annual change ${signed(populationDynamics.annualNetRate * 100, 2)} percent"><span>POPULATION</span><strong>${population(integratedPopulation)}<i class="${populationDynamics.annualNetRate >= 0 ? 'is-positive' : 'is-negative'}">${signed(populationDynamics.annualNetRate * 100, 2)}%</i></strong></button>
-          <button type="button" class="top-metric top-metric--combined-power top-metric--defence-stack ${wars.length ? 'has-war' : ''}" data-action="panel" data-panel="war" title="Empire Army with APEX Energy projected over it" aria-label="Open War. Shield-supported army power ${compactNumber(combinedPower)}. Base Empire Army power ${compactNumber(combatPower)}, ${armyReadiness.percent} percent ready, ${armyReadiness.status.toLowerCase()}. ${apexPowerState.recovering ? `APEX Energy recharging at ${apexPowerState.integrityPercent} percent and currently unavailable` : `APEX Energy ${apexPowerState.integrityPercent} percent; Army support plus ${format(apexPowerState.supportBonusPercent, 1)} percent`}"><span>EMPIRE DEFENCE</span><strong>${compactNumber(combinedPower)}<i class="topbar-army-ready ${armyReadiness.className}">${armyReadiness.value} ARMY</i></strong><i class="topbar-defence-stack" role="img" aria-label="Army readiness ${armyReadiness.percent} percent with APEX Energy ${apexPowerState.integrityPercent} percent overlaid"><b style="--army-ready:${armyReadiness.percent}%"></b><em class="${apexPowerState.recovering ? 'is-recharging' : 'is-active'}" style="--shield-integrity:${apexPowerState.integrityPercent}%"><i data-empire-defence-glow></i></em></i><small><span>ARMY ${compactNumber(combatPower)}</span><b class="${apexPowerState.recovering ? 'is-warn' : 'is-positive'}">ENERGY ${apexPowerState.integrityPercent}% · +${format(apexPowerState.supportBonusPercent, 1)}% SUPPORT</b></small></button>
+          <button type="button" class="top-metric top-metric--combined-power top-metric--defence-stack ${wars.length ? 'has-war' : ''}" data-action="panel" data-panel="war" title="Empire Army with EONSCAR Energy projected over it" aria-label="Open War. Shield-supported army power ${compactNumber(combinedPower)}. Base Empire Army power ${compactNumber(combatPower)}, ${armyReadiness.percent} percent ready, ${armyReadiness.status.toLowerCase()}. ${apexPowerState.recovering ? `EONSCAR Energy recharging at ${apexPowerState.integrityPercent} percent and currently unavailable` : `EONSCAR Energy ${apexPowerState.integrityPercent} percent; Army support plus ${format(apexPowerState.supportBonusPercent, 1)} percent`}"><span>EMPIRE DEFENCE</span><strong>${compactNumber(combinedPower)}<i class="topbar-army-ready ${armyReadiness.className}">${armyReadiness.value} ARMY</i></strong><i class="topbar-defence-stack" role="img" aria-label="Army readiness ${armyReadiness.percent} percent with EONSCAR Energy ${apexPowerState.integrityPercent} percent overlaid"><b style="--army-ready:${armyReadiness.percent}%"></b><em class="${apexPowerState.recovering ? 'is-recharging' : 'is-active'}" style="--shield-integrity:${apexPowerState.integrityPercent}%"><i data-empire-defence-glow></i></em></i><small><span>ARMY ${compactNumber(combatPower)}</span><b class="${apexPowerState.recovering ? 'is-warn' : 'is-positive'}">ENERGY ${apexPowerState.integrityPercent}% · +${format(apexPowerState.supportBonusPercent, 1)}% SUPPORT</b></small></button>
           <button type="button" class="top-metric top-metric--logistics is-${logisticsReadiness.status}" data-action="panel" data-panel="war" title="Actual supply delivered to active war fronts" aria-label="Open War. War Supply ${logisticsReadiness.percent} percent. ${escapeHtml(logisticsDetail)}"><span>WAR SUPPLY</span><strong>${logisticsReadiness.percent}%<i>${logisticsReadiness.frontCount === 0 ? 'NO WAR' : logisticsReadiness.statusLabel}</i></strong><i class="topbar-progress-bar" role="progressbar" aria-label="War supply delivered" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${logisticsReadiness.percent}"><b style="width:${logisticsReadiness.percent}%"></b></i></button>
           <button type="button" class="top-metric top-metric--research" data-action="panel" data-panel="research" title="Active research and progress" aria-label="Open Research. ${escapeHtml(topbarResearchLabel)}, ${topbarResearchProgress} percent complete"><span>RESEARCH</span><strong>${topbarResearchProgress}%</strong><i class="topbar-progress-bar" role="progressbar" aria-label="Research progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${topbarResearchProgress}"><b style="width:${topbarResearchProgress}%"></b></i><small>${escapeHtml(topbarResearchLabel)}</small></button>
         </nav>
@@ -2944,7 +2955,7 @@ export class WorldUIV2 {
 
       ${!spectating ? `<nav class="command-dock glass-panel" aria-label="Command center">
         <button class="${commandOpen && this.panelMode === 'war' ? 'is-active' : ''} ${wars.length ? 'has-war' : ''}" data-action="panel" data-panel="war"><i>⚔</i><span><b>WAR</b><small>${wars.length ? `${wars.length} active` : 'Choose target'}</small></span></button>
-        <button class="${commandOpen && this.panelMode === 'commander' ? 'is-active' : ''}" data-action="panel" data-panel="commander"><i>◆</i><span><b>APEX</b><small>AUTO · ${escapeHtml(apexDockStatus)}</small></span></button>
+        <button class="${commandOpen && this.panelMode === 'commander' ? 'is-active' : ''}" data-action="panel" data-panel="commander"><i class="eonscar-command-mark"><img src="${eonscarLogoUrl}" alt=""></i><span><b>EONSCAR</b><small>AUTO · ${escapeHtml(apexDockStatus)}</small></span></button>
         <button class="${commandOpen && this.panelMode === 'nation' ? 'is-active' : ''}" data-action="panel" data-panel="nation"><i>◇</i><span><b>NATION</b><small>AI · ${escapeHtml(finance.aiMode)}</small></span></button>
         <button class="${commandOpen && this.panelMode === 'research' ? 'is-active' : ''}" data-action="panel" data-panel="research"><i>⌁</i><span><b>RESEARCH</b><small>${completedUpgrades} upgrades</small></span></button>
         <button class="${commandOpen && this.panelMode === 'economy' ? 'is-active' : ''} ${displayedNet < 0 ? 'is-negative' : ''}" data-action="panel" data-panel="economy"><i>$</i><span><b>ECONOMY</b><small>${signed(finance.annualEconomyGrowthRate * 100, 2)}%/yr</small></span></button>
@@ -3015,7 +3026,7 @@ export class WorldUIV2 {
     const state = this.engine.state;
     const force = state.commanderForces?.[human.id];
     if (!force) {
-      return `<aside class="world-panel command-drawer glass-panel commander-control is-unavailable"><button class="panel-close" data-action="close-panel" aria-label="Close APEX status">×</button><div class="drawer-heading"><div><span class="panel-kicker">LOYAL STRATEGIC INTELLIGENCE</span><h2>APEX</h2></div><strong>OFFLINE</strong></div><section class="commander-control__empty"><b>This legacy timeline has no APEX shield.</b><p>Start a new Campaign or Survival run to initialise its autonomous neural defence network.</p></section></aside>`;
+      return `<aside class="world-panel command-drawer glass-panel commander-control is-unavailable"><button class="panel-close" data-action="close-panel" aria-label="Close EONSCAR status">×</button><div class="drawer-heading"><div><span class="panel-kicker">LOYAL STRATEGIC INTELLIGENCE</span><h2>EONSCAR</h2></div><strong>OFFLINE</strong></div><section class="commander-control__empty"><b>This legacy timeline has no EONSCAR shield.</b><p>Start a new Campaign or Survival run to initialise its autonomous neural defence network.</p></section></aside>`;
     }
 
     const autonomy = selectCommanderAutonomyStatusV2(
@@ -3061,10 +3072,10 @@ export class WorldUIV2 {
         ? `${frontAllocationPercent}% power per front · ${totalProjectionBudgetPercent}% total grid budget`
         : `${protectedTerritoryCount} protected ${protectedTerritoryCount === 1 ? 'territory' : 'territories'}`;
     return `<aside class="world-panel command-drawer glass-panel command-drawer--clean command-drawer--unified command-drawer--decision commander-control" data-scroll-session="${drawerScrollSessionId('commander')}">
-      <button class="panel-close" data-action="close-panel" aria-label="Close APEX status">×</button>
-      <div class="drawer-heading drawer-heading--single"><div><h2>APEX</h2></div><strong class="${recovering ? 'is-warning' : 'is-positive'}">AUTO · ${escapeHtml(networkStatus)}</strong></div>
-      <section class="commander-control__hero ${recovering ? 'is-recovering' : ''}"><div class="commander-control__crest" aria-hidden="true">⌁<i></i></div><div><span>EMPIRE-WIDE SHIELD NETWORK</span><strong>${format(activeFill, 0)}% ENERGY</strong><small>${protectedTerritoryCount} PROTECTED · ${escapeHtml(autonomy.headline.replace(/^APEX\s+/, ''))}${capstoneSummary ? ` · ${escapeHtml(capstoneSummary)}` : ''}</small></div></section>
-      <section class="commander-control__metrics commander-control__metrics--decision" aria-label="APEX neural shield status"><article><span>ENERGY</span><b>${format(activeFill, 0)}%</b><small>${compactNumber(force.shield.integrity)} / ${compactNumber(force.shield.maxIntegrity)} MAX · ${recovering ? 'Offline until fully charged' : 'Active neural dome'}</small></article><article class="is-elite"><span>ARMY SUPPORT</span><b>+${format(((network?.attackMultiplier ?? 1) - 1) * 100, 1)}% ATK</b><small>+${format(((network?.defenseMultiplier ?? 1) - 1) * 100, 1)}% DEF · only while Energy is online</small></article><article><span>BACKUP ENERGY</span><b>${compactNumber(force.shield.rechargeBuffer)}</b><small>Stored for safe recharge</small></article><article class="is-good"><span>EMPIRE CONTRIBUTION</span><b>+${cash(annual(finance.apexContribution))}/YR</b><small>Autonomous network output</small></article><article class="${activeFrontCount > 0 && !recovering ? 'is-power' : ''}"><span>NETWORK SUPPORT</span><b>${escapeHtml(networkStatus)}</b><small>${escapeHtml(networkDetail)}</small></article></section>
+      <button class="panel-close" data-action="close-panel" aria-label="Close EONSCAR status">×</button>
+      <div class="drawer-heading drawer-heading--single"><div><h2>EONSCAR</h2></div><strong class="${recovering ? 'is-warning' : 'is-positive'}">AUTO · ${escapeHtml(networkStatus)}</strong></div>
+      <section class="commander-control__hero ${recovering ? 'is-recovering' : ''}"><div class="commander-control__crest" aria-hidden="true"><img src="${eonscarLogoUrl}" alt=""><i></i></div><div><span>EMPIRE-WIDE SHIELD NETWORK</span><strong>${format(activeFill, 0)}% ENERGY</strong><small>${protectedTerritoryCount} PROTECTED · ${escapeHtml(autonomy.headline.replace(/^(?:EONSCAR|APEX)\s+/, ''))}${capstoneSummary ? ` · ${escapeHtml(capstoneSummary)}` : ''}</small></div></section>
+      <section class="commander-control__metrics commander-control__metrics--decision" aria-label="EONSCAR neural shield status"><article><span>ENERGY</span><b>${format(activeFill, 0)}%</b><small>${compactNumber(force.shield.integrity)} / ${compactNumber(force.shield.maxIntegrity)} MAX · ${recovering ? 'Offline until fully charged' : 'Active neural dome'}</small></article><article class="is-elite"><span>ARMY SUPPORT</span><b>+${format(((network?.attackMultiplier ?? 1) - 1) * 100, 1)}% ATK</b><small>+${format(((network?.defenseMultiplier ?? 1) - 1) * 100, 1)}% DEF · only while Energy is online</small></article><article><span>BACKUP ENERGY</span><b>${compactNumber(force.shield.rechargeBuffer)}</b><small>Stored for safe recharge</small></article><article class="is-good"><span>EMPIRE CONTRIBUTION</span><b>+${cash(annual(finance.apexContribution))}/YR</b><small>Autonomous network output</small></article><article class="${activeFrontCount > 0 && !recovering ? 'is-power' : ''}"><span>NETWORK SUPPORT</span><b>${escapeHtml(networkStatus)}</b><small>${escapeHtml(networkDetail)}</small></article></section>
     </aside>`;
   }
 
@@ -3204,23 +3215,23 @@ export class WorldUIV2 {
       ? 'TUTORIAL · REQUIRED TO CONTINUE'
       : firstStrike ? 'FIRST OPERATION READY' : 'SITUATION UPDATE';
     const objective = mandatory
-      ? 'Start the required APEX analysis'
+      ? 'Start the required EONSCAR analysis'
       : firstStrike
         ? 'Review and approve your first attack'
         : transmission.id === 'campaign-first-war-recovery'
           ? 'Research and choose your next target'
-          : 'Read this APEX situation update';
+          : 'Read this EONSCAR situation update';
     const action = mandatory
-      ? `<button class="primary-button apex-transmission__required-action" data-action="respond-apex-transmission" data-transmission="${transmission.id}" data-choice="accept" aria-label="Required: start APEX analysis">START ANALYSIS <span aria-hidden="true">→</span></button>`
+      ? `<button class="primary-button apex-transmission__required-action" data-action="respond-apex-transmission" data-transmission="${transmission.id}" data-choice="accept" aria-label="Required: start EONSCAR analysis">START ANALYSIS <span aria-hidden="true">→</span></button>`
       : `<button class="primary-button" data-action="respond-apex-transmission" data-transmission="${transmission.id}" data-choice="acknowledge">${firstStrike ? 'SELECT FIRST TARGET' : 'ACKNOWLEDGE'}</button>`;
     return `<div class="apex-transmission-backdrop" data-action="complete-apex-transmission">
       <section class="apex-transmission-channel glass-panel${complete ? '' : ' is-revealing'}${mandatory ? ' is-required' : ''}" role="dialog" aria-modal="true" aria-labelledby="apex-transmission-title" aria-describedby="apex-transmission-full-copy" tabindex="-1" data-reveal-key="${escapeHtml(key)}">
         <div class="apex-transmission__signal" aria-hidden="true">
           <svg viewBox="0 0 160 96" focusable="false"><path d="M4 52h22l9-25 15 49 13-34 11 20 11-10h18l8-30 14 57 12-35 9 8h10"/><path d="M9 18l23 8 18-13 23 12 24-14 24 15 28-10"/><rect x="30" y="22" width="7" height="7" transform="rotate(45 33.5 25.5)"/><rect x="93" y="8" width="7" height="7" transform="rotate(45 96.5 11.5)"/><rect x="118" y="23" width="7" height="7" transform="rotate(45 121.5 26.5)"/></svg>
-          <b>APEX</b><span>ALLIED STRATEGIC AI</span>
+          <b>EONSCAR</b><span>ALLIED STRATEGIC AI</span>
         </div>
         <div class="apex-transmission__message">
-          <header><span>SECURE ALLIED CHANNEL · WEEK ${transmission.sentTick}</span><b><i></i> APEX LIVE</b></header>
+          <header><span>SECURE ALLIED CHANNEL · WEEK ${transmission.sentTick}</span><b><i></i> EONSCAR LIVE</b></header>
           <small class="apex-transmission__context">${context}</small>
           <h2 id="apex-transmission-title">${escapeHtml(transmission.title)}</h2>
           <p class="apex-transmission__visible-copy" aria-hidden="true"><span class="apex-transmission__copy">${escapeHtml(visibleCopy)}</span><i class="apex-transmission__cursor"${complete ? ' hidden' : ''}>▋</i></p>
@@ -3269,8 +3280,8 @@ export class WorldUIV2 {
           : 'LOCKED';
     const action = terms.status === 'complete' ? ''
       : `<button class="${canStart ? 'primary-button' : 'ghost-button'}" data-action="start-arctic-project" data-project="${project.id}" ${canStart ? '' : 'disabled'} title="${escapeHtml(terms.reason ?? (terms.status === 'active' ? 'Analysis is already running.' : 'Complete the previous stage first.'))}">${terms.status === 'active' ? `${progress}% ACTIVE` : terms.status === 'available' ? `START ANALYSIS · ${cash(terms.cost)}` : 'PREVIOUS STAGE REQUIRED'}</button>`;
-    return `<section class="research-next-card research-next-card--polar${completed === 0 && terms.status === 'available' ? ' is-highlighted' : ''}" style="--project:#55d8ef" aria-label="APEX signal analysis stage ${stage} of ${ARCTIC_PROJECTS_V2.length}: ${escapeHtml(project.name)}">
-      <div><span>APEX SIGNAL ANALYSIS · STAGE ${stage}/${ARCTIC_PROJECTS_V2.length}</span><strong>${escapeHtml(project.name)}</strong><b>${escapeHtml(status)}</b></div>
+    return `<section class="research-next-card research-next-card--polar${completed === 0 && terms.status === 'available' ? ' is-highlighted' : ''}" style="--project:#55d8ef" aria-label="EONSCAR signal analysis stage ${stage} of ${ARCTIC_PROJECTS_V2.length}: ${escapeHtml(project.name)}">
+      <div><span>EONSCAR SIGNAL ANALYSIS · STAGE ${stage}/${ARCTIC_PROJECTS_V2.length}</span><strong>${escapeHtml(project.name)}</strong><b>${escapeHtml(status)}</b></div>
       <i role="progressbar" aria-label="${escapeHtml(project.name)} progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress}"><b style="width:${progress}%"></b></i>
       <strong class="research-next-effect">${escapeHtml(effect)}</strong>
       <small>${terms.status === 'active' ? `${progress}% complete · ${compactWarTime(remaining)} remaining` : terms.status === 'complete' ? 'Effects active.' : escapeHtml(terms.reason ?? `${cash(terms.cost)} · ${compactWarTime(terms.durationTicks)}`)}</small>
@@ -3490,13 +3501,13 @@ export class WorldUIV2 {
         <section class="decision-stat-grid decision-stat-grid--nation" aria-label="Nation status">
           <article class="is-primary"><span>POWER</span><strong>${compactNumber(nationPower)}</strong><small>National combat power</small></article>
           <article><span>TERRITORIES</span><strong>${world.controlledTerritories}</strong><small>${format(world.controlledLandShare * 100, 2)}% mapped land</small></article>
-          <article class="${integratingTerritories.length ? 'is-warn' : 'is-good'}"><span>APEX SIGNAL PURGE</span><strong>${format(purgePercent, 1)}%</strong><small>${nextIntegration ? `${escapeHtml(this.engine.content.territories[nextIntegration.id]?.name ?? nextIntegration.id)} · ${escapeHtml(purgeState)}${integrationWeeks === undefined ? '' : ` · ${compactWarTime(integrationWeeks)}`}` : 'Complete'}</small></article>
+          <article class="${integratingTerritories.length ? 'is-warn' : 'is-good'}"><span>EONSCAR SIGNAL PURGE</span><strong>${format(purgePercent, 1)}%</strong><small>${nextIntegration ? `${escapeHtml(this.engine.content.territories[nextIntegration.id]?.name ?? nextIntegration.id)} · ${escapeHtml(purgeState)}${integrationWeeks === undefined ? '' : ` · ${compactWarTime(integrationWeeks)}`}` : 'Complete'}</small></article>
           <article><span>PEOPLE</span><strong>${population(economy.population)}</strong><small class="${populationDynamics.annualNetRate >= 0 ? 'is-positive' : 'is-negative'}">${signedPeople(annualPopulationChange)} / year</small></article>
         </section>
 
         <details class="decision-details" data-disclosure-session="drawer:nation:people"><summary>People <b>${populationShare.toFixed(2)}% world population</b></summary><div class="decision-details__body"><section class="nation-system-block nation-life-grid" aria-label="Population"><article class="nation-life-card nation-life-card--population"><div><span>DEMOGRAPHICS</span><strong class="${populationDynamics.annualNetRate >= 0 ? 'is-positive' : 'is-negative'}">${signedPeople(annualPopulationChange)} / year</strong></div><div class="nation-demographic-flow"><span><b>+${population(annualBirths)}</b>BIRTHS</span><i>−</i><span><b>−${population(annualDeaths)}</b>DEATHS</span>${populationDynamics.annualWarPenaltyRate > 0 ? `<i>−</i><span><b>−${population(economy.population * populationDynamics.annualWarPenaltyRate)}</b>WAR DRAG</span>` : ''}</div></article></section></div></details>
 
-        <details class="decision-details" data-disclosure-session="drawer:nation:apex-purge"><summary>APEX purge &amp; national IQ <b>IQ ${format(iqFusion.score, 1)}</b></summary><div class="decision-details__body"><section class="nation-fusion-panel ${integratingTerritories.length ? 'is-active' : 'is-complete'}" aria-label="Empire liberation, APEX Signal Purge and national IQ fusion"><header><span>APEX SIGNAL PURGE</span><strong>IQ ${format(iqFusion.score, 1)}</strong></header><div class="nation-fusion-score"><span><small>NATIVE</small><b>${format(iqFusion.nativeBaseline, 1)}</b></span><i aria-hidden="true">&rarr;</i><span><small>FUSED</small><b>${format(iqFusion.fusedBaseline, 1)}</b></span><em class="${fusionTone}">${signed(iqFusion.fusionDelta, 1)} IQ</em></div><div class="nation-fusion-progress"><span><b>${format(purgePercent, 1)}% SIGNAL PURGED</b><small>${integratingTerritories.length ? `APEX focus · ${activeFrontPurges} front · ${remotePurges} remote · ${format(integrationProgress * 100, 1)}%` : 'Complete'}</small></span><i role="progressbar" aria-label="Empire signal purge" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${format(purgePercent, 1)}"><b style="width:${format(purgePercent, 2)}%"></b></i></div><div class="nation-fusion-origins" aria-label="Liberated population origins">${fusionOriginMix || '<span><b>NATIVE</b>100%</span>'}</div><footer><span>${format(iqFusion.foreignContributingShare * 100, 1)}% foreign influence${iqFusion.researchBonus > 0 ? ` · +${format(iqFusion.researchBonus, 1)} research IQ` : ''}</span><strong>${nextIntegration ? `${escapeHtml(this.engine.content.territories[nextIntegration.id]?.name ?? nextIntegration.id)} · ${escapeHtml(purgeState)}${integrationWeeks === undefined ? '' : ` · ${format(integrationWeeks / 52, 1)}Y`}` : 'ALL CORE'}</strong></footer></section></div></details>
+        <details class="decision-details" data-disclosure-session="drawer:nation:apex-purge"><summary>EONSCAR purge &amp; national IQ <b>IQ ${format(iqFusion.score, 1)}</b></summary><div class="decision-details__body"><section class="nation-fusion-panel ${integratingTerritories.length ? 'is-active' : 'is-complete'}" aria-label="Empire liberation, EONSCAR Signal Purge and national IQ fusion"><header><span>EONSCAR SIGNAL PURGE</span><strong>IQ ${format(iqFusion.score, 1)}</strong></header><div class="nation-fusion-score"><span><small>NATIVE</small><b>${format(iqFusion.nativeBaseline, 1)}</b></span><i aria-hidden="true">&rarr;</i><span><small>FUSED</small><b>${format(iqFusion.fusedBaseline, 1)}</b></span><em class="${fusionTone}">${signed(iqFusion.fusionDelta, 1)} IQ</em></div><div class="nation-fusion-progress"><span><b>${format(purgePercent, 1)}% SIGNAL PURGED</b><small>${integratingTerritories.length ? `EONSCAR focus · ${activeFrontPurges} front · ${remotePurges} remote · ${format(integrationProgress * 100, 1)}%` : 'Complete'}</small></span><i role="progressbar" aria-label="Empire signal purge" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${format(purgePercent, 1)}"><b style="width:${format(purgePercent, 2)}%"></b></i></div><div class="nation-fusion-origins" aria-label="Liberated population origins">${fusionOriginMix || '<span><b>NATIVE</b>100%</span>'}</div><footer><span>${format(iqFusion.foreignContributingShare * 100, 1)}% foreign influence${iqFusion.researchBonus > 0 ? ` · +${format(iqFusion.researchBonus, 1)} research IQ` : ''}</span><strong>${nextIntegration ? `${escapeHtml(this.engine.content.territories[nextIntegration.id]?.name ?? nextIntegration.id)} · ${escapeHtml(purgeState)}${integrationWeeks === undefined ? '' : ` · ${format(integrationWeeks / 52, 1)}Y`}` : 'ALL CORE'}</strong></footer></section></div></details>
 
         <details class="decision-details" data-disclosure-session="drawer:nation:systems"><summary>Nation systems <b>STABLE</b></summary><div class="decision-details__body"><section class="unified-stat-grid"><article><span>INTEGRATED PEOPLE</span><strong>${population(integratedPopulation)}</strong><small>${format(populationShare, 2)}% of world</small></article><article><span>NATIONAL AI</span><strong>${escapeHtml(finance.aiMode.toUpperCase())}</strong><small>${format(finance.aiEfficiency * 100, 1)}% efficiency</small></article></section></div></details>
       </aside>
@@ -3512,7 +3523,7 @@ export class WorldUIV2 {
     const growth = finance.annualEconomyGrowthRate;
     const incomeItems = [
       { label: 'TAX REVENUE', weekly: Math.max(0, finance.revenue), tone: 'tax', always: true },
-      { label: 'APEX CONTRIBUTION', weekly: Math.max(0, finance.apexContribution), tone: 'apex', always: true },
+      { label: 'EONSCAR CONTRIBUTION', weekly: Math.max(0, finance.apexContribution), tone: 'apex', always: true },
     ];
     const incomeRows = incomeItems
       .filter((item) => item.always || item.weekly > 0.0000005)
@@ -3831,8 +3842,8 @@ export class WorldUIV2 {
         const assignedSupportPercent = apexAssigned
           ? apexShield.supportBonusPercent * networkFront!.allocationShare : 0;
         const apexDetail = apexAssigned
-          ? `APEX GRID ${allocationPercent}% · +${format(assignedSupportPercent, 1)}% ARMY · ENERGY ${apexShield.integrityPercent}%`
-          : candidate.criticalDefense ? 'APEX PRIORITY · COLLAPSE RISK'
+          ? `EONSCAR GRID ${allocationPercent}% · +${format(assignedSupportPercent, 1)}% ARMY · ENERGY ${apexShield.integrityPercent}%`
+          : candidate.criticalDefense ? 'EONSCAR PRIORITY · COLLAPSE RISK'
           : `AUTO PRIORITY ${index + 1} · +${format(candidate.marginalWinImpact, 1)}PP IMPACT`;
         return `<article class="war-primary-front${apexAssigned ? ' is-assigned' : ''}" style="--enemy:${enemy?.cssColor ?? '#ff8179'}"><div><span>${candidate.mission === 'assault-support' ? 'ATTACK' : 'DEFEND'} · ${escapeHtml(warAccessLabel(candidate.access))}</span><strong>${escapeHtml(sourceName)} → ${escapeHtml(targetName)}</strong><small>POWER ${compactNumber(ownLocalPower)} / ${compactNumber(enemyLocalPower)} · ${escapeHtml(apexDetail)}</small></div></article>`;
       }).join('');
@@ -3848,16 +3859,16 @@ export class WorldUIV2 {
             ? this.cachedWarLogisticsPreview(human.id, candidate.targetId) : undefined,
         )).join('') : '<div class="empty-state">No legal target is currently in land or naval range.</div>'}</div></section>`
       : warsUnlocked
-        ? '<section class="war-command-lock war-command-lock--compact" aria-label="APEX is preparing your first target"><strong>APEX IS PREPARING YOUR FIRST TARGET</strong></section>'
+        ? '<section class="war-command-lock war-command-lock--compact" aria-label="EONSCAR is preparing your first target"><strong>EONSCAR IS PREPARING YOUR FIRST TARGET</strong></section>'
         : apexOpeningBriefingKnown
         ? `<section class="war-command-lock" aria-label="Military intelligence locked"><span>INTELLIGENCE LOCKED</span><strong>SIGNAL TRIANGULATION REQUIRED</strong><small>${escapeHtml(CAMPAIGN_WAR_LOCK_REASON_V2)}</small><button class="secondary-button" data-action="panel" data-panel="research">OPEN RESEARCH</button></section>`
-        : `<section class="war-command-lock war-command-lock--opening" aria-label="APEX initial scan in progress"><span>CALM</span><strong>INITIAL SCAN IN PROGRESS</strong><small>Review your readiness. APEX will contact you when verified intelligence is available.</small></section>`;
+        : `<section class="war-command-lock war-command-lock--opening" aria-label="EONSCAR initial scan in progress"><span>CALM</span><strong>INITIAL SCAN IN PROGRESS</strong><small>Review your readiness. EONSCAR will contact you when verified intelligence is available.</small></section>`;
     return `
       <aside class="world-panel command-drawer glass-panel war-command command-drawer--clean command-drawer--unified command-drawer--decision" data-scroll-session="${drawerScrollSessionId('war')}">
         <button class="panel-close" data-action="close-panel" aria-label="Close war command">×</button>
         <div class="drawer-heading drawer-heading--compact drawer-heading--single"><div><h2>War</h2></div><strong class="${wars.length ? 'is-negative' : army.fillRatio >= 0.55 ? 'is-positive' : 'is-warn'}">${wars.length ? 'AT WAR' : army.fillRatio >= 0.55 ? 'READY' : 'REBUILDING'}</strong></div>
-        <section class="decision-stat-grid decision-stat-grid--war" aria-label="Military status"><article class="is-primary"><span>TOTAL POWER</span><strong>${compactNumber(combinedPower)}</strong><small>${apexShield.supportBonusPercent > 0 ? `Army ${compactNumber(currentPower)} · APEX +${format(apexShield.supportBonusPercent, 1)}%` : 'Empire combat power'}</small></article><article class="${army.fillRatio >= 0.55 ? 'is-good' : 'is-warn'}"><span>ARMY READY</span><strong>${format(army.fillRatio * 100, 0)}%</strong><small>${people(army.deployed)} active</small></article><article class="logistics-${logisticsReadiness.status}${logisticsReadiness.status === 'critical' ? ' is-danger' : logisticsReadiness.status === 'strained' ? ' is-warn' : logisticsReadiness.status === 'ready' ? ' is-good' : ''}"><span>WAR SUPPLY</span><strong>${logisticsReadiness.percent}% ${logisticsReadiness.frontCount === 0 ? 'NO WAR' : logisticsReadiness.statusLabel}</strong><small>${escapeHtml(logisticsSummary)}</small></article><article class="${finance.warOperations > 0 ? 'is-warn' : ''}"><span>WAR COST</span><strong>${cash(annual(finance.warOperations))}</strong><small>/ year</small></article></section>
-        ${primaryFrontRows ? `<section class="war-primary-fronts" aria-label="Priority active fronts"><header><strong>Priority fronts</strong><small>APEX allocates the shared shield automatically</small></header>${primaryFrontRows}</section>` : ''}
+        <section class="decision-stat-grid decision-stat-grid--war" aria-label="Military status"><article class="is-primary"><span>TOTAL POWER</span><strong>${compactNumber(combinedPower)}</strong><small>${apexShield.supportBonusPercent > 0 ? `Army ${compactNumber(currentPower)} · EONSCAR +${format(apexShield.supportBonusPercent, 1)}%` : 'Empire combat power'}</small></article><article class="${army.fillRatio >= 0.55 ? 'is-good' : 'is-warn'}"><span>ARMY READY</span><strong>${format(army.fillRatio * 100, 0)}%</strong><small>${people(army.deployed)} active</small></article><article class="logistics-${logisticsReadiness.status}${logisticsReadiness.status === 'critical' ? ' is-danger' : logisticsReadiness.status === 'strained' ? ' is-warn' : logisticsReadiness.status === 'ready' ? ' is-good' : ''}"><span>WAR SUPPLY</span><strong>${logisticsReadiness.percent}% ${logisticsReadiness.frontCount === 0 ? 'NO WAR' : logisticsReadiness.statusLabel}</strong><small>${escapeHtml(logisticsSummary)}</small></article><article class="${finance.warOperations > 0 ? 'is-warn' : ''}"><span>WAR COST</span><strong>${cash(annual(finance.warOperations))}</strong><small>/ year</small></article></section>
+        ${primaryFrontRows ? `<section class="war-primary-fronts" aria-label="Priority active fronts"><header><strong>Priority fronts</strong><small>EONSCAR allocates the shared shield automatically</small></header>${primaryFrontRows}</section>` : ''}
         ${targetIntel}
         <details class="decision-details" data-disclosure-session="drawer:war:army"><summary>Army, ATK &amp; DEF</summary><div class="decision-details__body">${this.renderMilitaryCommandOverview(human, economy, finance)}</div></details>
         ${wars.length ? `<details class="decision-details" data-disclosure-session="drawer:war:campaigns"><summary>Active campaigns <b>${wars.length}</b></summary><div class="decision-details__body"><div class="war-cards">${wars.map((war) => this.renderWarCard(war, human.id, finance, logisticsReadiness, warEstimates.get(war.id), wars.length)).join('')}</div></div></details>` : ''}
@@ -4106,13 +4117,13 @@ export class WorldUIV2 {
     const panelStatus = survivalTransitOnly ? 'SUPPLY CORRIDOR'
       : activeWar ? 'WAR LIVE'
       : territory.integrationProgram
-        ? rogueRapidAssimilation ? 'RAPID ASSIMILATION' : `${owner.isHuman ? 'APEX ' : ''}SIGNAL PURGE`
+        ? rogueRapidAssimilation ? 'RAPID ASSIMILATION' : `${owner.isHuman ? 'EONSCAR ' : ''}SIGNAL PURGE`
       : isOwnTerritory ? 'YOUR CORE' : 'FOREIGN TARGET';
     const integrationPayer = isOwnTerritory ? 'YOU PAY' : `${owner.shortName.toUpperCase()} PAYS`;
     const integrationPanel = survivalTransitOnly
       ? '<section class="territory-integration-card territory-integration-card--corridor" aria-label="Supply corridor, transit only"><div class="territory-integration-card__head"><span>SUPPLY CORRIDOR</span><strong>TRANSIT ONLY</strong></div><small>Transit control only · no local production or recruits.</small></section>'
       : territory.integrationProgram
-      ? `<section class="territory-integration-card"><div class="territory-integration-card__head"><span>${rogueRapidAssimilation ? 'RAPID ASSIMILATION' : `${owner.isHuman ? 'APEX ' : ''}SIGNAL PURGE`} · ${escapeHtml(integratingCore?.shortName ?? definition.name).toUpperCase()}</span><strong>${escapeHtml(rogueRapidAssimilation ? '4× INTEGRATION' : apexPurgeStatus?.label ?? 'INTEGRATING')} · ${format(integrationPercent, 1)}%</strong></div><i role="progressbar" aria-label="${rogueRapidAssimilation ? 'Rapid assimilation' : 'Signal purge'} progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${format(integrationPercent, 1)}"><b style="width:${integrationPercent}%"></b></i><div class="territory-integration-card__metrics"><div><span>ETA</span><strong>${integrationWeeks === undefined ? 'WAITING FOR SUPPLY' : compactWarTime(integrationWeeks)}</strong></div><div><span>${escapeHtml(integrationPayer)}</span><strong class="is-negative">−${cash(territoryIntegrationAnnualCost)} / YEAR</strong></div></div><small>${cash(unlockedOutput)} active output · permanent ${escapeHtml(owner.shortName)} core at completion${guardWeeks > 0 ? ` · guard ${guardWeeks}w` : ''}</small></section>`
+      ? `<section class="territory-integration-card"><div class="territory-integration-card__head"><span>${rogueRapidAssimilation ? 'RAPID ASSIMILATION' : `${owner.isHuman ? 'EONSCAR ' : ''}SIGNAL PURGE`} · ${escapeHtml(integratingCore?.shortName ?? definition.name).toUpperCase()}</span><strong>${escapeHtml(rogueRapidAssimilation ? '4× INTEGRATION' : apexPurgeStatus?.label ?? 'INTEGRATING')} · ${format(integrationPercent, 1)}%</strong></div><i role="progressbar" aria-label="${rogueRapidAssimilation ? 'Rapid assimilation' : 'Signal purge'} progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${format(integrationPercent, 1)}"><b style="width:${integrationPercent}%"></b></i><div class="territory-integration-card__metrics"><div><span>ETA</span><strong>${integrationWeeks === undefined ? 'WAITING FOR SUPPLY' : compactWarTime(integrationWeeks)}</strong></div><div><span>${escapeHtml(integrationPayer)}</span><strong class="is-negative">−${cash(territoryIntegrationAnnualCost)} / YEAR</strong></div></div><small>${cash(unlockedOutput)} active output · permanent ${escapeHtml(owner.shortName)} core at completion${guardWeeks > 0 ? ` · guard ${guardWeeks}w` : ''}</small></section>`
       : '';
     const blockedWarNote = !activeWar && declaration && !declaration.allowed
       ? `<div class="war-rule-note is-blocked"><b>WAR UNAVAILABLE</b><span>${escapeHtml(declaration.reason ?? 'Requirements are not met.')}</span></div>`
@@ -4160,7 +4171,7 @@ export class WorldUIV2 {
         : survivalCounteroffensiveTarget ? 'ROGUE FRONT · COUNTERATTACK'
         : `ROUTE BLOCKED · ${routeBlocker}`
       : activeWar
-      ? territoryFront ? 'ACTIVE FRONT · APEX SHIELD ONLINE'
+      ? territoryFront ? 'ACTIVE FRONT · EONSCAR SHIELD ONLINE'
         : 'WAR ACTIVE · NO DIRECT CONTACT'
       : declaration?.allowed ? `${warAccessLabel(access)} ATTACK ROUTE`
         : 'ATTACK UNAVAILABLE';
@@ -4300,8 +4311,8 @@ export class WorldUIV2 {
       );
       const apexReadout = !apexAssigned ? ''
         : !apexNetwork?.active
-          ? 'APEX SHIELD RECOVERING'
-          : `APEX GRID ${Math.round(networkFront!.allocationShare * 100)}% · +${format(assignedSupportPercent, 1)}% ARMY`;
+          ? 'EONSCAR SHIELD RECOVERING'
+          : `EONSCAR GRID ${Math.round(networkFront!.allocationShare * 100)}% · +${format(assignedSupportPercent, 1)}% ARMY`;
       const allySupport = selectCoopAllySupportPreviewV2(
         this.engine.state,
         this.engine.content,
@@ -4370,23 +4381,26 @@ export class WorldUIV2 {
   private renderHelp(): string {
     const audioCredits = GAME_AUDIO_CREDITS.map((source) => `<li><a href="${escapeHtml(source.sourceUrl)}" target="_blank" rel="noreferrer">“${escapeHtml(source.title)}”</a> by ${escapeHtml(source.author)} · <a href="${escapeHtml(source.licenseUrl)}" target="_blank" rel="noreferrer">${escapeHtml(source.licenseLabel)}</a></li>`).join('');
     const campaignEveryNationForItself = this.options.scenarioConfig?.mode === 'standard-2026';
-    return `<div class="modal-backdrop"><section class="modal-card world-help" data-scroll-session="modal:help" aria-labelledby="game-guide-title"><button class="modal-close" data-action="help" aria-label="Close game guide">×</button><header class="world-help__heading"><h2 id="game-guide-title">Field guide</h2><p>You choose expansion and targets. APEX projects an autonomous neural shield.</p></header><div class="world-help-grid">
+    return `<div class="modal-backdrop"><section class="modal-card world-help" data-scroll-session="modal:help" aria-labelledby="game-guide-title"><button class="modal-close" data-action="help" aria-label="Close game guide">×</button><header class="world-help__heading"><h2 id="game-guide-title">Field guide</h2><p>You choose expansion and targets. EONSCAR projects an autonomous neural shield.</p></header><div class="world-help-grid">
       <article><i aria-hidden="true">◎</i><div><h3>Win and survive</h3><p>Become the final sovereign power, or unite Earth and destroy Antarctica's Zero-Point Core.</p></div></article>
-      <article><i aria-hidden="true">HUD</i><div><h3>Core loop and HUD</h3><p>Read five top metrics, choose a target and let time, logistics and APEX execute.</p></div></article>
-      <article><i aria-hidden="true">$</i><div><h3>Economy and treasury</h3><p>Output creates tax income; the shared treasury pays weekly commitments and APEX adds its own contribution.</p></div></article>
-      <article><i aria-hidden="true">MIL</i><div><h3>Army and APEX</h3><p>APEX projects one autonomous shield across the Empire and concentrates it where the fighting matters most.</p></div></article>
+      <article><i aria-hidden="true">HUD</i><div><h3>Core loop and HUD</h3><p>Read five top metrics, choose a target and let time, logistics and EONSCAR execute.</p></div></article>
+      <article><i aria-hidden="true">$</i><div><h3>Economy and treasury</h3><p>Output creates tax income; the shared treasury pays weekly commitments and EONSCAR adds its own contribution.</p></div></article>
+      <article><i aria-hidden="true">MIL</i><div><h3>Army and EONSCAR</h3><p>EONSCAR projects one autonomous shield across the Empire and concentrates it where the fighting matters most.</p></div></article>
       <article><i aria-hidden="true">⚔</i><div><h3>War Supply</h3><p>100% means every active front receives its full Army Capacity allocation. Naval routes deliver half the land amount.</p></div></article>
-      <article><i aria-hidden="true">AI</i><div><h3>APEX autonomy</h3><p>Energy powers the dome. At 0% it collapses, recharges safely and returns only at 100%.</p></div></article>
+      <article><i aria-hidden="true">AI</i><div><h3>EONSCAR autonomy</h3><p>Energy powers the dome. At 0% it collapses, recharges safely and returns only at 100%.</p></div></article>
       <article><i aria-hidden="true">R&amp;D</i><div><h3>Research</h3><p>Ten programmes advance automatically, while Active Effects shows the real totals applied to your empire.</p></div></article>
-      <article><i aria-hidden="true">◇</i><div><h3>Liberation and signal purge</h3><p>${campaignEveryNationForItself ? 'The machine signal shattered every alliance; each nation now fights for itself. ' : ''}Captured land starts partly usable while APEX purges the Rogue signal. A short post-war recovery window prevents immediate redeclaration.</p></div></article>
-      <article><i aria-hidden="true">POL</i><div><h3>North Pole and Rogue Attention</h3><p>The staged North Pole investigation gradually improves APEX intel and preparation; it never awakens the Rogue. Time and world liberation determine when Antarctica begins to react.</p></div></article>
+      <article><i aria-hidden="true">◇</i><div><h3>Liberation and signal purge</h3><p>${campaignEveryNationForItself ? 'The machine signal shattered every alliance; each nation now fights for itself. ' : ''}Captured land starts partly usable while EONSCAR purges the Rogue signal. A short post-war recovery window prevents immediate redeclaration.</p></div></article>
+      <article><i aria-hidden="true">POL</i><div><h3>North Pole and Rogue Attention</h3><p>The staged North Pole investigation gradually improves EONSCAR intel and preparation; it never awakens the Rogue. Time and world liberation determine when Antarctica begins to react.</p></div></article>
       <article><i aria-hidden="true">↔</i><div><h3>Controls and multiplayer</h3><p>Click territories, drag the globe, wheel or pinch to zoom, recenter with ⌖ and close drawers with Escape. Multiplayer orders are host-validated; absorbed commanders spectate.</p></div></article>
     </div><p class="help-tip"><b>Sound:</b> the ♪ button controls Music, Effects and Voice independently and stores choices on this device.</p><details class="world-help__credits" data-disclosure-session="modal:help:audio-credits"><summary>AUDIO CREDITS</summary><ul>${audioCredits}</ul></details></section></div>`;
   }
 
   private renderInbox(): string {
     const allEvents = this.engine.state.events.filter(isMajorWorldEvent).slice().reverse();
-    const events = allEvents.filter((event) => !event.message.startsWith('APEX TRANSMISSION ·'));
+    const events = allEvents.filter((event) => (
+      !event.message.startsWith('EONSCAR TRANSMISSION ·')
+      && !event.message.startsWith('APEX TRANSMISSION ·')
+    ));
     const transmissions = [...this.engine.apexTransmissions(this.viewerPlayerId())].reverse();
     const transmissionRows = transmissions.map((item) => {
       const response = item.action === 'north-pole-investigation'
@@ -4399,9 +4413,9 @@ export class WorldUIV2 {
           ? '<b class="apex-inbox-status">READ</b>'
           : `<button class="ghost-button" data-action="respond-apex-transmission" data-transmission="${item.id}" data-choice="acknowledge">ACKNOWLEDGE</button>`;
       const pendingClass = item.choice === null ? ' is-pending' : '';
-      return `<article class="apex-inbox-row${pendingClass}"><i aria-hidden="true">◆</i><div><span>APEX · ALLIED AI · WEEK ${item.sentTick}</span><strong>${escapeHtml(item.title)}</strong><p>${escapeHtml(item.body)}</p></div>${response}</article>`;
+      return `<article class="apex-inbox-row${pendingClass}"><i aria-hidden="true">◆</i><div><span>EONSCAR · ALLIED AI · WEEK ${item.sentTick}</span><strong>${escapeHtml(item.title)}</strong><p>${escapeHtml(item.body)}</p></div>${response}</article>`;
     }).join('');
-    return `<div class="modal-backdrop modal-backdrop--soft"><section class="modal-card inbox-modal"><button class="modal-close" data-action="inbox">×</button><div class="panel-kicker">SITUATION INBOX</div><h2>Briefings &amp; world events</h2><div class="inbox-filters"><span>${allEvents.filter((event) => this.eventIsUnread(event)).length} unread</span><button data-action="mark-read">Mark all read</button></div><div class="inbox-list" data-scroll-session="modal:inbox">${transmissionRows ? `<section class="apex-inbox-history" aria-label="APEX transmission history"><header><div><span>APEX · ALLIED AI</span><strong>Briefing log</strong></div><small>NEWEST FIRST</small></header>${transmissionRows}</section>` : ''}${events.map((event) => `<button class="${this.eventIsUnread(event) ? 'is-unread' : ''}" data-action="focus-event" data-territory="${event.territoryId ?? ''}"><b class="event-dot event-dot--${event.severity}"></b><div><span>WEEK ${event.tick} · ${event.kind.toUpperCase()}</span><strong>${escapeHtml(event.message)}</strong></div></button>`).join('')}</div></section></div>`;
+    return `<div class="modal-backdrop modal-backdrop--soft"><section class="modal-card inbox-modal"><button class="modal-close" data-action="inbox">×</button><div class="panel-kicker">SITUATION INBOX</div><h2>Briefings &amp; world events</h2><div class="inbox-filters"><span>${allEvents.filter((event) => this.eventIsUnread(event)).length} unread</span><button data-action="mark-read">Mark all read</button></div><div class="inbox-list" data-scroll-session="modal:inbox">${transmissionRows ? `<section class="apex-inbox-history" aria-label="EONSCAR transmission history"><header><div><span>EONSCAR · ALLIED AI</span><strong>Briefing log</strong></div><small>NEWEST FIRST</small></header>${transmissionRows}</section>` : ''}${events.map((event) => `<button class="${this.eventIsUnread(event) ? 'is-unread' : ''}" data-action="focus-event" data-territory="${event.territoryId ?? ''}"><b class="event-dot event-dot--${event.severity}"></b><div><span>WEEK ${event.tick} · ${event.kind.toUpperCase()}</span><strong>${escapeHtml(event.message)}</strong></div></button>`).join('')}</div></section></div>`;
   }
 
   private renderWarConfirmation(targetId: PlayerId): string {
@@ -4445,8 +4459,8 @@ export class WorldUIV2 {
     const ownTotalPower = ownPower * (1 + apexSupportBonus / 100);
     const powerRatio = targetPower > 0 ? ownTotalPower / targetPower : 99;
     const apexPowerLine = apexIncluded
-      ? `<small class="review-apex-contribution"><b>ARMY ${compactNumber(ownPower)}</b> · APEX +${format(apexSupportBonus, 1)}%${apexForecast.etaWeeks && apexForecast.etaWeeks > 0 ? ` · ARRIVES W${apexForecast.etaWeeks}` : ''}</small>`
-      : `<small class="review-apex-contribution is-unavailable"><b>APEX UNAVAILABLE</b> · ${escapeHtml(apexForecast.reason)}</small>`;
+      ? `<small class="review-apex-contribution"><b>ARMY ${compactNumber(ownPower)}</b> · EONSCAR +${format(apexSupportBonus, 1)}%${apexForecast.etaWeeks && apexForecast.etaWeeks > 0 ? ` · ARRIVES W${apexForecast.etaWeeks}` : ''}</small>`
+      : `<small class="review-apex-contribution is-unavailable"><b>EONSCAR UNAVAILABLE</b> · ${escapeHtml(apexForecast.reason)}</small>`;
     const terrainLabel = forecast.terrain
       ? terrainPresentation(forecast.terrain).label.toUpperCase()
       : 'UNKNOWN';
@@ -4574,9 +4588,9 @@ export class WorldUIV2 {
       <div class="surrender-confirm__sigil" aria-hidden="true">⚑</div>
       <div class="panel-kicker">END TIMELINE</div>
       <h2 id="surrender-title">End this future for ${escapeHtml(human.name)}?</h2>
-      <p>APEX returns acquired intelligence to the origin point.</p>
+      <p>EONSCAR returns acquired intelligence to the origin point.</p>
       <div class="surrender-confirm__summary"><span><small>TIMELINE AGE</small><b>${weeks} weeks</b></span><span><small>TERRITORIES HELD</small><b>${territories}</b></span><span><small>REWARDS</small><b>FULL EARNED VALUE</b></span></div>
-      <div class="war-rule-note is-warning"><b>PROGRESSION RETAINED</b><span>Nation Mastery XP and APEX XP use actual performance without a surrender penalty.</span><small>The final timeline report appears before you return to command.</small></div>
+      <div class="war-rule-note is-warning"><b>PROGRESSION RETAINED</b><span>Nation Mastery XP and EONSCAR XP use actual performance without a surrender penalty.</span><small>The final timeline report appears before you return to command.</small></div>
       <div class="panel-actions"><button class="ghost-button" data-action="cancel-surrender">KEEP PLAYING</button><button class="danger-button" data-action="confirm-surrender">END TIMELINE</button></div>
     </section></div>`;
   }
@@ -4636,7 +4650,7 @@ export class WorldUIV2 {
         ? `<span>THEATER MESH · ${outcome.apexTwinProjectionBattles} MULTI-FRONT BATTLES</span>` : '',
     ].filter(Boolean).join('');
     const apexDetail = apexPresent
-      ? `<span>PEAK +${compactNumber(outcome.apexPeakPower)} APEX SUPPORT</span>${apexIntegrityResult}${outcome.apexSupplySpent > 0 ? `<span>SUPPLY ${format(apexSupplyCoverage, 0)}%</span>` : ''}${apexCapstoneDetail}`
+      ? `<span>PEAK +${compactNumber(outcome.apexPeakPower)} EONSCAR SUPPORT</span>${apexIntegrityResult}${outcome.apexSupplySpent > 0 ? `<span>SUPPLY ${format(apexSupplyCoverage, 0)}%</span>` : ''}${apexCapstoneDetail}`
       : '<span>SHIELD NOT PRESENT ON THIS FRONT</span>';
     const allySupportedBattles = outcome.allySupportedBattles ?? 0;
     const allySupportDetail = allySupportedBattles > 0
@@ -4653,7 +4667,7 @@ export class WorldUIV2 {
       <div class="war-report__summary">
         <section class="war-report__card war-report__card--losses" aria-label="Military losses"><header><span>LOSSES</span><b>${people(outcome.survivingManpower)} ACTIVE</b></header><div><span><small>YOU</small><strong>−${people(outcome.ownLosses)}</strong></span><i aria-hidden="true"></i><span><small>ENEMY</small><strong>−${people(outcome.enemyLosses)}</strong></span></div>${allySupportDetail}</section>
         <section class="war-report__card war-report__card--territory" aria-label="Territory result"><header><span>TERRITORY</span><b class="${netTerritories > 0 ? 'is-positive' : netTerritories < 0 ? 'danger-text' : ''}">${territoryDelta} NET</b></header><div>${territoryDetail}</div></section>
-        <section class="war-report__card war-report__card--apex ${apexPresent ? 'is-active' : ''}" aria-label="APEX shield contribution"><header><span>APEX SHIELD</span><b>${apexPresent ? `${outcome.apexSupportedBattles}/${outcome.battles} BATTLES` : 'NO SHIELD SUPPORT'}</b></header><div>${apexDetail}</div></section>
+        <section class="war-report__card war-report__card--apex ${apexPresent ? 'is-active' : ''}" aria-label="EONSCAR shield contribution"><header><span>EONSCAR SHIELD</span><b>${apexPresent ? `${outcome.apexSupportedBattles}/${outcome.battles} BATTLES` : 'NO SHIELD SUPPORT'}</b></header><div>${apexDetail}</div></section>
       </div>
       <details class="war-report__details" data-disclosure-session="modal:war-outcome:${escapeHtml(outcome.warId)}:full-breakdown"><summary>FULL BREAKDOWN</summary><div>
         <article><span>ATTACK RATING</span><strong>${format(outcome.effectiveAttackBefore, 2)} → ${format(outcome.effectiveAttackAfter, 2)}</strong><small>Before / after</small></article>
@@ -4945,7 +4959,7 @@ export class WorldUIV2 {
               choice,
             );
             if (!commandAccepted(result)) {
-              this.toast(commandReason(result) ?? 'That APEX transmission is no longer actionable.');
+              this.toast(commandReason(result) ?? 'That EONSCAR transmission is no longer actionable.');
               break;
             }
             this.apexTransmissionPendingResponseId = transmissionId;

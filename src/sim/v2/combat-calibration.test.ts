@@ -133,7 +133,7 @@ function simulateWar(seed: number, humanId: string, attackerId: string, defender
 }
 
 describe('V2 coherent combat and forecast calibration', () => {
-  it('caps APEX interception at 75% of the post-DEF hit before applying its Energy budget', () => {
+  it('caps EONSCAR interception at 75% of the post-DEF hit before applying its Energy budget', () => {
     const allocation = allocateApexFrontlineDamageV2({
       requestedDamage: 0.03,
       nationalManpower: 0.1,
@@ -202,7 +202,7 @@ describe('V2 coherent combat and forecast calibration', () => {
     });
   });
 
-  it('leaves the full hit with the national army when no APEX supports the front', () => {
+  it('leaves the full hit with the national army when no EONSCAR supports the front', () => {
     expect(allocateApexFrontlineDamageV2({
       requestedDamage: 0.001,
       nationalManpower: 0.1,

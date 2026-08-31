@@ -757,14 +757,14 @@ export class WorldEngineV2 {
     _offerId: string,
     _upgradeId: RunUpgradeIdV2,
   ): CommandResultV2 {
-    return { accepted: false, reason: 'Timeline adaptation cards were retired; use APEX talents and nation mastery.' };
+    return { accepted: false, reason: 'Timeline adaptation cards were retired; use EONSCAR talents and nation mastery.' };
   }
 
   /** Configures the immutable multiplayer seats before the first shared tick. */
   configureHumanPlayers(playerIds: readonly string[], viewerPlayerId: string): CommandResultV2 {
     if (this.state.tick > 0) return { accepted: false, reason: 'Human seats are locked after the campaign begins.' };
     if (Object.keys(this.state.commanderForces).length > 0) {
-      return { accepted: false, reason: 'Human seats are locked after APEX shield initialisation.' };
+      return { accepted: false, reason: 'Human seats are locked after EONSCAR shield initialisation.' };
     }
     const ids = [...new Set(playerIds.map(nationIdV2))]
       .sort((left, right) => left.localeCompare(right));
@@ -827,7 +827,7 @@ export class WorldEngineV2 {
     const id = nationIdV2(countryId);
     if (this.state.tick > 0) return { accepted: false, reason: 'Country selection is locked after the campaign begins.' };
     if (Object.keys(this.state.commanderForces).length > 0) {
-      return { accepted: false, reason: 'Country selection is locked after APEX shield initialisation.' };
+      return { accepted: false, reason: 'Country selection is locked after EONSCAR shield initialisation.' };
     }
     if (!isHumanSelectableNationV2(this.content, id)) {
       return { accepted: false, reason: 'The Rogue AI is an enemy empire and cannot be selected.' };
@@ -1310,9 +1310,9 @@ export class WorldEngineV2 {
     if (!this.applyingCommand) {
       const transmission = selectApexTransmissionsV2(this.state, id)
         .find((item) => item.id === transmissionId);
-      if (!transmission) return { accepted: false, reason: 'That APEX transmission is stale.' };
+      if (!transmission) return { accepted: false, reason: 'That EONSCAR transmission is stale.' };
       if (transmission.action === null && choice !== 'acknowledge') {
-        return { accepted: false, reason: 'This APEX briefing only requires acknowledgement.' };
+        return { accepted: false, reason: 'This EONSCAR briefing only requires acknowledgement.' };
       }
       if (transmission.action === 'north-pole-investigation' && choice !== 'accept') {
         return { accepted: false, reason: 'Signal Triangulation is mandatory before strategic operations.' };

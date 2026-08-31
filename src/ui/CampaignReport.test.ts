@@ -86,7 +86,7 @@ describe('campaign report', () => {
     expect(html).toContain('Victory secured.');
     expect(html).toContain('FINAL TIMELINE REPORT · Survival');
     expect(html).toContain('+640 XP');
-    expect(html).toContain('APEX LEVEL');
+    expect(html).toContain('EONSCAR LEVEL');
     expect(html).toContain('+480 XP');
     expect(html).toMatch(/TALENT POINT/);
     expect(html).toContain('LIBERATION DELTA');
@@ -134,12 +134,12 @@ describe('campaign report', () => {
     expect(html).toContain('Timeline ended.');
     expect(html).toContain('+75 XP');
     expect(html).toContain('+40 XP');
-    expect(html).toContain('APEX · TEMPORAL RETURN');
+    expect(html).toContain('EONSCAR · TEMPORAL RETURN');
     expect(html).toContain('This timeline is lost—not our war.');
     expect(html).toContain('Next time, we arrive stronger.');
   });
 
-  it('keeps the same APEX time-return promise inside the defeat report', () => {
+  it('keeps the same EONSCAR time-return promise inside the defeat report', () => {
     const snapshot = reportSnapshot();
     snapshot.outcome = 'defeat';
     snapshot.reward.outcome = 'defeat';
@@ -150,7 +150,7 @@ describe('campaign report', () => {
     });
 
     expect(html).toContain('Timeline complete.');
-    expect(html).toContain('APEX · TEMPORAL RETURN');
+    expect(html).toContain('EONSCAR · TEMPORAL RETURN');
     expect(html).toContain('return its lessons to the first free node in Greenland');
     expect(html).not.toContain('TIMELINE INTELLIGENCE SAVED');
   });
@@ -172,7 +172,7 @@ describe('campaign report', () => {
       masteryBeforeSettlement: { xp: 500, level: 3 },
       commanderBeforeSettlement: { xp: 700, level: 4, talentPointsAvailable: 2 },
     });
-    expect(html).toContain('Alternative Universe grants no Nation Mastery XP, APEX XP, Credits or nation unlocks.');
+    expect(html).toContain('Alternative Universe grants no Nation Mastery XP, EONSCAR XP, Credits or nation unlocks.');
     expect(html).toContain('COMMAND CREDITS');
     expect(html).not.toContain('TIMELINE INTELLIGENCE SAVED');
   });

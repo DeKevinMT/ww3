@@ -484,7 +484,7 @@ export function validateMultiplayerDeploymentSnapshotV1(
       || defenseSpecialist !== (activeDoctrine === 'bastion')
       || rapidResponse !== (activeDoctrine === 'rapid-response');
   if (doctrineMismatch) {
-    fail(`${label}.activeDoctrine must match its one resolved APEX specialist capability.`);
+    fail(`${label}.activeDoctrine must match its one resolved EONSCAR specialist capability.`);
   }
   return {
     schemaVersion: MULTIPLAYER_DEPLOYMENT_SCHEMA_VERSION,
@@ -744,7 +744,7 @@ function validateWorldCommand(value: unknown): WorldCommandV2 {
       const expectedKeys = ['choice', 'playerId', 'transmissionId', 'type'];
       const keys = Object.keys(command).sort((left, right) => left.localeCompare(right, 'en'));
       if (keys.length !== expectedKeys.length || keys.some((key, index) => key !== expectedKeys[index])) {
-        fail('APEX transmission responses must contain exactly playerId, transmissionId and choice.');
+        fail('EONSCAR transmission responses must contain exactly playerId, transmissionId and choice.');
       }
       requirePlayerId(command.playerId, 'command.playerId');
       if (typeof command.transmissionId !== 'string'
@@ -760,7 +760,7 @@ function validateWorldCommand(value: unknown): WorldCommandV2 {
       }
       if (command.transmissionId !== 'campaign-signal-anomaly'
         && command.choice !== 'acknowledge') {
-        fail('informational APEX transmissions only accept acknowledge.');
+        fail('informational EONSCAR transmissions only accept acknowledge.');
       }
       break;
     }
@@ -1307,7 +1307,7 @@ export function decodeSignalCode(code: string): DirectSignal {
   }
   const compact = code.trim();
   if (!compact.startsWith(`${SIGNAL_CODE_PREFIX}.`)) {
-    throw new MultiplayerProtocolError('invalid-signal', 'This is not an APEX: Reclamation Direct Connect code.');
+    throw new MultiplayerProtocolError('invalid-signal', 'This is not an EONSCAR Direct Connect code.');
   }
   const maximumEncodedLength = SIGNAL_CODE_PREFIX.length + 1 + Math.ceil(MAX_SIGNAL_CODE_BYTES * 4 / 3);
   if (compact.length > maximumEncodedLength) {

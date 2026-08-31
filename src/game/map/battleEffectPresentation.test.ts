@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import worldMapSceneSource from './WorldMapScene.ts?raw';
-import legacyMapSceneSource from './MapScene.ts?raw';
-import globeSceneSource from './three/ThreeGlobeScene.ts?raw';
+import worldMapSceneSourceRaw from './WorldMapScene.ts?raw';
+import legacyMapSceneSourceRaw from './MapScene.ts?raw';
+import globeSceneSourceRaw from './three/ThreeGlobeScene.ts?raw';
 import {
   BATTLE_EFFECT_MAX_ACTIVE,
   BATTLE_EFFECT_SCALE,
@@ -10,6 +10,11 @@ import {
   battleProjectileScale,
   battleTerritoryWaveRadiusDegrees,
 } from './battleEffectPresentation';
+
+const normalized = (source: string): string => source.replace(/\r\n/g, '\n');
+const worldMapSceneSource = normalized(worldMapSceneSourceRaw);
+const legacyMapSceneSource = normalized(legacyMapSceneSourceRaw);
+const globeSceneSource = normalized(globeSceneSourceRaw);
 
 describe('battle effect presentation', () => {
   it('renders every attack with one authored scale regardless of magnitude', () => {

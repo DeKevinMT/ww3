@@ -1,4 +1,4 @@
-# Frontier Command v2.65 - Polar Endgame
+# EONSCAR v2.65 - Polar Endgame
 
 ## Headline
 
@@ -21,7 +21,7 @@ Version 2.65 adds the complete Arctic research and Antarctic rogue-AI endgame wh
 - Weak-country reserve floors are non-zero before multipliers are applied.
 - Greenland has a deliberately restrained mobilisation identity, a separate 12.5% Arctic discount and extra opening reserves; its temporary weak-start force curve remains the main opening aid.
 - Country traits were rebalanced toward distinctive military, economic or research identities; generic food traits are exceptional.
-- Suspicion progressively raises APEX military priority before first contact. After first contact all countries prioritise Earth Defence regardless of Suspicion.
+- Suspicion progressively raises EONSCAR military priority before first contact. After first contact all countries prioritise Earth Defence regardless of Suspicion.
 - Upkeep may be funded to 125% above the treasury reserve target to accelerate recruitment.
 
 ## Empire fusion

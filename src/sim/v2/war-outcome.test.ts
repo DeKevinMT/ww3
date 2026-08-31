@@ -135,7 +135,7 @@ describe('transient post-war outcomes', () => {
     expect(engine.state.wars.some((war) => war.id === 'war-outcome-exhaustion')).toBe(false);
   });
 
-  it('records factual APEX support from battle telemetry in the transient report', () => {
+  it('records factual EONSCAR support from battle telemetry in the transient report', () => {
     const state = createWorldStateV2(9_102, WORLD_CONTENT_V2);
     const humanId = id('bel');
     const opponentId = id('lux');

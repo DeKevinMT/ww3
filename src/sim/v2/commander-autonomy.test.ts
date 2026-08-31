@@ -83,7 +83,7 @@ function apexBelgium(seed: number) {
   return { state, belgium };
 }
 
-describe('autonomous distributed APEX network', () => {
+describe('autonomous distributed EONSCAR network', () => {
   it('normalizes every retired movement command without relocating the network', () => {
     const { state, belgium } = apexBelgium(83_007);
     const force = state.commanderForces[belgium]!;

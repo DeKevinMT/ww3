@@ -268,8 +268,8 @@ export function activateRogueAiSurvivalV2(
     'polar',
     'critical',
     immediate
-      ? 'SURVIVAL PROTOCOL: APEX detects the Codex Ascendancy beneath Antarctica. All three machine gateways are already active.'
-      : 'APEX ORIGIN LOCK: the Codex Ascendancy is active beneath Antarctica. All three gateways are sealed; one breach is forming.',
+      ? 'SURVIVAL PROTOCOL: EONSCAR detects the Codex Ascendancy beneath Antarctica. All three machine gateways are already active.'
+      : 'EONSCAR ORIGIN LOCK: the Codex Ascendancy is active beneath Antarctica. All three gateways are sealed; one breach is forming.',
     undefined,
     revealedBy ?? undefined,
     { polarRegion: 'antarctica' },

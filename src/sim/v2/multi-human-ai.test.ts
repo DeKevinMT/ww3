@@ -54,7 +54,7 @@ describe('multi-human simulation boundaries', () => {
       .toBe(plannedMilitary(lowSuspicion, rival));
   });
 
-  it('keeps APEX economy and research active without choosing a second human war or peace', () => {
+  it('keeps EONSCAR economy and research active without choosing a second human war or peace', () => {
     const state = createWorldStateV2(9_101, WORLD_CONTENT_V2);
     const primary = nationIdV2('bel');
     const secondHuman = nationIdV2('nld');

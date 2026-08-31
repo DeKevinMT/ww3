@@ -49,7 +49,7 @@ export function planApexFrontFocusV2(
   const sourceOwned = territories[sourceId]?.owner === playerId;
   const targetOwned = territories[targetId]?.owner === playerId;
   if (sourceOwned === targetOwned) {
-    return { allowed: false, reason: 'APEX needs one friendly side of the selected front.' };
+    return { allowed: false, reason: 'EONSCAR needs one friendly side of the selected front.' };
   }
   const mission = sourceOwned ? 'assault-support' : 'defense';
   return {

@@ -173,7 +173,7 @@ function safeCallback(callback: (() => void) | undefined): void {
   try {
     callback();
   } catch (error) {
-    console.error('Frontier Command Direct Connect callback failed.', error);
+    console.error('EONSCAR Direct Connect callback failed.', error);
   }
 }
 

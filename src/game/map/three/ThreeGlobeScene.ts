@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import apexGalaxyMapBackgroundUrl from '../../../assets/apex-galaxy-map-bg.jpg?url';
+import eonscarGalaxyMapBackgroundUrl from '../../../assets/eonscar-galaxy-map-bg.jpg?url';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
@@ -2209,7 +2209,7 @@ export class ThreeGlobeScene implements MapSceneAdapter {
     // star, flare, particle or post-processing pass sits over the globe.
     this.host.dataset.celestialBackdropDrawCalls = '1';
     const deepSpaceTexture = new THREE.TextureLoader().load(
-      apexGalaxyMapBackgroundUrl,
+      eonscarGalaxyMapBackgroundUrl,
       (loadedTexture) => {
         if (this.destroyed) {
           loadedTexture.dispose();
@@ -2227,7 +2227,7 @@ export class ThreeGlobeScene implements MapSceneAdapter {
         this.host.dataset.celestialBackdropDrawCalls = '0';
       },
     );
-    deepSpaceTexture.name = 'APEX camera-parallax galaxy map background';
+    deepSpaceTexture.name = 'EONSCAR camera-parallax galaxy map background';
     deepSpaceTexture.colorSpace = THREE.SRGBColorSpace;
     deepSpaceTexture.minFilter = THREE.LinearFilter;
     deepSpaceTexture.magFilter = THREE.LinearFilter;
@@ -2620,7 +2620,7 @@ export class ThreeGlobeScene implements MapSceneAdapter {
       const primeSupportPercent = primeState?.force
         ? commanderShieldMapSupportPercent(primeState.force.shield) : 0;
       const signalBadge = apexSignal
-        ? `<i class="globe-map__ai-signal is-apex" aria-label="APEX empire shield concentrating here at ${viewerApexPercent}% shared Energy">APEX ${viewerApexPercent}%</i>`
+        ? `<i class="globe-map__ai-signal is-apex" aria-label="EONSCAR empire shield concentrating here at ${viewerApexPercent}% shared Energy">EONSCAR ${viewerApexPercent}%</i>`
         : primeSignal
           ? `<i class="globe-map__ai-signal is-prime" aria-label="ROGUE PRIME amplifying the Antarctic army by ${primeSupportPercent.toFixed(1)} percent">PRIME +${primeSupportPercent.toFixed(1)}%</i>`
           : '';
@@ -2631,7 +2631,7 @@ export class ThreeGlobeScene implements MapSceneAdapter {
       const baseSemanticTitle = remotePassive
         ? `${definition.englishName} · Global power rank #${rank ?? '—'} · Live intelligence unavailable`
         : frontierIntel
-        ? `${definition.englishName} · Partial APEX intel · Local power ${compactMapCombatPower(territory.army.power)}`
+        ? `${definition.englishName} · Partial EONSCAR intel · Local power ${compactMapCombatPower(territory.army.power)}`
         : rogueTerritory.rogue
         ? `${definition.englishName} · Rogue AI readiness ${readinessPercent}%${rogueTerritory.showPower ? ` · Local power ${compactMapCombatPower(territory.army.power)}` : ''}`
         : localHeadquarters
@@ -2642,7 +2642,7 @@ export class ThreeGlobeScene implements MapSceneAdapter {
           ? `Local power ${compactMapCombatPower(territory.army.power)}`
           : '';
       const signalSemantic = apexSupport
-        ? `Protected by the distributed APEX empire shield at ${viewerApexPercent}% shared Energy${apexSignal ? '; energy concentrated at this front' : ''}`
+        ? `Protected by the distributed EONSCAR empire shield at ${viewerApexPercent}% shared Energy${apexSignal ? '; energy concentrated at this front' : ''}`
         : primeSignal
           ? `ROGUE PRIME amplifying the Antarctic army by ${primeSupportPercent.toFixed(1)}%`
           : '';

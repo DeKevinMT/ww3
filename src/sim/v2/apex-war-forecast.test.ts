@@ -126,8 +126,8 @@ function resolveReadyApexSupportedBattle(
   return resolveBattlePulseV2(engine.state, engine.content, war, operation);
 }
 
-describe('APEX-aware canonical war forecast', () => {
-  it('raises the same canonical forecast used by target review when APEX can stage legally', () => {
+describe('EONSCAR-aware canonical war forecast', () => {
+  it('raises the same canonical forecast used by target review when EONSCAR can stage legally', () => {
     const { engine, playerId } = campaignWithApex(31_001);
     const defenderId = nationIdV2('bel');
     const withoutApex = structuredClone(engine.state);

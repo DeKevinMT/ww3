@@ -13,6 +13,11 @@ import {
   resolveScenarioV2,
   type ScenarioConfigV2,
 } from '../sim/v2/scenarios';
+import {
+  CAMPAIGN_SINGLE_PLAYER_REASON_V2,
+  DEFAULT_MULTIPLAYER_GAME_MODE_V2,
+  isMultiplayerGameModeV2,
+} from './modes';
 
 export const LOBBY_REJOIN_GRACE_MS = 2 * 60_000;
 export const SURVIVAL_COOP_PLAYER_COUNT_V1 = 2;
@@ -33,10 +38,16 @@ export class HostLobbyModel {
   constructor(
     readonly hostPeerId: string,
     hostName: string,
-    scenario: ScenarioConfigV2 = normalizeScenarioConfigV2({ mode: 'standard-2026', seed: 1 }),
+    scenario: ScenarioConfigV2 = normalizeScenarioConfigV2({
+      mode: DEFAULT_MULTIPLAYER_GAME_MODE_V2,
+      seed: 1,
+    }),
     private readonly now: () => number = Date.now,
     private readonly rejoinGraceMs = LOBBY_REJOIN_GRACE_MS,
   ) {
+    if (!isMultiplayerGameModeV2(scenario.mode)) {
+      throw new Error(CAMPAIGN_SINGLE_PLAYER_REASON_V2);
+    }
     const resolved = resolveScenarioV2(scenario);
     this.scenario = resolved.config;
     this.content = resolved.content;
@@ -102,6 +113,9 @@ export class HostLobbyModel {
       case 'set-scenario': {
         if (peerId !== this.hostPeerId) {
           return { accepted: false, reason: 'Only the room host can change the scenario.' };
+        }
+        if (!isMultiplayerGameModeV2(action.scenario.mode)) {
+          return { accepted: false, reason: CAMPAIGN_SINGLE_PLAYER_REASON_V2 };
         }
         let resolved: ReturnType<typeof resolveScenarioV2>;
         try {

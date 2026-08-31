@@ -183,7 +183,7 @@ describe('front-specific Empire war forecast', () => {
     });
   });
 
-  it('includes the live APEX Army modifier and remains deterministic and bounded', () => {
+  it('includes the live EONSCAR Army modifier and remains deterministic and bounded', () => {
     const { state, content } = forecastState('land', 0.30, 0);
     expect(initializeCommanderForceV2(state, content, bel, apexProfile))
       .toEqual({ accepted: true });

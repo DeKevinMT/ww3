@@ -1,6 +1,6 @@
 {
-  "name": "frontier-command",
-  "description": "A deterministic browser grand-strategy simulation with autonomous national AI.",
+  "name": "eonscar",
+  "description": "EONSCAR is a deterministic time-war grand-strategy game built around a single-player campaign.",
   "private": true,
   "version": "0.1.0",
   "type": "module",

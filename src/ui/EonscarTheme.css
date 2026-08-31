@@ -1,21 +1,21 @@
 :root {
-  --apex-void: #020811;
-  --apex-ink: #04111d;
-  --apex-surface: rgba(5, 18, 30, .92);
-  --apex-surface-soft: rgba(6, 23, 37, .76);
-  --apex-line: rgba(139, 218, 234, .16);
-  --apex-line-strong: rgba(139, 226, 242, .32);
-  --apex-cyan: #71e9ff;
-  --apex-cyan-soft: #a9f4ff;
-  --apex-magenta: #f04fd3;
-  --apex-amber: #efbd68;
-  --apex-danger: #ff756d;
-  --apex-positive: #69e3a2;
-  --apex-text: #ecf9fc;
-  --apex-muted: #92aeb7;
-  --apex-display: "Segoe UI Variable Display", "Bahnschrift", "Segoe UI", sans-serif;
-  --apex-copy: "Segoe UI Variable Text", "Segoe UI", Arial, sans-serif;
-  --apex-shadow: 0 28px 80px rgba(0, 0, 0, .46);
+  --eonscar-void: #020811;
+  --eonscar-ink: #04111d;
+  --eonscar-surface: rgba(5, 18, 30, .92);
+  --eonscar-surface-soft: rgba(6, 23, 37, .76);
+  --eonscar-line: rgba(139, 218, 234, .16);
+  --eonscar-line-strong: rgba(139, 226, 242, .32);
+  --eonscar-cyan: #71e9ff;
+  --eonscar-cyan-soft: #a9f4ff;
+  --eonscar-magenta: #f04fd3;
+  --eonscar-amber: #efbd68;
+  --eonscar-danger: #ff756d;
+  --eonscar-positive: #69e3a2;
+  --eonscar-text: #ecf9fc;
+  --eonscar-muted: #92aeb7;
+  --eonscar-display: "Segoe UI Variable Display", "Bahnschrift", "Segoe UI", sans-serif;
+  --eonscar-copy: "Segoe UI Variable Text", "Segoe UI", Arial, sans-serif;
+  --eonscar-shadow: 0 28px 80px rgba(0, 0, 0, .46);
 }
 
 html,
@@ -23,9 +23,9 @@ body,
 button,
 input,
 select,
-textarea { font-family: var(--apex-copy); }
+textarea { font-family: var(--eonscar-copy); }
 
-body { background: var(--apex-void); }
+body { background: var(--eonscar-void); }
 
 button,
 input,
@@ -39,7 +39,7 @@ input:focus-visible,
 select:focus-visible,
 textarea:focus-visible,
 summary:focus-visible {
-  outline: 2px solid var(--apex-cyan-soft);
+  outline: 2px solid var(--eonscar-cyan-soft);
   outline-offset: 3px;
 }
 
@@ -101,13 +101,13 @@ summary:focus-visible {
 /* Account, deployment, talent and arsenal surfaces -------------------------- */
 
 .commander-menu-shell {
-  --menu-cyan: var(--apex-cyan);
-  --menu-magenta: var(--apex-magenta);
-  color: var(--apex-text);
-  background-color: var(--apex-void);
+  --menu-cyan: var(--eonscar-cyan);
+  --menu-magenta: var(--eonscar-magenta);
+  color: var(--eonscar-text);
+  background-color: var(--eonscar-void);
   background-image:
     linear-gradient(100deg, rgba(2, 8, 17, .96), rgba(2, 8, 17, .76) 48%, rgba(2, 8, 17, .9)),
-    url("../assets/apex-reclamation-bg.jpg");
+    url("../assets/eonscar-command-bg.jpg");
   background-size: cover;
   background-position: center;
   background-attachment: fixed;
@@ -123,7 +123,7 @@ summary:focus-visible {
   background-image:
     linear-gradient(92deg, rgba(2, 8, 17, .76), rgba(2, 8, 17, .42) 46%, rgba(2, 8, 17, .66)),
     linear-gradient(0deg, rgba(2, 8, 17, .82), transparent 66%),
-    url("../assets/apex-reclamation-bg.jpg");
+    url("../assets/eonscar-command-bg.jpg");
 }
 
 .commander-menu-shell--home::after {
@@ -135,16 +135,27 @@ summary:focus-visible {
 
 .commander-profile-strip,
 .commander-menu-shell--home .commander-profile-strip {
-  border-bottom: 1px solid var(--apex-line);
+  border-bottom: 1px solid var(--eonscar-line);
   background: linear-gradient(90deg, rgba(2, 8, 17, .84), rgba(5, 20, 32, .68) 54%, rgba(2, 8, 17, .82));
   box-shadow: 0 16px 44px rgba(0, 0, 0, .28);
 }
 
 .commander-profile-strip__identity > i {
+  display: grid;
+  place-items: center;
+  overflow: hidden;
   border-color: rgba(113, 233, 255, .38);
   border-radius: 5px 14px 5px 14px;
   background: linear-gradient(145deg, rgba(113, 233, 255, .16), rgba(240, 79, 211, .06));
   box-shadow: inset 0 1px rgba(255, 255, 255, .08), 0 0 24px rgba(113, 233, 255, .08);
+}
+
+.eonscar-sigil-frame img {
+  width: 84%;
+  height: 84%;
+  display: block;
+  object-fit: contain;
+  filter: drop-shadow(0 0 7px rgba(113, 233, 255, .28));
 }
 
 .commander-profile-strip__identity small,
@@ -156,7 +167,7 @@ summary:focus-visible {
   letter-spacing: .85px;
 }
 
-.commander-profile-strip__identity strong { font-family: var(--apex-display); }
+.commander-profile-strip__identity strong { font-family: var(--eonscar-display); }
 
 .commander-profile-strip__level {
   border-color: rgba(113, 233, 255, .13);
@@ -167,7 +178,7 @@ summary:focus-visible {
   border-color: color-mix(in srgb, var(--home-country) 24%, rgba(113, 233, 255, .18));
   background: linear-gradient(92deg, rgba(3, 13, 22, .7) 0%, rgba(3, 13, 22, .48) 48%, rgba(2, 9, 17, .32) 100%);
   backdrop-filter: blur(5px) saturate(112%);
-  box-shadow: var(--apex-shadow), inset 0 1px rgba(255, 255, 255, .035);
+  box-shadow: var(--eonscar-shadow), inset 0 1px rgba(255, 255, 255, .035);
 }
 
 .commander-theater::before {
@@ -207,26 +218,40 @@ summary:focus-visible {
 .commander-theater__brand {
   position: absolute;
   z-index: 3;
-  top: 25px;
-  right: 28px;
-  display: grid;
-  justify-items: end;
+  top: 22px;
+  right: 24px;
+  display: flex;
+  align-items: center;
+  gap: 11px;
   pointer-events: none;
   text-align: right;
   text-shadow: 0 4px 24px rgba(0, 0, 0, .7);
 }
 
-.commander-theater__brand > span {
-  color: var(--apex-cyan);
-  font: 800 11px/1 var(--apex-display);
-  letter-spacing: 4.4px;
+.commander-theater__brand > img {
+  width: 52px;
+  height: 52px;
+  display: block;
+  object-fit: contain;
+  filter: drop-shadow(0 0 14px rgba(113, 233, 255, .28));
 }
 
-.commander-theater__brand > strong {
+.commander-theater__brand > span {
+  display: grid;
+  justify-items: end;
+}
+
+.commander-theater__brand > span > strong {
+  color: #eafcff;
+  font: 820 20px/1 var(--eonscar-display);
+  letter-spacing: 3.8px;
+}
+
+.commander-theater__brand > span > small {
   margin-top: 5px;
-  color: rgba(230, 249, 252, .78);
-  font: 760 19px/.9 var(--apex-display);
-  letter-spacing: 1.1px;
+  color: rgba(113, 233, 255, .68);
+  font: 760 7px/1 var(--eonscar-display);
+  letter-spacing: 2px;
 }
 
 .commander-theater__brief h2,
@@ -234,7 +259,7 @@ summary:focus-visible {
 .commander-talents__heading h1,
 .commander-arsenal__heading h1,
 .commander-country-detail h2 {
-  font-family: var(--apex-display);
+  font-family: var(--eonscar-display);
   font-weight: 760;
   text-wrap: balance;
 }
@@ -255,7 +280,7 @@ summary:focus-visible {
 .commander-talents__overview,
 .commander-talent-branch,
 .commander-arsenal__body {
-  border-color: var(--apex-line);
+  border-color: var(--eonscar-line);
   background-color: rgba(3, 14, 24, .78);
   box-shadow: inset 0 1px rgba(255, 255, 255, .025), 0 18px 48px rgba(0, 0, 0, .18);
 }
@@ -317,7 +342,7 @@ summary:focus-visible {
 .commander-meta-card header > span,
 .commander-talent-branch > header span,
 .commander-country-row > b {
-  color: var(--apex-cyan);
+  color: var(--eonscar-cyan);
   font-size: 10px;
   letter-spacing: 1.05px;
 }
@@ -336,15 +361,15 @@ summary:focus-visible {
 /* Live command HUD ---------------------------------------------------------- */
 
 .world-ui-v2 {
-  --cyan: var(--apex-cyan);
-  color: var(--apex-text);
+  --cyan: var(--eonscar-cyan);
+  color: var(--eonscar-text);
 }
 
 .world-ui-v2 .glass-panel,
 .world-ui-v2 .modal-card {
-  border-color: var(--apex-line);
+  border-color: var(--eonscar-line);
   background: linear-gradient(145deg, rgba(6, 22, 36, .94), rgba(3, 13, 23, .93));
-  box-shadow: var(--apex-shadow), inset 0 1px rgba(255, 255, 255, .03);
+  box-shadow: var(--eonscar-shadow), inset 0 1px rgba(255, 255, 255, .03);
 }
 
 .world-ui-v2 .situation-topbar {
@@ -360,7 +385,7 @@ summary:focus-visible {
 }
 
 .world-ui-v2 .command-identity__line > strong {
-  font-family: var(--apex-display);
+  font-family: var(--eonscar-display);
   font-weight: 750;
 }
 
@@ -388,7 +413,7 @@ summary:focus-visible {
 
 .world-ui-v2 .topbar-status .top-metric > strong {
   color: #f1fbfd;
-  font-family: var(--apex-display);
+  font-family: var(--eonscar-display);
   font-weight: 720;
 }
 
@@ -468,7 +493,7 @@ summary:focus-visible {
 .world-ui-v2 .command-dock > button.is-active {
   border-color: rgba(113, 233, 255, .28);
   background: linear-gradient(120deg, rgba(113, 233, 255, .12), rgba(113, 233, 255, .035));
-  box-shadow: inset 3px 0 var(--apex-cyan), 0 0 24px rgba(113, 233, 255, .07);
+  box-shadow: inset 3px 0 var(--eonscar-cyan), 0 0 24px rgba(113, 233, 255, .07);
 }
 
 .world-ui-v2 .world-panel.command-drawer,
@@ -482,7 +507,7 @@ summary:focus-visible {
 .world-ui-v2 .world-panel.command-drawer h2,
 .world-ui-v2 .modal-card h2,
 .world-ui-v2 .war-outcome-modal h2 {
-  font-family: var(--apex-display);
+  font-family: var(--eonscar-display);
   font-weight: 750;
   text-wrap: balance;
 }
@@ -491,7 +516,7 @@ summary:focus-visible {
 .world-ui-v2 .command-drawer--clean .section-label,
 .world-ui-v2 .panel-kicker,
 .world-ui-v2 .section-label {
-  color: var(--apex-cyan);
+  color: var(--eonscar-cyan);
   letter-spacing: 1.1px;
 }
 
@@ -547,7 +572,7 @@ summary:focus-visible {
 }
 
 .world-ui-v2 .apex-transmission__message h2,
-.world-ui-v2 .apex-transmission__signal > b { font-family: var(--apex-display); }
+.world-ui-v2 .apex-transmission__signal > b { font-family: var(--eonscar-display); }
 
 #tooltip {
   border-color: rgba(139, 218, 234, .2);
@@ -567,7 +592,7 @@ summary:focus-visible {
 .campaign-report {
   background:
     linear-gradient(100deg, rgba(2, 8, 17, .88), rgba(2, 8, 17, .58)),
-    url("../assets/apex-reclamation-bg.jpg") center / cover fixed;
+    url("../assets/eonscar-command-bg.jpg") center / cover fixed;
 }
 
 .campaign-report__atmosphere { background: transparent; }
@@ -579,7 +604,7 @@ summary:focus-visible {
 }
 
 .campaign-report__header h1,
-.campaign-report__stats strong { font-family: var(--apex-display); }
+.campaign-report__stats strong { font-family: var(--eonscar-display); }
 
 .campaign-report__reward-row article,
 .campaign-report__stats,
@@ -591,7 +616,7 @@ summary:focus-visible {
 .multiplayer-lobby-layer {
   background:
     linear-gradient(100deg, rgba(2, 8, 17, .9), rgba(2, 8, 17, .64)),
-    url("../assets/apex-reclamation-bg.jpg") center / cover fixed;
+    url("../assets/eonscar-command-bg.jpg") center / cover fixed;
 }
 
 .multiplayer-lobby-card {
@@ -603,7 +628,7 @@ summary:focus-visible {
 
 .multiplayer-lobby-card h1,
 .multiplayer-lobby-card h2,
-.mp-matchmaking__count b { font-family: var(--apex-display); }
+.mp-matchmaking__count b { font-family: var(--eonscar-display); }
 
 .mp-player,
 .mp-connect-grid section,

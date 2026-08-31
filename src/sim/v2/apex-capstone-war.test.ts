@@ -113,7 +113,7 @@ function assignApexFront(
   };
 }
 
-describe('APEX capstones at the live war boundary', () => {
+describe('EONSCAR capstones at the live war boundary', () => {
   it('keeps the standalone-damage compatibility helper available for Rogue PRIME', () => {
     const humanId = nationIdV2('bel');
     expect(resolveCommanderStandaloneDamageV2(humanId, {

@@ -1354,7 +1354,7 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
     const hostilePrime = role === 'rogue-prime';
     const field = this.add.graphics();
     this.drawCommanderNeuralField(field, role);
-    const signal = this.add.text(0, 17, hostilePrime ? 'PRIME' : 'APEX', {
+    const signal = this.add.text(0, 17, hostilePrime ? 'PRIME' : 'EONSCAR', {
       fontFamily: 'Inter, system-ui, sans-serif', fontSize: '11px', fontStyle: '800',
       color: hostilePrime ? '#ff88c9' : '#9af5ff', letterSpacing: 0.45,
     }).setOrigin(0.5).setStroke('#020712', 2).setResolution(LABEL_TEXT_RESOLUTION);
@@ -2567,7 +2567,7 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
             ? `  PRIME +${primeSupportPercent.toFixed(1)}%`
             : '';
         const accessibleLabel = `${sector.name}. National power ${compactMapCombatPower(territory.army.power)}.${apexSupport
-          ? ` APEX neural shield at ${apexShield.percent}% Energy.`
+          ? ` EONSCAR neural shield at ${apexShield.percent}% Energy.`
           : primeSupport
             ? ` ROGUE PRIME amplifying the Antarctic army by ${primeSupportPercent.toFixed(1)}%.`
             : ''}`;
@@ -3123,7 +3123,7 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
         visual.name.setText(labelName);
         visual.detail.setText(armyLabel);
         const supportAccessibleLabel = apexSupport
-          ? `National power ${compactMapCombatPower(displayedArmy.power)}. APEX neural shield at ${apexShield.percent}% shared Energy.${apexFrontProjectionPercent !== null
+          ? `National power ${compactMapCombatPower(displayedArmy.power)}. EONSCAR neural shield at ${apexShield.percent}% shared Energy.${apexFrontProjectionPercent !== null
             ? ` Theater Mesh allocates ${apexFrontProjectionPercent}% combat support to this front.` : ''}${apexProjection?.singularityCharged
               ? ' Overdrive shield cycle charged.' : ''}`
           : apexInbound

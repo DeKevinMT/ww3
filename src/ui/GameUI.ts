@@ -1,4 +1,5 @@
 import { executeAiTurn, type AiStep } from '../game/ai/strategist';
+import eonscarLogoUrl from '../assets/brand/eonscar-logo-transparent.png?url';
 import { findTradeSetIndices } from '../game/cards';
 import { predictBattle, resolveStackRound } from '../game/combat';
 import { REGION_BY_ID, REGIONS, TERRITORIES, TERRITORY_BY_ID } from '../game/data/map';
@@ -350,8 +351,8 @@ export class GameUI {
     this.hud.innerHTML = `
       <header class="topbar glass-panel">
         <div class="brand">
-          <div class="brand__mark">FC</div>
-          <div><strong>APEX: RECLAMATION</strong><span>TACTICAL WORLD NETWORK</span></div>
+          <div class="brand__mark"><img src="${eonscarLogoUrl}" alt=""></div>
+          <div><strong>EONSCAR</strong><span>TACTICAL WORLD NETWORK</span></div>
         </div>
         <div class="phase-strip" aria-label="Beurtfases">
           ${phaseOrder.map((phase, index) => `
@@ -573,7 +574,7 @@ export class GameUI {
     return `
       <div class="modal-backdrop">
         <section class="intro-card modal-card">
-          <div class="intro-card__map"><div class="orb orb--one"></div><div class="orb orb--two"></div><span>APEX NETWORK / 01</span><strong>RECLAIM<br>THE FUTURE</strong></div>
+          <div class="intro-card__map"><div class="orb orb--one"></div><div class="orb orb--two"></div><span>EONSCAR NETWORK / 01</span><strong>RECLAIM<br>THE FUTURE</strong></div>
           <div class="intro-card__content">
             <div class="panel-kicker">SPEELBARE VERTICALE SLICE</div>
             <h1>Verover de wereld.<br><em>Zonder dobbelpech.</em></h1>

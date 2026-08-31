@@ -16,7 +16,7 @@ describe('open country information', () => {
   });
 
   it('keeps exact power, army and economy in the normal country UI', () => {
-    expect(worldUiSource).not.toContain('PARTIAL APEX INTEL');
+    expect(worldUiSource).not.toContain('PARTIAL EONSCAR INTEL');
     expect(worldUiSource).not.toContain('LIVE SIGNAL UNAVAILABLE');
     expect(worldUiSource).not.toContain('NO VERIFIED SIGNAL');
     expect(worldUiSource).not.toContain('ALL LIVE STATS · UNVERIFIED');

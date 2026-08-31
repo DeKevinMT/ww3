@@ -108,7 +108,7 @@ function stateOwner(territoryId: TerritoryId) {
   return nationIdV2(territoryId);
 }
 
-describe('distributed APEX Signal Purge', () => {
+describe('distributed EONSCAR Signal Purge', () => {
   it('focuses one peace-time purge at 3× while deterministic relays keep the rest at 50%', () => {
     const state = createWorldStateV2(88_101, WORLD_CONTENT_V2);
     beginTwoHumanPurges(state);
@@ -136,7 +136,7 @@ describe('distributed APEX Signal Purge', () => {
       state, WORLD_CONTENT_V2, focusId,
     )).toMatchObject({
       mode: 'network-focus',
-      label: `APEX PRIORITY PURGE · ${APEX_SIGNAL_PURGE_ON_SITE_SPEED_V2}×`,
+      label: `EONSCAR PRIORITY PURGE · ${APEX_SIGNAL_PURGE_ON_SITE_SPEED_V2}×`,
       focused: true,
     });
     expect(selectApexSignalPurgeArrivalV2(
@@ -319,6 +319,6 @@ describe('distributed APEX Signal Purge', () => {
     expect(campaignCountrySignalPurgeCompleteV1(
       state, WORLD_CONTENT_V2, belgium, luxembourg,
     )).toBe(true);
-    expect(state.events.at(-1)?.message).toContain('APEX completed the Signal Purge');
+    expect(state.events.at(-1)?.message).toContain('EONSCAR completed the Signal Purge');
   });
 });

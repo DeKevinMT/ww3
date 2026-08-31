@@ -492,14 +492,14 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
     ])) {
       const existing = apexTerritoryClaims.get(territoryId);
       if (existing && existing !== playerId) {
-        errors.push(`APEX territory ${territoryId} is claimed by both ${existing} and ${playerId}.`);
+        errors.push(`EONSCAR territory ${territoryId} is claimed by both ${existing} and ${playerId}.`);
       } else apexTerritoryClaims.set(territoryId, playerId);
     }
     if (force.front) {
       const signature = `${force.front.warId}:${force.front.sourceId}:${force.front.targetId}`;
       const existing = apexFrontClaims.get(signature);
       if (existing && existing !== playerId) {
-        errors.push(`APEX front ${signature} is claimed by both ${existing} and ${playerId}.`);
+        errors.push(`EONSCAR front ${signature} is claimed by both ${existing} and ${playerId}.`);
       } else apexFrontClaims.set(signature, playerId);
     }
     const secondaryFront = force.doctrineRuntime?.secondaryProjection?.front;
@@ -507,7 +507,7 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
       const signature = `${secondaryFront.warId}:${secondaryFront.sourceId}:${secondaryFront.targetId}`;
       const existing = apexFrontClaims.get(signature);
       if (existing && existing !== playerId) {
-        errors.push(`APEX front ${signature} is claimed by both ${existing} and ${playerId}.`);
+        errors.push(`EONSCAR front ${signature} is claimed by both ${existing} and ${playerId}.`);
       } else apexFrontClaims.set(signature, playerId);
     }
   }
@@ -558,7 +558,7 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
   if (polar) {
     const narrative = polar.apexNarrative;
     if (!narrative || !exactKeys(narrative, APEX_NARRATIVE_KEYS)) {
-      errors.push('APEX narrative state is invalid.');
+      errors.push('EONSCAR narrative state is invalid.');
     } else {
       for (const [rawPlayerId, progress] of Object.entries(narrative.players)) {
         const playerId = rawPlayerId as PlayerId;
@@ -566,7 +566,7 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
           || !exactKeys(progress, APEX_NARRATIVE_PLAYER_KEYS)
           || typeof progress.investigationAuthorized !== 'boolean'
           || !Array.isArray(progress.transmissions)) {
-          errors.push(`APEX narrative player ${rawPlayerId} is invalid.`);
+          errors.push(`EONSCAR narrative player ${rawPlayerId} is invalid.`);
           continue;
         }
         const ids = new Set<string>();
@@ -589,20 +589,20 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
               .includes(transmission.action)
             || transmission.targetId !== null && !content.territories[transmission.targetId]
             || ![null, 'accept', 'later', 'acknowledge'].includes(transmission.choice)) {
-            errors.push(`APEX transmission ${String(transmission?.id)} is invalid.`);
+            errors.push(`EONSCAR transmission ${String(transmission?.id)} is invalid.`);
             continue;
           }
           ids.add(transmission.id);
           if ((transmission.choice === null) !== (transmission.resolvedTick === null)) {
-            errors.push(`APEX transmission ${transmission.id} has invalid response timing.`);
+            errors.push(`EONSCAR transmission ${transmission.id} has invalid response timing.`);
           }
           if (transmission.action === null
             && transmission.choice !== null && transmission.choice !== 'acknowledge') {
-            errors.push(`APEX transmission ${transmission.id} has an invalid acknowledgement.`);
+            errors.push(`EONSCAR transmission ${transmission.id} has an invalid acknowledgement.`);
           }
           if (transmission.action === 'north-pole-investigation'
             && transmission.choice === 'acknowledge') {
-            errors.push(`APEX transmission ${transmission.id} did not receive its required decision.`);
+            errors.push(`EONSCAR transmission ${transmission.id} did not receive its required decision.`);
           }
           const targetAllowed = transmission.action === 'first-strike-guidance'
             || transmission.id === 'campaign-first-conquest'
@@ -612,7 +612,7 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
           if (transmission.action === 'first-strike-guidance'
             ? transmission.targetId === null
             : transmission.targetId !== null && !targetAllowed) {
-            errors.push(`APEX transmission ${transmission.id} has an invalid guidance target.`);
+            errors.push(`EONSCAR transmission ${transmission.id} has an invalid guidance target.`);
           }
         }
       }
@@ -1078,11 +1078,11 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
     const apexTelemetry = war.apexTelemetryByPlayer as unknown;
     if (apexTelemetry !== undefined) {
       if (!apexTelemetry || typeof apexTelemetry !== 'object' || Array.isArray(apexTelemetry)) {
-        errors.push(`War ${war.id} has invalid APEX telemetry.`);
+        errors.push(`War ${war.id} has invalid EONSCAR telemetry.`);
       } else {
         for (const [playerId, rawTelemetry] of Object.entries(apexTelemetry)) {
           if (!rawTelemetry || typeof rawTelemetry !== 'object' || Array.isArray(rawTelemetry)) {
-            errors.push(`War ${war.id} has invalid APEX telemetry for ${playerId}.`);
+            errors.push(`War ${war.id} has invalid EONSCAR telemetry for ${playerId}.`);
             continue;
           }
           const telemetry = rawTelemetry as NonNullable<
@@ -1107,7 +1107,7 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
             || !countValues.every((value) => Number.isSafeInteger(value) && value >= 0)
             || telemetry.singularityPulses > telemetry.supportedBattles
             || telemetry.twinProjectionBattles > telemetry.supportedBattles) {
-            errors.push(`War ${war.id} has invalid APEX telemetry for ${playerId}.`);
+            errors.push(`War ${war.id} has invalid EONSCAR telemetry for ${playerId}.`);
           }
         }
       }

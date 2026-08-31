@@ -24,8 +24,8 @@ function operation(
   };
 }
 
-describe('shared Best Target focus + APEX plan', () => {
-  it('stages an assault from owned territory and never sends APEX into the enemy', () => {
+describe('shared Best Target focus + EONSCAR plan', () => {
+  it('stages an assault from owned territory and never sends EONSCAR into the enemy', () => {
     const state = createWorldStateV2(81_001);
     const belgium = nationIdV2('bel');
     const sourceId = territoryIdV2('bel');

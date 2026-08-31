@@ -1,6 +1,6 @@
 # Polar endgame
 
-Frontier Command v2.65 turns the poles into a complete late-game arc without adding countries to the ordinary world model. The Arctic is a manual preparation layer; Antarctica is a bounded deterministic campaign that becomes the final victory condition for a surviving human player.
+EONSCAR v2.65 turns the poles into a complete late-game arc without adding countries to the ordinary world model. The Arctic is a manual preparation layer; Antarctica is a bounded deterministic campaign that becomes the final victory condition for a surviving human player.
 
 ## Player flow
 

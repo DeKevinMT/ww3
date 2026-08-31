@@ -1,12 +1,14 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import worldUiSource from './WorldUIV2.ts?raw';
+import worldUiSourceRaw from './WorldUIV2.ts?raw';
 import {
   apexShieldTopbarPresentationV2,
   armyReadinessTopbarPresentationV2,
 } from './WorldUIV2';
 
-const stylesSource = readFileSync(new URL('../styles.css', import.meta.url), 'utf8');
+const normalized = (source: string): string => source.replace(/\r\n/g, '\n');
+const worldUiSource = normalized(worldUiSourceRaw);
+const stylesSource = normalized(readFileSync(new URL('../styles.css', import.meta.url), 'utf8'));
 
 describe('responsive strategic topbar', () => {
   it('keeps five focused status shortcuts while giving Empire Defence a wider mobile slot', () => {
@@ -97,7 +99,7 @@ describe('responsive strategic topbar', () => {
     expect(worldUiSource).not.toContain('class="top-metric top-metric--apex');
     expect(worldUiSource).not.toContain('class="top-metric top-metric--people-food');
     expect(worldUiSource).not.toContain('class="top-metric top-metric--food"');
-    expect(worldUiSource).toContain('including APEX income');
+    expect(worldUiSource).toContain('including EONSCAR income');
     expect(worldUiSource).toContain('${armyReadiness.value} ARMY');
     expect(worldUiSource).toContain('<span>ARMY ${compactNumber(combatPower)}</span>');
     expect(worldUiSource).not.toContain('human.trainedReserves');
@@ -165,7 +167,7 @@ describe('responsive strategic topbar', () => {
     expect(armyReadinessTopbarPresentationV2(Number.NaN, 0).percent).toBe(0);
   });
 
-  it('does not count an extracted APEX force before full recovery releases it', () => {
+  it('does not count an extracted EONSCAR force before full recovery releases it', () => {
     expect(apexShieldTopbarPresentationV2(100, 0.999, 1, 'hq-training')).toEqual({
       supportBonusPercent: 0,
       armyPowerMultiplier: 1,
@@ -187,7 +189,7 @@ describe('responsive strategic topbar', () => {
     });
   });
 
-  it('keeps the compact APEX readout shield-native and exposes capstone state', () => {
+  it('keeps the compact EONSCAR readout shield-native and exposes capstone state', () => {
     expect(worldUiSource).toContain('<span>ENERGY</span>');
     expect(worldUiSource).toContain('${compactNumber(force.shield.integrity)} / ${compactNumber(force.shield.maxIntegrity)} MAX');
     expect(worldUiSource).toContain('OVERDRIVE ${lancer.supportedAssaultCount}/3');

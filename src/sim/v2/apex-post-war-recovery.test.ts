@@ -6,6 +6,7 @@ import { synchronizeArmyCapacityV2 } from './capacity';
 import { WORLD_CONTENT_V2 } from './content';
 import {
   APEX_POST_WAR_RECOVERY_DELAY_TICKS_V2,
+  APEX_TUTORIAL_TRANSMISSION_MIN_SPACING_TICKS_V2,
   processApexNarrativeV2,
   respondToApexTransmissionV2,
   selectApexTransmissionsV2,
@@ -99,7 +100,7 @@ function concludeHumanWar(
   );
 }
 
-describe('APEX post-war recovery transmission', () => {
+describe('EONSCAR post-war recovery transmission', () => {
   it('waits for the first war to end and for three fully quiet weeks', () => {
     const state = createWorldStateV2(89_201, WORLD_CONTENT_V2);
     const playerId = seedResolvedEarlyCampaignStory(state);
@@ -152,7 +153,9 @@ describe('APEX post-war recovery transmission', () => {
     const state = createWorldStateV2(89_203, WORLD_CONTENT_V2);
     const playerId = seedResolvedEarlyCampaignStory(state);
     concludeHumanWar(state, playerId, 20);
-    state.tick = 23;
+    state.tick = 18 + APEX_TUTORIAL_TRANSMISSION_MIN_SPACING_TICKS_V2 - 1;
+    expect(processApexNarrativeV2(state, WORLD_CONTENT_V2)).toBe(0);
+    state.tick += 1;
     expect(processApexNarrativeV2(state, WORLD_CONTENT_V2)).toBe(1);
     expect(respondToApexTransmissionV2(
       state,
@@ -170,7 +173,7 @@ describe('APEX post-war recovery transmission', () => {
     expect(serializeSaveV2(loaded, WORLD_CONTENT_V2)).toBe(serialized);
   });
 
-  it('preserves the three-week recovery clock when reconnect drops transient event copy', () => {
+  it('preserves both recovery and tutorial-spacing clocks when reconnect drops event copy', () => {
     const state = createWorldStateV2(89_205, WORLD_CONTENT_V2);
     const playerId = seedResolvedEarlyCampaignStory(state);
     concludeHumanWar(state, playerId, 20);
@@ -181,6 +184,8 @@ describe('APEX post-war recovery transmission', () => {
     loaded.tick = 22;
     expect(processApexNarrativeV2(loaded, WORLD_CONTENT_V2)).toBe(0);
     loaded.tick = 23;
+    expect(processApexNarrativeV2(loaded, WORLD_CONTENT_V2)).toBe(0);
+    loaded.tick = 18 + APEX_TUTORIAL_TRANSMISSION_MIN_SPACING_TICKS_V2;
     expect(processApexNarrativeV2(loaded, WORLD_CONTENT_V2)).toBe(1);
     expect(selectApexTransmissionsV2(loaded, playerId).at(-1)?.id)
       .toBe('campaign-first-war-recovery');

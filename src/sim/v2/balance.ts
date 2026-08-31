@@ -574,16 +574,16 @@ export const NATIONAL_AI_ALLOCATION_STEP_MAX = 4;
 export const NATIONAL_AI_EFFICIENCY_PER_IQ_POINT = 0.0025;
 /** Shared cash-runway policy; selecting a country grants no reserve advantage. */
 export const NATIONAL_AI_PEACE_RESERVE_WEEKS = 8;
-/** Universal public administration and operating burden: exactly 20% of ordinary tax revenue. */
-export const BASE_OPERATING_COST_TAX_REVENUE_SHARE = 0.20;
-/** Administrative research improves collection modestly and can trim operations to no less than 15%. */
+/** Universal public administration and operating burden: exactly 30% of ordinary tax revenue. */
+export const BASE_OPERATING_COST_TAX_REVENUE_SHARE = 0.30;
+/** Administrative research improves collection modestly and can trim operations to no less than 25%. */
 export const TAX_EFFICIENCY_RESEARCH_BONUS_PER_EFFECTIVE_LEVEL = 0.003;
 export const TAX_EFFICIENCY_RESEARCH_EFFECTIVE_CEILING = 30;
 export const TAX_EFFICIENCY_RESEARCH_HALF_SATURATION = 20;
 export const OPERATING_EFFICIENCY_RESEARCH_REDUCTION_PER_EFFECTIVE_LEVEL = 0.0025;
 export const OPERATING_EFFICIENCY_RESEARCH_EFFECTIVE_CEILING = 20;
 export const OPERATING_EFFICIENCY_RESEARCH_HALF_SATURATION = 15;
-export const BASE_OPERATING_COST_MIN_TAX_REVENUE_SHARE = 0.15;
+export const BASE_OPERATING_COST_MIN_TAX_REVENUE_SHARE = 0.25;
 export const NATIONAL_AI_WAR_BASE_RUNWAY_WEEKS = 6;
 export const NATIONAL_AI_WAR_FRONT_RUNWAY_WEEKS = 2;
 /** Better national decision quality builds a slightly deeper emergency buffer. */

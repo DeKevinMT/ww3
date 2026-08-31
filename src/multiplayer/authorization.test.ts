@@ -107,7 +107,7 @@ describe('multiplayer command authorization', () => {
     }
   });
 
-  it('binds APEX transmission responses to the addressed human seat', () => {
+  it('binds EONSCAR transmission responses to the addressed human seat', () => {
     const state = createWorldStateV2(552, WORLD_CONTENT_V2);
     const command = {
       type: 'respond-apex-transmission' as const,

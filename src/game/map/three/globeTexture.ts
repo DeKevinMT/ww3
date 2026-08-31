@@ -987,7 +987,7 @@ export class GlobePoliticalTexture {
     this.intelligenceFogMaskCanvas.width = 1024;
     this.intelligenceFogMaskCanvas.height = 512;
     const intelligenceFogMaskContext = this.intelligenceFogMaskCanvas.getContext('2d');
-    if (!intelligenceFogMaskContext) throw new Error('The APEX intelligence mask could not be created.');
+    if (!intelligenceFogMaskContext) throw new Error('The EONSCAR intelligence mask could not be created.');
     this.intelligenceFogMaskContext = intelligenceFogMaskContext;
     this.intelligenceFogMaskContext.imageSmoothingEnabled = true;
     this.intelligenceFogMaskContext.imageSmoothingQuality = 'high';
@@ -996,7 +996,7 @@ export class GlobePoliticalTexture {
     this.intelligenceFogNoiseCanvas.width = 128;
     this.intelligenceFogNoiseCanvas.height = 64;
     const fogNoise = this.intelligenceFogNoiseCanvas.getContext('2d');
-    if (!fogNoise) throw new Error('The APEX intelligence noise texture could not be created.');
+    if (!fogNoise) throw new Error('The EONSCAR intelligence noise texture could not be created.');
     const noiseImage = fogNoise.createImageData(128, 64);
     for (let index = 0; index < noiseImage.data.length; index += 4) {
       const seed = (Math.imul(index / 4 + 97, 2_654_435_761) >>> 0) / 4_294_967_296;

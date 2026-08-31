@@ -302,7 +302,7 @@ describe('shared national-AI spending discipline', () => {
       .toBeCloseTo(invested.excessCashInvestment, 5);
   });
 
-  it('never turns AI or selected-country APEX cash into manual purchase commands', () => {
+  it('never turns AI or selected-country EONSCAR cash into manual purchase commands', () => {
     const base = createWorldStateV2(91_002);
     const belgium = nationIdV2('bel');
     const netherlands = nationIdV2('nld');

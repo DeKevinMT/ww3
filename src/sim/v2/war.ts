@@ -1701,7 +1701,7 @@ export function forecastWarV2(
   defenderId: PlayerId,
   militaryBaseSnapshot: MilitaryBaseSnapshotV2 = createMilitaryBaseSnapshotV2(state, content),
 ): WarForecastV2 {
-  const noApex = (reason = 'No operational APEX shield is available.'): ApexForecastContributionV2 => ({
+  const noApex = (reason = 'No operational EONSCAR shield is available.'): ApexForecastContributionV2 => ({
     status: 'absent',
     stagingTerritoryId: null,
     power: 0,

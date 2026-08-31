@@ -65,8 +65,8 @@ function recurringProgramEnvelope(state: WorldStateV2, playerId: PlayerId): numb
   return plan.military + plan.research + plan.development;
 }
 
-describe('lean shared APEX and empire finance', () => {
-  it('makes base APEX free and transfers its full modest output to Greenland', () => {
+describe('lean shared EONSCAR and empire finance', () => {
+  it('makes base EONSCAR free and transfers its full modest output to Greenland', () => {
     const state = createWorldStateV2(73_001, WORLD_CONTENT_V2);
     const greenland = nationIdV2('grl');
     makeHuman(state, [greenland]);
@@ -108,7 +108,7 @@ describe('lean shared APEX and empire finance', () => {
     }
   });
 
-  it('uses one combined target and books APEX exactly once in net and closing cash', () => {
+  it('uses one combined target and books EONSCAR exactly once in net and closing cash', () => {
     const state = createWorldStateV2(73_003, WORLD_CONTENT_V2);
     const greenland = nationIdV2('grl');
     makeHuman(state, [greenland]);
@@ -163,7 +163,7 @@ describe('lean shared APEX and empire finance', () => {
     expect(force.economy.treasury).toBe(0);
   });
 
-  it('keeps Front Projection Pulse-only while base APEX income joins the shared target', () => {
+  it('keeps Front Projection Pulse-only while base EONSCAR income joins the shared target', () => {
     const state = createWorldStateV2(73_033, WORLD_CONTENT_V2);
     const greenland = nationIdV2('grl');
     makeHuman(state, [greenland]);

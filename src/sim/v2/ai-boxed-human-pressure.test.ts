@@ -102,14 +102,14 @@ describe('boxed human anti-stalemate pressure', () => {
     expect(first.some((command) => command.type === 'declare-war'
       && command.defenderId === humanId)).toBe(false);
     const warnings = engine.state.events.filter((event) => (
-      event.playerId === humanId && event.message.startsWith('APEX EARLY WARNING')
+      event.playerId === humanId && event.message.startsWith('EONSCAR EARLY WARNING')
     ));
     expect(warnings).toHaveLength(1);
     expect(warnings[0]!.message).toContain(`${AI_BOXED_HUMAN_WARNING_TICKS} weeks`);
 
     planAiCommandsV2(engine.state, engine.content);
     expect(engine.state.events.filter((event) => (
-      event.playerId === humanId && event.message.startsWith('APEX EARLY WARNING')
+      event.playerId === humanId && event.message.startsWith('EONSCAR EARLY WARNING')
     ))).toHaveLength(1);
 
     const resumed = structuredClone(engine.state);
@@ -118,7 +118,7 @@ describe('boxed human anti-stalemate pressure', () => {
     expect(stillPreparing.some((command) => command.type === 'declare-war'
       && command.defenderId === humanId)).toBe(false);
     expect(resumed.events.filter((event) => (
-      event.playerId === humanId && event.message.startsWith('APEX EARLY WARNING')
+      event.playerId === humanId && event.message.startsWith('EONSCAR EARLY WARNING')
     ))).toHaveLength(1);
   });
 });

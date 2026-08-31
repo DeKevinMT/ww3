@@ -146,7 +146,7 @@ describe('campaign lifecycle settlement', () => {
     expect(first.settlementId).toBe('campaign-lifecycle-test:victory');
   });
 
-  it('slows country mastery for powerful nations without reducing APEX XP', () => {
+  it('slows country mastery for powerful nations without reducing EONSCAR XP', () => {
     const antarcticGain = state({
       tick: 104,
       territories: {

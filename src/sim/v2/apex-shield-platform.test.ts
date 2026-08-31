@@ -76,7 +76,7 @@ function activeWar(state: WorldStateV2, playerId: PlayerId): WarStateV2 {
   };
 }
 
-describe('APEX neural energy-shield platform', () => {
+describe('EONSCAR neural energy-shield platform', () => {
   it('projects legacy army storage as integrity, ATK/DEF and shield power', () => {
     const state = createWorldStateV2(94_001, WORLD_CONTENT_V2);
     const nationalManpowerBefore = totalNationalManpower(state);
@@ -247,7 +247,7 @@ describe('APEX neural energy-shield platform', () => {
     expect(selectHumanEmpireDefeatWinnerV2(state)).not.toBe(playerId);
   });
 
-  it('uses an unavailable zero-value view when no compatible APEX record exists', () => {
+  it('uses an unavailable zero-value view when no compatible EONSCAR record exists', () => {
     const state = createWorldStateV2(94_005, WORLD_CONTENT_V2);
     const playerId = nationIdV2('bel');
 

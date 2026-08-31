@@ -63,7 +63,7 @@ interface LobbyInternals {
   onGuestMessage(message: SessionMessage): void;
   selectPreferredCountryIfAvailable(): void;
   applyLocalAction(action: LobbyAction): void;
-  changeScenario(mode: 'standard-2026' | 'random-world', reroll?: boolean): void;
+  changeScenario(mode: 'survival' | 'random-world', reroll?: boolean): void;
   render(): void;
 }
 
@@ -226,6 +226,7 @@ describe('multiplayer lobby launch recovery', () => {
     const usa = nationIdV2('usa');
     const ui = new MultiplayerLobby({
       onClose: vi.fn(), onHostLaunch: vi.fn(), onGuestLaunch: vi.fn(), openingMetrics,
+      preferredCountryId: canada,
       availableCountryIds: new Set([belgium, canada]),
       countryMasteryLevels: new Map([[belgium, 7], [canada, 3]]),
     });
@@ -422,8 +423,8 @@ describe('multiplayer lobby launch recovery', () => {
     ui.destroy(false);
   });
 
-  it('uses distinct public queue cohorts for Campaign, Survival and Alternative Universe', () => {
-    const modes = ['standard-2026', 'survival', 'random-world'] as const;
+  it('uses distinct public queue cohorts for Survival and Alternative Universe', () => {
+    const modes = ['survival', 'random-world'] as const;
     const entries = modes.flatMap((mode, modeIndex) => [0, 1].map((seat) => ({
       clientId: `${mode}-${seat}`,
       rulesVersion: multiplayerQueueCompatibilityKey(mode),
@@ -431,8 +432,8 @@ describe('multiplayer lobby launch recovery', () => {
     })));
     const groups = formMatchmakingGroups(entries);
 
-    expect(new Set(modes.map(multiplayerQueueCompatibilityKey))).toHaveLength(3);
-    expect(groups).toHaveLength(3);
+    expect(new Set(modes.map(multiplayerQueueCompatibilityKey))).toHaveLength(2);
+    expect(groups).toHaveLength(2);
     expect(groups.every((group) => new Set(group.map((entry) => entry.rulesVersion)).size === 1)).toBe(true);
     expect(groups.flat().every((entry) => entry.rulesVersion.startsWith(`${V2_RULES_VERSION}:`))).toBe(true);
   });
@@ -464,6 +465,19 @@ describe('multiplayer lobby launch recovery', () => {
     ui.destroy();
   });
 
+  it('refuses direct Campaign matchmaking before opening a queue connection', () => {
+    const sockets = stubMatchmakingSocket();
+    expect(() => new MultiplayerLobby({
+        onClose: vi.fn(), onHostLaunch: vi.fn(), onGuestLaunch: vi.fn(), openingMetrics,
+        scenarioConfig: normalizeScenarioConfigV2({ mode: 'standard-2026', seed: 88 }),
+        preferredCountryId: nationIdV2('bel'),
+        directMatchmaking: true,
+      }))
+      .toThrow(/Campaign is single-player only/);
+
+    expect(sockets).toHaveLength(0);
+  });
+
   it('keeps private/direct-connect setup collapsed until Advanced / Private is opened', () => {
     const ui = new MultiplayerLobby({
       onClose: vi.fn(), onHostLaunch: vi.fn(), onGuestLaunch: vi.fn(), openingMetrics,
@@ -483,9 +497,9 @@ describe('multiplayer lobby launch recovery', () => {
     ui.destroy(false);
   });
 
-  it('renders a matchmade room as one readiness flow without a second nation or mode setup', async () => {
+  it('renders an Alternative Universe match as one readiness flow without a second setup', async () => {
     stubMatchmakingSocket();
-    const scenario = normalizeScenarioConfigV2({ mode: 'standard-2026', seed: 88 });
+    const scenario = normalizeScenarioConfigV2({ mode: 'random-world', seed: 88 });
     const ui = new MultiplayerLobby({
       onClose: vi.fn(), onHostLaunch: vi.fn(), onGuestLaunch: vi.fn(), openingMetrics,
       scenarioConfig: scenario,
@@ -507,7 +521,8 @@ describe('multiplayer lobby launch recovery', () => {
       'Your countries stay independent; allied territory carries team supply.',
     );
     expect(internals.root.innerHTML).toContain('Belgium');
-    expect(internals.root.innerHTML).toContain('Campaign');
+    expect(internals.root.innerHTML).toContain('Alternative Universe');
+    expect(internals.root.innerHTML).not.toContain('Campaign');
     expect(internals.root.innerHTML).toContain('READY UP');
     expect(internals.root.innerHTML.match(/data-mp-action="(?:toggle-ready|start)"/g)).toHaveLength(1);
     expect(internals.root.innerHTML).not.toContain('country-select--lobby');

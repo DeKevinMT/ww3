@@ -16,10 +16,16 @@ import {
   apexTerritoryPoliticalIdentityVisible,
   selectApexIntelligenceVisibility,
 } from './apexIntelligenceFog';
-import worldMapSceneSource from './WorldMapScene.ts?raw';
-import threeGlobeSceneSource from './three/ThreeGlobeScene.ts?raw';
-import globeTextureSource from './three/globeTexture.ts?raw';
-import worldUiSource from '../../ui/WorldUIV2.ts?raw';
+import worldMapSceneSourceRaw from './WorldMapScene.ts?raw';
+import threeGlobeSceneSourceRaw from './three/ThreeGlobeScene.ts?raw';
+import globeTextureSourceRaw from './three/globeTexture.ts?raw';
+import worldUiSourceRaw from '../../ui/WorldUIV2.ts?raw';
+
+const normalized = (source: string): string => source.replace(/\r\n/g, '\n');
+const worldMapSceneSource = normalized(worldMapSceneSourceRaw);
+const threeGlobeSceneSource = normalized(threeGlobeSceneSourceRaw);
+const globeTextureSource = normalized(globeTextureSourceRaw);
+const worldUiSource = normalized(worldUiSourceRaw);
 
 function territory(id: string, ownerId: string): MapTerritoryState {
   return {
@@ -114,7 +120,7 @@ function withRogueAttention(
   return engine;
 }
 
-describe('APEX Intelligence Fog visibility', () => {
+describe('EONSCAR Intelligence Fog visibility', () => {
   it('reveals own territory and one actual strategic hop while keeping remote seats private', () => {
     const visibility = selectApexIntelligenceVisibility(fogEngine());
     expect(visibility.enabled).toBe(true);
@@ -151,7 +157,7 @@ describe('APEX Intelligence Fog visibility', () => {
     expect(unknown.alpha).toBeLessThan(0.2);
   });
 
-  it('reveals viewer war fronts, the APEX route and detected approaching Rogue logistics', () => {
+  it('reveals viewer war fronts, the EONSCAR route and detected approaching Rogue logistics', () => {
     const engine = fogEngine();
     engine.state.wars = [{
       id: 'war:gnb:usa',
@@ -594,9 +600,9 @@ describe('APEX Intelligence Fog visibility', () => {
 
   it('renders the normal exact tooltip and inspector without dossier or partial-intel redaction', () => {
     expect(worldUiSource).not.toContain('ACCOUNT DOSSIER');
-    expect(worldUiSource).not.toContain('PARTIAL APEX INTEL');
+    expect(worldUiSource).not.toContain('PARTIAL EONSCAR INTEL');
     expect(worldUiSource).not.toContain('NO VERIFIED SIGNAL');
-    expect(worldUiSource).not.toContain('OUTSIDE APEX RANGE');
+    expect(worldUiSource).not.toContain('OUTSIDE EONSCAR RANGE');
     expect(worldUiSource).not.toContain('Exact live stats unverified');
     expect(worldUiSource).toContain('const localPower = this.engine.territoryPower(territoryId)');
     expect(worldUiSource).toContain('<span>LOCAL POWER</span>');

@@ -220,7 +220,7 @@ export function applyMultiplayerDeploymentsV1(
     const apex = engine.initializeCommanderForce(countryId, deployment.apex);
     if (!apex.accepted) return {
       accepted: false,
-      reason: apex.reason ?? `APEX could not deploy for ${countryId}.`,
+      reason: apex.reason ?? `EONSCAR could not deploy for ${countryId}.`,
     };
   }
   synchronizeArmyCapacityV2(engine.state, engine.content);

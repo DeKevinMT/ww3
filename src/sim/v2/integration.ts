@@ -405,7 +405,7 @@ export function selectApexSignalPurgeStatusesV2(
     let label: string;
     if (focused && network.focused) {
       mode = 'network-focus';
-      label = `APEX PRIORITY PURGE · ${APEX_SIGNAL_PURGE_ON_SITE_SPEED_V2}×`;
+      label = `EONSCAR PRIORITY PURGE · ${APEX_SIGNAL_PURGE_ON_SITE_SPEED_V2}×`;
     } else if (front.supplied) {
       mode = 'front';
       label = `FRONT PURGE · ${APEX_SIGNAL_PURGE_FRONT_SPEED_V2}×`;
@@ -962,7 +962,7 @@ export function advanceTerritoryIntegrationProgramsV2(
       'conquest',
       isHumanPlayerV2(state, ownerId) ? 'action' : 'info',
       isHumanPlayerV2(state, ownerId)
-        ? `APEX completed the Signal Purge in ${formerName}; it is now permanent core territory in liberated ${ownerName}.`
+        ? `EONSCAR completed the Signal Purge in ${formerName}; it is now permanent core territory in liberated ${ownerName}.`
         : rogueRapidAssimilation
           ? `RAPID ASSIMILATION complete: ${formerName} is now a permanent Rogue-controlled core.`
           : `${formerName} completed integration into ${ownerName} and is now permanent core territory.`,

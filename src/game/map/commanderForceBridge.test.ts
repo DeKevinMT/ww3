@@ -19,7 +19,7 @@ function forceWithTransit(
   };
 }
 
-describe('APEX neural-dome map transit projection', () => {
+describe('EONSCAR neural-dome map transit projection', () => {
   it('interpolates only inside the canonical movement window', () => {
     const force = forceWithTransit(100, 120);
     expect(mapCommanderTransitProgress(force, 90)).toBe(0);
@@ -42,7 +42,7 @@ describe('APEX neural-dome map transit projection', () => {
     expect(mapCommanderTransitProgress(force, 26)).toBe(1);
   });
 
-  it('keeps extracted APEX unavailable for the complete canonical recovery mission', () => {
+  it('keeps extracted EONSCAR unavailable for the complete canonical recovery mission', () => {
     expect(mapCommanderRecoveryLifecycleActive({ mission: 'hq-training' })).toBe(true);
     expect(mapCommanderRecoveryLifecycleActive({ mission: 'evacuate' })).toBe(true);
     expect(mapCommanderRecoveryLifecycleActive({ mission: 'standby' })).toBe(false);

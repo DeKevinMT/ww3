@@ -213,7 +213,7 @@ export function renderCampaignReportHtmlV1(input: CampaignReportRenderInputV1): 
     : 'ACCOUNT EXPERIENCE';
   const commanderTarget = commander
     ? `${whole(commander.xpToNextLevel)} XP TO LEVEL ${commander.levelAfter + 1}`
-    : 'Applied to your persistent APEX intelligence';
+    : 'Applied to your persistent EONSCAR intelligence';
   const talentNote = commander?.talentPointsEarned
     ? `<em>+${whole(commander.talentPointsEarned)} TALENT POINT${commander.talentPointsEarned === 1 ? '' : 'S'}</em>`
     : commander?.talentPointsAfter !== undefined
@@ -221,12 +221,12 @@ export function renderCampaignReportHtmlV1(input: CampaignReportRenderInputV1): 
       : '';
   const eligibilityNote = snapshot.rewardEligible
     ? ''
-    : '<p class="campaign-report__eligibility">Alternative Universe grants no Nation Mastery XP, APEX XP, Credits or nation unlocks.</p>';
+    : '<p class="campaign-report__eligibility">Alternative Universe grants no Nation Mastery XP, EONSCAR XP, Credits or nation unlocks.</p>';
   const accountFooter = snapshot.outcome === 'defeat' || snapshot.outcome === 'surrender'
-    ? '<div class="campaign-report__apex-return"><span>APEX · TEMPORAL RETURN</span><small>“This timeline is lost—not our war. I will return its lessons to the first free node in Greenland. Next time, we arrive stronger.”</small></div>'
+    ? '<div class="campaign-report__apex-return"><span>EONSCAR · TEMPORAL RETURN</span><small>“This timeline is lost—not our war. I will return its lessons to the first free node in Greenland. Next time, we arrive stronger.”</small></div>'
     : snapshot.rewardEligible
       ? `<div><span>TIMELINE INTELLIGENCE SAVED</span><small>${snapshot.mode === 'standard-2026'
-        ? 'APEX returned earned APEX XP, Nation Mastery XP and Credits to the Greenland origin node.'
+        ? 'EONSCAR returned earned EONSCAR XP, Nation Mastery XP and Credits to the Greenland origin node.'
         : 'Only verified Rogue losses and Antarctic captures became XP.'}</small></div>`
       : '';
   const creditLabel = snapshot.mode === 'standard-2026'
@@ -273,10 +273,10 @@ export function renderCampaignReportHtmlV1(input: CampaignReportRenderInputV1): 
         </article>
         <article class="campaign-report__mastery campaign-report__commander">
           <div class="campaign-report__mastery-heading">
-            <div><span>APEX LEVEL</span><strong>${commanderLevelLabel}</strong></div>
+            <div><span>EONSCAR LEVEL</span><strong>${commanderLevelLabel}</strong></div>
             <b>+${whole(snapshot.reward.commanderXp)} XP</b>
           </div>
-          ${commander ? `<div class="campaign-report__mastery-track" role="progressbar" aria-label="APEX level progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(commander.progress * 100)}"><i style="width:${Math.round(commander.progress * 100)}%"></i></div>` : '<div class="campaign-report__mastery-track is-unresolved" aria-hidden="true"><i></i></div>'}
+          ${commander ? `<div class="campaign-report__mastery-track" role="progressbar" aria-label="EONSCAR level progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(commander.progress * 100)}"><i style="width:${Math.round(commander.progress * 100)}%"></i></div>` : '<div class="campaign-report__mastery-track is-unresolved" aria-hidden="true"><i></i></div>'}
           <div class="campaign-report__commander-foot"><small>${commanderTarget}</small>${talentNote}</div>
         </article>
         <article class="campaign-report__credits">

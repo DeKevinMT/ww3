@@ -38,7 +38,7 @@
         background-image:
           linear-gradient(90deg, rgba(2, 8, 17, .22) 0%, rgba(2, 8, 17, .02) 55%, rgba(2, 8, 17, .18) 100%),
           linear-gradient(0deg, rgba(2, 8, 17, .78) 0%, rgba(2, 8, 17, .02) 55%),
-          url("./src/assets/apex-reclamation-bg.jpg");
+          url("./src/assets/eonscar-command-bg.jpg");
         background-size: cover;
         background-position: center;
         color: #dffaff;
@@ -91,22 +91,35 @@
         filter: drop-shadow(0 18px 42px rgba(0, 0, 0, .58));
       }
 
-      .startup-loader__brand { display: grid; justify-items: start; }
-      .startup-loader__brand > span {
-        color: #71e9ff;
-        font-size: clamp(12px, 1.15vw, 16px);
-        font-weight: 900;
-        line-height: 1;
-        letter-spacing: clamp(5px, .75vw, 10px);
+      .startup-loader__brand {
+        display: flex;
+        align-items: center;
+        gap: clamp(14px, 2vw, 24px);
       }
-      .startup-loader__brand > strong {
-        margin-top: 5px;
+      .startup-loader__brand > img {
+        width: clamp(68px, 8vw, 108px);
+        aspect-ratio: 1;
+        object-fit: contain;
+        filter: drop-shadow(0 0 22px rgba(113, 233, 255, .2));
+      }
+      .startup-loader__brand-copy { display: grid; justify-items: start; }
+      .startup-loader__brand-copy > strong {
         color: #effcff;
-        font-size: clamp(30px, 4.1vw, 58px);
-        font-weight: 850;
-        line-height: .88;
-        letter-spacing: clamp(1px, .2vw, 3px);
+        font-family: "Bahnschrift Condensed", "Arial Narrow", "Segoe UI", sans-serif;
+        font-size: clamp(38px, 5vw, 70px);
+        font-stretch: condensed;
+        font-weight: 700;
+        line-height: .84;
+        letter-spacing: clamp(4px, .65vw, 9px);
         text-shadow: 0 0 32px rgba(113, 233, 255, .18);
+      }
+      .startup-loader__brand-copy > span {
+        margin-top: 12px;
+        color: #8fdceb;
+        font-size: clamp(9px, .8vw, 12px);
+        font-weight: 800;
+        line-height: 1;
+        letter-spacing: clamp(2px, .38vw, 5px);
       }
 
       .startup-loader__track {
@@ -137,7 +150,7 @@
       }
       #startup-loader[data-loader-stage="world"] .startup-loader__track i { transform: scaleX(.28); }
       #startup-loader[data-loader-stage="map"] .startup-loader__track i { transform: scaleX(.62); }
-      #startup-loader[data-loader-stage="apex"] .startup-loader__track i { transform: scaleX(.88); }
+      #startup-loader[data-loader-stage="eonscar"] .startup-loader__track i { transform: scaleX(.88); }
 
       #startup-loader.is-ready .startup-loader__track i {
         animation: none;
@@ -182,6 +195,10 @@
           background-position: 62% center;
         }
         .startup-loader__content { width: 100%; gap: 17px; }
+        .startup-loader__brand { gap: 12px; }
+        .startup-loader__brand > img { width: 62px; }
+        .startup-loader__brand-copy > strong { letter-spacing: 3px; }
+        .startup-loader__brand-copy > span { margin-top: 8px; letter-spacing: 2px; }
         .startup-loader__tip { grid-template-columns: 1fr; gap: 5px; }
         .startup-loader__tip > p { font-size: 13px; }
       }
@@ -192,26 +209,30 @@
         #startup-loader.is-ready .startup-loader__track i { transition-duration: 1ms; }
       }
     </style>
-    <link rel="preload" as="image" href="./src/assets/apex-reclamation-bg.jpg" fetchpriority="high" />
-    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23020811'/%3E%3Cpath d='M32 8 56 53H43l-4-9H25l-4 9H8L32 8Zm0 18-4 10h8l-4-10Z' fill='%2371e9ff'/%3E%3C/svg%3E" />
+    <link rel="preload" as="image" href="./src/assets/eonscar-command-bg.jpg" fetchpriority="high" />
+    <link rel="preload" as="image" href="./src/assets/brand/eonscar-logo-transparent.png" />
+    <link rel="icon" href="./src/assets/brand/eonscar-profile.png" type="image/png" />
     <meta
       name="description"
-      content="APEX: RECLAMATION — reclaim a fractured world across evolving timelines."
+      content="EONSCAR — command nations through a fractured world and carry every lesson across timelines."
     />
-    <title>APEX: RECLAMATION</title>
+    <title>EONSCAR</title>
     <script type="module" src="/src/main.ts"></script>
   </head>
   <body>
     <div id="app">
       <div id="startup-loader" role="status" aria-live="polite" aria-atomic="true" aria-hidden="false" data-loader-variant="boot" data-loader-stage="boot">
-        <span class="startup-loader__sr-only">Connecting to APEX account</span>
+        <span class="startup-loader__sr-only">Connecting to EONSCAR account</span>
         <div class="startup-loader__content">
-          <div class="startup-loader__brand" aria-hidden="true"><span>APEX</span><strong>RECLAMATION</strong></div>
+          <div class="startup-loader__brand" aria-hidden="true">
+            <img src="./src/assets/brand/eonscar-logo-transparent.png" alt="" />
+            <div class="startup-loader__brand-copy"><strong>EONSCAR</strong><span>EONSCAR REMEMBERS.</span></div>
+          </div>
           <div class="startup-loader__track" aria-hidden="true"><i></i></div>
           <div class="startup-loader__tip" role="note"><span>FIELD INTEL</span><p data-loader-tip>Land borders are the most reliable routes for expansion.</p></div>
         </div>
       </div>
-      <div id="game-canvas" aria-label="Interactive world war map"></div>
+      <div id="game-canvas" aria-label="Interactive EONSCAR world command map"></div>
       <div id="hud" aria-live="polite"></div>
       <div id="tooltip" role="tooltip"></div>
       <div id="toast-layer" aria-live="assertive"></div>

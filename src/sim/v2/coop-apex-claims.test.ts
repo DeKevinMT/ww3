@@ -43,8 +43,8 @@ function twoSeatApex(seed: number) {
   return { state, belgium, netherlands };
 }
 
-describe('co-op APEX claim invariant', () => {
-  it('deploys one independent APEX per human seat on distinct territories', () => {
+describe('co-op EONSCAR claim invariant', () => {
+  it('deploys one independent EONSCAR per human seat on distinct territories', () => {
     const { state, belgium, netherlands } = twoSeatApex(97_001);
     const bel = territoryIdV2('bel');
     const nld = territoryIdV2('nld');

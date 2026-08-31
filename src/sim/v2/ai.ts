@@ -251,7 +251,7 @@ function boxedHumanWarningMessageV2(
   threatenerId: PlayerId,
 ): string {
   const name = content.nations[threatenerId]?.shortName ?? threatenerId;
-  return `APEX EARLY WARNING · ${name} is mobilising along a local route. Pressure window: ${AI_BOXED_HUMAN_WARNING_TICKS} weeks.`;
+  return `EONSCAR EARLY WARNING · ${name} is mobilising along a local route. Pressure window: ${AI_BOXED_HUMAN_WARNING_TICKS} weeks.`;
 }
 
 function assessAiBoxedHumanV2(

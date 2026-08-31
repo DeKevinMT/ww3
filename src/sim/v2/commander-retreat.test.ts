@@ -89,7 +89,7 @@ function threatenedBelgium(seed: number) {
   return { state, humanId, activeWar, activeOperation };
 }
 
-describe('APEX shared-integrity recovery lifecycle', () => {
+describe('EONSCAR shared-integrity recovery lifecycle', () => {
   it('retires all voluntary and route-based retreat behavior', () => {
     const { state, humanId } = threatenedBelgium(84_001);
     const before = structuredClone(state.commanderForces[humanId]);

@@ -91,7 +91,7 @@ function engine(force = apex()): WorldMapEngineContract {
   };
 }
 
-describe('empire-wide APEX field presentation', () => {
+describe('empire-wide EONSCAR field presentation', () => {
   it('covers the complete owned empire while concentrating at friendly fronts', () => {
     const presentation = selectApexEmpireFieldPresentation(engine());
     expect(presentation.active).toBe(true);

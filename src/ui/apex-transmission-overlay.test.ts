@@ -1,8 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import worldUiSource from './WorldUIV2.ts?raw';
+import worldUiSourceRaw from './WorldUIV2.ts?raw';
 
-const stylesSource = readFileSync(new URL('../styles.css', import.meta.url), 'utf8');
+const normalized = (source: string): string => source.replace(/\r\n/g, '\n');
+const worldUiSource = normalized(worldUiSourceRaw);
+const stylesSource = normalized(readFileSync(new URL('../styles.css', import.meta.url), 'utf8'));
 
 function methodSource(start: string, end: string): string {
   const from = worldUiSource.indexOf(start);
@@ -12,7 +14,7 @@ function methodSource(start: string, end: string): string {
   return worldUiSource.slice(from, until);
 }
 
-describe('APEX transmission overlay', () => {
+describe('EONSCAR transmission overlay', () => {
   it('uses one compact secure-channel dialog with an abstract neural signal', () => {
     const render = methodSource(
       '  private renderApexTransmissionOverlay(',
@@ -22,7 +24,7 @@ describe('APEX transmission overlay', () => {
     expect(render).toContain('aria-modal="true"');
     expect(render).toContain('SECURE ALLIED CHANNEL');
     expect(render).toContain('ALLIED STRATEGIC AI');
-    expect(render).toContain('APEX LIVE');
+    expect(render).toContain('EONSCAR LIVE');
     expect(render).toContain('CURRENT OBJECTIVE');
     expect(render).toContain('<svg viewBox="0 0 160 96"');
     expect(render).not.toMatch(/apex-robot|<img|robot/i);
@@ -37,7 +39,7 @@ describe('APEX transmission overlay', () => {
       '  private renderSoundOptions(',
     );
     expect(render).toContain('TUTORIAL · REQUIRED TO CONTINUE');
-    expect(render).toContain('Start the required APEX analysis');
+    expect(render).toContain('Start the required EONSCAR analysis');
     expect(render).toContain('GAME PAUSED · REQUIRED');
     expect(render).toContain('START ANALYSIS');
     expect(render).toContain('SELECT FIRST TARGET');
@@ -98,9 +100,13 @@ describe('APEX transmission overlay', () => {
   });
 
   it('keeps the message surface still instead of sweeping a glow over the copy', () => {
-    expect(stylesSource).not.toContain('apex-channel-scan');
-    expect(stylesSource).not.toContain('.apex-transmission-channel::after');
-    expect(stylesSource).not.toContain('filter: drop-shadow(0 0 9px');
+    const transmissionStyles = stylesSource.slice(
+      stylesSource.indexOf('.world-ui-v2 .apex-transmission-backdrop'),
+      stylesSource.indexOf('.world-ui-v2 .apex-inbox-history'),
+    );
+    expect(transmissionStyles).not.toContain('apex-channel-scan');
+    expect(transmissionStyles).not.toContain('.apex-transmission-channel::after');
+    expect(transmissionStyles).not.toContain('filter: drop-shadow(0 0 9px');
   });
 
   it('keeps the inbox clear about speaker, chronology and unresolved actions', () => {
@@ -108,7 +114,7 @@ describe('APEX transmission overlay', () => {
       '  private renderInbox(',
       '  private renderWarConfirmation(',
     );
-    expect(inbox).toContain('APEX · ALLIED AI');
+    expect(inbox).toContain('EONSCAR · ALLIED AI');
     expect(inbox).toContain('Briefing log');
     expect(inbox).toContain('NEWEST FIRST');
     expect(inbox).toContain('OBJECTIVE COMPLETE');

@@ -165,7 +165,7 @@ function safeNotify(callback: (() => void) | undefined): void {
   try {
     callback();
   } catch (error) {
-    console.error('Frontier Command multiplayer session callback failed.', error);
+    console.error('EONSCAR multiplayer session callback failed.', error);
   }
 }
 

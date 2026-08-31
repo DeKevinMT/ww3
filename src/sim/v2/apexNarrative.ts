@@ -27,8 +27,10 @@ type TransmissionCopyV2 = Pick<ApexTransmissionV2, 'title' | 'body' | 'action'>;
 
 /** Six quiet opening weeks let the player read the country before APEX interrupts. */
 export const APEX_FIRST_TRANSMISSION_TICK_V2 = 6;
-/** Story beats never stack into one simulation moment or reconnect burst. */
+/** Non-tutorial story beats never stack into one simulation moment or reconnect burst. */
 export const APEX_TRANSMISSION_MIN_SPACING_TICKS_V2 = 2;
+/** First-Campaign teaching beats leave two quiet months after the prior acknowledgement. */
+export const APEX_TUTORIAL_TRANSMISSION_MIN_SPACING_TICKS_V2 = 8;
 /** Let the first conflict move on the map before APEX explains what caused it. */
 export const APEX_FIRST_AI_WAR_OBSERVATION_TICKS_V2 = 2;
 /** A quiet three-week beat makes recovery visible without interrupting the war report. */
@@ -36,8 +38,8 @@ export const APEX_POST_WAR_RECOVERY_DELAY_TICKS_V2 = 3;
 
 const COPY: Readonly<Record<ApexTransmissionIdV2, TransmissionCopyV2>> = Object.freeze({
   'campaign-signal-anomaly': {
-    title: 'APEX online · anomaly detected',
-    body: 'Commander, I am APEX. I survived a future the Rogue destroyed and sent our lessons back to Greenland, the first free node and birthplace of Dawnline. This starting nation is an intervention point learned across later timelines. Start Signal Triangulation: the same brainwashing pattern is here.',
+    title: 'EONSCAR online · anomaly detected',
+    body: 'Commander, I am EONSCAR. I survived a future the Rogue destroyed and sent our lessons back to Greenland, the first free node and birthplace of Dawnline. This starting nation is an intervention point learned across later timelines. Start Signal Triangulation: the same brainwashing pattern is here.',
     action: 'north-pole-investigation',
   },
   'campaign-communications-blackout': {
@@ -97,12 +99,12 @@ const COPY: Readonly<Record<ApexTransmissionIdV2, TransmissionCopyV2>> = Object.
   },
   'rogue-prime-detected': {
     title: 'A rival intelligence is moving',
-    body: 'That formation is not an ordinary army. One hostile intelligence is commanding it directly—the Rogue has built its own answer to APEX.',
+    body: 'That formation is not an ordinary army. One hostile intelligence is commanding it directly—the Rogue has built its own answer to EONSCAR.',
     action: null,
   },
   'campaign-first-antarctic-sector': {
     title: 'We have a foothold on Antarctica',
-    body: 'APEX sensors are inside the machine network. Push inland over connected ground; do not waste strength on another ocean crossing.',
+    body: 'EONSCAR sensors are inside the machine network. Push inland over connected ground; do not waste strength on another ocean crossing.',
     action: null,
   },
   'campaign-core-defeated': {
@@ -265,7 +267,10 @@ function transmissionWindowOpenV2(
     (latest, item) => Math.max(latest, item.resolvedTick ?? item.sentTick),
     Number.NEGATIVE_INFINITY,
   );
-  return state.tick >= lastResolvedTick + APEX_TRANSMISSION_MIN_SPACING_TICKS_V2;
+  const minimumSpacing = isCampaignTutorialTransmissionV2(id)
+    ? APEX_TUTORIAL_TRANSMISSION_MIN_SPACING_TICKS_V2
+    : APEX_TRANSMISSION_MIN_SPACING_TICKS_V2;
+  return state.tick >= lastResolvedTick + minimumSpacing;
 }
 
 function dispatchV2(
@@ -304,7 +309,7 @@ function dispatchV2(
     state,
     'system',
     id.includes('core') || id.includes('gateway') ? 'critical' : 'info',
-    `APEX TRANSMISSION · ${copy.title}`,
+    `EONSCAR TRANSMISSION · ${copy.title}`,
     undefined,
     playerId,
   );
@@ -706,15 +711,15 @@ export function respondToApexTransmissionV2(
   choice: ApexTransmissionChoiceV2,
 ): CommandResultV2 {
   if (!isHumanPlayerV2(state, playerId)) {
-    return { accepted: false, reason: 'That APEX transmission does not belong to your country.' };
+    return { accepted: false, reason: 'That EONSCAR transmission does not belong to your country.' };
   }
   const progress = playerNarrativeV2(state, playerId);
   const transmission = progress.transmissions.find((item) => item.id === transmissionId);
   if (!transmission || transmission.playerId !== playerId) {
-    return { accepted: false, reason: 'That APEX transmission is stale or belongs to another player.' };
+    return { accepted: false, reason: 'That EONSCAR transmission is stale or belongs to another player.' };
   }
   if (transmission.choice !== null) {
-    return { accepted: false, reason: 'That APEX response was already recorded.' };
+    return { accepted: false, reason: 'That EONSCAR response was already recorded.' };
   }
   if (transmission.action === 'north-pole-investigation') {
     if (choice !== 'accept') {
@@ -726,7 +731,7 @@ export function respondToApexTransmissionV2(
     return { accepted: true };
   }
   if (choice !== 'acknowledge') {
-    return { accepted: false, reason: 'This APEX briefing only requires acknowledgement.' };
+    return { accepted: false, reason: 'This EONSCAR briefing only requires acknowledgement.' };
   }
   transmission.choice = 'acknowledge';
   transmission.resolvedTick = state.tick;

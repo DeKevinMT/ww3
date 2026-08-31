@@ -44,7 +44,7 @@ describe('force presentation signature', () => {
     expect(mapCombatPowerLabel(12_345.678)).not.toMatch(/ATK|DEF|COMBAT POWER/);
   });
 
-  it('projects APEX only as a bounded national-army support percentage', () => {
+  it('projects EONSCAR only as a bounded national-army support percentage', () => {
     expect(commanderShieldMapSupportPercent({
       integrity: 0.012,
       maxIntegrity: 0.02,

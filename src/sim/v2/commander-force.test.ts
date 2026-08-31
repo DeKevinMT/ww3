@@ -112,8 +112,8 @@ function testWar(
   };
 }
 
-describe('APEX neural dome', () => {
-  it('accepts the canonical high-energy APEX rating band but rejects unsafe ratings', () => {
+describe('EONSCAR neural dome', () => {
+  it('accepts the canonical high-energy EONSCAR rating band but rejects unsafe ratings', () => {
     const state = createWorldStateV2(21_021, WORLD_CONTENT_V2);
     const playerId = state.humanPlayerId;
     expect(initializeCommanderForceV2(state, WORLD_CONTENT_V2, playerId, {
@@ -168,7 +168,7 @@ describe('APEX neural dome', () => {
     });
   });
 
-  it('exposes free APEX income without adding it a second time in the Commander phase', () => {
+  it('exposes free EONSCAR income without adding it a second time in the Commander phase', () => {
     const state = createWorldStateV2(21_019, WORLD_CONTENT_V2);
     const playerId = state.humanPlayerId;
     expect(initializeCommanderForceV2(
@@ -192,7 +192,7 @@ describe('APEX neural dome', () => {
     expect(force.economy.annualOutput).toBe(commanderProfile.annualOutput);
   });
 
-  it('never creates a private APEX reserve or cash expense', () => {
+  it('never creates a private EONSCAR reserve or cash expense', () => {
     const state = createWorldStateV2(21_020, WORLD_CONTENT_V2);
     const playerId = state.humanPlayerId;
     expect(initializeCommanderForceV2(state, WORLD_CONTENT_V2, playerId, {
@@ -454,7 +454,7 @@ describe('APEX neural dome', () => {
     expect(state.commanderForces[belgium]!.shield.integrity).toBeLessThan(integrityBefore);
   });
 
-  it('uses the same neural shield allocation while APEX supports an attacking front', () => {
+  it('uses the same neural shield allocation while EONSCAR supports an attacking front', () => {
     const state = createWorldStateV2(21_003_1, WORLD_CONTENT_V2);
     const belgium = nationIdV2('bel');
     const netherlands = nationIdV2('nld');
@@ -673,7 +673,7 @@ describe('APEX neural dome', () => {
     expect(force.mission).toBe('standby');
   });
 
-  it('collapses into Energy recovery without creating an APEX personnel army', () => {
+  it('collapses into Energy recovery without creating an EONSCAR personnel army', () => {
     const state = createWorldStateV2(21_003_8, WORLD_CONTENT_V2);
     const belgium = nationIdV2('bel');
     state.humanPlayerId = belgium;
@@ -933,7 +933,7 @@ describe('APEX neural dome', () => {
     expect(comparison.defenseRatio).toBeGreaterThanOrEqual(14);
     expect(comparison.defenseRatio).toBeLessThanOrEqual(20);
     expect(comparison.qualityTier).toBe('apex-elite');
-    expect(comparison.qualityLabel).toBe('APEX DOME');
+    expect(comparison.qualityLabel).toBe('EONSCAR DOME');
     expect(comparison.attack).toBe(82);
     expect(comparison.defense).toBe(90);
   });
@@ -1037,7 +1037,7 @@ describe('APEX neural dome', () => {
     }
   });
 
-  it('authenticates the pre-APEX V2.67 shape before adding an empty force record', () => {
+  it('authenticates the pre-EONSCAR V2.67 shape before adding an empty force record', () => {
     const original = createWorldStateV2(21_004, WORLD_CONTENT_V2);
     const humanId = original.humanPlayerId;
     const manpowerBefore = Object.values(original.territories)

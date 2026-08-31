@@ -5,7 +5,7 @@ import { initializeCommanderForceV2 } from './commanderForce';
 import { WORLD_CONTENT_V2 } from './content';
 import {
   APEX_FIRST_TRANSMISSION_TICK_V2,
-  APEX_TRANSMISSION_MIN_SPACING_TICKS_V2,
+  APEX_TUTORIAL_TRANSMISSION_MIN_SPACING_TICKS_V2,
   apexInvestigationAuthorizedV2,
   cloneApexNarrativeV2,
   processApexNarrativeV2,
@@ -19,7 +19,7 @@ import { resolveScenarioV2 } from './scenarios';
 import { nationIdV2, territoryIdV2 } from './types';
 import { WorldEngineV2 } from './WorldEngineV2';
 
-describe('APEX narrative transmissions', () => {
+describe('EONSCAR narrative transmissions', () => {
   it('starts mandatory Stage I from the first CTA with one charge and no second click', () => {
     const engine = new WorldEngineV2(900);
     const playerId = engine.state.humanPlayerId;
@@ -77,7 +77,7 @@ describe('APEX narrative transmissions', () => {
       playerId, 'campaign-signal-anomaly', 'accept',
     )).toEqual({ accepted: true });
     engine.state.polarEndgame.communicationsBlackoutTick = engine.state.tick;
-    engine.state.tick += APEX_TRANSMISSION_MIN_SPACING_TICKS_V2;
+    engine.state.tick += APEX_TUTORIAL_TRANSMISSION_MIN_SPACING_TICKS_V2;
     expect(processApexNarrativeV2(engine.state, engine.content)).toBe(1);
     const actionSequenceBefore = engine.state.actionSequence;
     engine.setSpeed(0);
@@ -120,7 +120,7 @@ describe('APEX narrative transmissions', () => {
     expect(selectApexTransmissionsV2(state, playerId)).toEqual([
       expect.objectContaining({
         id: 'campaign-signal-anomaly',
-        title: 'APEX online · anomaly detected',
+        title: 'EONSCAR online · anomaly detected',
         action: 'north-pole-investigation',
         choice: null,
         sentTick: APEX_FIRST_TRANSMISSION_TICK_V2,
@@ -149,7 +149,7 @@ describe('APEX narrative transmissions', () => {
     )).toEqual({ accepted: true });
 
     state.polarEndgame.communicationsBlackoutTick = state.tick;
-    state.tick += APEX_TRANSMISSION_MIN_SPACING_TICKS_V2;
+    state.tick += APEX_TUTORIAL_TRANSMISSION_MIN_SPACING_TICKS_V2;
     expect(processApexNarrativeV2(state, WORLD_CONTENT_V2)).toBe(1);
     const briefing = selectApexTransmissionsV2(state, playerId).at(-1);
     expect(briefing).toMatchObject({
@@ -158,6 +158,31 @@ describe('APEX narrative transmissions', () => {
     });
     expect(briefing?.body).toContain('observe one live conflict');
     expect(briefing?.body).not.toMatch(/fog|dark|night|blackout|unreliable/i);
+  });
+
+  it('keeps the full eight-week tutorial cooldown across save and reconnect', () => {
+    const state = createWorldStateV2(9012, WORLD_CONTENT_V2);
+    const playerId = state.humanPlayerId;
+    state.tick = APEX_FIRST_TRANSMISSION_TICK_V2;
+    expect(processApexNarrativeV2(state, WORLD_CONTENT_V2)).toBe(1);
+    expect(respondToApexTransmissionV2(
+      state, playerId, 'campaign-signal-anomaly', 'accept',
+    )).toEqual({ accepted: true });
+    state.polarEndgame.communicationsBlackoutTick = state.tick;
+
+    const resolvedTick = selectApexTransmissionsV2(state, playerId)[0]!.resolvedTick!;
+    state.tick = resolvedTick + APEX_TUTORIAL_TRANSMISSION_MIN_SPACING_TICKS_V2 - 1;
+    synchronizeArmyCapacityV2(state, WORLD_CONTENT_V2);
+    const loaded = loadSaveV2(serializeSaveV2(state, WORLD_CONTENT_V2), WORLD_CONTENT_V2);
+
+    expect(processApexNarrativeV2(loaded, WORLD_CONTENT_V2)).toBe(0);
+    expect(selectApexTransmissionsV2(loaded, playerId)).toHaveLength(1);
+    loaded.tick += 1;
+    expect(processApexNarrativeV2(loaded, WORLD_CONTENT_V2)).toBe(1);
+    expect(selectApexTransmissionsV2(loaded, playerId).at(-1)).toMatchObject({
+      id: 'campaign-communications-blackout',
+      sentTick: resolvedTick + APEX_TUTORIAL_TRANSMISSION_MIN_SPACING_TICKS_V2,
+    });
   });
 
   it('upgrades retired intro copy in an active save without losing its target', () => {
@@ -273,10 +298,10 @@ describe('APEX narrative transmissions', () => {
     processApexNarrativeV2(state, WORLD_CONTENT_V2);
     respondToApexTransmissionV2(state, playerId, 'campaign-signal-anomaly', 'accept');
     state.polarEndgame.communicationsBlackoutTick = state.tick;
-    state.tick += APEX_TRANSMISSION_MIN_SPACING_TICKS_V2;
+    state.tick += APEX_TUTORIAL_TRANSMISSION_MIN_SPACING_TICKS_V2;
     processApexNarrativeV2(state, WORLD_CONTENT_V2);
     respondToApexTransmissionV2(state, playerId, 'campaign-communications-blackout', 'acknowledge');
-    state.tick += APEX_TRANSMISSION_MIN_SPACING_TICKS_V2;
+    state.tick += APEX_TUTORIAL_TRANSMISSION_MIN_SPACING_TICKS_V2;
     const targetForGuidance = WORLD_CONTENT_V2.territoryIds.find((id) => (
       WORLD_CONTENT_V2.territories[id]?.initialOwnerId !== playerId
     ))!;
@@ -291,7 +316,7 @@ describe('APEX narrative transmissions', () => {
       choice: 'acknowledge',
       resolvedTick: state.tick,
     });
-    state.tick += APEX_TRANSMISSION_MIN_SPACING_TICKS_V2;
+    state.tick += APEX_TUTORIAL_TRANSMISSION_MIN_SPACING_TICKS_V2;
 
     recordApexConquestNarrativeV2(
       state, WORLD_CONTENT_V2, playerId, canada, targetId, canada,
@@ -314,7 +339,7 @@ describe('APEX narrative transmissions', () => {
     const force = state.commanderForces[playerId]!;
     force.mission = 'standby';
     force.front = null;
-    state.tick += APEX_TRANSMISSION_MIN_SPACING_TICKS_V2;
+    state.tick += APEX_TUTORIAL_TRANSMISSION_MIN_SPACING_TICKS_V2;
     // Liberation is deliberately held behind the recovery tutorial. The
     // distributed network can then focus purge bandwidth without travelling.
     expect(processApexNarrativeV2(state, WORLD_CONTENT_V2)).toBe(0);
@@ -330,7 +355,7 @@ describe('APEX narrative transmissions', () => {
       choice: 'acknowledge',
       resolvedTick: state.tick,
     });
-    state.tick += APEX_TRANSMISSION_MIN_SPACING_TICKS_V2;
+    state.tick += APEX_TUTORIAL_TRANSMISSION_MIN_SPACING_TICKS_V2;
     expect(processApexNarrativeV2(state, WORLD_CONTENT_V2)).toBe(1);
     expect(selectApexTransmissionsV2(state, playerId).at(-1)?.id)
       .toBe('campaign-first-purge-arrival');
@@ -339,7 +364,7 @@ describe('APEX narrative transmissions', () => {
     );
     state.territories[targetId]!.integration = 1;
     delete state.territories[targetId]!.integrationProgram;
-    state.tick += APEX_TRANSMISSION_MIN_SPACING_TICKS_V2;
+    state.tick += APEX_TUTORIAL_TRANSMISSION_MIN_SPACING_TICKS_V2;
     expect(processApexNarrativeV2(state, WORLD_CONTENT_V2)).toBe(1);
     const liberation = selectApexTransmissionsV2(state, playerId)
       .find((item) => item.id === 'campaign-first-liberation');

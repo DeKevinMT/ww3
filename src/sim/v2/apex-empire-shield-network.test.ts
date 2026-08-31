@@ -128,7 +128,7 @@ function empireAtTwoFronts(
   return { state, humanId, assaultWar, defenseWar, assault, defense };
 }
 
-describe('APEX distributed Empire Shield Network', () => {
+describe('EONSCAR distributed Empire Shield Network', () => {
   it('covers every owned territory and conserves one ATK/DEF pool across fronts', () => {
     const { state, humanId } = empireAtTwoFronts();
     const force = state.commanderForces[humanId]!;

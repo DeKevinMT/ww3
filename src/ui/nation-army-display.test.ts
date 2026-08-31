@@ -62,8 +62,8 @@ describe('nation army display', () => {
     expect(toastVisibilityDuration('conquest')).toBe(5_000);
   });
 
-  it('names the universal operating cost as exactly 20% of tax revenue', () => {
-    expect(baseOperatingCostLabel()).toBe('BASE OPERATIONS · 20% OF TAX REVENUE');
+  it('names the universal operating cost as exactly 30% of tax revenue', () => {
+    expect(baseOperatingCostLabel()).toBe('BASE OPERATIONS · 30% OF TAX REVENUE');
   });
 
   it('explains the blended tax base in the compact economy UI', () => {

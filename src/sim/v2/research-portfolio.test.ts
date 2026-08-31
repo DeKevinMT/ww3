@@ -151,7 +151,9 @@ describe('V2 ten-program Development portfolio', () => {
     const at260 = totalBreakthroughs(state);
     expect(firstCompletion).toBeDefined();
     expect(firstCompletion).toBeGreaterThanOrEqual(30);
-    expect(firstCompletion).toBeLessThanOrEqual(140);
+    // The 30% Base Operations share intentionally leaves less discretionary
+    // funding than the former 20% baseline while keeping early progress visible.
+    expect(firstCompletion).toBeLessThanOrEqual(160);
     expect(at52).toBeLessThanOrEqual(1);
     // The shared IQ-scaled planner keeps progress visible without restoring a
     // selected-country research acceleration.

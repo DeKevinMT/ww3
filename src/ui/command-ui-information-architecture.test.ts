@@ -1,8 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import worldUiSource from './WorldUIV2.ts?raw';
+import worldUiSourceRaw from './WorldUIV2.ts?raw';
 
-const stylesSource = readFileSync(new URL('../styles.css', import.meta.url), 'utf8');
+const normalized = (source: string): string => source.replace(/\r\n/g, '\n');
+const worldUiSource = normalized(worldUiSourceRaw);
+const stylesSource = normalized(readFileSync(new URL('../styles.css', import.meta.url), 'utf8'));
 
 function methodSource(start: string, end: string): string {
   const from = worldUiSource.indexOf(start);
@@ -26,19 +28,19 @@ describe('command UI information architecture', () => {
       worldUiSource.indexOf('</nav>', worldUiSource.indexOf('<nav class="command-dock')),
     );
     expect(dock.match(/data-panel=/g)).toHaveLength(5);
-    for (const label of ['WAR', 'NATION', 'RESEARCH', 'ECONOMY', 'APEX']) {
+    for (const label of ['WAR', 'NATION', 'RESEARCH', 'ECONOMY', 'EONSCAR']) {
       expect(dock).toContain(`<b>${label}</b>`);
     }
     expect(dock).not.toContain('PROGRESS');
   });
 
-  it('keeps War decision-first while APEX support stays autonomous', () => {
+  it('keeps War decision-first while EONSCAR support stays autonomous', () => {
     const panel = methodSource('  private renderWarPanel(', '  private warTargetRecommendations(');
     expect(panel).toContain('command-drawer--decision');
     expect(panel).toContain('war-primary-front');
     expect(panel).toContain('Best targets');
     expect(panel).toContain('Power · chance · route · recurring cost');
-    expect(panel).toContain('APEX allocates the shared shield automatically');
+    expect(panel).toContain('EONSCAR allocates the shared shield automatically');
     expect(panel).not.toContain('FOCUS FRONT');
     expect(panel).toContain('decision-details');
     expect(panel.indexOf('this.renderAntarcticaGatewayCard()'))
@@ -48,7 +50,7 @@ describe('command UI information architecture', () => {
     expect(panel).toContain('const humanWarsUnlocked = campaignHumanWarsUnlockedV2(');
     expect(panel).toContain('const recommendations = humanWarsUnlocked');
     expect(panel).toMatch(
-      /const targetIntel = humanWarsUnlocked[\s\S]*No legal target is currently in land or naval range\.[\s\S]*: warsUnlocked[\s\S]*APEX IS PREPARING YOUR FIRST TARGET/,
+      /const targetIntel = humanWarsUnlocked[\s\S]*No legal target is currently in land or naval range\.[\s\S]*: warsUnlocked[\s\S]*EONSCAR IS PREPARING YOUR FIRST TARGET/,
     );
     expect(panel).not.toContain('FIRST-STRIKE BRIEFING PENDING');
     expect(panel).not.toContain('INTELLIGENCE PENDING');
@@ -60,7 +62,7 @@ describe('command UI information architecture', () => {
     expect(panel).not.toMatch(/FOCUS \+ SEND APEX|focus-apex-front|commander-order|SEND APEX/);
   });
 
-  it('shows one APEX-inclusive win chance and only decision-grade target intel', () => {
+  it('shows one EONSCAR-inclusive win chance and only decision-grade target intel', () => {
     const target = methodSource('  private renderTargetRecommendation(', '  private renderWarCard(');
     expect(target.match(/\$\{format\(candidate\.chance, 1\)\}/g)).toHaveLength(1);
     expect(target).toContain('war-intel-card__decision');
@@ -86,21 +88,21 @@ describe('command UI information architecture', () => {
 
   it('keeps Nation power-first and moves depth behind disclosure', () => {
     const nation = methodSource('  private renderNationPanel(', '  private renderEconomyPanel(');
-    for (const stat of ['POWER', 'TERRITORIES', 'APEX SIGNAL PURGE', 'PEOPLE']) {
+    for (const stat of ['POWER', 'TERRITORIES', 'EONSCAR SIGNAL PURGE', 'PEOPLE']) {
       expect(nation).toContain(`<span>${stat}</span>`);
     }
     expect(nation).toContain('drawer:nation:people');
     expect(nation).not.toMatch(/food/i);
-    expect(nation).toContain('APEX purge &amp; national IQ');
+    expect(nation).toContain('EONSCAR purge &amp; national IQ');
     expect(nation).toContain('Nation systems');
     expect(nation).not.toMatch(/Treaties|PEACE/);
     expect(nation).toContain('decision-details');
     expect(nation).not.toMatch(/WORLD HOSTILITY|POLITICAL SUSPICION|REVOLT|CONTAINMENT|coalitionNames/);
   });
 
-  it('renders APEX as a compact read-only autonomous status surface', () => {
+  it('renders EONSCAR as a compact read-only autonomous status surface', () => {
     const apex = methodSource('  private renderCommanderPanel(', '  private pendingApexTransmission(');
-    expect(apex).toContain('<h2>APEX</h2>');
+    expect(apex).toContain('<h2>EONSCAR</h2>');
     expect(apex).toContain('selectCommanderAutonomyStatusV2');
     expect(apex).toContain('AUTO · ${escapeHtml(networkStatus)}');
     for (const label of ['ENERGY', 'ARMY SUPPORT', 'BACKUP ENERGY', 'EMPIRE CONTRIBUTION', 'NETWORK SUPPORT']) {
@@ -118,10 +120,10 @@ describe('command UI information architecture', () => {
     expect(apex).not.toMatch(/MOVE<\/button>|LASER|commander-order|APEX economy|TREASURY|UPKEEP|INVEST/);
   });
 
-  it('shows APEX contribution as Empire income and keeps costs categorized', () => {
+  it('shows EONSCAR contribution as Empire income and keeps costs categorized', () => {
     const economy = methodSource('  private renderEconomyPanel(', '  private renderResearchPanel(');
     expect(economy).toContain('finance.revenue + finance.apexContribution');
-    expect(economy).toContain("label: 'APEX CONTRIBUTION'");
+    expect(economy).toContain("label: 'EONSCAR CONTRIBUTION'");
     expect(economy).toContain('const totalExpenses = finance.expenses');
     expect(economy.indexOf('Annual income breakdown'))
       .toBeLessThan(economy.indexOf('Annual expense breakdown'));
@@ -146,7 +148,7 @@ describe('command UI information architecture', () => {
     expect(polar).not.toMatch(/20W|OPTIONAL INTELLIGENCE|OPEN INVESTIGATION/);
   });
 
-  it('keeps territory inspection power-first and APEX status read-only', () => {
+  it('keeps territory inspection power-first and EONSCAR status read-only', () => {
     const territory = methodSource('  private renderTerritoryPanel(', '  private renderWarTracker(');
     const markup = territory.slice(territory.indexOf('    return `'));
     const terrainIndex = markup.indexOf('${terrainProfilePanel(');
@@ -154,7 +156,7 @@ describe('command UI information architecture', () => {
     expect(territory).toContain('COMBAT POWER</span>');
     expect(terrainIndex).toBeLessThan(markup.indexOf('SELECTED LAND'));
     expect(markup.indexOf('SELECTED LAND')).toBeLessThan(markup.indexOf('${ownerIntel}'));
-    expect(territory).toContain('ACTIVE FRONT · APEX SHIELD ONLINE');
+    expect(territory).toContain('ACTIVE FRONT · EONSCAR SHIELD ONLINE');
     expect(territory).toContain('ACTIVE COUNTEROFFENSIVE');
     expect(territory).toContain('ROGUE FRONT · COUNTERATTACK');
     expect(territory).toContain('this.engine.survivalCounteroffensiveTargets(humanId).find');
@@ -169,7 +171,7 @@ describe('command UI information architecture', () => {
     expect(territory).not.toMatch(/SEND APEX|commander-order/);
   });
 
-  it('keeps Operation Review power-first with APEX, route and recurring cost in one surface', () => {
+  it('keeps Operation Review power-first with EONSCAR, route and recurring cost in one surface', () => {
     const review = methodSource('  private renderWarConfirmation(', '  private renderSurrenderConfirmation(');
     for (const label of [
       'YOUR TOTAL POWER', 'ENEMY POWER', 'WIN CHANCE',
@@ -178,8 +180,8 @@ describe('command UI information architecture', () => {
       'START OPERATION',
     ]) expect(review).toContain(label);
     expect(review).toContain('ownTotalPower = ownPower * (1 + apexSupportBonus / 100)');
-    expect(review).toContain('APEX +${format(apexSupportBonus, 1)}%');
-    expect(review).toContain('APEX UNAVAILABLE');
+    expect(review).toContain('EONSCAR +${format(apexSupportBonus, 1)}%');
+    expect(review).toContain('EONSCAR UNAVAILABLE');
     expect(review).toContain('review-apex-contribution');
     expect(review).toContain('apexForecast.supportBonusPercent');
     expect(review).not.toMatch(/ownPower \+ apexPower|INCLUDES \+\$\{compactNumber\(apexPower\)\} APEX/);
@@ -218,7 +220,7 @@ describe('command UI information architecture', () => {
     expect(tracker).toContain('Your combined Power');
     expect(tracker).toContain('Combined Power balance');
     expect(tracker).toContain('${wars.map((war) => {');
-    expect(tracker).toContain('APEX GRID ${Math.round(networkFront!.allocationShare * 100)}%');
+    expect(tracker).toContain('EONSCAR GRID ${Math.round(networkFront!.allocationShare * 100)}%');
     expect(tracker).toContain('combinedOwnPower = own.power * (1 + assignedSupportPercent / 100)');
     expect(tracker).toContain('+${format(assignedSupportPercent, 1)}% ARMY');
     expect(tracker).not.toContain('assignedCommanderPower');
@@ -252,7 +254,7 @@ describe('command UI information architecture', () => {
     expect(compactTopbarStyles).toContain('.world-ui-v2 .war-tracker { top: 132px !important; }');
   });
 
-  it('contains no retired political or manual-APEX controls', () => {
+  it('contains no retired political or manual-EONSCAR controls', () => {
     expect(worldUiSource).not.toMatch(/POLITICAL SUSPICION|WORLD HOSTILITY|REVOLT RISK|CONTAINMENT ACTIVE|RIVALS MOBILISING/);
     expect(worldUiSource).not.toMatch(/data-action="commander-order"|data-action="focus-apex-front"|SEND APEX HERE|FOCUS \+ SEND APEX/);
     expect(worldUiSource).not.toMatch(/launch-propaganda|PROPAGANDA/);

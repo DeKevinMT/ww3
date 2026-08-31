@@ -406,7 +406,7 @@ describe('commander level and talent menu', () => {
     expect(progress.progressPercent).toBeLessThanOrEqual(50);
   });
 
-  it('renders three distinct APEX paths and one Army path with one exact inspector', () => {
+  it('renders three distinct EONSCAR paths and one Army path with one exact inspector', () => {
     const talents = emptyCommanderTalentsV1();
     talents['elite-vanguard'] = 2;
     const profile = {
@@ -430,7 +430,7 @@ describe('commander level and talent menu', () => {
     expect(html).toContain('<h2>Reactive Matrix</h2>');
     expect(html).toContain('<h2>Energy Core</h2>');
     expect(html).toContain('<h2>Empire Warfare</h2>');
-    expect(html).toContain('APEX CORE');
+    expect(html).toContain('EONSCAR CORE');
     expect(html).toContain(`ENERGY ${currentShieldHp} / ${currentShieldHp}`);
     expect(html).not.toContain('PULSE ATTACK');
     expect(html).toContain('NEXT LEVEL +');
@@ -468,12 +468,12 @@ describe('commander level and talent menu', () => {
     expect(html).not.toContain('PULSE ATTACK');
     expect(html).toContain('NEXT LEVEL +');
     expect(nextLevel).toBeGreaterThan(current);
-    expect(html).toContain('<em>APEX TOTAL · 24,000 MAX ENERGY</em>');
+    expect(html).toContain('<em>EONSCAR TOTAL · 24,000 MAX ENERGY</em>');
     expect(html).toContain(`<em>TALENT GAIN · +${Math.round((nextRank - current) * 1_000_000).toLocaleString('en')} MAX ENERGY</em>`);
 
     const rankZero = renderCommanderTalentBranchesV1({ ...profile, commanderLevel: 1 }, 'reserve-cadre');
     expect(rankZero).toContain('<strong>+0% Max Energy</strong>');
-    expect(rankZero).toContain('APEX TOTAL · 2,000 MAX ENERGY');
+    expect(rankZero).toContain('EONSCAR TOTAL · 2,000 MAX ENERGY');
     expect(rankZero).toContain('<strong>+0.5% Max Energy</strong>');
     expect(rankZero).toContain('TALENT GAIN · +10 MAX ENERGY');
     expect(rankZero).not.toContain('<strong>+2,000');
@@ -503,7 +503,7 @@ describe('commander level and talent menu', () => {
     expect(eliteCard).toContain('LV 79');
     expect(html).toContain('CURRENT · RANK 15');
     expect(html).toContain('NEXT RANK · 16 · LV 79');
-    expect(html).toContain('APEX LEVEL 79</button>');
+    expect(html).toContain('EONSCAR LEVEL 79</button>');
     expect(volunteerCard).toContain('RANK 3');
     expect(commanderTalentEffectCopyV1('elite-vanguard', 15, 'next'))
       .not.toBe(commanderTalentEffectCopyV1('elite-vanguard', 0, 'next'));
@@ -546,7 +546,7 @@ describe('commander level and talent menu', () => {
     expect(commanderMenuSource).toContain('id="commander-empire-flag-search"');
     expect(stylesSource).toContain('.commander-flag-picker__grid');
     expect(commanderMenuSource).not.toMatch(/Command Credits|\bCC\b|purchase/i);
-    expect(commanderMenuSource).toContain('APEX EVOLUTION MATRIX');
+    expect(commanderMenuSource).toContain('EONSCAR EVOLUTION MATRIX');
     expect(commanderMenuSource).not.toContain('commander-talent-overview__rank');
     expect(commanderMenuSource).not.toContain('commander-talent-overview__progress');
     expect(commanderMenuSource).toContain("label: 'Assault Shield'");
@@ -791,7 +791,7 @@ describe('commander level and talent menu', () => {
       expect(mounted.host.innerHTML).toContain('OPENING INTELLIGENCE');
       expect(mounted.host.innerHTML).toContain('FULL STRATEGIC INTELLIGENCE');
       expect(mounted.host.innerHTML).toContain('5 MORE METRICS');
-      expect(mounted.host.innerHTML).toContain('APEX &amp; META LOADOUT');
+      expect(mounted.host.innerHTML).toContain('EONSCAR &amp; META LOADOUT');
       expect(mounted.host.innerHTML).toContain('CONFIRM NETHERLANDS →');
       expect(mounted.host.innerHTML).toContain('aria-pressed="true"');
       expect(mounted.host.innerHTML).toContain('<span>ARMY ATTACK</span>');
@@ -823,6 +823,7 @@ describe('commander level and talent menu', () => {
         mounted.host.innerHTML.indexOf('</section>', mounted.host.innerHTML.indexOf('<section class="commander-mode-grid">')),
       );
       expect(primaryModes).toContain('data-mode="standard-2026"');
+      expect(primaryModes).toContain('data-mode="standard-2026" data-country="nld" data-multiplayer="false"');
       expect(primaryModes).toContain('data-mode="survival"');
       expect(primaryModes).not.toContain('data-mode="random-world"');
       expect(primaryModes).toContain('2026 · FIRST TIMELINE');
@@ -834,12 +835,13 @@ describe('commander level and talent menu', () => {
         mounted.host.innerHTML.indexOf('<section class="commander-deployment-loadout"'),
         mounted.host.innerHTML.indexOf('</section>', mounted.host.innerHTML.indexOf('<section class="commander-deployment-loadout"')),
       );
-      expect(apexLoadout).not.toContain('APEX POWER');
+      expect(apexLoadout).not.toContain('EONSCAR POWER');
       expect(apexLoadout).toContain('<span>ARMY ATTACK</span>');
       expect(apexLoadout).toContain('<span>ENERGY</span>');
       expect(apexLoadout).toContain('<span>SHIELD ABSORPTION</span>');
       expect(apexLoadout).not.toContain('ACTIVE / CAPACITY');
       expect(mounted.host.innerHTML).toContain('BEGIN CAMPAIGN →');
+      expect(mounted.host.innerHTML).toContain('Single-player only. Defeat nations');
       expect(mounted.host.innerHTML).toContain('ENTER FUN MODE →');
       expect(mounted.host.innerHTML).toContain('DEPLOY YOUR EMPIRE →');
       expect(mounted.host.innerHTML.indexOf('commander-mode-grid'))
@@ -879,7 +881,7 @@ describe('commander level and talent menu', () => {
     }
   });
 
-  it('uses multiplayer as a direct matchmaking modifier for every mission', () => {
+  it('keeps Campaign solo while co-op remains available for Survival and Alternative Universe', () => {
     const onStartMode = vi.fn();
     const onMultiplayerRequested = vi.fn();
     const mounted = mountCommanderMenuForTest(vi.fn(), {
@@ -894,16 +896,17 @@ describe('commander level and talent menu', () => {
       expect(mounted.host.innerHTML).toContain('aria-checked="true"');
       expect(mounted.host.innerHTML).toContain('FIND A TEAM');
       expect(mounted.host.innerHTML).toContain('shared victory or defeat');
+      expect(mounted.host.innerHTML).toContain('Campaign stays single-player');
       expect(mounted.host.innerHTML).toContain('>ON</b>');
       for (const mode of ['standard-2026', 'survival', 'random-world']) {
         mounted.click('start-mode', { mode });
       }
       expect(onMultiplayerRequested.mock.calls).toEqual([
-        ['standard-2026', 'bel'],
         ['survival', 'bel'],
         ['random-world', 'bel'],
       ]);
-      expect(onStartMode).not.toHaveBeenCalled();
+      expect(onStartMode).toHaveBeenCalledOnce();
+      expect(onStartMode).toHaveBeenCalledWith('standard-2026', 'bel', false);
     } finally {
       mounted.cleanup();
     }
@@ -971,7 +974,7 @@ describe('commander level and talent menu', () => {
     const mounted = mountCommanderMenuForTest();
     try {
       expect(mounted.host.innerHTML).toContain('commander-menu-shell--home');
-      expect(mounted.host.innerHTML).toContain('APEX: RECLAMATION · GLOBAL ACCOUNT');
+      expect(mounted.host.innerHTML).toContain('EONSCAR · GLOBAL ACCOUNT');
       expect(mounted.host.innerHTML).toContain('commander-theater__brand');
       expect(mounted.host.innerHTML).not.toContain('GLOBAL COMMANDER ACCOUNT');
       expect(mounted.host.innerHTML).toContain('commander-command-center');
@@ -982,7 +985,7 @@ describe('commander level and talent menu', () => {
       expect(mounted.host.innerHTML).toContain('commander-meta-card--arsenal');
       expect(mounted.host.innerHTML).toContain('EMPIRE SHIELD');
       expect(mounted.host.innerHTML).toContain('NATIONAL MASTERY');
-      expect(mounted.host.innerHTML).toContain('SPEND 1 APEX TALENT POINT →');
+      expect(mounted.host.innerHTML).toContain('SPEND 1 EONSCAR TALENT POINT →');
       expect(mounted.host.innerHTML).toContain('VIEW NATION ARSENAL →');
       expect(mounted.host.innerHTML.match(/commander-meta-card__cta/g)).toHaveLength(2);
       expect(mounted.host.innerHTML).toContain('<small>ENERGY</small>');
@@ -995,10 +998,10 @@ describe('commander level and talent menu', () => {
       expect(mounted.host.innerHTML).not.toContain('EMPIRE START GRANT');
       expect(mounted.host.innerHTML).not.toContain('EMPIRE INCOME');
       expect(mounted.host.innerHTML).not.toContain('EMPIRE TRAINING');
-      expect(mounted.host.innerHTML).not.toContain('APEX FOOD');
+      expect(mounted.host.innerHTML).not.toContain('EONSCAR FOOD');
       expect(commanderMenuSource).toContain('ARMY ATTACK');
       expect(commanderMenuSource).not.toMatch(/Empire Food|Food Production|People Fed|Fed\/Week/i);
-      expect(mounted.host.innerHTML).not.toContain('APEX ELITES');
+      expect(mounted.host.innerHTML).not.toContain('EONSCAR ELITES');
       expect(mounted.host.innerHTML).not.toContain('CAPACITY</small>');
       expect(mounted.host.innerHTML).not.toContain('RESERVE</small>');
       expect(mounted.host.innerHTML).not.toContain('NO DOCTRINE');
@@ -1074,13 +1077,13 @@ describe('commander level and talent menu', () => {
       expect(mounted.host.innerHTML).toContain('FIRST CAMPAIGN COMPLETE');
       expect(mounted.host.innerHTML).toContain('Spend the power you earned');
       expect(mounted.host.innerHTML).toContain('unspent points give no bonus');
-      expect(mounted.host.innerHTML).toContain('APEX TALENT POINTS');
+      expect(mounted.host.innerHTML).toContain('EONSCAR TALENT POINTS');
       expect(mounted.host.innerHTML).toContain('NATION MASTERY POINTS');
       expect(mounted.host.innerHTML).toContain('Credits only pay for Survival entry.');
       expect(mounted.host.innerHTML).toContain(
         'Defeating a nation in Campaign unlocks it',
       );
-      expect(mounted.host.innerHTML).toContain('SPEND 4 APEX TALENT POINTS →');
+      expect(mounted.host.innerHTML).toContain('SPEND 4 EONSCAR TALENT POINTS →');
       expect(mounted.host.innerHTML).toContain('SPEND 2 NATION MASTERY POINTS →');
       expect(mounted.host.innerHTML).toContain('data-action="tutorial-open-talents"');
       expect(mounted.host.innerHTML).toContain('data-action="tutorial-open-arsenal"');
@@ -1185,11 +1188,11 @@ describe('commander level and talent menu', () => {
 
       mounted.click('open-country-picker');
       expect(mounted.host.innerHTML).toContain('commander-theater__save-choice');
-      expect(mounted.host.innerHTML).toContain('APEX secures the campaign record.');
+      expect(mounted.host.innerHTML).toContain('EONSCAR secures the campaign record.');
       expect(mounted.host.innerHTML).toContain('CONTINUE CURRENT');
       expect(mounted.host.innerHTML).toContain('END &amp; CLAIM PROGRESS');
       expect(mounted.host.innerHTML).toContain(
-        'Earned APEX XP and Nation Mastery XP are settled exactly like any completed run.',
+        'Earned EONSCAR XP and Nation Mastery XP are settled exactly like any completed run.',
       );
       expect(mounted.host.innerHTML).not.toContain('victory bonus is unavailable');
       expect(mounted.host.innerHTML).not.toContain('NEW DEPLOYMENT');
@@ -1206,7 +1209,7 @@ describe('commander level and talent menu', () => {
     }
   });
 
-  it('keeps the APEX talent pane, page position and clicked talent focused across rerenders', () => {
+  it('keeps the EONSCAR talent pane, page position and clicked talent focused across rerenders', () => {
     const allocatedTalents = emptyCommanderTalentsV1();
     allocatedTalents['science-corps'] = 1;
     const allocatedProfile = {

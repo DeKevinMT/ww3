@@ -234,7 +234,7 @@ describe('one symmetric frontline hit ceiling', () => {
     });
   });
 
-  it('requires real national armies on both sides before APEX Pulse can fire', () => {
+  it('requires real national armies on both sides before EONSCAR Pulse can fire', () => {
     expect(resolveApexPulseDamageV2({
       pulseAttack: 10,
       nationalParticipatingManpower: 0,

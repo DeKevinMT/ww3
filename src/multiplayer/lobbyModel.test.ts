@@ -99,7 +99,7 @@ describe('Direct Connect lobby model', () => {
   });
 
   it('lets only the host change scenario and atomically clears every seat', () => {
-    const initial = normalizeScenarioConfigV2({ mode: 'standard-2026', seed: 101 });
+    const initial = normalizeScenarioConfigV2({ mode: 'survival', seed: 101 });
     const random = normalizeScenarioConfigV2({ mode: 'random-world', seed: 202 });
     const lobby = new HostLobbyModel('host', 'Alice', initial);
     lobby.connect('guest', 'Bob');
@@ -117,6 +117,18 @@ describe('Direct Connect lobby model', () => {
     expect(changed.scenario).toEqual(random);
     expect(changed.revision).toBe(before.revision + 1);
     expect(changed.players.every((player) => player.countryId === null && !player.ready)).toBe(true);
+  });
+
+  it('keeps Campaign outside the multiplayer lobby contract', () => {
+    const campaign = normalizeScenarioConfigV2({ mode: 'standard-2026', seed: 303 });
+
+    expect(() => new HostLobbyModel('host', 'Alice', campaign))
+      .toThrow(/Campaign is single-player only/);
+
+    const lobby = new HostLobbyModel('host', 'Alice');
+    expect(lobby.snapshot().scenario.mode).toBe('random-world');
+    expect(lobby.apply('host', { type: 'set-scenario', scenario: campaign }))
+      .toMatchObject({ accepted: false, reason: expect.stringMatching(/single-player only/) });
   });
 
   it('rejects stale revisioned actions without changing lobby state', () => {

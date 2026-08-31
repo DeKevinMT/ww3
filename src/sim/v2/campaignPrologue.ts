@@ -6,7 +6,7 @@ import type { PlayerId, WarStateV2, WorldStateV2 } from './types';
 export const CAMPAIGN_WAR_LOCK_REASON_V2
   = 'Complete Signal Triangulation to restore verified military intelligence.';
 export const CAMPAIGN_HUMAN_WAR_STORY_LOCK_REASON_V2
-  = 'Wait for APEX to finish the first-strike briefing.';
+  = 'Wait for EONSCAR to finish the first-strike briefing.';
 
 /**
  * Stage I is already a three-month calm opening. Six further weeks leave a

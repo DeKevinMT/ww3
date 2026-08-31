@@ -65,7 +65,7 @@ function fullyFundedPair(
   return { withApex, withoutApex, playerId };
 }
 
-describe('APEX Empire replenishment network', () => {
+describe('EONSCAR Empire replenishment network', () => {
   it('publishes exact fixed support without talent scaling', () => {
     const base = resolveCommanderForceInitializationV1(resolveCountryLoadoutV1(
       createCommanderProfileV1(84_100, 'base-support'),
@@ -172,7 +172,7 @@ describe('APEX Empire replenishment network', () => {
     expect(unfundedFinance.reserveTraining).toBe(0);
   });
 
-  it('never boosts AI rivals or another country without its own APEX force', () => {
+  it('never boosts AI rivals or another country without its own EONSCAR force', () => {
     const { withApex, withoutApex, playerId } = fullyFundedPair(84_103);
     const rivalId = WORLD_CONTENT_V2.nationIds.find((candidate) => candidate !== playerId)!;
     withApex.players[rivalId]!.treasury = 1_000_000;

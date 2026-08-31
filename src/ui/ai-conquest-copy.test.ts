@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { integrationCompletionToastMessageV2 } from './WorldUIV2';
 
 describe('AI conquest copy', () => {
-  it('reserves Signal Purge and liberation language for an APEX-controlled victor', () => {
+  it('reserves Signal Purge and liberation language for an EONSCAR-controlled victor', () => {
     const apex = integrationCompletionToastMessageV2('Iceland', 'Greenland', true);
     const autonomous = integrationCompletionToastMessageV2('Ukraine', 'Russia', false);
 
