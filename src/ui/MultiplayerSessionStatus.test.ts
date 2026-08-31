@@ -110,7 +110,7 @@ describe('multiplayer session command feedback', () => {
     expect(element.attributes.get('role')).toBe('alert');
 
     vi.advanceTimersByTime(GUEST_COMMAND_REJECT_NOTICE_MS);
-    expect(element.textContent).toContain('WEEK 19');
+    expect(element.textContent).toContain('DAY 19');
     expect(element.classList.contains('has-command-error')).toBe(false);
     expect(element.attributes.get('role')).toBe('status');
   });

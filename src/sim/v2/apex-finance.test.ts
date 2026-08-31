@@ -229,6 +229,7 @@ describe('lean shared EONSCAR and empire finance', () => {
   it('spends no reserve cash at target and shares one bounded surplus envelope above it', () => {
     const state = createWorldStateV2(73_004, WORLD_CONTENT_V2);
     const netherlands = nationIdV2('nld');
+    state.players[netherlands]!.research.activeProgram = 'advanced-weapons';
     for (const territory of Object.values(state.territories)) {
       if (territory.owner === netherlands) {
         territory.army.manpower = territory.army.capacity * 0.45;

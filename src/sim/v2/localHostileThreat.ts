@@ -184,7 +184,7 @@ export function selectOpponentLocalHostileThreatV2(
   else if (powerRatio < 0.65) reasons.push('Attacker currently lacks decisive power');
   if (atBorder) reasons.push('Your recent expansion reached this border');
   else if (expansionPressure >= 6) reasons.push('Your regional expansion raised hostility');
-  if (boxedPressure > 0) reasons.push(`No viable local exit for ${Math.round(boxedWeeks)} weeks`);
+  if (boxedPressure > 0) reasons.push(`No viable local exit for ${Math.round(boxedWeeks)} days`);
   return {
     attackerId,
     score,

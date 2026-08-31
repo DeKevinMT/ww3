@@ -23,11 +23,12 @@ describe('globe render pipeline performance contract', () => {
     expect(globeSceneSource).not.toContain('buildGlobeBorderPositions');
     expect(globeSceneSource).not.toContain('updateGlobeBorderVisibility');
     expect(globeSceneSource).not.toContain('highlightGroup');
-    expect(globeSceneSource.match(/new LineSegments2\(/g)).toHaveLength(1);
-    // One authored gateway batch, one transit network and one pooled true dome.
-    // Political edges still stay in one screen-space LineSegments2 batch.
-    expect(globeSceneSource.match(/new THREE\.LineSegments\(/g)).toHaveLength(3);
+    // Political edges remain one screen-space batch. The authored gateways use
+    // one bounded two-pass group (soft glow + thin core), never one mesh per route.
+    expect(globeSceneSource.match(/new LineSegments2\(/g)).toHaveLength(2);
+    expect(globeSceneSource.match(/new THREE\.LineSegments\(/g)).toHaveLength(2);
     expect(globeSceneSource).toContain('authoredIntercontinentalGatewayBatch');
+    expect(globeSceneSource).toContain('group.userData.drawCalls = 2');
     expect(globeSceneSource).toContain('this.neuralNetworkGeometry');
     expect(globeSceneSource).toContain('pooledTerritoryNeuralDome');
   });

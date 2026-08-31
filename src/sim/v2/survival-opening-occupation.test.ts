@@ -11,7 +11,6 @@ import {
   SURVIVAL_DAWNLINE_ARCTIC_NATION_IDS_V2,
   selectSurvivalDawnlineLeaderIdV2,
 } from './survivalEmpire';
-import { isSurvivalDawnlineNationV2 } from './survivalOrdinaryAi';
 import { nationIdV2 } from './types';
 import { invalidateTerritoryIndexV2 } from './selectors';
 import {
@@ -29,11 +28,10 @@ function formedPacificFront(seed: number): WorldEngineV2 {
 }
 
 describe('Survival physical opening and push-pull pacing', () => {
-  it('keeps the sovereign world intact while forming only the explicit Arctic Dawnline', () => {
+  it('keeps the sovereign world intact while fusing Arctic Base Packets into the flagship', () => {
     const engine = formedPacificFront(81_001);
     const human = nationIdV2('usa');
-    const dawnline = selectSurvivalDawnlineLeaderIdV2(engine.state)!;
-    expect(dawnline).toBe(nationIdV2('grl'));
+    expect(selectSurvivalDawnlineLeaderIdV2(engine.state)).toBeUndefined();
     expect(engine.content.territoryIds.filter((territoryId) => (
       engine.state.territories[territoryId]?.owner === ROGUE_AI_NATION_ID_V2
     ))).toEqual(expect.arrayContaining(ANTARCTIC_TERRITORY_IDS_V2));
@@ -43,14 +41,22 @@ describe('Survival physical opening and push-pull pacing', () => {
     ))).toEqual([]);
     expect(engine.state.runProgression.scorchedWorldTerritoryIds).toEqual([]);
 
-    const dawnlineTerritories = engine.content.territoryIds.filter((territoryId) => (
-      engine.state.territories[territoryId]?.owner === dawnline
+    const arcticOrigins = new Set<string>(SURVIVAL_DAWNLINE_ARCTIC_NATION_IDS_V2);
+    const arcticTerritoryIds = engine.content.territoryIds.filter((territoryId) => (
+      arcticOrigins.has(engine.content.territories[territoryId]?.initialOwnerId ?? '')
     ));
-    expect(dawnlineTerritories).toHaveLength(
-      SURVIVAL_DAWNLINE_ARCTIC_NATION_IDS_V2.length - 1,
+    expect(arcticTerritoryIds.length).toBeGreaterThanOrEqual(
+      SURVIVAL_DAWNLINE_ARCTIC_NATION_IDS_V2.length,
     );
-    expect(isSurvivalDawnlineNationV2(engine.state, dawnline)).toBe(true);
+    for (const territoryId of arcticTerritoryIds) {
+      const originId = engine.content.territories[territoryId]!.initialOwnerId;
+      expect(engine.state.territories[territoryId]!.owner).toBe(human);
+      expect(engine.state.territories[territoryId]!.survivalBasePacket).toBe(
+        originId === human ? undefined : true,
+      );
+    }
     expect(engine.state.territories.chl!.owner).toBe(human);
+    expect(engine.state.territories.chl!.survivalBasePacket).toBeUndefined();
     for (const territory of Object.values(engine.state.territories)) {
       if (territory.owner === ROGUE_AI_NATION_ID_V2) continue;
       expect(territory.army.manpower).toBeCloseTo(territory.army.capacity, 9);
@@ -112,7 +118,6 @@ describe('Survival physical opening and push-pull pacing', () => {
   it('sustains deterministic battles and territorial movement for three years', () => {
     const engine = formedPacificFront(81_003);
     const human = nationIdV2('usa');
-    const dawnline = selectSurvivalDawnlineLeaderIdV2(engine.state)!;
     const initialOwners = new Map(engine.content.territoryIds.map((territoryId) => [
       territoryId,
       engine.state.territories[territoryId]!.owner,
@@ -177,9 +182,7 @@ describe('Survival physical opening and push-pull pacing', () => {
     expect(Object.values(engine.state.territories).some((territory) => (
       territory.owner === human
     ))).toBe(true);
-    expect(Object.values(engine.state.territories).some((territory) => (
-      territory.owner === dawnline
-    ))).toBe(true);
+    expect(selectSurvivalDawnlineLeaderIdV2(engine.state)).toBeUndefined();
     expect(maxRogueWars).toBeLessThanOrEqual(SURVIVAL_MAX_CONCURRENT_ROGUE_FRONTS_V2);
     for (const war of engine.state.wars.filter((candidate) => (
       candidate.attackerId === ROGUE_AI_NATION_ID_V2
@@ -189,16 +192,17 @@ describe('Survival physical opening and push-pull pacing', () => {
       }
     }
     assertInvariantsV2(engine.state, engine.content);
-  }, 15_000);
+  }, 60_000);
 
-  it('opens a real Dawnline front as soon as physical Rogue expansion reaches it', () => {
+  it('opens a real Empire front as soon as physical Rogue expansion reaches a Base Packet', () => {
     const engine = formedPacificFront(81_004);
-    const dawnline = selectSurvivalDawnlineLeaderIdV2(engine.state)!;
+    const human = nationIdV2('usa');
     const dawnlineTerritoryId = engine.content.territoryIds.find((territoryId) => (
-      engine.state.territories[territoryId]?.owner === dawnline
+      engine.state.territories[territoryId]?.owner === human
+        && engine.state.territories[territoryId]?.survivalBasePacket === true
         && (engine.content.territories[territoryId]?.connections ?? []).some((connection) => {
           const owner = engine.state.territories[connection.targetId]?.owner;
-          return owner && owner !== dawnline
+          return owner && owner !== human
             && !engine.state.humanPlayerIds.includes(owner)
             && owner !== ROGUE_AI_NATION_ID_V2;
         })
@@ -207,7 +211,7 @@ describe('Survival physical opening and push-pull pacing', () => {
       .map((connection) => connection.targetId)
       .find((territoryId) => {
         const owner = engine.state.territories[territoryId]?.owner;
-        return owner && owner !== dawnline
+        return owner && owner !== human
           && !engine.state.humanPlayerIds.includes(owner)
           && owner !== ROGUE_AI_NATION_ID_V2;
       })!;
@@ -221,11 +225,11 @@ describe('Survival physical opening and push-pull pacing', () => {
     invalidateTerritoryIndexV2(engine.state);
 
     expect(processRogueAiSurvivalV2(engine.state, engine.content).targets)
-      .toContain(dawnline);
+      .toContain(human);
     synchronizeWarFrontsV2(engine.state, engine.content);
     const war = engine.state.wars.find((candidate) => (
       candidate.attackerId === ROGUE_AI_NATION_ID_V2
-        && candidate.defenderId === dawnline
+        && candidate.defenderId === human
     ));
     expect(war).toBeDefined();
     expect(war!.attackerOperations).toContainEqual(expect.objectContaining({

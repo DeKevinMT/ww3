@@ -1,19 +1,19 @@
 import { randomInt } from '../../game/random';
 import {
   RESEARCH_BRANCH_EFFECTS,
-  RESEARCH_BRANCHES,
   round,
 } from './balance';
 import type { WorldContentV2 } from './content';
 import { addWorldEventV2 } from './events';
 import type { FinancePlansV2 } from './economy';
+import { isHumanPlayerV2 } from './humanPlayers';
 import {
   createPowerSnapshotV2,
   selectResearchCatchUpFactorV2,
   selectResearchBranchMaxedV2,
-  selectResearchFundingSharesV2,
   selectIsEliminatedV2,
   selectResearchBranchCostV2,
+  selectResearchFundableActiveProgramV2,
   selectResearchOutputV2,
   selectWeeklyFinanceBreakdownV2,
   sortedNationIdsV2,
@@ -33,7 +33,16 @@ export function branchIsMaxedV2(
   return selectResearchBranchMaxedV2(state, content, playerId, branch);
 }
 
-/** One seeded draw from an uncapped branch pool. */
+/** Canonical branch/effect membership check shared by command-edge validation. */
+export function researchEffectBelongsToBranchV2(
+  branch: ResearchBranchV2,
+  effect: ResearchEffectV2,
+): boolean {
+  return (RESEARCH_BRANCH_EFFECTS[branch] as readonly ResearchEffectV2[] | undefined)
+    ?.includes(effect) ?? false;
+}
+
+/** Legacy seeded suggestion helper. Live research never applies this automatically. */
 export function drawResearchEffectV2(
   state: Pick<WorldStateV2, 'rngState'>,
   branch: ResearchBranchV2,
@@ -54,6 +63,13 @@ export function processResearchV2(
     if (selectIsEliminatedV2(state, playerId)
       || !isNationOperationalV2(state, content, playerId)) continue;
     const nation = state.players[playerId]!;
+    const branch = selectResearchFundableActiveProgramV2(
+      state,
+      content,
+      playerId,
+      powerSnapshot,
+    );
+    if (!branch) continue;
     const finance = financePlans?.get(playerId)
       ?? selectWeeklyFinanceBreakdownV2(state, content, playerId, powerSnapshot);
     // Research uses one stable national trait view throughout this nation's
@@ -77,48 +93,38 @@ export function processResearchV2(
       finance,
       catchUp,
       nationTraitContext,
+      powerSnapshot,
     );
-    const fundingShares = selectResearchFundingSharesV2(state, content, playerId);
-    const lastFundedIndex = RESEARCH_BRANCHES.reduce((last, branch, index) => (
-      fundingShares[branch] > 0 ? index : last
-    ), -1);
-    let assignedOutput = 0;
-    for (let branchIndex = 0; branchIndex < RESEARCH_BRANCHES.length; branchIndex += 1) {
-      const branch = RESEARCH_BRANCHES[branchIndex]!;
-      const maxed = fundingShares[branch] <= 0;
-      const outputShare = maxed ? 0 : branchIndex === lastFundedIndex
-        ? round(Math.max(0, poolOutput - assignedOutput), 9)
-        : round(poolOutput * fundingShares[branch], 9);
-      assignedOutput = round(assignedOutput + outputShare, 9);
-      if (maxed) continue;
-      const weeklyProgress = applyResearchProgressTraitV2(
+    const cost = selectResearchBranchCostV2(
+      state,
+      content,
+      playerId,
+      branch,
+      powerSnapshot,
+    );
+    if (cost <= 0) continue;
+    const current = Math.max(0, nation.research.progress[branch]);
+    if (current + 1e-9 >= cost) {
+      nation.research.progress[branch] = cost;
+      continue;
+    }
+    const weeklyProgress = applyResearchProgressTraitV2(
+      playerId,
+      branch,
+      poolOutput,
+      nationTraitContext,
+    );
+    const next = Math.min(cost, round(current + weeklyProgress));
+    nation.research.progress[branch] = next;
+    if (next + 1e-9 >= cost) {
+      addWorldEventV2(
+        state,
+        'research',
+        isHumanPlayerV2(state, playerId) ? 'action' : 'info',
+        `${content.nations[playerId]?.name ?? playerId}: ${branch.replaceAll('-', ' ')} breakthrough ready — choose one upgrade.`,
+        undefined,
         playerId,
-        branch,
-        outputShare,
-        nationTraitContext,
       );
-      nation.research.progress[branch] = round(
-        nation.research.progress[branch] + weeklyProgress,
-      );
-      while (true) {
-        const cost = selectResearchBranchCostV2(state, content, playerId, branch, powerSnapshot);
-        if (cost <= 0 || nation.research.progress[branch] + 1e-9 < cost) break;
-        const effect = drawResearchEffectV2(state, branch, nation.research.effectLevels);
-        if (!effect) break;
-        nation.research.progress[branch] = round(Math.max(0, nation.research.progress[branch] - cost));
-        nation.research.effectLevels[effect] += 1;
-        nation.research.breakthroughs[branch] += 1;
-        addWorldEventV2(
-          state,
-          'research',
-          'info',
-          `${content.nations[playerId]?.name ?? playerId}: ${effect.replaceAll('-', ' ')} upgrade completed.`,
-          undefined,
-          playerId,
-        );
-        if (branch === 'education-intelligence'
-          && branchIsMaxedV2(state, content, playerId, branch)) break;
-      }
     }
   }
 }

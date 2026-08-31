@@ -12,14 +12,18 @@ import { addWorldEventV2 } from './events';
 import { selectHumanPlayerIdsV2 } from './humanPlayers';
 import { retireAbsorbedNationV2 } from './integration';
 import {
+  SURVIVAL_BASE_PACKET_ARMY_CAPACITY_FACTOR_V2,
+  SURVIVAL_DAWNLINE_ARCTIC_NATION_IDS_V2,
   SURVIVAL_DAWNLINE_ACCORD_NAME_V2,
   applySurvivalOpeningArmyReadinessV2,
   isSurvivalDawnlineNationV2,
 } from './survivalOrdinaryAi';
 import {
+  createMilitaryBaseSnapshotV2,
   invalidateNationIndexV2,
   invalidateTerritoryIndexV2,
   selectCurrentPowerV2,
+  selectTerritoryPowerV2,
   selectWeeklyFinanceBreakdownV2,
 } from './selectors';
 import type {
@@ -32,6 +36,10 @@ import type {
 export interface SurvivalEmpireFormationResultV2 extends CommandResultV2 {
   readonly memberIds?: readonly PlayerId[];
   readonly territoryIds?: readonly TerritoryId[];
+  readonly fullMemberIds?: readonly PlayerId[];
+  readonly basePacketMemberIds?: readonly PlayerId[];
+  readonly basePacketTerritoryIds?: readonly TerritoryId[];
+  readonly roguePowerRatio?: number;
   /** Legacy fields retained for authenticated old saves and callers. */
   readonly dawnlineLeaderId?: PlayerId;
   readonly dawnlineMemberIds?: readonly PlayerId[];
@@ -57,10 +65,7 @@ export const SURVIVAL_SCORCHED_ECONOMY_CEILING_FACTOR_V2 = 1;
 /** @deprecated Scorched populations are retired; this neutral factor is schema compatibility only. */
 export const SURVIVAL_SCORCHED_POPULATION_CEILING_FACTOR_V2 = 1;
 
-/** Fixed geopolitical membership: never inferred from borders or map order. */
-export const SURVIVAL_DAWNLINE_ARCTIC_NATION_IDS_V2 = Object.freeze([
-  'can', 'dnk', 'fin', 'isl', 'nor', 'rus', 'swe', 'usa', 'grl',
-] as const);
+export { SURVIVAL_DAWNLINE_ARCTIC_NATION_IDS_V2 } from './survivalOrdinaryAi';
 
 /** The opening machine army is deliberately only a little stronger. */
 export const SURVIVAL_ROGUE_DAWNLINE_POWER_RATIO_V2 = 1.20;
@@ -185,38 +190,6 @@ export function unifySurvivalDawnlineAccordV2(
   invalidateNationIndexV2(state);
 }
 
-const SURVIVAL_DAWNLINE_LEADER_PRIORITY_V2 = Object.freeze([
-  'grl', 'usa', 'rus', 'can', 'nor', 'swe', 'fin', 'dnk', 'isl',
-] as const);
-
-function chooseSurvivalDawnlineLeaderIdV2(
-  memberIds: readonly PlayerId[],
-): PlayerId | undefined {
-  const members = new Set(memberIds);
-  return SURVIVAL_DAWNLINE_LEADER_PRIORITY_V2
-    .map((id) => id as PlayerId)
-    .find((id) => members.has(id));
-}
-
-function establishSurvivalDawnlineHumanAlliancesV2(
-  state: WorldStateV2,
-  dawnlineLeaderId: PlayerId,
-): void {
-  state.allianceOffers = state.allianceOffers.filter((offer) => (
-    offer.fromId !== dawnlineLeaderId && offer.toId !== dawnlineLeaderId
-  ));
-  for (const humanId of selectHumanPlayerIdsV2(state)) {
-    if (humanId === dawnlineLeaderId) continue;
-    const [leftId, rightId] = [humanId, dawnlineLeaderId]
-      .sort((left, right) => left.localeCompare(right)) as [PlayerId, PlayerId];
-    if (!state.alliances.some((alliance) => (
-      alliance.leftId === leftId && alliance.rightId === rightId
-    ))) state.alliances.push({ leftId, rightId, formedTick: state.tick });
-  }
-  state.alliances.sort((left, right) => left.leftId.localeCompare(right.leftId)
-    || left.rightId.localeCompare(right.rightId));
-}
-
 function rogueAntarcticTerritoryIdsV2(
   state: WorldStateV2,
 ): TerritoryId[] {
@@ -244,28 +217,86 @@ function setRogueAntarcticManpowerV2(
   });
 }
 
+function survivalArcticOriginTerritoryIdsV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+): TerritoryId[] {
+  const arcticOrigins = new Set<string>(SURVIVAL_DAWNLINE_ARCTIC_NATION_IDS_V2);
+  return content.territoryIds.filter((territoryId) => {
+    const originId = content.territories[territoryId]?.initialOwnerId;
+    return originId !== undefined
+      && arcticOrigins.has(originId)
+      && Boolean(state.territories[territoryId]);
+  }).sort((left, right) => left.localeCompare(right));
+}
+
+export interface SurvivalArcticPowerBenchmarkV2 {
+  readonly allBasePower: number;
+  readonly effectivePower: number;
+  readonly unlockMasteryExtraPower: number;
+  readonly rogueTargetPower: number;
+}
+
 /**
- * Calibrates the real Antarctic army against the fully deployed Dawnline bloc.
- * Any extra headroom is created through the ordinary force-capacity research
- * field before manpower is assigned, so weekly capacity synchronization keeps
- * the opening sustainable instead of treating it as an off-cap spawn.
+ * Quotes only Arctic-origin formations. The cloned all-base counterfactual
+ * marks every Arctic territory as a neutral 50% packet, so unlocked capacity
+ * and local mastery become measurable upside without mutating the live run.
+ */
+export function selectSurvivalArcticPowerBenchmarkV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+): SurvivalArcticPowerBenchmarkV2 {
+  const territoryIds = survivalArcticOriginTerritoryIdsV2(state, content);
+  const effectiveSnapshot = createMilitaryBaseSnapshotV2(state, content);
+  const effectivePower = round(territoryIds.reduce((sum, territoryId) => (
+    sum + selectTerritoryPowerV2(state, content, territoryId, effectiveSnapshot)
+  ), 0), 9);
+
+  const allBaseState = structuredClone(state);
+  for (const territoryId of territoryIds) {
+    allBaseState.territories[territoryId]!.survivalBasePacket = true;
+  }
+  synchronizeArmyCapacityV2(allBaseState, content);
+  applySurvivalOpeningArmyReadinessV2(allBaseState, content);
+  const allBaseSnapshot = createMilitaryBaseSnapshotV2(allBaseState, content);
+  const allBasePower = round(territoryIds.reduce((sum, territoryId) => (
+    sum + selectTerritoryPowerV2(allBaseState, content, territoryId, allBaseSnapshot)
+  ), 0), 9);
+  const unlockMasteryExtraPower = round(Math.max(0, effectivePower - allBasePower), 9);
+  return {
+    allBasePower,
+    effectivePower,
+    unlockMasteryExtraPower,
+    rogueTargetPower: round(
+      allBasePower * SURVIVAL_ROGUE_DAWNLINE_POWER_RATIO_V2
+        + unlockMasteryExtraPower * 0.50,
+      9,
+    ),
+  };
+}
+
+/**
+ * Calibrates the physical Antarctic army against the player's effective
+ * Arctic-origin contribution. The old leader parameter is ignored so legacy
+ * callers compile while new openings no longer require a separate NPC bloc.
  */
 export function balanceSurvivalRogueAgainstDawnlineV2(
   state: WorldStateV2,
   content: WorldContentV2,
-  dawnlineLeaderId: PlayerId,
+  _legacyDawnlineLeaderId?: PlayerId,
 ): number {
   const rogue = state.players[ROGUE_AI_NATION_ID_V2];
-  if (!rogue || !state.players[dawnlineLeaderId]) return 0;
-  const dawnlinePower = selectCurrentPowerV2(state, content, dawnlineLeaderId);
+  if (!rogue) return 0;
+  const benchmark = selectSurvivalArcticPowerBenchmarkV2(state, content);
   let roguePower = selectCurrentPowerV2(state, content, ROGUE_AI_NATION_ID_V2);
   const territoryIds = rogueAntarcticTerritoryIdsV2(state);
   const activeManpower = territoryIds.reduce((sum, territoryId) => (
     sum + Math.max(0, state.territories[territoryId]?.army.manpower ?? 0)
   ), 0);
-  if (dawnlinePower <= 0 || roguePower <= 0 || activeManpower <= 0) return 0;
+  if (benchmark.rogueTargetPower <= 0 || benchmark.effectivePower <= 0
+    || roguePower <= 0 || activeManpower <= 0) return 0;
 
-  const targetPower = dawnlinePower * SURVIVAL_ROGUE_DAWNLINE_POWER_RATIO_V2;
+  const targetPower = benchmark.rogueTargetPower;
   let targetManpower = activeManpower * targetPower / roguePower;
   const currentCapacity = territoryIds.reduce((sum, territoryId) => (
     sum + Math.max(0, state.territories[territoryId]?.army.capacity ?? 0)
@@ -289,7 +320,7 @@ export function balanceSurvivalRogueAgainstDawnlineV2(
     setRogueAntarcticManpowerV2(state, targetManpower);
     roguePower = selectCurrentPowerV2(state, content, ROGUE_AI_NATION_ID_V2);
   }
-  return dawnlinePower > 0 ? round(roguePower / dawnlinePower, 9) : 0;
+  return round(roguePower / benchmark.effectivePower, 9);
 }
 
 /** Funds a finite multi-year machine campaign from the final live war budget. */
@@ -326,38 +357,6 @@ export function fundSurvivalRogueWarChestV2(
   return rogue.treasury;
 }
 
-interface PreparedSurvivalDawnlineV2 {
-  readonly leaderId?: PlayerId;
-  readonly memberIds: readonly PlayerId[];
-  readonly territoryIds: readonly TerritoryId[];
-  readonly roguePowerRatio: number;
-}
-
-function prepareSurvivalDawnlineV2(
-  state: WorldStateV2,
-  content: WorldContentV2,
-  protectedOwnerIds: ReadonlySet<PlayerId>,
-): PreparedSurvivalDawnlineV2 {
-  const memberIds = survivalDawnlineNationIdsV2(state, content, protectedOwnerIds);
-  const leaderId = chooseSurvivalDawnlineLeaderIdV2(memberIds);
-  if (!leaderId) {
-    synchronizeArmyCapacityV2(state, content);
-    applySurvivalOpeningArmyReadinessV2(state, content);
-    return { memberIds: [], territoryIds: [], roguePowerRatio: 0 };
-  }
-  const memberSet = new Set(memberIds);
-  const territoryIds = (Object.entries(state.territories) as Array<[TerritoryId, WorldStateV2['territories'][TerritoryId]]>)
-    .filter(([, territory]) => memberSet.has(territory.owner))
-    .map(([territoryId]) => territoryId)
-    .sort((left, right) => left.localeCompare(right));
-  unifySurvivalDawnlineAccordV2(state, content, leaderId, memberIds, territoryIds);
-  synchronizeArmyCapacityV2(state, content);
-  applySurvivalOpeningArmyReadinessV2(state, content);
-  establishSurvivalDawnlineHumanAlliancesV2(state, leaderId);
-  const roguePowerRatio = balanceSurvivalRogueAgainstDawnlineV2(state, content, leaderId);
-  return { leaderId, memberIds, territoryIds, roguePowerRatio };
-}
-
 function survivalRosterAlreadyPreparedV2(state: WorldStateV2): boolean {
   return state.events.some((event) => event.tick === 0 && (
     event.message.startsWith('SURVIVAL COMMAND:')
@@ -385,10 +384,87 @@ function selectedMemberBlocksFormationV2(
   });
 }
 
+interface SurvivalMemberMergeV2 {
+  readonly absorbedMemberIds: readonly PlayerId[];
+  readonly transferredTerritoryIds: readonly TerritoryId[];
+  readonly basePacketTerritoryIds: readonly TerritoryId[];
+}
+
 /**
- * Co-op keeps every chosen nation sovereign and fully deployed. The remaining
- * authored Arctic states form a full-strength NPC Dawnline; all other ordinary
- * AI countries retain normal economies, capacity and full opening readiness.
+ * Permanently folds full and Base Packet members into a real human backend.
+ * Base Packets surrender only half their opening treasury and never merge
+ * research. Their physical economy and population are deliberately untouched.
+ */
+function mergeSurvivalMembersIntoHostV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  hostId: PlayerId,
+  fullMemberIds: readonly PlayerId[],
+  basePacketMemberIds: readonly PlayerId[],
+): SurvivalMemberMergeV2 {
+  const full = new Set(fullMemberIds);
+  const base = new Set(basePacketMemberIds.filter((memberId) => !full.has(memberId)));
+  const absorbedMemberIds = [...new Set([...full, ...base])]
+    .filter((memberId) => memberId !== hostId)
+    .sort((left, right) => left.localeCompare(right));
+  const absorbed = new Set(absorbedMemberIds);
+  const transferredTerritoryIds: TerritoryId[] = [];
+  const basePacketTerritoryIds: TerritoryId[] = [];
+
+  for (const territoryId of content.territoryIds) {
+    const territory = state.territories[territoryId];
+    if (!territory || !absorbed.has(territory.owner)) continue;
+    const sourceOwnerId = territory.owner;
+    territory.owner = hostId;
+    territory.coreOwner = hostId;
+    territory.integration = 1;
+    delete territory.integrationProgram;
+    if (base.has(sourceOwnerId)) {
+      territory.survivalBasePacket = true;
+      basePacketTerritoryIds.push(territoryId);
+    } else {
+      delete territory.survivalBasePacket;
+    }
+    transferredTerritoryIds.push(territoryId);
+  }
+  invalidateTerritoryIndexV2(state);
+
+  for (const memberId of absorbedMemberIds) {
+    const basePacket = base.has(memberId);
+    if (basePacket && state.players[memberId]) {
+      state.players[memberId]!.treasury = round(
+        state.players[memberId]!.treasury
+          * SURVIVAL_BASE_PACKET_ARMY_CAPACITY_FACTOR_V2,
+        9,
+      );
+    }
+    if (!retireAbsorbedNationV2(state, content, memberId, hostId, !basePacket)) {
+      throw new Error(`Survival empire formation could not retire member ${memberId}.`);
+    }
+  }
+  invalidateNationIndexV2(state);
+  return {
+    absorbedMemberIds,
+    transferredTerritoryIds: transferredTerritoryIds
+      .sort((left, right) => left.localeCompare(right)),
+    basePacketTerritoryIds: basePacketTerritoryIds
+      .sort((left, right) => left.localeCompare(right)),
+  };
+}
+
+function prepareSurvivalOpeningForcesV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+): number {
+  synchronizeArmyCapacityV2(state, content);
+  applySurvivalOpeningArmyReadinessV2(state, content);
+  return balanceSurvivalRogueAgainstDawnlineV2(state, content);
+}
+
+/**
+ * Co-op keeps every chosen nation sovereign and fully deployed. Every
+ * unselected authored Arctic state becomes a 50% Base Packet of the primary
+ * human host; no separate NPC controller or alliance is created.
  */
 export function prepareMultiplayerSurvivalRosterV2(
   state: WorldStateV2,
@@ -399,7 +475,7 @@ export function prepareMultiplayerSurvivalRosterV2(
     return { accepted: false, reason: 'A Survival roster can only be prepared in Survival.' };
   }
   if (state.tick !== 0 || state.gameOver) {
-    return { accepted: false, reason: 'The co-op Survival roster must be prepared before week one.' };
+    return { accepted: false, reason: 'The co-op Survival roster must be prepared before day one.' };
   }
   const selected = [...new Set(selectedHumanIds)]
     .sort((left, right) => left.localeCompare(right));
@@ -414,25 +490,57 @@ export function prepareMultiplayerSurvivalRosterV2(
   if (survivalRosterAlreadyPreparedV2(state)) {
     return { accepted: false, reason: 'The co-op Survival world is already prepared.' };
   }
+  const allArcticMemberIds = survivalDawnlineNationIdsV2(
+    state,
+    content,
+    new Set<PlayerId>(),
+  );
+  const selectedSet = new Set(selected);
+  const basePacketMemberIds = allArcticMemberIds
+    .filter((memberId) => !selectedSet.has(memberId))
+    .sort((left, right) => left.localeCompare(right));
+  if (selectedMemberBlocksFormationV2(state, new Set(basePacketMemberIds))) {
+    return {
+      accepted: false,
+      reason: 'An Arctic Base Packet member is already involved in a war or territorial integration.',
+    };
+  }
   invalidateTerritoryIndexV2(state);
   invalidateNationIndexV2(state);
   pruneAllianceStateV2(state);
-  const dawnline = prepareSurvivalDawnlineV2(state, content, new Set(selected));
+  const hostId = state.humanPlayerId;
+  const merged = mergeSurvivalMembersIntoHostV2(
+    state,
+    content,
+    hostId,
+    [hostId],
+    basePacketMemberIds,
+  );
+  pruneAllianceStateV2(state);
+  state.aiEscalation.lastHumanTerritoryCount = Object.values(state.territories)
+    .filter((territory) => territory.owner === hostId).length;
+  state.aiEscalation.lastHumanPower = 0;
+  const roguePowerRatio = prepareSurvivalOpeningForcesV2(state, content);
   addWorldEventV2(
     state,
     'system',
     'action',
-    `CO-OP SURVIVAL: ${selected.length} sovereign human commands deploy at full strength beside Greenland-founded Arctic Dawnline. Every country begins fully mobilised with normal resources; the Antarctic Rogue opens all three gateways with roughly 20% more combat power than Dawnline.`,
+    `CO-OP SURVIVAL: ${selected.length} sovereign human commands deploy at full power. ${basePacketMemberIds.length} unselected Arctic countr${basePacketMemberIds.length === 1 ? 'y joins' : 'ies join'} the primary Dawnline Empire as 50% Base Packets; no separate NPC bloc deploys. The Rogue holds Antarctica and opens all three gateways.`,
     undefined,
-    state.humanPlayerId,
+    hostId,
   );
   return {
     accepted: true,
     memberIds: selected,
-    dawnlineLeaderId: dawnline.leaderId,
-    dawnlineMemberIds: dawnline.memberIds,
-    dawnlineTerritoryIds: dawnline.territoryIds,
-    weakenedTerritoryIds: [],
+    territoryIds: merged.transferredTerritoryIds,
+    fullMemberIds: selected,
+    basePacketMemberIds,
+    basePacketTerritoryIds: merged.basePacketTerritoryIds,
+    roguePowerRatio,
+    dawnlineLeaderId: undefined,
+    dawnlineMemberIds: [],
+    dawnlineTerritoryIds: [],
+    weakenedTerritoryIds: merged.basePacketTerritoryIds,
     occupiedTerritoryIds: [],
   };
 }
@@ -453,7 +561,7 @@ export function formSurvivalEmpireV2(
     return { accepted: false, reason: 'A unified starting empire is exclusive to Survival.' };
   }
   if (state.tick !== 0) {
-    return { accepted: false, reason: 'The Survival empire must be formed before week one.' };
+    return { accepted: false, reason: 'The Survival empire must be formed before day one.' };
   }
   if (state.gameOver) return { accepted: false, reason: 'The campaign has already ended.' };
   if (state.humanPlayerId !== flagshipId
@@ -470,13 +578,24 @@ export function formSurvivalEmpireV2(
     return { accepted: false, reason: 'The Survival starting empire is already formed.' };
   }
 
-  const canonicalMemberIds = [...new Set([flagshipId, ...memberIds])]
+  const fullMemberIds = [...new Set([flagshipId, ...memberIds])]
     .filter((playerId) => (
       isHumanSelectableNationV2(content, playerId)
         && !isRogueAiNationV2(content, playerId)
         && Boolean(state.players[playerId])
         && Object.values(state.territories).some((territory) => territory.owner === playerId)
     ))
+    .sort((left, right) => left.localeCompare(right));
+  const fullMemberSet = new Set(fullMemberIds);
+  const arcticMemberIds = survivalDawnlineNationIdsV2(
+    state,
+    content,
+    new Set<PlayerId>(),
+  );
+  const basePacketMemberIds = arcticMemberIds
+    .filter((playerId) => !fullMemberSet.has(playerId))
+    .sort((left, right) => left.localeCompare(right));
+  const canonicalMemberIds = [...new Set([...fullMemberIds, ...arcticMemberIds])]
     .sort((left, right) => left.localeCompare(right));
   const absorbedMemberIds = canonicalMemberIds.filter((playerId) => playerId !== flagshipId);
   const retiringNationIds = new Set(absorbedMemberIds);
@@ -487,29 +606,14 @@ export function formSurvivalEmpireV2(
     };
   }
 
-  const transferredTerritoryIds = (Object.entries(state.territories) as Array<[
-    TerritoryId,
-    WorldStateV2['territories'][TerritoryId],
-  ]>)
-    .filter(([, territory]) => absorbedMemberIds.includes(territory.owner))
-    .map(([territoryId]) => territoryId)
-    .sort((left, right) => left.localeCompare(right));
-
-  for (const territoryId of transferredTerritoryIds) {
-    const territory = state.territories[territoryId]!;
-    territory.owner = flagshipId;
-    territory.coreOwner = flagshipId;
-    territory.integration = 1;
-    delete territory.integrationProgram;
-  }
-  invalidateTerritoryIndexV2(state);
-
   const flagship = state.players[flagshipId]!;
-  for (const memberId of absorbedMemberIds) {
-    if (!retireAbsorbedNationV2(state, content, memberId, flagshipId, true)) {
-      throw new Error(`Survival empire formation could not retire member ${memberId}.`);
-    }
-  }
+  const merged = mergeSurvivalMembersIntoHostV2(
+    state,
+    content,
+    flagshipId,
+    fullMemberIds,
+    basePacketMemberIds,
+  );
   const retired = retiringNationIds;
   state.firstIntegrationDiscountUsedBy = state.firstIntegrationDiscountUsedBy
     .filter((playerId) => !retired.has(playerId));
@@ -532,29 +636,29 @@ export function formSurvivalEmpireV2(
     .filter((territory) => territory.owner === flagshipId).length;
   state.aiEscalation.lastHumanPower = 0;
   invalidateNationIndexV2(state);
-  const dawnline = prepareSurvivalDawnlineV2(
-    state,
-    content,
-    new Set(canonicalMemberIds),
-  );
+  const roguePowerRatio = prepareSurvivalOpeningForcesV2(state, content);
 
   const flagshipName = content.nations[flagshipId]?.shortName ?? flagshipId;
   addWorldEventV2(
     state,
     'system',
     'action',
-    `SURVIVAL COMMAND: ${flagshipName} unified ${canonicalMemberIds.length} unlocked countr${canonicalMemberIds.length === 1 ? 'y' : 'ies'} at full Army Capacity. Greenland-founded Arctic Dawnline deploys separately; every country begins fully mobilised with normal resources. The Rogue holds Antarctica, opens three gateways and begins roughly 20% stronger than Dawnline.`,
+    `SURVIVAL COMMAND: ${flagshipName} leads one Dawnline Empire with ${fullMemberIds.length} full-power countr${fullMemberIds.length === 1 ? 'y' : 'ies'} and ${basePacketMemberIds.length} locked Arctic 50% Base Packet${basePacketMemberIds.length === 1 ? '' : 's'}. Every member is fused into the flagship; no separate NPC bloc deploys. The Rogue holds Antarctica and opens all three gateways.`,
     flagship.capitalId,
     flagshipId,
   );
   return {
     accepted: true,
     memberIds: canonicalMemberIds,
-    territoryIds: transferredTerritoryIds,
-    dawnlineLeaderId: dawnline.leaderId,
-    dawnlineMemberIds: dawnline.memberIds,
-    dawnlineTerritoryIds: dawnline.territoryIds,
-    weakenedTerritoryIds: [],
+    territoryIds: merged.transferredTerritoryIds,
+    fullMemberIds,
+    basePacketMemberIds,
+    basePacketTerritoryIds: merged.basePacketTerritoryIds,
+    roguePowerRatio,
+    dawnlineLeaderId: undefined,
+    dawnlineMemberIds: [],
+    dawnlineTerritoryIds: [],
+    weakenedTerritoryIds: merged.basePacketTerritoryIds,
     occupiedTerritoryIds: [],
   };
 }

@@ -140,7 +140,7 @@ describe('larger, supply-bound V2 field battles', () => {
 
     expect(fullStrengthPulses).toBeGreaterThan(20);
     expect(depletedPulses).toBeGreaterThan(20);
-    // A force below one complete 8%-capacity supply package fights less
+    // A force below one complete 10%-capacity supply package fights less
     // efficiently, but both fixtures must still resolve far before five years.
     expect(fullStrengthWeeks).toBeLessThanOrEqual(130);
     expect(depletedWeeks).toBeLessThanOrEqual(130);

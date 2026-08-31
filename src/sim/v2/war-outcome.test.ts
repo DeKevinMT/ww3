@@ -249,7 +249,7 @@ describe('transient post-war outcomes', () => {
     expect(outcomes).toHaveLength(1);
     expect(outcomes[0]).toMatchObject({
       result: 'stalemate',
-      reason: 'Conflict closed after 26 weeks without a legal battle front.',
+      reason: 'Conflict closed after 26 days without a legal battle front.',
       apexSupportedBattles: 2,
       apexPeakPower: 62,
       apexMaxIntegrity: 0.0008,

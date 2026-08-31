@@ -23,6 +23,8 @@ describe('EONSCAR transmission overlay', () => {
     expect(render).toContain('role="dialog"');
     expect(render).toContain('aria-modal="true"');
     expect(render).toContain('SECURE ALLIED CHANNEL');
+    expect(render).toContain('SECURE ALLIED CHANNEL · DAY ${transmission.sentTick}');
+    expect(render).not.toContain('SECURE ALLIED CHANNEL · WEEK');
     expect(render).toContain('ALLIED STRATEGIC AI');
     expect(render).toContain('EONSCAR LIVE');
     expect(render).toContain('CURRENT OBJECTIVE');
@@ -33,23 +35,15 @@ describe('EONSCAR transmission overlay', () => {
     expect(stylesSource).toContain('font-size: 16px;');
   });
 
-  it('makes the mandatory first briefing non-dismissible and routes it to Research', () => {
-    const render = methodSource(
-      '  private renderApexTransmissionOverlay(',
-      '  private renderSoundOptions(',
+  it('filters retired Campaign tutorial briefings before they can block play', () => {
+    const pending = methodSource(
+      '  private pendingApexTransmission():',
+      '  /** A local APEX briefing is a real pause;',
     );
-    expect(render).toContain('TUTORIAL · REQUIRED TO CONTINUE');
-    expect(render).toContain('Start the required EONSCAR analysis');
-    expect(render).toContain('GAME PAUSED · REQUIRED');
-    expect(render).toContain('START ANALYSIS');
-    expect(render).toContain('SELECT FIRST TARGET');
-    expect(render).toContain('data-choice="accept"');
-    expect(render).not.toContain('OPEN RESEARCH');
-    expect(render).not.toContain('LATER');
-    expect(render).not.toContain('modal-close');
-    expect(worldUiSource).toContain("if (event.key === 'Escape') {");
-    expect(worldUiSource).toContain("this.panelMode = 'research';");
-    expect(worldUiSource).not.toContain('NORTH POLE INVESTIGATION AUTHORISED');
+    expect(pending).toContain('!isCampaignTutorialTransmissionV2(item.id)');
+    expect(pending).toContain('item.choice === null');
+    expect(worldUiSource).toContain('Boolean(this.pendingApexTransmission())');
+    expect(worldUiSource).toContain('const apexTransmission = !warOutcome ? this.pendingApexTransmission() : undefined;');
   });
 
   it('reveals words live, supports click-to-complete, reduced motion and a focus trap', () => {
@@ -109,7 +103,7 @@ describe('EONSCAR transmission overlay', () => {
     expect(transmissionStyles).not.toContain('filter: drop-shadow(0 0 9px');
   });
 
-  it('keeps the inbox clear about speaker, chronology and unresolved actions', () => {
+  it('keeps the inbox clear while omitting retired tutorial history', () => {
     const inbox = methodSource(
       '  private renderInbox(',
       '  private renderWarConfirmation(',
@@ -117,8 +111,11 @@ describe('EONSCAR transmission overlay', () => {
     expect(inbox).toContain('EONSCAR · ALLIED AI');
     expect(inbox).toContain('Briefing log');
     expect(inbox).toContain('NEWEST FIRST');
-    expect(inbox).toContain('OBJECTIVE COMPLETE');
-    expect(inbox).toContain('START ANALYSIS');
-    expect(inbox).toContain('SELECT FIRST TARGET');
+    expect(inbox).toContain('EONSCAR · ALLIED AI · DAY ${item.sentTick}');
+    expect(inbox).toContain('DAY ${event.tick} · ${event.kind.toUpperCase()}');
+    expect(inbox).not.toContain('WEEK ${item.sentTick}');
+    expect(inbox).toContain('.filter((item) => !isCampaignTutorialTransmissionV2(item.id))');
+    expect(inbox).toContain('ACKNOWLEDGE');
+    expect(inbox).toContain('READ');
   });
 });

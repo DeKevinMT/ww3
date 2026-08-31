@@ -19,9 +19,10 @@ import { rogueAiSurvivalActiveV2 } from './survival';
 import {
   SURVIVAL_ROGUE_WAR_CHEST_YEARS_V2,
   SURVIVAL_DAWNLINE_ARCTIC_NATION_IDS_V2,
+  prepareMultiplayerSurvivalRosterV2,
+  selectSurvivalArcticPowerBenchmarkV2,
   selectSurvivalDawnlineLeaderIdV2,
 } from './survivalEmpire';
-import { isSurvivalDawnlineNationV2 } from './survivalOrdinaryAi';
 import { nationIdV2, territoryIdV2 } from './types';
 import {
   declareWarV2,
@@ -41,7 +42,7 @@ function survival(seed = 91_001, flagship = 'bel'): WorldEngineV2 {
 }
 
 describe('Survival clean world opening', () => {
-  it('keeps Rogue in Antarctica, forms only the explicit Arctic Dawnline and preserves the world', () => {
+  it('keeps Rogue in Antarctica and folds every Arctic country into the human Empire', () => {
     const engine = survival();
     const standardContent = resolveScenarioV2({ mode: 'standard-2026', seed: 91_001 }).content;
     const standard = new WorldEngineV2(91_001, standardContent);
@@ -52,18 +53,19 @@ describe('Survival clean world opening', () => {
     expect(new Set(rogueOwned)).toEqual(antarctica);
     expect(engine.state.runProgression.scorchedWorldTerritoryIds).toEqual([]);
 
-    const dawnlineLeader = selectSurvivalDawnlineLeaderIdV2(engine.state)!;
-    expect(dawnlineLeader).toBe(nationIdV2('grl'));
-    expect(isSurvivalDawnlineNationV2(engine.state, dawnlineLeader)).toBe(true);
     const dawnlineMembers = new Set(SURVIVAL_DAWNLINE_ARCTIC_NATION_IDS_V2);
+    expect(selectSurvivalDawnlineLeaderIdV2(engine.state)).toBeUndefined();
     for (const territoryId of engine.content.territoryIds) {
       const definition = engine.content.territories[territoryId]!;
       if ((definition.kind ?? 'sovereign') !== 'sovereign') continue;
       const territory = engine.state.territories[territoryId]!;
       const expectedOwner = dawnlineMembers.has(definition.initialOwnerId as never)
-        ? dawnlineLeader : definition.initialOwnerId;
+        ? nationIdV2('bel') : definition.initialOwnerId;
       expect(territory.owner, territoryId).toBe(expectedOwner);
       expect(territory.coreOwner, territoryId).toBe(expectedOwner);
+      expect(territory.survivalBasePacket, territoryId).toBe(
+        dawnlineMembers.has(definition.initialOwnerId as never) ? true : undefined,
+      );
       expect(territory.population, territoryId)
         .toBe(standard.state.territories[territoryId]!.population);
       expect(territory.economy, territoryId)
@@ -71,9 +73,12 @@ describe('Survival clean world opening', () => {
       expect(territory.integration, territoryId).toBe(1);
       expect(territory.integrationProgram, territoryId).toBeUndefined();
     }
+    for (const nationId of SURVIVAL_DAWNLINE_ARCTIC_NATION_IDS_V2) {
+      expect(engine.state.players[nationIdV2(nationId)]).toBeUndefined();
+    }
   });
 
-  it('starts every non-Rogue sovereign at exactly 100% of live capacity', () => {
+  it('starts full members at 100% and locked Arctic Base Packets at exactly 50%', () => {
     const engine = survival(91_002);
     const human = engine.state.territories[territoryIdV2('bel')]!;
     const ordinary = engine.state.territories[territoryIdV2('nld')]!;
@@ -81,6 +86,7 @@ describe('Survival clean world opening', () => {
     expect(human.army.manpower).toBeCloseTo(human.army.capacity, 9);
     expect(ordinary.army.manpower).toBeCloseTo(ordinary.army.capacity, 9);
     expect(dawnline.army.manpower).toBeCloseTo(dawnline.army.capacity, 9);
+    expect(dawnline.survivalBasePacket).toBe(true);
 
     const standardContent = resolveScenarioV2({ mode: 'standard-2026', seed: 91_002 }).content;
     const standard = new WorldEngineV2(91_002, standardContent);
@@ -88,6 +94,8 @@ describe('Survival clean world opening', () => {
     expect(ordinary.economy).toBe(standard.state.territories[territoryIdV2('nld')]!.economy);
     expect(ordinary.army.capacity)
       .toBeCloseTo(standard.state.territories[territoryIdV2('nld')]!.army.capacity, 9);
+    expect(dawnline.army.capacity)
+      .toBeCloseTo(standard.state.territories[territoryIdV2('usa')]!.army.capacity * 0.50, 9);
   });
 
   it('lets a funded ordinary country recruit normally after peacetime losses', () => {
@@ -111,15 +119,7 @@ describe('Survival clean world opening', () => {
       reason: 'Ordinary countries do not initiate wars against human commands in Survival.',
     });
     expect(warDeclarationStatusV2(engine.state, engine.content, human, ordinary).allowed).toBe(true);
-    const dawnline = selectSurvivalDawnlineLeaderIdV2(engine.state)!;
-    expect(warDeclarationStatusV2(engine.state, engine.content, human, dawnline)).toMatchObject({
-      allowed: false,
-      reason: 'The Arctic Dawnline Accord is a protected human ally.',
-    });
-    expect(warDeclarationStatusV2(engine.state, engine.content, dawnline, ordinary)).toMatchObject({
-      allowed: false,
-      reason: 'Dawnline engages only the Rogue AI in Survival.',
-    });
+    expect(selectSurvivalDawnlineLeaderIdV2(engine.state)).toBeUndefined();
   });
 
   it('opens all three gateways and an immediate legal Rogue front from Antarctica', () => {
@@ -232,17 +232,20 @@ describe('Survival clean world opening', () => {
     expect(engine.state.runProgression.scorchedWorldTerritoryIds).not.toContain(operation.targetId);
   });
 
-  it('calibrates real Antarctic opening power to about 1.20× the full Dawnline bloc', () => {
+  it('calibrates Rogue against the all-base Arctic baseline plus half the unlock upside', () => {
     const engine = survival(91_007);
-    const dawnline = selectSurvivalDawnlineLeaderIdV2(engine.state)!;
     const roguePower = selectCurrentPowerV2(
       engine.state,
       engine.content,
       ROGUE_AI_NATION_ID_V2,
     );
-    const dawnlinePower = selectCurrentPowerV2(engine.state, engine.content, dawnline);
-    expect(roguePower / dawnlinePower).toBeGreaterThanOrEqual(1.17);
-    expect(roguePower / dawnlinePower).toBeLessThanOrEqual(1.24);
+    const benchmark = selectSurvivalArcticPowerBenchmarkV2(engine.state, engine.content);
+    expect(benchmark.rogueTargetPower).toBeCloseTo(
+      benchmark.allBasePower * 1.20 + benchmark.unlockMasteryExtraPower * 0.50,
+      8,
+    );
+    expect(roguePower / benchmark.rogueTargetPower).toBeGreaterThanOrEqual(0.98);
+    expect(roguePower / benchmark.rogueTargetPower).toBeLessThanOrEqual(1.02);
   });
 
   it('funds a finite dynamic Rogue war chest with at least five years left after year one', () => {
@@ -276,22 +279,71 @@ describe('Survival clean world opening', () => {
     ) * 52;
     expect(rogue.treasury).toBeGreaterThan(0);
     expect(rogue.treasury / annualBasisAfter).toBeGreaterThanOrEqual(5);
-  });
+  }, 15_000);
 
-  it('uses Greenland as founder-controller unless Greenland is a human command', () => {
+  it('never creates a separate Greenland controller and keeps the selected Arctic flagship full', () => {
     const founded = survival(91_008, 'bel');
-    expect(selectSurvivalDawnlineLeaderIdV2(founded.state)).toBe(nationIdV2('grl'));
+    expect(selectSurvivalDawnlineLeaderIdV2(founded.state)).toBeUndefined();
+    expect(founded.state.territories[territoryIdV2('grl')]).toMatchObject({
+      owner: nationIdV2('bel'),
+      survivalBasePacket: true,
+    });
 
     const greenland = survival(91_009, 'grl');
-    const coordinator = selectSurvivalDawnlineLeaderIdV2(greenland.state)!;
-    expect(coordinator).toBe(nationIdV2('usa'));
-    expect(greenland.state.territories[territoryIdV2('grl')]!.owner).toBe(nationIdV2('grl'));
+    expect(selectSurvivalDawnlineLeaderIdV2(greenland.state)).toBeUndefined();
+    expect(greenland.state.territories[territoryIdV2('grl')]).toMatchObject({
+      owner: nationIdV2('grl'),
+    });
+    expect(greenland.state.territories[territoryIdV2('grl')]!.survivalBasePacket)
+      .toBeUndefined();
+    expect(greenland.state.territories[territoryIdV2('usa')]).toMatchObject({
+      owner: nationIdV2('grl'),
+      survivalBasePacket: true,
+    });
+    expect(greenland.state.players[nationIdV2('usa')]).toBeUndefined();
     expect(greenland.state.alliances.some((alliance) => (
-      new Set([alliance.leftId, alliance.rightId]).has(nationIdV2('grl'))
-        && new Set([alliance.leftId, alliance.rightId]).has(coordinator)
-    ))).toBe(true);
+      alliance.leftId === nationIdV2('grl') || alliance.rightId === nationIdV2('grl')
+    ))).toBe(false);
     expect(greenland.state.events.some((event) => (
-      event.message.includes('Greenland-founded Arctic Dawnline')
+      event.message.includes('no separate NPC bloc deploys')
     ))).toBe(true);
+  });
+
+  it('keeps selected co-op countries sovereign and merges unselected Arctic packets into the host', () => {
+    const seed = 91_012;
+    const { content } = resolveScenarioV2({ mode: 'survival', seed });
+    const engine = new WorldEngineV2(seed, content);
+    const host = nationIdV2('bel');
+    const arcticGuest = nationIdV2('usa');
+    expect(engine.chooseCountry(host)).toEqual({ accepted: true });
+    expect(engine.configureHumanPlayers([host, arcticGuest], host)).toEqual({ accepted: true });
+
+    const prepared = prepareMultiplayerSurvivalRosterV2(
+      engine.state,
+      engine.content,
+      [host, arcticGuest],
+    );
+    expect(prepared).toMatchObject({
+      accepted: true,
+      dawnlineLeaderId: undefined,
+    });
+    expect(engine.state.humanPlayerIds).toEqual([host, arcticGuest].sort());
+    expect(engine.state.players[arcticGuest]).toBeDefined();
+    expect(engine.state.territories[territoryIdV2('usa')]).toMatchObject({
+      owner: arcticGuest,
+      coreOwner: arcticGuest,
+    });
+    expect(engine.state.territories[territoryIdV2('usa')]!.survivalBasePacket).toBeUndefined();
+    expect(engine.state.territories[territoryIdV2('can')]).toMatchObject({
+      owner: host,
+      coreOwner: host,
+      survivalBasePacket: true,
+    });
+    expect(engine.state.players[nationIdV2('can')]).toBeUndefined();
+    expect(selectSurvivalDawnlineLeaderIdV2(engine.state)).toBeUndefined();
+    expect(engine.state.alliances.some((alliance) => (
+      alliance.leftId === host || alliance.rightId === host
+        || alliance.leftId === arcticGuest || alliance.rightId === arcticGuest
+    ))).toBe(false);
   });
 });

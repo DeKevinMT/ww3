@@ -1616,7 +1616,7 @@ export function initializeCommanderForceV2(
   input: CommanderForceInitializationV2,
 ): CommandResultV2 {
   state.commanderForces ??= {};
-  if (state.tick !== 0) return { accepted: false, reason: 'EONSCAR neural-dome setup is locked after week zero.' };
+  if (state.tick !== 0) return { accepted: false, reason: 'EONSCAR neural-dome setup is locked after day zero.' };
   if (!isHumanPlayerV2(state, playerId) || !state.players[playerId]) {
     return { accepted: false, reason: 'EONSCAR neural-dome setup requires a living human-controlled country.' };
   }

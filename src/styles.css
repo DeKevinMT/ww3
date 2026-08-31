@@ -10878,3 +10878,247 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
   .world-ui-v2 .survival-contact-fast-forward button,
   .world-ui-v2 .survival-contact-fast-forward__speed { min-height: 27px; padding: 0 7px; }
 }
+
+/* Active Research · one readable Empire Blueprint instead of ten passive bars. */
+.world-ui-v2 .research-command.command-drawer--unified {
+  width: min(760px, calc(100vw - 24px));
+  --panel-accent: #b59cff;
+}
+.world-ui-v2 .top-metric--research.is-actionable {
+  background: linear-gradient(145deg, rgba(181, 156, 255, .17), rgba(12, 27, 41, .68));
+  box-shadow: inset 0 -2px rgba(201, 181, 255, .7), 0 0 18px rgba(181, 156, 255, .10);
+}
+.world-ui-v2 .top-metric--research.is-actionable strong { color: #e3d7ff; font-size: 13px; }
+.world-ui-v2 .top-metric--research.is-idle strong { color: #baaed0; font-size: 13px; }
+.world-ui-v2 .research-blueprint-hero {
+  margin: 2px 0 10px;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--project) 30%, rgba(255,255,255,.06));
+  border-left: 3px solid var(--project);
+  border-radius: 11px;
+  background:
+    radial-gradient(circle at 0 0, color-mix(in srgb, var(--project) 13%, transparent), transparent 48%),
+    linear-gradient(145deg, rgba(10, 26, 40, .94), rgba(5, 16, 27, .78));
+}
+.world-ui-v2 .research-blueprint-hero > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.world-ui-v2 .research-blueprint-hero > header span,
+.world-ui-v2 .research-blueprint-hero > header b {
+  color: color-mix(in srgb, var(--project) 80%, #dbe7e9);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: .8px;
+}
+.world-ui-v2 .research-blueprint-hero h3 {
+  margin: 7px 0 4px;
+  color: #f2f7f8;
+  font-size: 20px;
+  line-height: 1.15;
+}
+.world-ui-v2 .research-blueprint-hero > p {
+  max-width: 640px;
+  margin: 0;
+  color: #9db1b7;
+  font-size: 11px;
+  line-height: 1.45;
+}
+.world-ui-v2 .research-blueprint-hero > i {
+  height: 7px;
+  margin-top: 11px;
+  display: block;
+  overflow: hidden;
+  border-radius: 99px;
+  background: rgba(255,255,255,.07);
+}
+.world-ui-v2 .research-blueprint-hero > i > b {
+  height: 100%;
+  display: block;
+  border-radius: inherit;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--project) 66%, #7fe2ec), var(--project));
+  box-shadow: 0 0 12px color-mix(in srgb, var(--project) 45%, transparent);
+}
+.world-ui-v2 .research-blueprint-hero > footer {
+  margin-top: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.world-ui-v2 .research-blueprint-hero > footer > span { color: #9db1b7; font-size: 10px; }
+.world-ui-v2 .research-surge-button { min-height: 34px; padding: 0 10px; font-size: 9px; }
+.world-ui-v2 .research-blueprint-hero.is-ready {
+  border-color: color-mix(in srgb, var(--project) 54%, rgba(255,255,255,.08));
+  box-shadow: inset 0 0 22px color-mix(in srgb, var(--project) 6%, transparent);
+}
+.world-ui-v2 .research-choice-grid {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.world-ui-v2 .research-choice-card {
+  --effect-accent: #b59cff;
+  min-width: 0;
+  min-height: 148px;
+  padding: 10px;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  grid-template-rows: 1fr auto;
+  gap: 8px;
+  border: 1px solid color-mix(in srgb, var(--effect-accent) 28%, rgba(255,255,255,.07));
+  border-radius: 9px;
+  color: inherit;
+  background: linear-gradient(145deg, color-mix(in srgb, var(--effect-accent) 8%, transparent), rgba(4,15,25,.62));
+  text-align: left;
+  cursor: pointer;
+  transition: border-color .16s ease, background .16s ease, transform .16s ease;
+}
+.world-ui-v2 .research-choice-card:hover,
+.world-ui-v2 .research-choice-card:focus-visible {
+  border-color: color-mix(in srgb, var(--effect-accent) 72%, white 4%);
+  background: linear-gradient(145deg, color-mix(in srgb, var(--effect-accent) 14%, transparent), rgba(4,15,25,.76));
+  outline: none;
+  transform: translateY(-1px);
+}
+.world-ui-v2 .research-choice-card > i {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--effect-accent);
+  background: color-mix(in srgb, var(--effect-accent) 13%, rgba(5,15,24,.9));
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 900;
+}
+.world-ui-v2 .research-choice-card > span { min-width: 0; display: flex; flex-direction: column; }
+.world-ui-v2 .research-choice-card small { color: #8ea6ac; font-size: 8px; font-weight: 850; letter-spacing: .45px; }
+.world-ui-v2 .research-choice-card strong { margin-top: 3px; color: #edf6f7; font-size: 13px; line-height: 1.2; }
+.world-ui-v2 .research-choice-card p { margin: 5px 0 7px; color: #94a9af; font-size: 9px; line-height: 1.4; }
+.world-ui-v2 .research-choice-card span > b { margin-top: auto; color: var(--effect-accent); font-size: 9px; line-height: 1.35; }
+.world-ui-v2 .research-choice-card > em {
+  grid-column: 1 / -1;
+  min-height: 27px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  color: #eff9fa;
+  background: color-mix(in srgb, var(--effect-accent) 22%, rgba(8,25,37,.9));
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 900;
+  letter-spacing: .7px;
+}
+.world-ui-v2 .research-choice-card--combat { --effect-accent: #ff877d; }
+.world-ui-v2 .research-choice-card--defence { --effect-accent: #78bff1; }
+.world-ui-v2 .research-choice-card--force { --effect-accent: #e9ad72; }
+.world-ui-v2 .research-choice-card--people { --effect-accent: #e09de8; }
+.world-ui-v2 .research-choice-card--research { --effect-accent: #9d9cf5; }
+.world-ui-v2 .research-choice-card--economy { --effect-accent: #66ddb5; }
+.world-ui-v2 .research-blueprint { margin: 10px 0; display: grid; gap: 8px; }
+.world-ui-v2 .research-blueprint > header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 2px;
+}
+.world-ui-v2 .research-blueprint > header span { color: #cbb9f5; font-size: 10px; font-weight: 900; letter-spacing: .75px; }
+.world-ui-v2 .research-blueprint > header small { color: #80979e; font-size: 9px; }
+.world-ui-v2 .research-pillar {
+  padding: 9px;
+  border: 1px solid rgba(132, 177, 191, .13);
+  border-radius: 10px;
+  background: rgba(5, 18, 29, .43);
+}
+.world-ui-v2 .research-pillar > header {
+  margin-bottom: 7px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.world-ui-v2 .research-pillar > header > i {
+  width: 29px;
+  height: 29px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(181,156,255,.25);
+  border-radius: 7px;
+  color: #c8b5fa;
+  background: rgba(181,156,255,.08);
+  font-size: 8px;
+  font-style: normal;
+  font-weight: 900;
+}
+.world-ui-v2 .research-pillar > header > div { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.world-ui-v2 .research-pillar > header strong { color: #e8f1f2; font-size: 11px; }
+.world-ui-v2 .research-pillar > header small { color: #829aa1; font-size: 9px; }
+.world-ui-v2 .research-pillar > div {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+.world-ui-v2 .research-program-card {
+  min-width: 0;
+  padding: 10px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  border: 1px solid color-mix(in srgb, var(--project) 18%, rgba(255,255,255,.06));
+  border-radius: 8px;
+  background: linear-gradient(145deg, color-mix(in srgb, var(--project) 4%, transparent), rgba(7,20,31,.62));
+}
+.world-ui-v2 .research-program-card.is-active,
+.world-ui-v2 .research-program-card.is-ready { border-color: color-mix(in srgb, var(--project) 55%, rgba(255,255,255,.08)); }
+.world-ui-v2 .research-program-card.is-active { box-shadow: inset 3px 0 var(--project); }
+.world-ui-v2 .research-program-card > header { display: contents; }
+.world-ui-v2 .research-program-card > header span { color: color-mix(in srgb, var(--project) 72%, #aebfc3); font-size: 8px; font-weight: 900; letter-spacing: .55px; }
+.world-ui-v2 .research-program-card > header b { color: var(--project); font-size: 10px; }
+.world-ui-v2 .research-program-card h4 { grid-column: 1 / -1; margin: 4px 0 3px; color: #e9f2f3; font-size: 12px; }
+.world-ui-v2 .research-program-card p { grid-column: 1 / -1; margin: 0; color: #8fa5ab; font-size: 9px; line-height: 1.38; }
+.world-ui-v2 .research-program-card > small { grid-column: 1 / -1; min-height: 26px; margin-top: 6px; color: #718b93; font-size: 8px; line-height: 1.35; }
+.world-ui-v2 .research-program-card > i {
+  grid-column: 1 / -1;
+  height: 4px;
+  margin: 8px 0;
+  overflow: hidden;
+  border-radius: 99px;
+  background: rgba(255,255,255,.06);
+}
+.world-ui-v2 .research-program-card > i > b { height: 100%; display: block; border-radius: inherit; background: var(--project); }
+.world-ui-v2 .research-program-card > button {
+  grid-column: 1 / -1;
+  min-height: 30px;
+  border: 1px solid color-mix(in srgb, var(--project) 32%, rgba(255,255,255,.05));
+  border-radius: 6px;
+  color: color-mix(in srgb, var(--project) 80%, #eef7f8);
+  background: color-mix(in srgb, var(--project) 8%, rgba(5,16,27,.8));
+  font-size: 8px;
+  font-weight: 900;
+  letter-spacing: .65px;
+  cursor: pointer;
+}
+.world-ui-v2 .research-program-card > button:not(:disabled):hover,
+.world-ui-v2 .research-program-card > button:not(:disabled):focus-visible {
+  border-color: color-mix(in srgb, var(--project) 68%, white 4%);
+  background: color-mix(in srgb, var(--project) 17%, rgba(5,16,27,.8));
+  outline: none;
+}
+.world-ui-v2 .research-program-card > button:disabled { cursor: default; opacity: .76; }
+.world-ui-v2 .research-program-card.is-ready > button { color: #f1eaff; background: color-mix(in srgb, var(--project) 19%, rgba(5,16,27,.8)); }
+.world-ui-v2 .research-program-card.is-maxed { opacity: .62; }
+.world-ui-v2 .research-special-lane .research-next-card { margin: 0; }
+
+@media (max-width: 720px) {
+  .world-ui-v2 .research-command.command-drawer--unified { width: calc(100vw - 16px); }
+  .world-ui-v2 .research-choice-grid { grid-template-columns: 1fr; }
+  .world-ui-v2 .research-choice-card { min-height: 0; }
+  .world-ui-v2 .research-pillar > div { grid-template-columns: 1fr; }
+  .world-ui-v2 .research-blueprint-hero h3 { font-size: 17px; }
+  .world-ui-v2 .research-blueprint-hero > footer { align-items: stretch; flex-direction: column; }
+  .world-ui-v2 .research-surge-button { width: 100%; }
+}

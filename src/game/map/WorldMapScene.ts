@@ -81,8 +81,7 @@ import {
 } from './three/globeTerritoryPresentation';
 import {
   AUTHORED_NAVAL_GATEWAY_PRESENTATION_ROUTES,
-  NAVAL_GATEWAY_PRESENTATION_STYLE,
-  navalGatewayRouteEmphasized,
+  resolveNavalGatewayRoutePresentation,
 } from './navalGatewayPresentation';
 import {
   APEX_INTELLIGENCE_FOG_STYLE,
@@ -3352,31 +3351,35 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
     const graphics = this.routeGraphics;
     if (!graphics) return;
     const zoom = this.cameras.main.zoom;
+    const routePresentations = AUTHORED_NAVAL_GATEWAY_PRESENTATION_ROUTES.map((route) => ({
+      route,
+      presentation: resolveNavalGatewayRoutePresentation(
+        route,
+        this.mapState,
+        this.hoveredId,
+        this.selection.sourceId,
+        this.selection.targetId,
+      ),
+    }));
     const signature = [
       Math.round(zoom * 1_000),
-      this.hoveredId ?? '',
-      this.selection.sourceId ?? '',
-      this.selection.targetId ?? '',
+      ...routePresentations.map(({ route, presentation }) => [
+        route.id,
+        presentation.activity,
+        presentation.emphasized ? 1 : 0,
+        presentation.activePulse,
+      ].join(':')),
     ].join(':');
     if (signature === this.gatewayRoutePresentationSignature) return;
     this.gatewayRoutePresentationSignature = signature;
     graphics.clear();
-    for (const route of AUTHORED_NAVAL_GATEWAY_PRESENTATION_ROUTES) {
-      const emphasized = navalGatewayRouteEmphasized(
-        route,
-        this.hoveredId,
-        this.selection.sourceId,
-        this.selection.targetId,
-      );
-      graphics.lineStyle(
-        this.screenWorldSize(emphasized
-          ? NAVAL_GATEWAY_PRESENTATION_STYLE.emphasizedWidthPx
-          : NAVAL_GATEWAY_PRESENTATION_STYLE.widthPx),
-        emphasized
-          ? NAVAL_GATEWAY_PRESENTATION_STYLE.emphasizedColor
-          : NAVAL_GATEWAY_PRESENTATION_STYLE.color,
-        emphasized ? 0.36 : NAVAL_GATEWAY_PRESENTATION_STYLE.opacity,
-      );
+    const drawRoutePass = (
+      route: (typeof AUTHORED_NAVAL_GATEWAY_PRESENTATION_ROUTES)[number],
+      widthPx: number,
+      color: number,
+      opacity: number,
+    ): void => {
+      graphics.lineStyle(this.screenWorldSize(widthPx), color, opacity);
       for (const [start, end] of route.dashedSegments) {
         // Canonical samples are unwrapped for dateline-safe curves. Three
         // copies remain one Phaser Graphics batch and only the visible copy is
@@ -3385,6 +3388,20 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
           graphics.lineBetween(start.x + shift, start.y, end.x + shift, end.y);
         }
       }
+    };
+    for (const { route, presentation } of routePresentations) {
+      drawRoutePass(
+        route,
+        presentation.glowWidthPx,
+        presentation.glowColor,
+        presentation.glowOpacity,
+      );
+      drawRoutePass(
+        route,
+        presentation.widthPx,
+        presentation.color,
+        presentation.opacity,
+      );
     }
   }
 

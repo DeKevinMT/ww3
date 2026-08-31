@@ -5,7 +5,6 @@ import {
   countryFlagAssetUrl,
   countryFlagHtml,
   CUSTOM_FLAG_NATION_IDS,
-  DAWNLINE_ACCORD_FLAG_NATION_ID,
 } from './countryFlags';
 
 describe('country flag assets', () => {
@@ -25,16 +24,6 @@ describe('country flag assets', () => {
     expect(countryFlagHtml('unknown', '◇')).toBe(
       '<span class="country-flag__fallback">◇</span>',
     );
-  });
-
-  it('gives Dawnline one bundled alliance flag distinct from human and Rogue identities', () => {
-    const asset = countryFlagAsset(DAWNLINE_ACCORD_FLAG_NATION_ID);
-    expect(asset?.loader).toBe('svg');
-    expect(asset?.url).toContain('dawnline-accord-flag.svg');
-    expect(asset?.url).not.toBe(countryFlagAssetUrl('rai'));
-    expect(CUSTOM_FLAG_NATION_IDS).toContain(DAWNLINE_ACCORD_FLAG_NATION_ID);
-    expect(countryFlagHtml(DAWNLINE_ACCORD_FLAG_NATION_ID, 'DAWN', true))
-      .toContain('<img src=');
   });
 
   it('preloads custom raster flags with the correct Phaser loader', () => {

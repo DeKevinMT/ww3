@@ -36,6 +36,8 @@ import { nationIdV2, territoryIdV2 } from './types';
 const LEGACY_CONTENT_VERSION_V16 = 'natural-earth-countries-2026-v6-naval';
 const LEGACY_RULES_VERSION_V22_76 = 'frontier-command-v2.76-logistics-readiness';
 const LEGACY_RULES_VERSION_V22_77 = 'frontier-command-v2.77-apex-shield-multipliers';
+const LEGACY_RULES_VERSION_V22_78 = 'frontier-command-v2.78-rogue-perimeter-balance';
+const LEGACY_RULES_VERSION_V22_79 = 'frontier-command-v2.79-active-research';
 
 function removeSchema22Fields(save: Record<string, any>): void {
   delete save.commanderForces;
@@ -482,7 +484,7 @@ describe('V2 legacy save migration', () => {
     expect(createSaveV2(reloaded, WORLD_CONTENT_V2)).toEqual(current);
   });
 
-  it('extends authenticated twenty-year opening pools to thirty years without granting manpower', () => {
+  it('extends authenticated legacy opening pools to 1,560 daily ticks without granting manpower', () => {
     const greenland = nationIdV2('grl');
     const state = createWorldStateV2(8_642);
     synchronizeOpeningArmyHumanRosterV2(
@@ -1358,7 +1360,7 @@ describe('V2 legacy save migration', () => {
     expect(createSaveV2(loadSaveV2(resaved, content), content)).toEqual(resaved);
   });
 
-  it('round-trips current v2.78 Antarctic saves idempotently without legacy redistribution', () => {
+  it('round-trips current v2.80 Antarctic saves idempotently without legacy redistribution', () => {
     const content = resolveScenarioV2({ mode: 'survival', seed: 97_604 }).content;
     const current = structuredClone(createSaveV2(
       createWorldStateV2(97_604, content),
@@ -1385,6 +1387,75 @@ describe('V2 legacy save migration', () => {
     expect(resaved).toEqual(current);
   });
 
+  it('authenticates v2.79 and preserves active research plus every tick deadline without x7 scaling', () => {
+    const state = createWorldStateV2(97_610, WORLD_CONTENT_V2);
+    const playerId = nationIdV2('bel');
+    const rivalId = nationIdV2('nld');
+    state.tick = 91;
+    state.players[playerId]!.research.activeProgram = 'logistics-medicine';
+    state.players[playerId]!.rapidRecruitmentAvailableTick = 121;
+    state.players[playerId]!.researchSurgeAvailableTick = 173;
+    state.players[playerId]!.propagandaAvailableTick = 195;
+    state.players[playerId]!.propagandaProgram = {
+      startedTick: 80,
+      endsTick: 132,
+      totalSuspicionReduction: 12,
+      weeklySuspicionReduction: round(12 / 52, 12),
+    };
+    state.truces = [{
+      leftId: playerId,
+      rightId: rivalId,
+      expiresTick: 211,
+    }];
+    synchronizeArmyCapacityV2(state, WORLD_CONTENT_V2);
+
+    const legacy = structuredClone(createSaveV2(
+      state,
+      WORLD_CONTENT_V2,
+    )) as Record<string, any>;
+    legacy.rulesVersion = LEGACY_RULES_VERSION_V22_79;
+    legacy.canonicalStateHash = canonicalStateHashV2(legacy);
+
+    const tampered = structuredClone(legacy);
+    tampered.tick *= 7;
+    expect(() => loadSaveV2(tampered as never, WORLD_CONTENT_V2))
+      .toThrow(/hash mismatch/i);
+
+    const loaded = loadSaveV2(legacy as never, WORLD_CONTENT_V2);
+    const resaved = createSaveV2(loaded, WORLD_CONTENT_V2);
+
+    expect(loaded.rulesVersion).toBe(V2_RULES_VERSION);
+    expect(loaded.tick).toBe(91);
+    expect(loaded.players[playerId]!.research.activeProgram).toBe('logistics-medicine');
+    expect(loaded.players[playerId]).toMatchObject({
+      rapidRecruitmentAvailableTick: 121,
+      researchSurgeAvailableTick: 173,
+      propagandaAvailableTick: 195,
+      propagandaProgram: {
+        startedTick: 80,
+        endsTick: 132,
+      },
+    });
+    expect(loaded.truces).toEqual([{
+      leftId: playerId,
+      rightId: rivalId,
+      expiresTick: 211,
+    }]);
+    expect(resaved.rulesVersion).toBe(V2_RULES_VERSION);
+    expect(resaved.tick).toBe(legacy.tick);
+    expect(resaved.players[playerId]!.research.activeProgram)
+      .toBe(legacy.players[playerId].research.activeProgram);
+    expect(resaved.players[playerId]!.rapidRecruitmentAvailableTick)
+      .toBe(legacy.players[playerId].rapidRecruitmentAvailableTick);
+    expect(resaved.players[playerId]!.researchSurgeAvailableTick)
+      .toBe(legacy.players[playerId].researchSurgeAvailableTick);
+    expect(resaved.players[playerId]!.propagandaAvailableTick)
+      .toBe(legacy.players[playerId].propagandaAvailableTick);
+    expect(resaved.players[playerId]!.propagandaProgram)
+      .toEqual(legacy.players[playerId].propagandaProgram);
+    expect(resaved.truces).toEqual(legacy.truces);
+  });
+
   it('redistributes authenticated pre-contact Campaign v2.77 saves before first Antarctic contact', () => {
     const state = createWorldStateV2(97_605, WORLD_CONTENT_V2);
     const weightedShares = antarcticWeightShareByTerritory(WORLD_CONTENT_V2);
@@ -1406,5 +1477,90 @@ describe('V2 legacy save migration', () => {
         9,
       );
     }
+  });
+
+  it('authenticates v2.78 before deterministically migrating the highest allocation to active research', () => {
+    const state = createWorldStateV2(97_606, WORLD_CONTENT_V2);
+    const playerId = nationIdV2('bel');
+    state.rngState = 123_456_789;
+    state.actionSequence = 7;
+    state.players[playerId]!.treasury = 321.75;
+    state.players[playerId]!.research.allocations = {
+      'population-recruitment': 20,
+      'military-industry': 40,
+      'advanced-weapons': 40,
+      'defensive-systems': 0,
+      'logistics-medicine': 0,
+      'economy-science': 0,
+      'food-systems': 0,
+      'reserve-doctrine': 0,
+      'public-administration': 0,
+      'education-intelligence': 0,
+    };
+    const legacy = structuredClone(createSaveV2(state, WORLD_CONTENT_V2)) as Record<string, any>;
+    legacy.rulesVersion = LEGACY_RULES_VERSION_V22_78;
+    for (const nation of Object.values(legacy.players) as Array<Record<string, any>>) {
+      delete nation.research.activeProgram;
+    }
+    legacy.canonicalStateHash = canonicalStateHashV2(legacy);
+    const tampered = structuredClone(legacy);
+    tampered.players[playerId].research.allocations['military-industry'] = 39;
+    expect(() => loadSaveV2(tampered as never, WORLD_CONTENT_V2)).toThrow(/hash mismatch/i);
+
+    const loaded = loadSaveV2(legacy as never, WORLD_CONTENT_V2);
+    const resaved = createSaveV2(loaded, WORLD_CONTENT_V2);
+    const reloaded = loadSaveV2(resaved, WORLD_CONTENT_V2);
+
+    expect(loaded.rulesVersion).toBe(V2_RULES_VERSION);
+    expect(loaded.players[playerId]!.research.activeProgram).toBe('military-industry');
+    expect(loaded.tick).toBe(0);
+    expect(loaded.rngState).toBe(123_456_789);
+    expect(loaded.actionSequence).toBe(7);
+    expect(loaded.players[playerId]!.treasury).toBe(321.75);
+    expect(createSaveV2(reloaded, WORLD_CONTENT_V2)).toEqual(resaved);
+  });
+
+  it('rejects missing or malformed active research in rehashed current saves', () => {
+    const missing = structuredClone(createSaveV2(
+      createWorldStateV2(97_607), WORLD_CONTENT_V2,
+    )) as Record<string, any>;
+    delete missing.players.bel.research.activeProgram;
+    missing.canonicalStateHash = canonicalStateHashV2(missing);
+    expect(() => loadSaveV2(missing as never, WORLD_CONTENT_V2))
+      .toThrow(/research|active research/i);
+
+    const malformed = structuredClone(createSaveV2(
+      createWorldStateV2(97_608), WORLD_CONTENT_V2,
+    )) as Record<string, any>;
+    malformed.players.bel.research.activeProgram = 'forged-program';
+    malformed.canonicalStateHash = canonicalStateHashV2(malformed);
+    expect(() => loadSaveV2(malformed as never, WORLD_CONTENT_V2))
+      .toThrow(/active research/i);
+
+    const preseededLegacy = structuredClone(createSaveV2(
+      createWorldStateV2(976_081), WORLD_CONTENT_V2,
+    )) as Record<string, any>;
+    preseededLegacy.rulesVersion = LEGACY_RULES_VERSION_V22_78;
+    preseededLegacy.canonicalStateHash = canonicalStateHashV2(preseededLegacy);
+    expect(() => loadSaveV2(preseededLegacy as never, WORLD_CONTENT_V2))
+      .toThrow(/non-canonical research state/i);
+  });
+
+  it('keeps a created save immutable when live research changes afterwards', () => {
+    const state = createWorldStateV2(97_609, WORLD_CONTENT_V2);
+    const playerId = nationIdV2('bel');
+    state.players[playerId]!.research.activeProgram = 'military-industry';
+    const save = createSaveV2(state, WORLD_CONTENT_V2);
+    const savedResearch = structuredClone(save.players[playerId]!.research);
+
+    state.players[playerId]!.research.activeProgram = 'economy-science';
+    state.players[playerId]!.research.allocations['military-industry'] = 0;
+    state.players[playerId]!.research.allocations['economy-science'] = 100;
+    state.players[playerId]!.research.progress['military-industry'] += 7;
+    state.players[playerId]!.research.effectLevels.attack += 2;
+    state.players[playerId]!.research.breakthroughs['advanced-weapons'] += 1;
+
+    expect(save.players[playerId]!.research).toEqual(savedResearch);
+    expect(canonicalStateHashV2(save)).toBe(save.canonicalStateHash);
   });
 });

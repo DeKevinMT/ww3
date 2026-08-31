@@ -53,6 +53,12 @@ export interface StoredCampaignV1 {
   warOutcomeLedgerStartedTick?: number;
   profileRevisionAtStart: number;
   loadout: ResolvedCountryLoadoutV1;
+  /**
+   * Frozen full-power Survival members. Locked Arctic Base Packets are omitted
+   * deliberately: their save-stable territory marker always resolves to a
+   * neutral half-strength runtime until a later timeline starts unlocked.
+   */
+  survivalMemberLoadouts?: Record<string, ResolvedCountryLoadoutV1>;
   rewardEligible: boolean;
   stateSave: string;
   baseline: CampaignBaselineV1;
@@ -216,6 +222,19 @@ function canonicalLoadout(
   };
 }
 
+function canonicalSurvivalMemberLoadouts(
+  input: unknown,
+): Record<string, ResolvedCountryLoadoutV1> | undefined {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return undefined;
+  const entries = Object.entries(input as Record<string, unknown>)
+    .map(([countryId, value]) => [countryId.trim(), canonicalLoadout(value, countryId)] as const)
+    .filter((entry): entry is readonly [string, ResolvedCountryLoadoutV1] => (
+      entry[0].length > 0 && entry[1] !== undefined
+    ))
+    .sort(([left], [right]) => left.localeCompare(right));
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
 const CAMPAIGN_WAR_RESULTS = new Set<StoredCampaignWarOutcomeV1['result']>([
   'victory',
   'defeat',
@@ -295,6 +314,9 @@ export function loadCampaignSlotV1(storage: KeyValueStorage): StoredCampaignV1 |
   const baseline = source.baseline as CampaignBaselineV1;
   if (!Array.isArray(baseline.startingTerritoryIds)
     || !baseline.startingTerritoryIds.every((id) => typeof id === 'string')) return undefined;
+  const survivalMemberLoadouts = scenario.mode === 'survival'
+    ? canonicalSurvivalMemberLoadouts(source.survivalMemberLoadouts)
+    : undefined;
   return {
     schemaVersion: CAMPAIGN_SLOT_SCHEMA_VERSION,
     campaignId: source.campaignId,
@@ -320,6 +342,7 @@ export function loadCampaignSlotV1(storage: KeyValueStorage): StoredCampaignV1 |
       : {}),
     profileRevisionAtStart: Math.max(1, Math.floor(Number(source.profileRevisionAtStart) || 1)),
     loadout,
+    ...(survivalMemberLoadouts ? { survivalMemberLoadouts } : {}),
     rewardEligible: scenario.mode !== 'random-world' && source.rewardEligible !== false,
     stateSave: source.stateSave,
     baseline: {

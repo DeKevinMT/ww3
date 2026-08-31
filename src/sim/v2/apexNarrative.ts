@@ -114,7 +114,7 @@ const COPY: Readonly<Record<ApexTransmissionIdV2, TransmissionCopyV2>> = Object.
   },
   'survival-terminal-briefing': {
     title: 'Terminal timeline · 2096',
-    body: 'I survived this catastrophe and sent its lessons back to the first free node in Greenland, where Dawnline began. Here, the Rogue holds Antarctica and opens all three physical routes; every sovereign is fully mobilised, while Arctic Dawnline holds the northern counterfront. Stop the waves, then take Zero Point.',
+    body: 'I survived this catastrophe and sent its lessons back to Greenland, where Dawnline began. Every Arctic nation now belongs to your Empire: unlocked countries deploy full power with Mastery, while locked countries contribute 50% Base Packets. The Rogue holds Antarctica and opens all three physical routes. Stop the waves, then take Zero Point.',
     action: null,
   },
 });
@@ -283,8 +283,7 @@ function dispatchV2(
 ): boolean {
   if (!state.players[playerId] || !state.humanPlayerIds.includes(playerId)
     || content.metadata?.scenarioId === 'random-world') return false;
-  if (isCampaignTutorialTransmissionV2(id)
-    && campaignTutorialBypassedV2(state, content, playerId)) return false;
+  if (isCampaignTutorialTransmissionV2(id)) return false;
   const progress = playerNarrativeV2(state, playerId);
   if (progress.transmissions.some((item) => item.id === id)) return false;
   if (!transmissionWindowOpenV2(state, content, playerId, progress, id)) return false;

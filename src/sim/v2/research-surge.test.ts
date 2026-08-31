@@ -11,12 +11,12 @@ import {
   invalidateTerritoryIndexV2,
   selectResearchPortfolioV2,
   selectResearchSurgeTermsV2,
+  selectWeeklyFinanceBreakdownV2,
 } from './selectors';
 import { WorldEngineV2 } from './WorldEngineV2';
 import {
   nationIdV2,
   territoryIdV2,
-  type ResearchAllocationsV2,
   type ResearchBranchV2,
 } from './types';
 
@@ -24,23 +24,11 @@ const bel = nationIdV2('bel');
 const lux = nationIdV2('lux');
 const luxTerritory = territoryIdV2('lux');
 const targetBranch: ResearchBranchV2 = 'defensive-systems';
-const focusedAllocations: ResearchAllocationsV2 = {
-  'population-recruitment': 0,
-  'military-industry': 0,
-  'advanced-weapons': 100,
-  'defensive-systems': 0,
-  'logistics-medicine': 0,
-  'economy-science': 0,
-  'food-systems': 0,
-  'reserve-doctrine': 0,
-  'public-administration': 0,
-  'education-intelligence': 0,
-};
-
 function belgiumState(seed: number) {
   const state = createWorldStateV2(seed, WORLD_CONTENT_V2);
   state.humanPlayerId = bel;
   state.wars = [];
+  state.players[bel].research.activeProgram = targetBranch;
   return state;
 }
 
@@ -53,7 +41,10 @@ describe('targeted Research Surge', () => {
     expect(terms.targetBranch).toBe(targetBranch);
     expect(terms.progressWeeks).toBe(RESEARCH_SURGE_PROGRESS_WEEKS);
     expect(terms.progressWeeks).toBe(52);
-    expect(terms.progressAdded).toBe(round(selected.weeklyProgress * 52));
+    expect(terms.progressAdded).toBe(round(Math.min(
+      selected.nextCost - selected.progress,
+      selected.weeklyProgress * 52,
+    )));
     expect(terms.empireScale).toBeGreaterThanOrEqual(1);
     expect(terms.cost).toBe(terms.baseCost);
   });
@@ -85,12 +76,15 @@ describe('targeted Research Surge', () => {
   it('queues the chosen program, advances no other program, and starts a 208-week cooldown', () => {
     const surgeState = belgiumState(2_404);
     surgeState.players[bel].treasury = 1_000_000;
-    surgeState.players[bel].research.allocations = { ...focusedAllocations };
     const controlState = structuredClone(surgeState);
     const engine = new WorldEngineV2(2_404, WORLD_CONTENT_V2, surgeState);
     const control = new WorldEngineV2(2_404, WORLD_CONTENT_V2, controlState);
     const terms = engine.researchSurgeTerms(bel, targetBranch);
     const treasuryBefore = engine.state.players[bel].treasury;
+    const controlResearchSpending = selectWeeklyFinanceBreakdownV2(
+      control.state, WORLD_CONTENT_V2, bel,
+    ).research;
+    expect(controlResearchSpending).toBeGreaterThan(0);
 
     expect(engine.researchSurge(bel, targetBranch)).toEqual({ accepted: true });
     expect(engine.state.players[bel].research.progress[targetBranch]).toBe(0);
@@ -102,18 +96,46 @@ describe('targeted Research Surge', () => {
     for (const branch of RESEARCH_BRANCHES) {
       const surgeProgress = engine.state.players[bel].research.progress[branch];
       const controlProgress = control.state.players[bel].research.progress[branch];
-      expect(surgeProgress - controlProgress).toBeCloseTo(
-        branch === targetBranch ? terms.progressAdded : 0,
-        8,
-      );
+      if (branch === targetBranch) {
+        expect(surgeProgress).toBeGreaterThan(controlProgress);
+        expect(surgeProgress).toBeLessThanOrEqual(
+          selectResearchPortfolioV2(surgeState, WORLD_CONTENT_V2, bel)
+            .find((program) => program.branch === targetBranch)!.nextCost,
+        );
+      } else expect(surgeProgress).toBe(controlProgress);
     }
     expect(engine.state.players[bel].manualActionUses.researchSurge).toBe(1);
     expect(engine.state.players[bel].researchSurgeAvailableTick).toBe(RESEARCH_SURGE_COOLDOWN_TICKS);
     expect(engine.state.players[bel].researchSurgeAvailableTick).toBe(208);
-    expect(engine.state.players[bel].treasury).toBeCloseTo(
-      control.state.players[bel].treasury - terms.cost,
-      6,
-    );
+    expect(selectWeeklyFinanceBreakdownV2(
+      engine.state, WORLD_CONTENT_V2, bel,
+    ).research).toBe(0);
+    const netSurgeCost = control.state.players[bel].treasury
+      - engine.state.players[bel].treasury;
+    expect(netSurgeCost).toBeGreaterThan(terms.cost - controlResearchSpending);
+    expect(netSurgeCost).toBeLessThan(terms.cost);
+  });
+
+  it('rejects inactive and ready programs and clamps a surge exactly to cost', () => {
+    const state = belgiumState(2_406);
+    state.players[bel].treasury = 1_000_000;
+    expect(selectResearchSurgeTermsV2(
+      state, WORLD_CONTENT_V2, bel, 'advanced-weapons',
+    ).reason).toMatch(/active program/i);
+
+    const row = selectResearchPortfolioV2(state, WORLD_CONTENT_V2, bel)
+      .find((program) => program.branch === targetBranch)!;
+    state.players[bel].research.progress[targetBranch] = row.nextCost - 0.001;
+    const terms = selectResearchSurgeTermsV2(state, WORLD_CONTENT_V2, bel, targetBranch);
+    expect(terms.allowed).toBe(true);
+    expect(terms.progressAdded).toBeCloseTo(0.001, 9);
+
+    const engine = new WorldEngineV2(2_406, WORLD_CONTENT_V2, state);
+    expect(engine.researchSurge(bel, targetBranch)).toEqual({ accepted: true });
+    engine.step();
+    expect(engine.state.players[bel].research.progress[targetBranch]).toBe(row.nextCost);
+    expect(engine.researchSurgeTerms(bel, targetBranch).allowed).toBe(false);
+    expect(engine.researchSurgeTerms(bel, targetBranch).reason).toMatch(/ready/i);
   });
 
   it('rejects a runtime target that is not one of the ten existing programs', () => {

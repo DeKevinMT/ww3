@@ -91,8 +91,8 @@ describe('V2 multi-front and naval balance regressions', () => {
     supplyState.players[bel].research.effectLevels.supply = 0;
     const landQuote = frontCapacitySupplyQuoteV2(supplyState, belTerritory, 'land');
     const navalQuote = frontCapacitySupplyQuoteV2(supplyState, belTerritory, 'naval');
-    expect(landQuote.capacityShare).toBe(0.08);
-    expect(navalQuote.capacityShare).toBe(0.04);
+    expect(landQuote.capacityShare).toBe(0.10);
+    expect(navalQuote.capacityShare).toBe(0.05);
     expect(navalQuote.capacityBudget).toBeCloseTo(landQuote.capacityBudget * 0.5, 9);
     expect(navalQuote.readiness).toBe(landQuote.readiness);
 

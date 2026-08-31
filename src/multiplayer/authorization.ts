@@ -33,6 +33,8 @@ export function authorizeMultiplayerCommandV2(
     case 'set-speed':
       return isRoomHost ? allowed() : rejected('Only the room host can change the shared game speed.');
     case 'set-research-allocations':
+    case 'set-research-focus':
+    case 'choose-research-breakthrough':
     case 'set-commander-priorities':
     case 'issue-commander-order':
     case 'adjust-budget':

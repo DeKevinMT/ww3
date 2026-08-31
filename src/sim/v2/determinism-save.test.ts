@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { AI_FIRST_WAR_TICK } from './balance';
 import { WorldEngineV2 } from './WorldEngineV2';
 import {
   nationalArmyCapacityTargetV2,
@@ -108,15 +107,13 @@ describe('V2 deterministic ticks, queues and saves', () => {
     expect(resumed.canonicalHash()).toBe(engine.canonicalHash());
   });
 
-  it('keeps a multi-seed 60-week soak invariant-safe and blocks early AI wars', () => {
+  it('keeps a multi-seed 40-day soak invariant-safe with the live opening threat model', () => {
     for (const seed of [201, 202]) {
       const engine = new WorldEngineV2(seed);
-      engine.step(AI_FIRST_WAR_TICK - 1);
-      // Seed-varied opening conflicts unfold during year one, but no ordinary
-      // autonomous AI war may bypass the configured opening gate.
-      expect(engine.state.wars.every((war) => war.startedTick < AI_FIRST_WAR_TICK)).toBe(true);
+      expect(engine.chooseCountry(nationIdV2('usa'))).toEqual({ accepted: true });
+      engine.step(40);
       assertInvariantsV2(engine.state, WORLD_CONTENT_V2);
-      expect(engine.state.tick).toBe(AI_FIRST_WAR_TICK - 1);
+      expect(engine.state.tick).toBe(40);
       for (const nationId of WORLD_CONTENT_V2.nationIds) {
         const finance = selectWeeklyFinanceBreakdownV2(
           engine.state, WORLD_CONTENT_V2, nationId,

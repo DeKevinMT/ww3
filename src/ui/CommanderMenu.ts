@@ -189,7 +189,7 @@ const MODE_PRESENTATION: Readonly<Record<GameModeV2, {
   survival: {
     label: 'Survival',
     kicker: '2096 · TERMINAL TIMELINE',
-    description: 'The machine continent is awake from week one. Hold, expand and break the Antarctic core.',
+    description: 'The machine continent is awake from day one. Hold, expand and break the Antarctic core.',
     badge: 'ENDGAME MODE',
   },
 };
@@ -241,7 +241,7 @@ function dateLabel(timestamp: number): string {
   return new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' }).format(timestamp);
 }
 
-function campaignWeek(campaign: StoredCampaignV1): number {
+function campaignDay(campaign: StoredCampaignV1): number {
   try {
     const parsed = JSON.parse(campaign.stateSave) as { tick?: unknown };
     return Math.max(0, Math.floor(Number(parsed.tick) || 0));
@@ -1324,35 +1324,6 @@ export class CommanderMenuV1 {
     </section>`;
   }
 
-  private renderCampaignProgressionTutorial(
-    apexTalentPoints: number,
-    hasActionableApexTalent: boolean,
-    nationMasteryPoints: number,
-    actionableNationCount: number,
-  ): string {
-    if (this.profile.campaignProgressionTutorialState !== 'ready') return '';
-    const talentAction = hasActionableApexTalent
-      ? `SPEND ${apexTalentPoints} EONSCAR POINT${apexTalentPoints === 1 ? '' : 'S'}`
-      : 'OPEN EONSCAR TALENTS';
-    const masteryAction = nationMasteryPoints > 0
-      ? `SPEND ${nationMasteryPoints} NATION POINT${nationMasteryPoints === 1 ? '' : 'S'}`
-      : 'OPEN NATION ARSENAL';
-    const masteryStatus = nationMasteryPoints > 0
-      ? `${nationMasteryPoints} UNSPENT · ${actionableNationCount} ${actionableNationCount === 1 ? 'NATION' : 'NATIONS'}`
-      : 'NATION-SPECIFIC PROGRESSION';
-    return `<div class="modal-backdrop commander-progression-tutorial-backdrop">
-      <section class="commander-progression-tutorial" role="dialog" aria-modal="true" aria-labelledby="commander-progression-tutorial-title">
-        <header><span>FIRST CAMPAIGN COMPLETE</span><h2 id="commander-progression-tutorial-title">Spend the power you earned</h2><p>Level gains unlock points, but unspent points give no bonus. Assign them before your next timeline.</p></header>
-        <div class="commander-progression-tutorial__choices">
-          <article class="${hasActionableApexTalent ? 'has-unspent' : ''}"><div><span>EONSCAR TALENT POINTS</span><strong>${apexTalentPoints > 0 ? `${apexTalentPoints} UNSPENT` : 'BUILD READY'}</strong><p>Account-wide upgrades for EONSCAR and its support of every national Army.</p></div><button data-action="tutorial-open-talents">${talentAction} →</button></article>
-          <article class="${nationMasteryPoints > 0 ? 'has-unspent' : ''}"><div><span>NATION MASTERY POINTS</span><strong>${masteryStatus}</strong><p>Nation-specific Army upgrades. Spend each point in the Nation Arsenal.</p></div><button data-action="tutorial-open-arsenal">${masteryAction} →</button></article>
-        </div>
-        <aside><b>KEEP THEM SEPARATE</b><span>Credits only pay for Survival entry. Defeating a nation in Campaign unlocks it; neither system uses upgrade points.</span></aside>
-        <footer><button class="ghost-button" data-action="dismiss-progression-tutorial">GOT IT · RETURN HOME</button></footer>
-      </section>
-    </div>`;
-  }
-
   private renderHome(): string {
     const campaign = this.options.campaign;
     const multiplayerResume = this.options.multiplayerResume;
@@ -1403,9 +1374,6 @@ export class CommanderMenuV1 {
     const totalUnspentMasteryPoints = this.profile.unlockedCountryIds.reduce((total, countryId) => (
       total + resolveCountryLoadoutV1(this.profile, countryId).masteryPointsAvailable
     ), 0);
-    const actionableMasteryNationCount = this.profile.unlockedCountryIds.filter((countryId) => (
-      resolveCountryLoadoutV1(this.profile, countryId).masteryPointsAvailable > 0
-    )).length;
     const homeCountry = multiplayerCountry ?? activeCountry ?? flagship;
     const homeMode = campaign ? MODE_PRESENTATION[campaign.scenario.mode] : undefined;
     const multiplayerMode = multiplayerResume ? MODE_PRESENTATION[multiplayerResume.mode] : undefined;
@@ -1438,7 +1406,7 @@ export class CommanderMenuV1 {
         </section>`
       : '';
     const primaryOperation = multiplayerResume
-      ? `<section class="commander-theater__save-choice is-multiplayer-rejoin"><div><span>ACTIVE MULTIPLAYER MATCH</span><strong>${escapeHtml(multiplayerCountry?.shortName ?? multiplayerResume.countryId.toUpperCase())} · ${escapeHtml(multiplayerMode!.label)}</strong><small>Reconnect to the same reserved country and synchronize the host's latest week.</small></div><button class="primary-button" data-action="resume-multiplayer">REJOIN MATCH</button><button class="ghost-button" data-action="discard-multiplayer-resume">LEAVE MATCH</button></section>`
+      ? `<section class="commander-theater__save-choice is-multiplayer-rejoin"><div><span>ACTIVE MULTIPLAYER MATCH</span><strong>${escapeHtml(multiplayerCountry?.shortName ?? multiplayerResume.countryId.toUpperCase())} · ${escapeHtml(multiplayerMode!.label)}</strong><small>Reconnect to the same reserved country and synchronize the host's latest day.</small></div><button class="primary-button" data-action="resume-multiplayer">REJOIN MATCH</button><button class="ghost-button" data-action="discard-multiplayer-resume">LEAVE MATCH</button></section>`
       : campaign && this.activeCampaignChoiceOpen
       ? `<section class="commander-theater__save-choice"><div><span>END ACTIVE TIMELINE?</span><strong>EONSCAR secures the campaign record.</strong><small>Earned EONSCAR XP and Nation Mastery XP are settled exactly like any completed run.</small></div><button class="primary-button" data-action="continue-campaign">CONTINUE CURRENT</button><button class="secondary-button" data-action="surrender-active-campaign">END &amp; CLAIM PROGRESS</button><button class="ghost-button" data-action="cancel-active-campaign-choice">CANCEL</button></section>`
       : campaign ? `<div class="commander-theater__actions"><button class="primary-button commander-theater__primary" data-action="continue-campaign"><span>RETURN TO THE FRONT</span><strong>CONTINUE CAMPAIGN</strong></button><button class="secondary-button" data-action="open-country-picker">START NEW TIMELINE</button></div>`
@@ -1468,7 +1436,7 @@ export class CommanderMenuV1 {
             <header class="commander-theater__status">${theaterStatus}</header>
             <div class="commander-theater__deployment-core ${deploymentRouteHtml ? 'has-deployment-route' : ''}">
               <div class="commander-theater__brief">
-                <span>${multiplayerResume ? 'MULTIPLAYER · REJOIN READY' : campaign ? `${escapeHtml(homeMode!.label.toUpperCase())} · WEEK ${campaignWeek(campaign)}` : 'DEPLOYMENT READY'}</span>
+                <span>${multiplayerResume ? 'MULTIPLAYER · REJOIN READY' : campaign ? `${escapeHtml(homeMode!.label.toUpperCase())} · DAY ${campaignDay(campaign)}` : 'DEPLOYMENT READY'}</span>
                 <h2>${escapeHtml(multiplayerResume ? multiplayerCountry?.name ?? multiplayerResume.countryId.toUpperCase() : campaign ? activeCountry?.name ?? campaign.countryId.toUpperCase() : flagship?.name ?? 'Choose your nation')}</h2>
                 <p>${multiplayerResume ? `${escapeHtml(multiplayerMode!.label)} · ${escapeHtml(multiplayerCountry?.shortName ?? multiplayerResume.countryId.toUpperCase())}` : campaign ? `Autosaved ${escapeHtml(dateLabel(campaign.updatedAt))}` : flagship ? `${compact(flagshipPower)} POWER · base ${compact(flagship.militaryPower)} · mastery LV ${countryMasteryV1(this.profile, flagship.id).level}` : 'Inspect a nation, then choose its mission.'}</p>
               </div>
@@ -1494,12 +1462,6 @@ export class CommanderMenuV1 {
       </main>
       ${this.deleteConfirmationOpen ? `<div class="modal-backdrop"><section class="modal-card commander-delete-modal"><div class="panel-kicker">DELETE ACTIVE SAVE</div><h2>Abandon this campaign?</h2><p>The in-progress campaign will be removed. Your nation unlocks, mastery and EONSCAR progress remain safe.</p><div><button class="ghost-button" data-action="cancel-delete-campaign">CANCEL</button><button class="primary-button" data-action="confirm-delete-campaign">DELETE SAVE</button></div></section></div>` : ''}
       ${this.resetConfirmationOpen ? `<div class="modal-backdrop"><section class="modal-card commander-delete-modal commander-reset-modal"><div class="panel-kicker">RESET ALL LOCAL PROGRESSION</div><h2>Start over completely?</h2><p>This permanently removes the active timeline, nation unlocks, mastery XP, EONSCAR levels and talents on this device. A new account keeps only ${escapeHtml(starterCountry?.name ?? 'its free starter nation')}.</p><div><button class="ghost-button" data-action="cancel-reset-account">KEEP MY SAVE</button><button class="primary-button" data-action="confirm-reset-account">RESET EVERYTHING</button></div></section></div>` : ''}
-      ${this.renderCampaignProgressionTutorial(
-        commanderProgress.availableTalentPoints,
-        hasActionableTalentPoint,
-        totalUnspentMasteryPoints,
-        actionableMasteryNationCount,
-      )}
     </div>`;
   }
 
@@ -1575,7 +1537,7 @@ export class CommanderMenuV1 {
       const standingLabel = ordinalV1(standing);
       return `<article class="${tone}" style="--standing:${standing}%" title="Neutral opening standing: ${standingLabel} percentile worldwide"><span>${label}</span><strong>${escapeHtml(value)}</strong><i><b></b></i><small>${standingLabel} percentile</small></article>`;
     };
-    return `<section class="commander-country-intel"><header><div><span>OPENING INTELLIGENCE</span><strong>Neutral week-one national strength</strong></div></header><div class="commander-country-intel__primary">
+    return `<section class="commander-country-intel"><header><div><span>OPENING INTELLIGENCE</span><strong>Neutral day-one national strength</strong></div></header><div class="commander-country-intel__primary">
       ${metric('attack', 'ATK', stats.attack.toFixed(2), 'is-attack')}
       ${metric('defense', 'DEF', stats.defense.toFixed(2), 'is-defense')}
       ${metric('iq', 'IQ', stats.iq.toFixed(1), 'is-iq')}
@@ -1634,7 +1596,9 @@ export class CommanderMenuV1 {
       const multiplayerActive = multiplayerEligible && this.multiplayerDeployment;
       const modeNote = mode === 'survival'
         ? survivalQuote.affordable
-          ? `${this.profile.unlockedCountryIds.length} owned nation${this.profile.unlockedCountryIds.length === 1 ? '' : 's'} form${this.profile.unlockedCountryIds.length === 1 ? 's' : ''} your empire. ${multiplayerActive ? `${survivalQuote.cost} Credits per commander seat. ` : ''}XP and Mastery still progress; Survival awards no Credits.`
+          ? `${multiplayerActive
+              ? 'The host Empire receives every unselected Arctic country'
+              : 'All 9 Arctic countries begin inside your Empire'}: locked Arctic countries as 50% Base Packets, unlocked Arctic countries at full power with Mastery. ${multiplayerActive ? `${survivalQuote.cost} Credits per commander seat. ` : ''}XP and Mastery still progress; Survival awards no Credits.`
           : `You need ${survivalQuote.cost} Credits. Earn them through meaningful Campaign activity.`
         : 'Single-player only. Defeat nations to unlock them permanently and earn Credits.';
       const action = multiplayerActive ? 'OPEN LOBBY'

@@ -110,7 +110,8 @@ describe('polar command UI', () => {
     expect(panel).toContain('this.engine.effectiveDefense(owner.id, territory.army)');
     expect(panel).toContain('ECONOMY');
     expect(panel).toContain('territory.economy');
-    expect(panel).toContain('Its real opening army is roughly 20% stronger than the full Arctic Dawnline bloc.');
+    expect(panel).toContain('Its opening army is calibrated above the Arctic Base Packet line; every unlocked country adds full power and Mastery to your Empire.');
+    expect(panel).not.toContain('full Arctic Dawnline bloc');
     expect(panel).toContain('PERIMETER STATES · WEAKEST');
     expect(panel).toContain('SOVEREIGN MACHINE CORE · STRONGEST');
     expect(worldUiSource).toContain("mapBridge.scene?.focusPolarSector?.(sectorId)");
@@ -124,12 +125,14 @@ describe('polar command UI', () => {
     expect(panel).toContain('PHYSICAL EXPANSION');
     expect(panel).toContain('Every conquest advances from Antarctica through an open gateway and enters rapid assimilation.');
     expect(panel).toContain('SOVEREIGN WORLD');
-    expect(panel).toContain('Every country opens fully mobilised with normal resources');
+    expect(panel).toContain('Arctic Base Packets belong to your Empire from deployment; unlocked members contribute full power and Mastery.');
+    expect(panel).not.toContain('Greenland-founded Dawnline remains separate');
     expect(panel).toContain('polar.nextCounteroffensiveTick');
-    expect(panel).toContain('+5% verified Antarctic reinforcements each year');
+    expect(panel).toContain('+5% verified Antarctic reinforcements each wave');
     expect(panel).toContain('selectRogueLogisticsTelemetryV2(');
     expect(panel).toContain('this.engine.recentLogisticsMovements()');
-    expect(panel).toContain('TROOP MOVEMENTS · THIS WEEK');
+    expect(panel).toContain('TROOP MOVEMENTS · TODAY');
+    expect(panel).not.toContain('TROOP MOVEMENTS · THIS WEEK');
     expect(panel).toContain('rogueLogistics?.movedManpower');
     expect(panel).toContain('FROM ANTARCTICA');
     expect(panel).toContain('rogueLogistics?.antarcticMovedManpower');

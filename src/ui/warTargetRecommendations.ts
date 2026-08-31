@@ -67,6 +67,6 @@ export function warTargetRouteLabelV2(
     parts.push(`${roundedNumberLabel(target.distanceKm!)} KM`);
   }
   const etaWeeks = routeEtaWeeks(target);
-  if (etaWeeks !== undefined) parts.push(`ETA ${roundedNumberLabel(etaWeeks)}W`);
+  if (etaWeeks !== undefined) parts.push(`ETA ${roundedNumberLabel(etaWeeks)}D`);
   return parts.join(' · ');
 }

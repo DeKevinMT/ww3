@@ -41,12 +41,14 @@ describe('canonical naval routes', () => {
       ['dom', 'guy'],
       ['gmb', 'guy'],
       ['grl', 'guy'],
+      ['guy', 'hti'],
       ['sle', 'sur'],
       ['mdg', 'tls'],
+      ['cri', 'png'],
       ['pan', 'png'],
       ['slv', 'png'],
     ]);
-    expect(AUTHORED_INTERCONTINENTAL_SEA_GATEWAYS.length).toBeLessThanOrEqual(10);
+    expect(AUTHORED_INTERCONTINENTAL_SEA_GATEWAYS.length).toBeLessThanOrEqual(12);
     const state = createWorldStateV2(5_713);
     for (const [leftId, rightId] of AUTHORED_INTERCONTINENTAL_SEA_GATEWAYS) {
       const left = COUNTRIES.find((country) => country.id === leftId)!;
@@ -86,11 +88,12 @@ describe('canonical naval routes', () => {
     expect(TERRITORY_BY_ID.can!.seaNeighbors).toContain('grl');
   });
 
-  it('gives Guyana three bounded weak-country sea routes without creating a major-power hub', () => {
-    expect(TERRITORY_BY_ID.guy!.seaNeighbors).toEqual(['dom', 'gmb', 'grl']);
+  it('gives Guyana four bounded weak-country sea routes without creating a major-power hub', () => {
+    expect(TERRITORY_BY_ID.guy!.seaNeighbors).toEqual(['dom', 'gmb', 'grl', 'hti']);
     expect(TERRITORY_BY_ID.dom!.seaNeighbors).toContain('guy');
     expect(TERRITORY_BY_ID.gmb!.seaNeighbors).toContain('guy');
     expect(TERRITORY_BY_ID.grl!.seaNeighbors).toContain('guy');
+    expect(TERRITORY_BY_ID.hti!.seaNeighbors).toContain('guy');
 
     expect(countrySeaRouteDistanceKm('guy', 'dom')).toBeGreaterThan(1_300);
     expect(countrySeaRouteDistanceKm('guy', 'dom')).toBeLessThan(3_500);

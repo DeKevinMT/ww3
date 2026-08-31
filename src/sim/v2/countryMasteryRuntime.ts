@@ -157,7 +157,12 @@ export function selectTerritoryCountryMasteryRuntimeV2(
   content: WorldContentV2,
   territoryId: TerritoryId,
   currentOwnerId: PlayerId,
+  state?: WorldStateV2,
 ): Readonly<CountryMasteryRuntimeModifiersV2> {
+  if (state?.territories[territoryId]?.survivalBasePacket === true
+    && state.humanPlayerIds.includes(currentOwnerId)) {
+    return NEUTRAL_COUNTRY_MASTERY_RUNTIME_MODIFIERS_V2;
+  }
   const registry = countryMasteryByContentV2.get(content);
   const ownerModifiers = registry?.get(currentOwnerId);
   if (!ownerModifiers) return NEUTRAL_COUNTRY_MASTERY_RUNTIME_MODIFIERS_V2;
@@ -214,6 +219,7 @@ export function selectCountryMasteryNationalRuntimeV2(
       content,
       territoryId,
       ownerId,
+      state,
     );
     totalWeight += weight;
     recruitment += modifiers.recruitmentMultiplier * weight;

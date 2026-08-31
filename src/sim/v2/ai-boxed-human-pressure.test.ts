@@ -105,7 +105,7 @@ describe('boxed human anti-stalemate pressure', () => {
       event.playerId === humanId && event.message.startsWith('EONSCAR EARLY WARNING')
     ));
     expect(warnings).toHaveLength(1);
-    expect(warnings[0]!.message).toContain(`${AI_BOXED_HUMAN_WARNING_TICKS} weeks`);
+    expect(warnings[0]!.message).toContain(`${AI_BOXED_HUMAN_WARNING_TICKS} days`);
 
     planAiCommandsV2(engine.state, engine.content);
     expect(engine.state.events.filter((event) => (

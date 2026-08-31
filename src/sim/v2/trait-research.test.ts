@@ -44,6 +44,7 @@ describe('retired V2 research-progress country traits', () => {
     const state = createWorldStateV2(82_101);
     const czechTerritory = territoryIdV2('cze');
     state.players[germany].research.allocations = { ...militaryIndustryOnly };
+    state.players[germany].research.activeProgram = 'military-industry';
 
     // The territory keeps Czechia as its immutable opening identity for save
     // compatibility, but neither archived country modifier can affect progress.

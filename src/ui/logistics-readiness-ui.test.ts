@@ -29,7 +29,7 @@ describe('Logistics Readiness UI contract', () => {
     expect(card).toContain('<small>WAR SUPPLY</small>');
     expect(card).toContain('${frontLogistics.percent}% SUPPLIED');
     expect(card).toContain('frontLogistics?.ruleLabel');
-    expect(card).toContain('NEXT BATTLE ${frontLogistics.nextBattleWeeks}W');
+    expect(card).toContain('NEXT BATTLE ${frontLogistics.nextBattleWeeks}D');
   });
 
   it('gives targets and Operation Review one non-duplicated route/readiness explanation', () => {

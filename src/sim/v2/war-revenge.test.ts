@@ -122,7 +122,7 @@ describe('V2 bounded multi-territory campaigns', () => {
     expect(state.events.at(-1)?.message).toContain('without a legal battle front');
   });
 
-  it('ends an ordinary legal front exactly at the five-year campaign boundary', () => {
+  it('ends an ordinary legal front exactly at the 260-day campaign boundary', () => {
     const state = createWorldStateV2(8_230_103);
     state.wars = [];
     state.offers = [];
@@ -147,6 +147,6 @@ describe('V2 bounded multi-territory campaigns', () => {
       rightId: nld,
       expiresTick: state.tick + TRUCE_TICKS,
     }]);
-    expect(state.events.at(-1)?.message).toContain('five-year campaign window ended');
+    expect(state.events.at(-1)?.message).toContain('260-day campaign window ended');
   });
 });

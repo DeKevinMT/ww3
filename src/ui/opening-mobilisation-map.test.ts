@@ -11,7 +11,7 @@ import {
 } from './WorldUIV2';
 
 describe('opening mobilisation on the map', () => {
-  it('projects only active human opening phases and follows the 30-year curve', () => {
+  it('projects only active human opening phases and follows the 1,560-day curve', () => {
     const greenland = nationIdV2('grl');
     const usa = nationIdV2('usa');
     const engine = new WorldEngineV2(95_201, WORLD_CONTENT_V2);
@@ -107,6 +107,6 @@ describe('opening mobilisation on the map', () => {
     expect(worldUiSource).toContain('temporary extra homeland Army + cap');
     expect(worldUiSource).toContain('temporary reduced homeland Army + cap');
     expect(worldUiSource).toContain('HOMELAND CAP');
-    expect(worldUiSource).toContain('years until permanent ×1');
+    expect(worldUiSource).toContain('${compactWarTime(openingMobilisation.remainingTicks)} until permanent ×1');
   });
 });

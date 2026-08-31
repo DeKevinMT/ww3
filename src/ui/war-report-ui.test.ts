@@ -25,6 +25,10 @@ describe('power-first War Report', () => {
     expect(report).toContain('DURATION');
     expect(report).toContain('BATTLES');
     expect(report).toContain('FRONT SCORE');
+    expect(report).toContain('WAR REPORT · DAY ${outcome.endedTick}');
+    expect(report).toContain('<dd>${duration} DAYS</dd>');
+    expect(report).not.toContain('WAR REPORT · WEEK');
+    expect(report).not.toContain('<dd>${duration} WEEKS</dd>');
   });
 
   it('reports factual EONSCAR battle support rather than current-force estimates', () => {

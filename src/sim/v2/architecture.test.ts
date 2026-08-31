@@ -72,7 +72,9 @@ describe('V2 canonical architecture', () => {
     expect(Object.keys(territory.army).sort()).toEqual([
       'baseAttack', 'baseDefense', 'capacity', 'manpower',
     ]);
-    expect(Object.keys(nation.research).sort()).toEqual(['allocations', 'breakthroughs', 'effectLevels', 'progress']);
+    expect(Object.keys(nation.research).sort()).toEqual([
+      'activeProgram', 'allocations', 'breakthroughs', 'effectLevels', 'progress',
+    ]);
     expect(nation.budget).toEqual(DEFAULT_BUDGET_V2);
   });
 

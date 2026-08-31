@@ -124,7 +124,7 @@ describe('best target route ranking', () => {
     expect(warTargetRoutePenaltyV2(expeditionReady)).toBeCloseTo(11.65, 6);
     expect(warTargetRecommendationScoreV2(expeditionReady)).toBeCloseTo(70.35, 6);
     expect(warTargetRouteLabelV2(expeditionReady))
-      .toBe('OCEAN EXPEDITION · 12,000 KM · ETA 1W');
+      .toBe('OCEAN EXPEDITION · 12,000 KM · ETA 1D');
   });
 
   it('lets an overwhelmingly safer expedition-ready target beat a nearby land target', () => {

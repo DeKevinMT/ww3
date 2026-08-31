@@ -10,12 +10,18 @@ import { assertInvariantsV2 } from './invariants';
 import { processResearchV2 } from './research';
 import {
   selectResearchBranchCostV2,
+  selectResearchBranchMaxedV2,
   selectResearchOutputV2,
   selectResearchPortfolioV2,
   selectWeeklyFinanceBreakdownV2,
 } from './selectors';
 import { WorldEngineV2 } from './WorldEngineV2';
-import { nationIdV2, type ResearchAllocationsV2, type WorldStateV2 } from './types';
+import {
+  nationIdV2,
+  type ResearchAllocationsV2,
+  type ResearchBranchV2,
+  type WorldStateV2,
+} from './types';
 
 const bel = nationIdV2('bel');
 
@@ -37,20 +43,26 @@ function totalBreakthroughs(state: WorldStateV2): number {
 }
 
 describe('V2 ten-program Development portfolio', () => {
-  it('keeps all unfinished programs active, including branches with 0% extra allocation', () => {
+  it('funds only the active program and preserves every paused branch', () => {
     const state = createWorldStateV2(501);
     state.players[bel].treasury = 100;
     state.players[bel].research.allocations = { ...CONCENTRATED };
+    state.players[bel].research.activeProgram = 'advanced-weapons';
     const portfolio = selectResearchPortfolioV2(state, WORLD_CONTENT_V2, bel);
     expect(portfolio).toHaveLength(10);
-    expect(portfolio.find((branch) => branch.branch === 'advanced-weapons')?.fundingShare).toBeCloseTo(0.73, 9);
+    const active = portfolio.find((branch) => branch.branch === 'advanced-weapons')!;
+    expect(active.fundingShare).toBe(1);
+    expect(active.weeklyProgress).toBeGreaterThan(0);
     for (const branch of portfolio.filter((item) => item.branch !== 'advanced-weapons')) {
       expect(branch.allocation).toBe(0);
-      expect(branch.fundingShare).toBeCloseTo(0.03, 9);
-      expect(branch.weeklyProgress).toBeGreaterThan(0);
+      expect(branch.fundingShare).toBe(0);
+      expect(branch.weeklyProgress).toBe(0);
     }
     processResearchV2(state, WORLD_CONTENT_V2, createFinancePlansV2(state, WORLD_CONTENT_V2));
-    for (const branch of RESEARCH_BRANCHES) expect(state.players[bel].research.progress[branch]).toBeGreaterThan(0);
+    expect(state.players[bel].research.progress['advanced-weapons']).toBeGreaterThan(0);
+    for (const branch of RESEARCH_BRANCHES.filter((branch) => branch !== 'advanced-weapons')) {
+      expect(state.players[bel].research.progress[branch]).toBe(0);
+    }
   });
 
   it('queues one exact-100 allocation atomically and rejects malformed mixes without mutation', () => {
@@ -109,9 +121,10 @@ describe('V2 ten-program Development portfolio', () => {
     expect(row.nextCostIncreaseRatio).toBeGreaterThan(1);
   });
 
-  it('divides one committed Research pot once without changing finance expenses', () => {
+  it('commits the full Research pot to focus while legacy allocations change nothing', () => {
     const state = createWorldStateV2(505);
     state.players[bel].treasury = 100;
+    state.players[bel].research.activeProgram = 'advanced-weapons';
     const finance = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, bel);
     const defaultPortfolio = selectResearchPortfolioV2(state, WORLD_CONTENT_V2, bel, finance);
     const poolOutput = selectResearchOutputV2(state, WORLD_CONTENT_V2, bel, finance);
@@ -123,14 +136,52 @@ describe('V2 ten-program Development portfolio', () => {
     const concentratedFinance = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, bel);
     const concentrated = selectResearchPortfolioV2(state, WORLD_CONTENT_V2, bel, concentratedFinance);
     expect(concentrated.reduce((sum, branch) => sum + branch.weeklyFunding, 0)).toBeCloseTo(concentratedFinance.research, 8);
+    expect(concentrated.find((branch) => branch.branch === 'advanced-weapons')?.fundingShare).toBe(1);
     expect(concentratedFinance.expenses).toBe(finance.expenses);
     expect(concentratedFinance.research).toBe(finance.research);
   });
 
-  it('is deterministic under identical allocation commands and seeded ticks', () => {
+  it('keeps paused and choice-ready R&D funding in the treasury', () => {
+    const active = createWorldStateV2(512);
+    active.players[bel].treasury = 100;
+    active.players[bel].research.activeProgram = 'advanced-weapons';
+    const activeFinance = selectWeeklyFinanceBreakdownV2(active, WORLD_CONTENT_V2, bel);
+    expect(activeFinance.research).toBeGreaterThan(0);
+
+    const paused = structuredClone(active);
+    paused.players[bel].research.activeProgram = null;
+    const pausedFinance = selectWeeklyFinanceBreakdownV2(paused, WORLD_CONTENT_V2, bel);
+    const pausedPortfolio = selectResearchPortfolioV2(
+      paused, WORLD_CONTENT_V2, bel, pausedFinance,
+    );
+    expect(pausedFinance.research).toBe(0);
+    expect(pausedFinance.closingTreasury - activeFinance.closingTreasury)
+      .toBeCloseTo(activeFinance.research, 8);
+    expect(pausedPortfolio.reduce((sum, branch) => sum + branch.weeklyFunding, 0)).toBe(0);
+    expect(pausedPortfolio.reduce((sum, branch) => sum + branch.weeklyProgress, 0)).toBe(0);
+
+    const choiceReady = structuredClone(active);
+    choiceReady.players[bel].research.progress['advanced-weapons'] = selectResearchBranchCostV2(
+      choiceReady, WORLD_CONTENT_V2, bel, 'advanced-weapons',
+    );
+    const choiceReadyFinance = selectWeeklyFinanceBreakdownV2(
+      choiceReady, WORLD_CONTENT_V2, bel,
+    );
+    const choiceReadyPortfolio = selectResearchPortfolioV2(
+      choiceReady, WORLD_CONTENT_V2, bel, choiceReadyFinance,
+    );
+    expect(choiceReadyFinance.research).toBe(0);
+    expect(choiceReadyFinance.closingTreasury - activeFinance.closingTreasury)
+      .toBeCloseTo(activeFinance.research, 8);
+    expect(choiceReadyPortfolio.reduce((sum, branch) => sum + branch.weeklyFunding, 0)).toBe(0);
+    expect(choiceReadyPortfolio.reduce((sum, branch) => sum + branch.weeklyProgress, 0)).toBe(0);
+  });
+
+  it('is deterministic under identical focus commands and seeded ticks', () => {
     const left = new WorldEngineV2(506);
     const right = new WorldEngineV2(506);
-    expect(left.setResearchAllocations(bel, CONCENTRATED)).toEqual(right.setResearchAllocations(bel, CONCENTRATED));
+    expect(left.setResearchFocus(bel, 'advanced-weapons'))
+      .toEqual(right.setResearchFocus(bel, 'advanced-weapons'));
     for (let tick = 0; tick < 12; tick += 1) {
       left.step();
       right.step();
@@ -138,26 +189,112 @@ describe('V2 ten-program Development portfolio', () => {
     }
   }, 15_000);
 
-  it('keeps Belgium progress visible on a one- and five-year peaceful calibration', () => {
+  it('stops exactly at the current cost until a player chooses an effect', () => {
     const state = createWorldStateV2(507);
-    let firstCompletion: number | undefined;
-    let at52 = 0;
+    state.players[bel].research.activeProgram = 'advanced-weapons';
+    const cost = selectResearchBranchCostV2(
+      state, WORLD_CONTENT_V2, bel, 'advanced-weapons',
+    );
+    let firstReady: number | undefined;
     for (let week = 1; week <= 260; week += 1) {
       processResearchV2(state, WORLD_CONTENT_V2, createFinancePlansV2(state, WORLD_CONTENT_V2));
-      const completed = totalBreakthroughs(state);
-      if (completed > 0 && firstCompletion === undefined) firstCompletion = week;
-      if (week === 52) at52 = completed;
+      if (state.players[bel].research.progress['advanced-weapons'] === cost
+        && firstReady === undefined) firstReady = week;
     }
-    const at260 = totalBreakthroughs(state);
-    expect(firstCompletion).toBeDefined();
-    expect(firstCompletion).toBeGreaterThanOrEqual(30);
-    // The 30% Base Operations share intentionally leaves less discretionary
-    // funding than the former 20% baseline while keeping early progress visible.
-    expect(firstCompletion).toBeLessThanOrEqual(160);
-    expect(at52).toBeLessThanOrEqual(1);
-    // The shared IQ-scaled planner keeps progress visible without restoring a
-    // selected-country research acceleration.
-    expect(at260).toBeGreaterThanOrEqual(2);
-    expect(at260).toBeLessThanOrEqual(6);
+    expect(firstReady).toBeDefined();
+    expect(state.players[bel].research.progress['advanced-weapons']).toBe(cost);
+    expect(totalBreakthroughs(state)).toBe(0);
+    expect(state.events.some((event) => /breakthrough ready/i.test(event.message))).toBe(true);
   }, 60_000);
+
+  it('preserves progress across focus switches and validates the selected breakthrough', () => {
+    const engine = new WorldEngineV2(511);
+    expect(engine.setResearchFocus(bel, 'forged-program' as ResearchBranchV2).accepted)
+      .toBe(false);
+    expect(engine.setResearchFocus(bel, 'advanced-weapons')).toEqual({ accepted: true });
+    engine.step();
+    const preserved = engine.state.players[bel].research.progress['advanced-weapons'];
+    expect(preserved).toBeGreaterThan(0);
+
+    expect(engine.setResearchFocus(bel, 'defensive-systems')).toEqual({ accepted: true });
+    engine.step();
+    expect(engine.state.players[bel].research.progress['advanced-weapons']).toBe(preserved);
+    expect(engine.state.players[bel].research.progress['defensive-systems']).toBeGreaterThan(0);
+
+    const cost = selectResearchBranchCostV2(
+      engine.state, WORLD_CONTENT_V2, bel, 'advanced-weapons',
+    );
+    engine.state.players[bel].research.progress['advanced-weapons'] = cost;
+    expect(engine.chooseResearchBreakthrough(bel, 'advanced-weapons', 'defense').accepted)
+      .toBe(false);
+    expect(engine.chooseResearchBreakthrough(bel, 'advanced-weapons', 'attack'))
+      .toEqual({ accepted: true });
+    engine.step();
+    expect(engine.state.players[bel].research.effectLevels.attack).toBe(1);
+    expect(engine.state.players[bel].research.breakthroughs['advanced-weapons']).toBe(1);
+    expect(engine.state.players[bel].research.progress['advanced-weapons']).toBe(0);
+    expect(engine.state.events.some((event) => /attack breakthrough selected/i.test(event.message)))
+      .toBe(true);
+  });
+
+  it('synchronizes a Capacity breakthrough before same-tick invariants run', () => {
+    const engine = new WorldEngineV2(513);
+    const nation = engine.state.players[bel];
+    nation.research.activeProgram = 'military-industry';
+    nation.research.progress['military-industry'] = selectResearchBranchCostV2(
+      engine.state, WORLD_CONTENT_V2, bel, 'military-industry',
+    );
+    const levelBefore = nation.research.effectLevels['force-capacity'];
+
+    expect(engine.chooseResearchBreakthrough(
+      bel, 'military-industry', 'force-capacity',
+    )).toEqual({ accepted: true });
+    expect(() => engine.step()).not.toThrow();
+    expect(nation.research.effectLevels['force-capacity']).toBe(levelBefore + 1);
+    assertInvariantsV2(engine.state, WORLD_CONTENT_V2);
+  });
+
+  it('keeps another active focus running when a non-active branch becomes maxed', () => {
+    const highIqContent = {
+      ...WORLD_CONTENT_V2,
+      nations: {
+        ...WORLD_CONTENT_V2.nations,
+        [bel]: { ...WORLD_CONTENT_V2.nations[bel]!, iqScore: 108 },
+      },
+    };
+    const engine = new WorldEngineV2(514, highIqContent);
+    const nation = engine.state.players[bel];
+    expect(selectResearchBranchMaxedV2(
+      engine.state, highIqContent, bel, 'education-intelligence',
+    )).toBe(false);
+
+    let firstMaxLevel = 1;
+    for (; firstMaxLevel < 100; firstMaxLevel += 1) {
+      nation.research.effectLevels['iq-increase'] = firstMaxLevel;
+      if (selectResearchBranchMaxedV2(
+        engine.state, highIqContent, bel, 'education-intelligence',
+      )) break;
+    }
+    expect(firstMaxLevel).toBeLessThan(100);
+    nation.research.effectLevels['iq-increase'] = firstMaxLevel - 1;
+    expect(selectResearchBranchMaxedV2(
+      engine.state, highIqContent, bel, 'education-intelligence',
+    )).toBe(false);
+
+    nation.research.activeProgram = 'advanced-weapons';
+    nation.research.progress['education-intelligence'] = selectResearchBranchCostV2(
+      engine.state, highIqContent, bel, 'education-intelligence',
+    );
+    expect(engine.chooseResearchBreakthrough(
+      bel, 'education-intelligence', 'iq-increase',
+    )).toEqual({ accepted: true });
+    engine.step();
+
+    expect(selectResearchBranchMaxedV2(
+      engine.state, highIqContent, bel, 'education-intelligence',
+    )).toBe(true);
+    expect(nation.research.activeProgram).toBe('advanced-weapons');
+    expect(nation.research.progress['advanced-weapons']).toBeGreaterThan(0);
+    assertInvariantsV2(engine.state, highIqContent);
+  });
 });

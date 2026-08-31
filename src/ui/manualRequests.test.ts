@@ -11,6 +11,6 @@ describe('manual Research Surge request lifecycle', () => {
 
   it('keeps temporary cash and cooldown waits queued', () => {
     expect(terminalResearchSurgeRequestReasonV2('Requires $12.00B in cash.')).toBeUndefined();
-    expect(terminalResearchSurgeRequestReasonV2('Research Surge returns in 12 weeks.')).toBeUndefined();
+    expect(terminalResearchSurgeRequestReasonV2('Research Surge returns in 12 days.')).toBeUndefined();
   });
 });

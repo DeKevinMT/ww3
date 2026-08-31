@@ -37,7 +37,7 @@ describe('premium globe presentation budget', () => {
   it('updates galaxy UVs from camera deltas without allocations or idle drift', () => {
     const parallaxSource = globeSceneSource.slice(
       globeSceneSource.indexOf('private updateCelestialBackdropParallax'),
-      globeSceneSource.indexOf('/** One immutable dashed buffer'),
+      globeSceneSource.indexOf('private createAuthoredGatewayRoutes'),
     );
     expect(globeSceneSource).toContain('const GALAXY_HORIZONTAL_PARALLAX_PER_RADIAN = 0.0065;');
     expect(globeSceneSource).toContain('const GALAXY_VERTICAL_PARALLAX_PER_RADIAN = 0.012;');

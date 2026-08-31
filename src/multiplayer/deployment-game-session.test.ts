@@ -324,7 +324,7 @@ describe('frozen multiplayer account deployment through session and reconnect', 
     reloadedGuest.close(false);
   });
 
-  it('starts Survival as two sovereign commands allied with a separate NPC Dawnline', () => {
+  it('starts Survival as two sovereign commands with Arctic packets owned by humans', () => {
     const belgium = nationIdV2('bel');
     const netherlands = nationIdV2('nld');
     const scenario = resolveScenarioV2({ mode: 'survival', seed: 88_402 });
@@ -349,20 +349,20 @@ describe('frozen multiplayer account deployment through session and reconnect', 
     });
     expect(host.state.players[belgium]).toBeDefined();
     expect(host.state.players[netherlands]).toBeDefined();
-    const dawnlineLeader = selectSurvivalDawnlineLeaderIdV2(host.state);
-    expect(dawnlineLeader).toBeDefined();
-    expect(dawnlineLeader).not.toBe(netherlands);
-    expect(dawnlineLeader).not.toBe(belgium);
-    expect(host.state.alliances).toContainEqual({
-      leftId: [belgium, dawnlineLeader!].sort()[0]!,
-      rightId: [belgium, dawnlineLeader!].sort()[1]!,
-      formedTick: 0,
-    });
-    expect(host.state.alliances).toContainEqual({
-      leftId: [netherlands, dawnlineLeader!].sort()[0]!,
-      rightId: [netherlands, dawnlineLeader!].sort()[1]!,
-      formedTick: 0,
-    });
+    expect(selectSurvivalDawnlineLeaderIdV2(host.state)).toBeUndefined();
+    const arcticPacketTerritories = Object.entries(host.state.territories)
+      .filter(([, territory]) => territory.survivalBasePacket === true);
+    expect(arcticPacketTerritories.length).toBeGreaterThan(0);
+    expect(arcticPacketTerritories.every(([, territory]) => (
+      host.state.humanPlayerIds.includes(territory.owner)
+    ))).toBe(true);
+    expect(arcticPacketTerritories.every(([, territory]) => (
+      territory.owner === belgium && territory.coreOwner === belgium
+    ))).toBe(true);
+    expect(host.state.alliances.some((alliance) => (
+      host.state.humanPlayerIds.includes(alliance.leftId)
+        || host.state.humanPlayerIds.includes(alliance.rightId)
+    ))).toBe(false);
     expect(host.state.commanderForces[belgium]).toBeDefined();
     expect(host.state.commanderForces[netherlands]).toBeDefined();
     expect(survivalCoopUsesSovereignLogisticsV2(host.state, scenario.content)).toBe(true);
@@ -399,13 +399,15 @@ describe('frozen multiplayer account deployment through session and reconnect', 
       .toEqual({ accepted: true });
     const replica = guest.engine as WorldEngineV2;
     expect(replica.viewerPlayerId).toBe(netherlands);
-    expect(selectSurvivalDawnlineLeaderIdV2(replica.state)).toBe(dawnlineLeader);
+    expect(selectSurvivalDawnlineLeaderIdV2(replica.state)).toBeUndefined();
     expect(replica.state.commanderForces[netherlands]).toBeDefined();
-    expect(replica.state.alliances).toContainEqual({
-      leftId: [netherlands, dawnlineLeader!].sort()[0]!,
-      rightId: [netherlands, dawnlineLeader!].sort()[1]!,
-      formedTick: 0,
-    });
+    expect(Object.entries(replica.state.territories)
+      .filter(([, territory]) => territory.survivalBasePacket === true)
+      .map(([territoryId, territory]) => [territoryId, territory.owner, territory.coreOwner])
+      .sort(([leftId], [rightId]) => leftId!.localeCompare(rightId!)))
+      .toEqual(arcticPacketTerritories
+        .map(([territoryId, territory]) => [territoryId, territory.owner, territory.coreOwner])
+        .sort(([leftId], [rightId]) => leftId!.localeCompare(rightId!)));
     guest.close(false);
 
     for (const territory of Object.values(host.state.territories)) {

@@ -7,9 +7,12 @@ import type {
   TerrainType,
 } from './types';
 
-export const V2_RULES_VERSION = 'frontier-command-v2.78-rogue-perimeter-balance';
+export const V2_RULES_VERSION = 'frontier-command-v2.80-daily-ticks';
 export const V2_CONTENT_VERSION = 'natural-earth-countries-2026-v8-antarctica-survival';
 export const V2_MAP_ID = 'natural-earth-countries-2026';
+/** One authoritative simulation tick advances the visible world by one day. */
+export const V2_CALENDAR_DAYS_PER_TICK = 1;
+export const V2_CALENDAR_DAYS_PER_YEAR = 365;
 export const V2_TICK_DURATION_MS = 1_000;
 export const V2_MAX_CATCH_UP_TICKS = 8;
 
@@ -612,6 +615,25 @@ export const CONQUEST_INITIAL_INTEGRATION_SHARE = 0.10;
 /** Every unfinished integration costs 3% of its frozen conquest GDP per year. */
 export const INTEGRATION_ADMINISTRATION_ANNUAL_OUTPUT_SHARE = 0.03;
 export const WEEKS_PER_YEAR = 52;
+
+/**
+ * The simulation deliberately keeps its established per-tick balance after a
+ * tick became one visible day. Convert a legacy 52-tick growth rate before
+ * presenting it as a true 365-day calendar-year projection.
+ */
+export function calendarAnnualGrowthRateV2(legacyAnnualRate: number): number {
+  if (!Number.isFinite(legacyAnnualRate)) return 0;
+  const ticksPerCalendarYear = V2_CALENDAR_DAYS_PER_YEAR / V2_CALENDAR_DAYS_PER_TICK;
+  return Math.max(0, 1 + legacyAnnualRate) ** (ticksPerCalendarYear / WEEKS_PER_YEAR) - 1;
+}
+
+/** Calendar-year projection for a legacy 52-tick attrition rate. */
+export function calendarAnnualLossRateV2(legacyAnnualLossRate: number): number {
+  if (!Number.isFinite(legacyAnnualLossRate)) return 0;
+  const ticksPerCalendarYear = V2_CALENDAR_DAYS_PER_YEAR / V2_CALENDAR_DAYS_PER_TICK;
+  const boundedLoss = clamp(legacyAnnualLossRate, 0, 1);
+  return 1 - (1 - boundedLoss) ** (ticksPerCalendarYear / WEEKS_PER_YEAR);
+}
 /** A minimum guard slice crosses the border after decisive conquest. */
 export const CONQUEST_GUARD_MIN_TRANSFER_SHARE = 0.02;
 /** A fresh conquest may commit up to 10% of its surviving source as a real one-year guard. */

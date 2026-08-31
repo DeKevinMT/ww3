@@ -17,16 +17,16 @@ function scaleArmy(engine: WorldEngineV2, ownerId: PlayerId, fill: number): void
 }
 
 describe('local hostile threat', () => {
-  it('is exactly calm before the mandatory Campaign blackout', () => {
+  it('shows the strongest live opening threat without a tutorial calm period', () => {
     const engine = new WorldEngineV2(95_001);
     const humanId = nationIdV2('slv');
     expect(engine.chooseCountry(humanId)).toEqual({ accepted: true });
 
-    expect(selectLocalHostileThreatV2(engine.state, engine.content, humanId)).toMatchObject({
-      score: 0,
-      topAttackerId: null,
-      level: 'calm',
-    });
+    const threat = selectLocalHostileThreatV2(engine.state, engine.content, humanId);
+    expect(threat.score).toBeGreaterThan(0);
+    expect(threat.topAttackerId).not.toBeNull();
+    expect(threat.level).not.toBe('calm');
+    expect(threat.candidates[0]?.attackerId).toBe(threat.topAttackerId);
   });
 
   it('ranks a shared land border far above a long ocean route', () => {

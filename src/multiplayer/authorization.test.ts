@@ -85,6 +85,30 @@ describe('multiplayer command authorization', () => {
     });
   });
 
+  it('binds active national research choices to their owning seat', () => {
+    const state = createWorldStateV2(550, WORLD_CONTENT_V2);
+    const ownCommands = [
+      {
+        type: 'set-research-focus' as const,
+        playerId: belgium,
+        branch: 'economy-science' as const,
+      },
+      {
+        type: 'choose-research-breakthrough' as const,
+        playerId: belgium,
+        branch: 'economy-science' as const,
+        effect: 'research-speed' as const,
+      },
+    ];
+    for (const command of ownCommands) {
+      expect(authorizeMultiplayerCommandV2(state, belgium, command, false).accepted).toBe(true);
+      expect(authorizeMultiplayerCommandV2(state, canada, command, true)).toEqual({
+        accepted: false,
+        reason: 'You can only manage your own country.',
+      });
+    }
+  });
+
   it('binds the separate Commander economy and manual route to its owning seat', () => {
     const state = createWorldStateV2(551, WORLD_CONTENT_V2);
     const ownCommands = [

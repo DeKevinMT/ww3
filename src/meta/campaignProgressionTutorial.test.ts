@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import mainSource from '../main.ts?raw';
+import commanderMenuSource from '../ui/CommanderMenu.ts?raw';
 import {
   STARTER_COUNTRY_ID,
   acknowledgeCampaignProgressionTutorialV1,
@@ -47,12 +48,16 @@ function reward(mode: GameModeV2, campaignId: string) {
   });
 }
 
-describe('post-Campaign progression tutorial', () => {
-  it('wires the settled scenario mode and durable acknowledgement into the account save', () => {
+describe('retired post-Campaign progression tutorial compatibility', () => {
+  it('retains durable account state without mounting the tutorial on Home', () => {
     expect(mainSource).toContain('queueCampaignProgressionTutorialV1(');
     expect(mainSource).toContain('campaign.scenario.mode,');
     expect(mainSource).toContain('claimed.accepted || progressionTutorial.accepted');
     expect(mainSource).toContain('onAcknowledgeCampaignProgressionTutorial: () => persistProfileResult(');
+    expect(commanderMenuSource).not.toContain('renderCampaignProgressionTutorial(');
+    expect(commanderMenuSource).not.toContain('FIRST CAMPAIGN COMPLETE');
+    expect(commanderMenuSource).not.toContain('data-action="tutorial-open-talents"');
+    expect(commanderMenuSource).not.toContain('data-action="tutorial-open-arsenal"');
   });
 
   it('queues after the first completed Campaign and persists one-time dismissal', () => {

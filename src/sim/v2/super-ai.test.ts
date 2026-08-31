@@ -3,9 +3,15 @@ import {
   activeAutonomousAiVsAiWarsV2,
   planAiCommandsV2,
   selectAiResearchAllocationsV2,
+  selectAiResearchFocusV2,
   selectDefensiveAidAssessmentV2,
 } from './ai';
-import { DEFAULT_BUDGET_V2, DEFAULT_RESEARCH_ALLOCATIONS_V2, aiActiveWarCapV2 } from './balance';
+import {
+  AI_FIRST_WAR_TICK,
+  DEFAULT_BUDGET_V2,
+  DEFAULT_RESEARCH_ALLOCATIONS_V2,
+  aiActiveWarCapV2,
+} from './balance';
 import { createWorldStateV2 } from './bootstrap';
 import {
   CONQUERED_TERRITORY_EMPIRE_COMBAT_CAP_SHARE_V2,
@@ -42,6 +48,7 @@ import {
   createPowerSnapshotV2,
   selectNationalAggressivenessV2,
   selectNationalAiPlanV2,
+  selectResearchBranchCostV2,
   selectResearchFundingSharesV2,
   selectRecruitmentUnitCostV2,
   selectTerritoriesOfV2,
@@ -54,7 +61,7 @@ import { WorldEngineV2 } from './WorldEngineV2';
 import { enterPostBlackoutCampaignForTestV2 } from './testSupport';
 
 describe('V2 shared national AI', () => {
-  it('redirects every research share once costly Education reaches the useful IQ cap', () => {
+  it('keeps capped Education out of AI focus without inventing passive funding', () => {
     const state = createWorldStateV2(8_230_001);
     const singapore = nationIdV2('sgp');
     state.players[singapore]!.research.effectLevels['iq-increase'] = 1_000_000;
@@ -64,13 +71,12 @@ describe('V2 shared national AI', () => {
       'economy-science': 0,
       'education-intelligence': 100,
     };
+    state.players[singapore]!.research.activeProgram = 'education-intelligence';
     const shares = selectResearchFundingSharesV2(
       state, WORLD_CONTENT_V2, singapore,
     );
     expect(shares['education-intelligence']).toBe(0);
-    expect(Object.values(shares).reduce((sum, share) => sum + share, 0)).toBeCloseTo(1, 10);
-    expect(Object.entries(shares).filter(([branch]) => branch !== 'education-intelligence')
-      .every(([, share]) => share > 0)).toBe(true);
+    expect(Object.values(shares).reduce((sum, share) => sum + share, 0)).toBe(0);
 
     const allocation = selectAiResearchAllocationsV2(
       state,
@@ -80,6 +86,14 @@ describe('V2 shared national AI', () => {
     );
     expect(allocation['education-intelligence']).toBe(0);
     expect(Object.values(allocation).reduce((sum, value) => sum + value, 0)).toBe(100);
+    const focus = selectAiResearchFocusV2(
+      state,
+      WORLD_CONTENT_V2,
+      singapore,
+      createPowerSnapshotV2(state, WORLD_CONTENT_V2),
+    );
+    expect(focus).toBeDefined();
+    expect(focus).not.toBe('education-intelligence');
   });
 
   it('combines a recent military-posture baseline with live national readiness', () => {
@@ -122,14 +136,17 @@ describe('V2 shared national AI', () => {
       .toBe(ordinaryForecast.projectedDefenderLosses);
   });
 
-  it('keeps the first year readable without attributing rival wars to the player', () => {
+  it('keeps the opening readable without attributing rival wars to the player', () => {
     const engine = new WorldEngineV2(700);
+    expect(engine.chooseCountry(nationIdV2('usa'))).toEqual({ accepted: true });
     enterPostBlackoutCampaignForTestV2(engine.state);
+    engine.state.tick = AI_FIRST_WAR_TICK;
     expect(engine.state.wars).toHaveLength(0);
     const seenWars = new Set<string>();
     let maximumActiveWars = 0;
     let maximumBackgroundWars = 0;
-    for (let week = 0; week < 50; week += 1) {
+    const horizonTick = AI_FIRST_WAR_TICK + 50;
+    while (engine.state.tick < horizonTick) {
       engine.step();
       maximumActiveWars = Math.max(maximumActiveWars, engine.state.wars.length);
       maximumBackgroundWars = Math.max(
@@ -220,7 +237,7 @@ describe('V2 shared national AI', () => {
     )).toEqual(research);
   });
 
-  it('makes enemy AI repair weak armies and redirect research automatically', () => {
+  it('makes enemy AI repair weak armies and select a research focus automatically', () => {
     const state = createWorldStateV2(702);
     const belgium = nationIdV2('nld');
     for (const territory of Object.values(state.territories)) {
@@ -244,36 +261,32 @@ describe('V2 shared national AI', () => {
       ));
       expect(Object.values(budgetCommand.budget).reduce((sum, value) => sum + value, 0)).toBe(100);
     }
-    const research = commands.find((command) => command.type === 'set-research-allocations');
-    expect(research?.type).toBe('set-research-allocations');
-    if (research?.type === 'set-research-allocations') {
-      const movedPoints = Object.keys(research.allocations).reduce((sum, branch) => (
-        sum + Math.max(0, research.allocations[branch as keyof typeof research.allocations]
-          - state.players[belgium].research.allocations[branch as keyof typeof research.allocations])
-      ), 0);
-      expect(movedPoints).toBeLessThanOrEqual(nationalAiAllocationStepLimitV2(
-        WORLD_CONTENT_V2.nations[belgium].iqScore,
+    const research = commands.find((command) => command.type === 'set-research-focus');
+    expect(research?.type).toBe('set-research-focus');
+    if (research?.type === 'set-research-focus') {
+      expect(research.branch).toBe(selectAiResearchFocusV2(
+        state,
+        WORLD_CONTENT_V2,
+        belgium,
+        createPowerSnapshotV2(state, WORLD_CONTENT_V2),
       ));
-      expect(Object.values(research.allocations).reduce((sum, value) => sum + value, 0)).toBe(100);
-      expect(Object.values(research.allocations).every((value) => value >= 0)).toBe(true);
     }
   });
 
-  it('builds different research portfolios for different national needs', () => {
+  it('selects different research focuses for different national needs', () => {
     const state = createWorldStateV2(704);
     state.tick = 32;
     const commands = planAiCommandsV2(state, WORLD_CONTENT_V2)
-      .filter((command) => command.type === 'set-research-allocations');
-    const allocations = new Map(commands.map((command) => [command.playerId, command.allocations]));
-    const luxembourg = allocations.get(nationIdV2('lux'))!;
-    const india = allocations.get(nationIdV2('ind'))!;
-    const burundi = allocations.get(nationIdV2('bdi'))!;
-    const usa = allocations.get(nationIdV2('usa'))!;
-    expect(new Set([luxembourg, india, burundi, usa].map((mix) => JSON.stringify(mix))).size).toBeGreaterThanOrEqual(2);
-    for (const mix of [luxembourg, india, burundi, usa]) {
-      expect(Object.values(mix).reduce((sum, value) => sum + value, 0)).toBe(100);
-      expect(Object.values(mix).every((value) => value >= 0)).toBe(true);
-    }
+      .filter((command) => command.type === 'set-research-focus');
+    const focuses = new Map(commands.map((command) => [command.playerId, command.branch]));
+    const selected = [
+      focuses.get(nationIdV2('lux')),
+      focuses.get(nationIdV2('ind')),
+      focuses.get(nationIdV2('bdi')),
+      focuses.get(nationIdV2('usa')),
+    ];
+    expect(selected.every((focus) => focus !== undefined && focus !== null)).toBe(true);
+    expect(new Set(selected).size).toBeGreaterThanOrEqual(2);
   });
 
   it('uses different national budgets for a food-and-debt crisis and an army rebuild', () => {
@@ -294,7 +307,7 @@ describe('V2 shared national AI', () => {
     expect(budgets.get(burundi)).not.toEqual(budgets.get(usa));
   });
 
-  it('optimizes the player nation automatically but never chooses its wars', () => {
+  it('optimizes the player budget without choosing its research or wars', () => {
     const state = createWorldStateV2(705);
     const human = state.humanPlayerId;
     for (const territory of Object.values(state.territories)) {
@@ -303,11 +316,15 @@ describe('V2 shared national AI', () => {
     state.tick = 32;
     const commands = planAiCommandsV2(state, WORLD_CONTENT_V2);
     expect(commands.some((command) => command.type === 'set-budget-policy' && command.playerId === human)).toBe(true);
-    expect(commands.some((command) => command.type === 'set-research-allocations' && command.playerId === human)).toBe(true);
+    expect(commands.some((command) => 'playerId' in command && command.playerId === human && (
+      command.type === 'set-research-allocations'
+        || command.type === 'set-research-focus'
+        || command.type === 'choose-research-breakthrough'
+    ))).toBe(false);
     expect(commands.some((command) => command.type === 'declare-war' && command.attackerId === human)).toBe(false);
   });
 
-  it('reviews player and rival research with the same eight-week AI cadence', () => {
+  it('reviews rival research on cadence without taking over the human choice', () => {
     const state = createWorldStateV2(711);
     const human = state.humanPlayerId;
     const rival = nationIdV2('nld');
@@ -318,8 +335,40 @@ describe('V2 shared national AI', () => {
     }
     state.tick = 8;
     const commands = planAiCommandsV2(state, WORLD_CONTENT_V2);
-    expect(commands.some((command) => command.type === 'set-research-allocations' && command.playerId === human)).toBe(true);
-    expect(commands.some((command) => command.type === 'set-research-allocations' && command.playerId === rival)).toBe(true);
+    expect(commands.some((command) => 'playerId' in command && command.playerId === human && (
+      command.type === 'set-research-focus'
+        || command.type === 'choose-research-breakthrough'
+    ))).toBe(false);
+    expect(commands.some((command) => command.type === 'set-research-focus' && command.playerId === rival)).toBe(true);
+  });
+
+  it('claims AI breakthroughs deterministically while leaving human choices ready', () => {
+    const state = createWorldStateV2(713);
+    const human = state.humanPlayerId;
+    const rival = nationIdV2('nld');
+    state.tick = 8;
+    for (const playerId of [human, rival]) {
+      state.players[playerId]!.research.activeProgram = 'advanced-weapons';
+      state.players[playerId]!.research.progress['advanced-weapons'] = selectResearchBranchCostV2(
+        state,
+        WORLD_CONTENT_V2,
+        playerId,
+        'advanced-weapons',
+      );
+    }
+    const left = planAiCommandsV2(state, WORLD_CONTENT_V2);
+    const right = planAiCommandsV2(structuredClone(state), WORLD_CONTENT_V2);
+    expect(left).toEqual(right);
+    expect(left.some((command) => command.type === 'choose-research-breakthrough'
+      && command.playerId === human)).toBe(false);
+    const rivalChoice = left.find((command) => command.type === 'choose-research-breakthrough'
+      && command.playerId === rival);
+    expect(rivalChoice).toMatchObject({
+      type: 'choose-research-breakthrough',
+      playerId: rival,
+      branch: 'advanced-weapons',
+      effect: 'attack',
+    });
   });
 
   it('allows multiple simultaneous fronts and charges each one', () => {

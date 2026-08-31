@@ -20,6 +20,7 @@ import {
   type StoredCampaignV1,
 } from '../meta/commanderStorage';
 import { WorldEngineV2 } from '../sim/v2/WorldEngineV2';
+import { calendarAnnualGrowthRateV2 } from '../sim/v2/balance';
 import { resolveScenarioV2 } from '../sim/v2/scenarios';
 import { IntroOpeningMetricsCacheV2 } from './WorldUIV2';
 import {
@@ -80,8 +81,12 @@ function openingCatalog(): readonly CommanderCountryCatalogEntryV1[] {
         population: metrics.economyView.population,
         economy: metrics.economyView.output,
         treasury: metrics.player.treasury,
-        economicGrowth: metrics.finance.annualEconomyGrowthRate * 100,
-        populationGrowth: metrics.populationDynamics.annualNetRate * 100,
+        economicGrowth: calendarAnnualGrowthRateV2(
+          metrics.finance.annualEconomyGrowthRate,
+        ) * 100,
+        populationGrowth: calendarAnnualGrowthRateV2(
+          metrics.populationDynamics.annualNetRate,
+        ) * 100,
         gdpPerCapita: metrics.economyView.wealthPerPerson / 1e6,
       },
       quote: quotes.get(nation.id)!,

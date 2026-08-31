@@ -343,8 +343,10 @@ export type ResearchAllocationsV2 = Record<ResearchBranchV2, number>;
 export type ResearchProgressByBranchV2 = Record<ResearchBranchV2, number>;
 
 export interface ResearchStateV2 {
-  /** Exact-100 extra-attention mix. The equal passive baseline is derived. */
+  /** Legacy exact-100 mix retained for authenticated saves and old commands. */
   allocations: ResearchAllocationsV2;
+  /** The sole program receiving national research output; null pauses research. */
+  activeProgram: ResearchBranchV2 | null;
   progress: ResearchProgressByBranchV2;
   effectLevels: ResearchEffectLevelsV2;
   breakthroughs: ResearchBreakthroughsV2;
@@ -457,6 +459,8 @@ export interface TerritoryStateV2 {
   integration: number;
   /** Fixed calendar promise created on conquest; absent for stable core territory. */
   integrationProgram?: IntegrationProgramStateV2;
+  /** Survival-only tick-zero Arctic account lock; absent everywhere else. */
+  survivalBasePacket?: true;
   army: ArmyStateV2;
 }
 
@@ -1521,6 +1525,13 @@ export type WorldCommandV2 =
     front: CommanderFrontAssignmentV2 | null;
   }
   | { type: 'set-research-allocations'; playerId: PlayerId; allocations: ResearchAllocationsV2 }
+  | { type: 'set-research-focus'; playerId: PlayerId; branch: ResearchBranchV2 | null }
+  | {
+    type: 'choose-research-breakthrough';
+    playerId: PlayerId;
+    branch: ResearchBranchV2;
+    effect: ResearchEffectV2;
+  }
   | { type: 'adjust-budget'; playerId: PlayerId; domain: BudgetDomainV2; delta: number }
   | { type: 'set-budget-policy'; playerId: PlayerId; budget: BudgetPolicyV2 }
   | { type: 'rapid-recruitment'; playerId: PlayerId }

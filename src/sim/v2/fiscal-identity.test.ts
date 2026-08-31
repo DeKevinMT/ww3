@@ -281,6 +281,7 @@ describe('V2 fiscal identity and population-linked income', () => {
       expect(Number.isFinite(finance.mandatoryFundingRatio), String(id)).toBe(true);
     }
 
+    state.players[usa]!.research.activeProgram = 'advanced-weapons';
     const unitedStates = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, usa);
     expect(unitedStates.armyUpkeep / unitedStates.revenue).toBeGreaterThan(0.14);
     // A healthy country now deliberately retains part of ordinary cashflow as

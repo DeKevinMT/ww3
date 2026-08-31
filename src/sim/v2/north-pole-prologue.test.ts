@@ -1,10 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { WorldEngineV2 } from './WorldEngineV2';
-import { planAiCommandsV2 } from './ai';
 import { createWorldStateV2 } from './bootstrap';
 import { synchronizeArmyCapacityV2 } from './capacity';
 import {
-  CAMPAIGN_WAR_LOCK_REASON_V2,
   campaignCommunicationsBlackoutActiveV2,
   campaignWarsUnlockedV2,
 } from './campaignPrologue';
@@ -29,7 +27,7 @@ function authoriseNorthPole(state: ReturnType<typeof createWorldStateV2>, player
   state.players[playerId]!.treasury = 100_000;
 }
 
-describe('Campaign North Pole investigation and calm prologue', () => {
+describe('Campaign North Pole investigation', () => {
   it('spreads the exact North Pole modifiers across fourteen sequential stages without leakage', () => {
     const state = createWorldStateV2(12_300, WORLD_CONTENT_V2);
     const playerId = state.humanPlayerId;
@@ -75,7 +73,7 @@ describe('Campaign North Pole investigation and calm prologue', () => {
       primeTracking: true,
     });
     expect(ARCTIC_PROJECTS_V2.map((project) => project.benefits)).toEqual([
-      ['+0.10% research output', '+1 week Rogue-route warning'],
+      ['+0.10% research output', '+1 day Rogue-route warning'],
       ['+0.15% research output'],
       ['+0.25% supply throughput'],
       ['+0.25% supply throughput'],
@@ -91,7 +89,7 @@ describe('Campaign North Pole investigation and calm prologue', () => {
       ['+2.5% Antarctic operation power', 'ROGUE PRIME tracking'],
     ]);
   });
-  it('keeps a new Campaign peaceful and rejects declarations with one plain reason', () => {
+  it('lets a new Campaign declare war immediately without waking the Rogue', () => {
     const engine = new WorldEngineV2(12_301, WORLD_CONTENT_V2);
     const humanId = engine.state.humanPlayerId;
     const targetId = WORLD_CONTENT_V2.nationIds.find((id) => (
@@ -100,14 +98,12 @@ describe('Campaign North Pole investigation and calm prologue', () => {
       && engine.warAccessType(humanId, id) !== 'none'
     ))!;
 
-    expect(campaignWarsUnlockedV2(engine.state, engine.content)).toBe(false);
+    expect(campaignWarsUnlockedV2(engine.state, engine.content)).toBe(true);
     expect(campaignCommunicationsBlackoutActiveV2(engine.state, engine.content)).toBe(false);
     expect(warDeclarationStatusV2(engine.state, engine.content, humanId, targetId))
-      .toMatchObject({ allowed: false, reason: CAMPAIGN_WAR_LOCK_REASON_V2 });
+      .toMatchObject({ allowed: true });
 
     engine.state.tick = 100;
-    expect(planAiCommandsV2(engine.state, engine.content)
-      .some((command) => command.type === 'declare-war')).toBe(false);
     expect(engine.state.wars).toEqual([]);
     expect(engine.state.polarEndgame.rogueAttention.stage).toBe('dormant');
   });

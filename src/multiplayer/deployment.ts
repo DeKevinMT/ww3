@@ -10,8 +10,8 @@ import {
 } from '../sim/v2/countryMasteryRuntime';
 import { processRogueAiSurvivalV2 } from '../sim/v2/survival';
 import {
+  balanceSurvivalRogueAgainstDawnlineV2,
   prepareMultiplayerSurvivalRosterV2,
-  selectSurvivalDawnlineLeaderIdV2,
   fundSurvivalRogueWarChestV2,
 } from '../sim/v2/survivalEmpire';
 import {
@@ -149,7 +149,7 @@ export interface SurvivalCoopSeatRolesV1 {
   readonly alliedCommanderId: PlayerId;
 }
 
-/** Human co-op seats are equal sovereign commands beside the NPC Dawnline. */
+/** Human co-op seats are equal sovereign commands inside one shared Survival line. */
 export function resolveSurvivalCoopSeatRolesV1(
   state: Pick<WorldStateV2, 'humanPlayerId' | 'humanPlayerIds' | 'players'>,
 ): SurvivalCoopSeatRolesV1 | undefined {
@@ -198,11 +198,6 @@ export function applyMultiplayerDeploymentsV1(
       humanIds,
     );
     if (!prepared.accepted) return prepared;
-    if (!prepared.dawnlineLeaderId
-      || humanIds.includes(prepared.dawnlineLeaderId)
-      || selectSurvivalDawnlineLeaderIdV2(engine.state) !== prepared.dawnlineLeaderId) {
-      return { accepted: false, reason: 'The Arctic Dawnline NPC could not be formed deterministically.' };
-    }
   }
 
   for (const countryId of humanIds) {
@@ -225,6 +220,7 @@ export function applyMultiplayerDeploymentsV1(
   }
   synchronizeArmyCapacityV2(engine.state, engine.content);
   if (engine.content.metadata?.scenarioId === 'survival') {
+    balanceSurvivalRogueAgainstDawnlineV2(engine.state, engine.content);
     processRogueAiSurvivalV2(engine.state, engine.content);
     synchronizeWarFrontsV2(engine.state, engine.content);
     fundSurvivalRogueWarChestV2(engine.state, engine.content);

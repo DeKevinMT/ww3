@@ -318,10 +318,10 @@ export class WorldUI {
           <b class="clock-state ${state.speed === 0 ? 'is-paused' : ''}">${state.speed === 0 ? 'PAUSED' : 'LIVE'}</b>
         </div>
         <div class="strategic-metrics">
-          <div class="treasury-metric"><span>TREASURY</span><strong>${format(human.treasury, 1)}B</strong><small class="cashflow ${weeklyNetCashflow >= 0 ? 'is-positive' : 'is-negative'}">${weeklyNetCashflow >= 0 ? '+' : '−'}${format(Math.abs(weeklyNetCashflow), 2)}B / week</small></div>
+          <div class="treasury-metric"><span>TREASURY</span><strong>${format(human.treasury, 1)}B</strong><small class="cashflow ${weeklyNetCashflow >= 0 ? 'is-positive' : 'is-negative'}">${weeklyNetCashflow >= 0 ? '+' : '−'}${format(Math.abs(weeklyNetCashflow), 2)}B / day</small></div>
           <button class="ranking-metric" data-action="ranking"><span>WORLD RANK</span><strong>#${humanRank} <small>${worldLeader ? `· ${escapeHtml(worldLeader.shortName)} #1` : ''}</small></strong></button>
-          <div class="population-metric"><span>POPULATION</span><strong>${format(this.engine.controlledPopulation(human.id), 1)}M</strong><small class="weekly-delta ${this.populationWeeklyDelta >= 0 ? 'is-positive' : 'is-negative'}">${this.populationWeeklyDelta >= 0 ? '+' : '−'}${populationLossLabel(Math.abs(this.populationWeeklyDelta))} / week</small></div>
-          <div class="manpower-metric"><span>MANPOWER</span><strong>${populationLossLabel(human.manpower)}</strong><small class="weekly-delta ${this.manpowerWeeklyDelta >= 0 ? 'is-positive' : 'is-negative'}">${this.manpowerWeeklyDelta >= 0 ? '+' : '−'}${populationLossLabel(Math.abs(this.manpowerWeeklyDelta))} / week</small></div>
+          <div class="population-metric"><span>POPULATION</span><strong>${format(this.engine.controlledPopulation(human.id), 1)}M</strong><small class="weekly-delta ${this.populationWeeklyDelta >= 0 ? 'is-positive' : 'is-negative'}">${this.populationWeeklyDelta >= 0 ? '+' : '−'}${populationLossLabel(Math.abs(this.populationWeeklyDelta))} / day</small></div>
+          <div class="manpower-metric"><span>MANPOWER</span><strong>${populationLossLabel(human.manpower)}</strong><small class="weekly-delta ${this.manpowerWeeklyDelta >= 0 ? 'is-positive' : 'is-negative'}">${this.manpowerWeeklyDelta >= 0 ? '+' : '−'}${populationLossLabel(Math.abs(this.manpowerWeeklyDelta))} / day</small></div>
         </div>
         <div class="top-actions">
           <button class="icon-button inbox-button ${unread ? 'has-alert' : ''}" data-action="inbox" title="Reports">⌁${unread ? `<i>${unread}</i>` : ''}</button>
@@ -332,7 +332,7 @@ export class WorldUI {
 
       <nav class="command-dock glass-panel" aria-label="Command center">
         <button class="${commandOpen && this.panelMode === 'war' ? 'is-active' : ''} ${humanWars.length ? 'has-war' : ''}" data-action="panel" data-panel="war"><i>⚔</i><span><b>WAR</b><small>${humanWars.length ? `${humanWars.length} active` : 'Forces'}</small></span></button>
-        <button class="${commandOpen && this.panelMode === 'economy' ? 'is-active' : ''}" data-action="panel" data-panel="economy"><i>◫</i><span><b>FINANCE</b><small class="${weeklyNetCashflow < 0 ? 'expense-value' : ''}">${weeklyNetCashflow >= 0 ? '+' : '−'}${format(Math.abs(weeklyNetCashflow), 2)}B/w</small></span></button>
+        <button class="${commandOpen && this.panelMode === 'economy' ? 'is-active' : ''}" data-action="panel" data-panel="economy"><i>◫</i><span><b>FINANCE</b><small class="${weeklyNetCashflow < 0 ? 'expense-value' : ''}">${weeklyNetCashflow >= 0 ? '+' : '−'}${format(Math.abs(weeklyNetCashflow), 2)}B/d</small></span></button>
         <button class="${commandOpen && this.panelMode === 'research' ? 'is-active' : ''}" data-action="panel" data-panel="research"><i>⌬</i><span><b>RESEARCH</b><small>${format(researchProgress)}% · PASSIVE</small></span></button>
       </nav>
 
@@ -381,7 +381,7 @@ export class WorldUI {
         <h2>Your country is #${humanRank}</h2>
         <p>Territory, armed strength, economy, population and science decide your position.</p>
         <div class="ranking-podium"><div><span>WORLD LEADER</span><strong>${escapeHtml(ranking[0]?.player.name ?? '—')}</strong></div><div><span>YOUR POWER</span><strong>${format(humanEntry?.score ?? 0)}</strong></div></div>
-        <div class="ranking-refresh-note">REFRESHES EVERY 5 SECONDS · WEEK ${this.engine.state.tick}</div>
+        <div class="ranking-refresh-note">REFRESHES EVERY 5 SECONDS · DAY ${this.engine.state.tick}</div>
         <div class="power-ranking">${ranking.map((entry) => {
           const rank = ranking.indexOf(entry) + 1;
           const territories = this.engine.territoriesOf(entry.player.id).length;
@@ -397,14 +397,14 @@ export class WorldUI {
     const protectedCash = finance.mode === 'war' || finance.mode === 'insolvent' ? 0 : finance.reserveTarget;
     const runway = finance.net < 0 ? Math.max(0, human.treasury - protectedCash) / Math.max(0.001, -finance.net) : Number.POSITIVE_INFINITY;
     const reserveHeading = finance.mode === 'normal' ? 'FULLY FUNDED'
-      : finance.mode === 'conserving' ? `AUTO-OPTIMISING · SAVING $${format(finance.savings, 2)}B/W`
+      : finance.mode === 'conserving' ? `AUTO-OPTIMISING · SAVING $${format(finance.savings, 2)}B/D`
         : finance.mode === 'rebuilding' ? `REBUILDING RESERVE · TARGET $${format(finance.reserveTarget)}B`
           : finance.mode === 'war' ? 'WARTIME FUNDING · RESERVE RELEASED'
             : 'CASH EXHAUSTED · EMERGENCY RATIONING';
     const reserveCopy = finance.mode === 'normal'
       ? `The national account can fund every requested programme while keeping a $${format(finance.reserveTarget)}B operating buffer.`
       : finance.mode === 'conserving'
-        ? `Finance directors are trimming new force expansion, training and part of defence upkeep before touching research or recovery. Requested $${format(finance.requestedExpenses, 2)}B; funded $${format(finance.expenses, 2)}B this week.`
+        ? `Finance directors are trimming new force expansion, training and part of defence upkeep before touching research or recovery. Requested $${format(finance.requestedExpenses, 2)}B; funded $${format(finance.expenses, 2)}B today.`
         : finance.mode === 'rebuilding'
           ? `Spending is reduced until the account recovers toward $${format(finance.reserveTarget)}B. Every funded activity is still paid from treasury; reduced funding means slower training, research, repairs and readiness.`
           : finance.mode === 'war'
@@ -414,8 +414,8 @@ export class WorldUI {
       <aside class="world-panel command-drawer glass-panel" data-scroll-key="economy">
         <button class="panel-close" data-action="close-panel" aria-label="Close finance">×</button>
         <div class="panel-kicker">NATIONAL FINANCE</div>
-        <div class="drawer-heading"><div><h2>$${format(human.treasury, 1)}B</h2><span>ONE NATIONAL ACCOUNT</span></div><strong class="${finance.net < 0 ? 'is-negative' : 'is-positive'}">${finance.net >= 0 ? '+' : '−'}$${format(Math.abs(finance.net), 2)}B / WEEK</strong></div>
-        <div class="finance-summary"><div><span>WEEKLY INCOME</span><strong>+$${format(finance.revenue, 2)}B</strong></div><div><span>FUNDED SPENDING</span><strong>−$${format(finance.expenses, 2)}B</strong></div><div><span>${finance.net < 0 ? 'RESERVE RUNWAY' : 'RESERVE TREND'}</span><strong>${Number.isFinite(runway) ? `${format(runway)} weeks` : finance.net > 0 ? `+$${format(finance.net, 2)}B/w` : 'STABLE'}</strong></div></div>
+        <div class="drawer-heading"><div><h2>$${format(human.treasury, 1)}B</h2><span>ONE NATIONAL ACCOUNT</span></div><strong class="${finance.net < 0 ? 'is-negative' : 'is-positive'}">${finance.net >= 0 ? '+' : '−'}$${format(Math.abs(finance.net), 2)}B / DAY</strong></div>
+        <div class="finance-summary"><div><span>DAILY INCOME</span><strong>+$${format(finance.revenue, 2)}B</strong></div><div><span>FUNDED SPENDING</span><strong>−$${format(finance.expenses, 2)}B</strong></div><div><span>${finance.net < 0 ? 'RESERVE RUNWAY' : 'RESERVE TREND'}</span><strong>${Number.isFinite(runway) ? `${format(runway)} days` : finance.net > 0 ? `+$${format(finance.net, 2)}B/d` : 'STABLE'}</strong></div></div>
         <span class="section-label">CASHFLOW BREAKDOWN</span>
         <div class="finance-ledger">
           ${this.renderFinanceRow('Public revenue', finance.revenue, finance.revenue, true)}
@@ -454,7 +454,7 @@ export class WorldUI {
         <div class="panel-kicker">NATIONAL RESEARCH LAB</div>
         <div class="drawer-heading"><div><h2>${escapeHtml(active.name)}</h2><span>RANDOM PASSIVE DISCOVERY · LEVEL ${discoveryLevel}</span></div><strong class="passive-badge">AUTONOMOUS</strong></div>
         <p>${escapeHtml(active.description)}</p>
-        <div class="research-progress" style="--research:${active.color}"><div><span>PASSIVE PROGRESS</span><strong>${format(progress)}%</strong></div><i><b style="width:${progress}%"></b></i><small>${format(human.research.progress, 1)} / ${format(effectiveCost, 1)} RP · $${format(weeklyCost, 3)}B every week · next effect ${escapeHtml(active.effect)}</small></div>
+        <div class="research-progress" style="--research:${active.color}"><div><span>PASSIVE PROGRESS</span><strong>${format(progress)}%</strong></div><i><b style="width:${progress}%"></b></i><small>${format(human.research.progress, 1)} / ${format(effectiveCost, 1)} RP · $${format(weeklyCost, 3)}B every day · next effect ${escapeHtml(active.effect)}</small></div>
         <div class="research-stats"><div><span>Science output</span><strong>${format(human.science, 1)}</strong></div><div><span>Total breakthroughs</span><strong>${totalDiscoveries}</strong></div></div>
         <span class="section-label">DISCOVERY HISTORY · NEXT BRANCH IS RANDOM</span>
         <div class="research-list">${RESEARCH_PROJECTS.map((project) => {
@@ -475,7 +475,7 @@ export class WorldUI {
     const upgrade = MANAGEMENT_UPGRADE_BY_ID[project.activeId]!;
     const progress = Math.min(100, project.progress / Math.max(1, project.target) * 100);
     const weeks = Math.max(0, Math.ceil(project.target - project.progress));
-    return `<div class="management-active" style="--project:${upgrade.color}"><div class="management-active__head"><i>${upgrade.icon}</i><div><span>ACTIVE ${domain.toUpperCase()} PROJECT</span><strong>${escapeHtml(upgrade.name)}</strong></div><b>${format(progress)}%</b></div><div class="management-progress"><i><b style="width:${progress}%"></b></i><small>${weeks} weeks remaining · $${format(project.paidCost, 1)}B committed</small></div></div>`;
+    return `<div class="management-active" style="--project:${upgrade.color}"><div class="management-active__head"><i>${upgrade.icon}</i><div><span>ACTIVE ${domain.toUpperCase()} PROJECT</span><strong>${escapeHtml(upgrade.name)}</strong></div><b>${format(progress)}%</b></div><div class="management-progress"><i><b style="width:${progress}%"></b></i><small>${weeks} day${weeks === 1 ? '' : 's'} remaining · $${format(project.paidCost, 1)}B committed</small></div></div>`;
   }
 
   private renderUpgradeCatalog(domain: ManagementDomain): string {
@@ -488,7 +488,7 @@ export class WorldUI {
       const duration = this.engine.managementUpgradeDuration(human.id, upgrade.id) ?? 0;
       const maxed = level >= upgrade.maxLevel;
       const disabled = slotBusy || maxed || human.treasury < cost;
-      return `<button style="--project:${upgrade.color}" data-action="start-upgrade" data-upgrade="${upgrade.id}" ${disabled ? 'disabled' : ''}><i>${upgrade.icon}</i><div><span>${escapeHtml(upgrade.branch)} · LEVEL ${level}</span><strong>${escapeHtml(upgrade.name)}</strong><small>${escapeHtml(upgrade.outcome)}</small><em>${maxed ? 'MAXIMUM LEVEL' : `$${format(cost, 1)}B · ${duration} WEEKS`}</em></div></button>`;
+      return `<button style="--project:${upgrade.color}" data-action="start-upgrade" data-upgrade="${upgrade.id}" ${disabled ? 'disabled' : ''}><i>${upgrade.icon}</i><div><span>${escapeHtml(upgrade.branch)} · LEVEL ${level}</span><strong>${escapeHtml(upgrade.name)}</strong><small>${escapeHtml(upgrade.outcome)}</small><em>${maxed ? 'MAXIMUM LEVEL' : `$${format(cost, 1)}B · ${duration} DAY${duration === 1 ? '' : 'S'}`}</em></div></button>`;
     }).join('')}</div>`;
   }
 
@@ -553,7 +553,7 @@ export class WorldUI {
         <div class="panel-kicker">WAR COMMAND CENTER</div>
         <div class="drawer-heading"><div><h2>${humanWars.length ? `${humanWars.length} active front${humanWars.length > 1 ? 's' : ''}` : 'Forces ready'}</h2><span>AUTOMATED FRONT DISTRIBUTION</span></div><strong class="${humanWars.length ? 'is-negative' : 'is-positive'}">${humanWars.length ? 'AT WAR' : 'PEACETIME'}</strong></div>
         <div class="army-summary"><div><span>Total HP</span><strong>${format(hp.current)}/${format(hp.max)}</strong></div><div><span>POWER</span><strong>${format(power)}</strong></div><div><span>ATK</span><strong>${format(attack)}</strong></div><div><span>DEF</span><strong>${format(defense)}</strong></div></div>
-        <div class="manpower-status"><div><span>TRAINED MANPOWER</span><strong>${populationLossLabel(human.manpower)} / ${populationLossLabel(this.engine.manpowerCapacity(human.id))}</strong></div><i><b style="width:${Math.min(100, human.manpower / Math.max(0.001, this.engine.manpowerCapacity(human.id)) * 100)}%"></b></i><small>Combat kills personnel. Your national account pays to train ${populationLossLabel(this.engine.manpowerTrainingRate(human.id))} replacements per week.</small></div>
+        <div class="manpower-status"><div><span>TRAINED MANPOWER</span><strong>${populationLossLabel(human.manpower)} / ${populationLossLabel(this.engine.manpowerCapacity(human.id))}</strong></div><i><b style="width:${Math.min(100, human.manpower / Math.max(0.001, this.engine.manpowerCapacity(human.id)) * 100)}%"></b></i><small>Combat kills personnel. Your national account pays to train ${populationLossLabel(this.engine.manpowerTrainingRate(human.id))} replacements per day.</small></div>
         <div class="command-bonuses"><span>${IMPROVEMENT_LABELS.attack}<b>LV ${human.improvements.attack}</b></span><span>${IMPROVEMENT_LABELS.defense}<b>LV ${human.improvements.defense}</b></span><span>${IMPROVEMENT_LABELS.recovery}<b>LV ${human.improvements.recovery}</b></span><span>${IMPROVEMENT_LABELS.training}<b>LV ${human.improvements.training}</b></span></div>
         <span class="section-label">WAR SITUATION</span>
         <div class="war-list">${humanWars.length ? humanWars.map((war) => {
@@ -564,7 +564,7 @@ export class WorldUI {
           const enemyMilitaryLoss = war.attackerId === human.id ? war.defenderMilitaryLoss : war.attackerMilitaryLoss;
           const operation = this.engine.warOperation(war.id, human.id);
           const objective = operation ? `${TERRITORY_BY_ID[operation.sourceId]?.name ?? operation.sourceId} → ${TERRITORY_BY_ID[operation.targetId]?.name ?? operation.targetId}` : 'High command assessing the front';
-          return `<article style="--enemy:${enemy.cssColor}"><div><i>${enemy.sigil}</i><div><strong>${escapeHtml(enemy.name)}</strong><small>Week ${this.engine.state.tick - war.startedTick} · ${war.battles} battle phases</small></div><b class="${score < 0 ? 'danger-text' : ''}">${signed(score)}</b></div><span>Our military casualties ${populationLossLabel(ownMilitaryLoss)} · enemy ${populationLossLabel(enemyMilitaryLoss)}</span><div class="war-list__operation"><b>${operation ? operation.doctrine.replaceAll('-', ' ').toUpperCase() : 'PLANNING'}</b><strong>${escapeHtml(objective)}</strong><small>${operation ? `${format(operation.supply * 100)}% supplied · ${operation.supportingForces} supporting front${operation.supportingForces === 1 ? '' : 's'} · momentum ${signed(Math.round(operation.momentum))}` : 'Reserves are moving toward threatened borders'}</small></div></article>`;
+          return `<article style="--enemy:${enemy.cssColor}"><div><i>${enemy.sigil}</i><div><strong>${escapeHtml(enemy.name)}</strong><small>Day ${this.engine.state.tick - war.startedTick} · ${war.battles} battle phases</small></div><b class="${score < 0 ? 'danger-text' : ''}">${signed(score)}</b></div><span>Our military casualties ${populationLossLabel(ownMilitaryLoss)} · enemy ${populationLossLabel(enemyMilitaryLoss)}</span><div class="war-list__operation"><b>${operation ? operation.doctrine.replaceAll('-', ' ').toUpperCase() : 'PLANNING'}</b><strong>${escapeHtml(objective)}</strong><small>${operation ? `${format(operation.supply * 100)}% supplied · ${operation.supportingForces} supporting front${operation.supportingForces === 1 ? '' : 's'} · momentum ${signed(Math.round(operation.momentum))}` : 'Reserves are moving toward threatened borders'}</small></div></article>`;
         }).join('') : '<div class="empty-state">No active war. Hostile borders still attract defensive reserves.</div>'}</div>
         ${this.renderManagementProgramme('war')}
         ${this.renderUpgradeCatalog('war')}
@@ -600,7 +600,7 @@ export class WorldUI {
         <div class="territory-kpis"><div><span>Population</span><strong>${format(territory.population, territory.population < 10 ? 1 : 0)}M</strong></div><div><span>GDP</span><strong>$${format(country.gdp)}B</strong></div><div><span>Local power</span><strong>${format(localPower)}</strong></div><div><span>Force readiness</span><strong>${format(territory.force.readiness * 100)}%</strong></div></div>
         <span class="section-label">NATIONAL FORCE · ${format(territory.force.hp)}/${format(territory.force.maxHp)} HP</span>
         <div class="force-health"><i><b style="width:${hpRatio * 100}%;background:${hpRatio < 0.3 ? '#ff655f' : owner.cssColor}"></b></i><span>${format(hpRatio * 100)}% combat strength</span></div>
-        <details class="intel-details"><summary>More intelligence</summary><div class="territory-bar"><div><span>Terrain</span><strong>${terrainLabel}</strong></div><i><b style="width:${Math.min(100, 30 + territory.fortification * 22)}%;background:#f0bd68"></b></i></div><div class="territory-bar"><div><span>Stability</span><strong>${format(territory.stability)}%</strong></div><i><b style="width:${territory.stability}%;background:${owner.cssColor}"></b></i></div><div class="territory-bar"><div><span>Infrastructure</span><strong>${territory.infrastructure}/7</strong></div><i><b style="width:${(territory.infrastructure / 7) * 100}%;background:#62dfaf"></b></i></div><div class="force-overview"><div><span>ATK</span><strong>${format(this.engine.effectiveAttack(owner.id, territory.force), 1)}</strong></div><div><span>DEF</span><strong>${format(this.engine.effectiveDefense(owner.id, territory.force), 1)}</strong></div><div><span>RECOVERY</span><strong>+${format(this.engine.effectiveRecovery(owner.id, territory.force), 2)} HP/w</strong></div></div><p class="data-vintage">Population ${country.populationYear} · growth ${country.populationGrowthYear}: ${country.populationGrowthRate >= 0 ? '+' : ''}${format(country.populationGrowthRate, 2)}% · GDP ${country.gdpYear} · defence ${country.militaryYear}</p></details>
+        <details class="intel-details"><summary>More intelligence</summary><div class="territory-bar"><div><span>Terrain</span><strong>${terrainLabel}</strong></div><i><b style="width:${Math.min(100, 30 + territory.fortification * 22)}%;background:#f0bd68"></b></i></div><div class="territory-bar"><div><span>Stability</span><strong>${format(territory.stability)}%</strong></div><i><b style="width:${territory.stability}%;background:${owner.cssColor}"></b></i></div><div class="territory-bar"><div><span>Infrastructure</span><strong>${territory.infrastructure}/7</strong></div><i><b style="width:${(territory.infrastructure / 7) * 100}%;background:#62dfaf"></b></i></div><div class="force-overview"><div><span>ATK</span><strong>${format(this.engine.effectiveAttack(owner.id, territory.force), 1)}</strong></div><div><span>DEF</span><strong>${format(this.engine.effectiveDefense(owner.id, territory.force), 1)}</strong></div><div><span>RECOVERY</span><strong>+${format(this.engine.effectiveRecovery(owner.id, territory.force), 2)} HP/d</strong></div></div><p class="data-vintage">Population ${country.populationYear} · growth ${country.populationGrowthYear}: ${country.populationGrowthRate >= 0 ? '+' : ''}${format(country.populationGrowthRate, 2)}% · GDP ${country.gdpYear} · defence ${country.militaryYear}</p></details>
         ${owner.id !== humanId ? `<div class="territory-actions"><button class="danger-button" data-action="quick-war" data-player="${owner.id}" ${canQuickWar ? '' : 'disabled'}>${activeHumanWar ? 'WAR ALREADY ACTIVE' : canQuickWar ? `DECLARE ${accessType === 'naval' ? 'NAVAL ' : ''}WAR ON ${escapeHtml(owner.shortName).toUpperCase()}` : 'WAR UNAVAILABLE · NO OPEN FRONT'}</button><button class="secondary-button" data-action="open-owner-diplomacy" data-player="${owner.id}">Relations</button></div>` : ''}
       </aside>
     `;
@@ -643,7 +643,7 @@ export class WorldUI {
         const enemyControl = disputed.filter((territory) => territory.foreignControl?.controllerId === enemyId)
           .reduce((sum, territory) => sum + (territory.foreignControl?.share ?? 0), 0);
         return `<article class="war-tracker__war ${liveBattle?.defenderId === human.id ? 'is-defending' : ''}"><button class="war-tracker__focus" data-action="focus-war" data-territory="${focusId}">
-          <div class="war-tracker__enemy" style="--enemy:${enemy.cssColor}"><i>${enemy.sigil}</i><div><span>${status}</span><strong>${escapeHtml(human.shortName)} <em>vs</em> ${escapeHtml(enemy.shortName)}</strong><small>Week ${this.engine.state.tick - war.startedTick} · ${war.battles} phases${location ? ` · ${escapeHtml(location)}` : ''}</small></div><b class="${score < 0 ? 'danger-text' : ''}">${signed(score)}</b></div>
+          <div class="war-tracker__enemy" style="--enemy:${enemy.cssColor}"><i>${enemy.sigil}</i><div><span>${status}</span><strong>${escapeHtml(human.shortName)} <em>vs</em> ${escapeHtml(enemy.shortName)}</strong><small>Day ${this.engine.state.tick - war.startedTick} · ${war.battles} phases${location ? ` · ${escapeHtml(location)}` : ''}</small></div><b class="${score < 0 ? 'danger-text' : ''}">${signed(score)}</b></div>
           ${activeOperation ? `<div class="war-tracker__operation ${liveBattle?.attackerId === human.id ? 'is-ours' : 'is-enemy'}"><div><span>${liveBattle?.attackerId === human.id ? 'OUR OPERATION' : 'ENEMY OPERATION'} · ${activeOperation.doctrine.replaceAll('-', ' ').toUpperCase()}</span><strong>${escapeHtml(operationSource ?? '')} <i>→</i> ${escapeHtml(operationTarget ?? '')}</strong></div><div><span>SUPPLY <b>${format(activeOperation.supply * 100)}%</b></span><span>SUPPORT <b>${activeOperation.supportingForces}</b></span><span>MOMENTUM <b>${signed(Math.round(activeOperation.momentum))}</b></span></div></div>` : ''}
           <div class="war-tracker__health"><div><span>OUR HP</span><strong>${format(ownHp.current)} / ${format(ownHp.max)}</strong><i><b style="width:${ownRatio * 100}%;background:${human.cssColor}"></b></i></div><em>WAR SCORE</em><div><span>ENEMY HP</span><strong>${format(enemyHp.current)} / ${format(enemyHp.max)}</strong><i><b style="width:${enemyRatio * 100}%;background:${enemy.cssColor}"></b></i></div></div>
           ${disputed.length ? `<div class="war-tracker__control"><span>${phase}</span><strong>OUR CONTROL +${format(ownControl * 100)}% · ENEMY +${format(enemyControl * 100)}%</strong><i><b style="width:${Math.min(100, Math.max(3, ownControl * 100))}%"></b></i></div>` : `<div class="war-tracker__phase"><span>${phase}</span><strong>Front lines holding</strong></div>`}
@@ -666,7 +666,7 @@ export class WorldUI {
     return `
       <aside class="world-feed glass-panel ${this.eventFeedOpen ? 'is-open' : ''}">
         <button class="world-feed__head" data-action="toggle-feed"><span><b class="event-dot event-dot--${latest?.severity ?? 'info'}"></b> REPORT</span><strong>${latest ? escapeHtml(latest.message) : 'No reports'}</strong><i>${this.eventFeedOpen ? '×' : '↑'}</i></button>
-        <div class="world-feed__list">${events.map((event) => `<button data-action="focus-event" data-territory="${event.territoryId ?? ''}"><span>W${event.tick}</span><b class="event-dot event-dot--${event.severity}"></b><p>${escapeHtml(event.message)}</p></button>`).join('')}</div>
+        <div class="world-feed__list">${events.map((event) => `<button data-action="focus-event" data-territory="${event.territoryId ?? ''}"><span>D${event.tick}</span><b class="event-dot event-dot--${event.severity}"></b><p>${escapeHtml(event.message)}</p></button>`).join('')}</div>
       </aside>
     `;
   }
@@ -728,7 +728,7 @@ export class WorldUI {
           <div class="panel-kicker">SITUATION ROOM FIELD MANUAL</div>
           <h2>You set direction. Your command systems execute.</h2>
           <div class="help-grid world-help-grid">
-            <article><span>Ⅱ</span><h3>Time</h3><p>Only you control the clock. Space pauses; use 1× or 2× to advance weeks.</p></article>
+            <article><span>Ⅱ</span><h3>Time</h3><p>Only you control the clock. Space pauses; use 1× or 2× to advance days.</p></article>
             <article><span>↗</span><h3>One account</h3><p>Track every real income and expense. At peace, the finance director trims commitments to rebuild a $5B reserve; war can use the entire account.</p></article>
             <article><span>◇</span><h3>Empire defence</h3><p>Reserves move through owned countries toward the most hostile borders, even before war begins.</p></article>
             <article><span>⬡</span><h3>War</h3><p>High command plans objectives. Supply, supporting fronts, momentum, ATK, DEF and terrain decide whether the line advances or retreats.</p></article>
@@ -749,7 +749,7 @@ export class WorldUI {
           <div class="panel-kicker">SITUATION INBOX</div>
           <h2>World events</h2>
           <div class="inbox-filters"><span>${events.filter((event) => event.unread).length} unread</span><button data-action="mark-read">Mark all read</button></div>
-          <div class="inbox-list">${events.map((event) => `<button class="${event.unread ? 'is-unread' : ''}" data-action="focus-event" data-territory="${event.territoryId ?? ''}"><b class="event-dot event-dot--${event.severity}"></b><div><span>WEEK ${event.tick} · ${event.kind.toUpperCase()}</span><strong>${escapeHtml(event.message)}</strong></div></button>`).join('')}</div>
+          <div class="inbox-list">${events.map((event) => `<button class="${event.unread ? 'is-unread' : ''}" data-action="focus-event" data-territory="${event.territoryId ?? ''}"><b class="event-dot event-dot--${event.severity}"></b><div><span>DAY ${event.tick} · ${event.kind.toUpperCase()}</span><strong>${escapeHtml(event.message)}</strong></div></button>`).join('')}</div>
         </section>
       </div>
     `;

@@ -203,7 +203,7 @@ describe('Campaign Rogue Attention', () => {
       .toBe(reconnect.state.tick + 52);
   });
 
-  it('derives the Stage I warning copy from the full 79-week buildup', () => {
+  it('derives the Stage I warning copy from the full 79-day buildup', () => {
     const engine = campaignWithLiberatedShare(80_014);
     const human = engine.state.humanPlayerId;
     engine.state.polarEndgame.arcticPrograms[human] = {
@@ -217,7 +217,7 @@ describe('Campaign Rogue Attention', () => {
     expect(engine.state.polarEndgame.rogueAttention.nextStageTick).toBe(
       engine.state.tick + ROGUE_ATTENTION_STAGE_DURATION_TICKS_V2 + 1,
     );
-    expect(engine.state.events.at(-1)?.message).toContain('Estimated buildup: 79 weeks.');
+    expect(engine.state.events.at(-1)?.message).toContain('Estimated buildup: 79 days.');
   });
 
   it('makes the final North Pole stage useful intel without awakening the Rogue', () => {

@@ -1,6 +1,7 @@
 import {
   V2_TICK_DURATION_MS,
   RAPID_RECRUITMENT_COOLDOWN_TICKS,
+  RESEARCH_BRANCHES,
   RESEARCH_SURGE_COOLDOWN_TICKS,
   clamp,
   round,
@@ -42,7 +43,7 @@ import {
   type WorldContentV2,
 } from './content';
 import { createFinancePlansV2, processDevelopmentPhaseV2, processFinanceMilitaryV2 } from './economy';
-import { pruneWorldHistoryV2 } from './events';
+import { addWorldEventV2, pruneWorldHistoryV2 } from './events';
 import { retireAbsorbedNationV2 } from './integration';
 import { assertInvariantsV2 } from './invariants';
 import {
@@ -72,7 +73,7 @@ import {
   type AntarcticExpeditionTermsV2,
   type ArcticProjectTermsV2,
 } from './polarEndgame';
-import { processResearchV2 } from './research';
+import { processResearchV2, researchEffectBelongsToBranchV2 } from './research';
 import { normalizeRetiredReserveCompatibilityV2 } from './retiredReserves';
 import { processRoguePrimeV2, reconcileRoguePrimeV2 } from './roguePrime';
 import {
@@ -123,6 +124,8 @@ import {
   selectOpeningCandidateFinancePlansV2,
   selectPopulationDynamicsV2,
   selectResearchPortfolioV2,
+  selectResearchBranchCostV2,
+  selectResearchBranchMaxedV2,
   selectResearchSurgeTermsV2,
   selectRapidRecruitmentTermsV2,
   selectStrategicScoreV2,
@@ -187,6 +190,7 @@ import type {
   GlobalResistanceV2,
   ResearchAllocationsV2,
   ResearchBranchV2,
+  ResearchEffectV2,
   ResearchPortfolioV2,
   ResearchSurgeTermsV2,
   RunUpgradeIdV2,
@@ -1216,12 +1220,26 @@ export class WorldEngineV2 {
     if (!this.applyingCommand) return this.queue({ type: 'research-surge', playerId: id, targetBranch });
 
     const nation = this.state.players[id]!;
-    nation.research.progress[targetBranch] = round(
-      nation.research.progress[targetBranch] + terms.progressAdded,
+    const cost = selectResearchBranchCostV2(this.state, this.content, id, targetBranch);
+    const progressBefore = nation.research.progress[targetBranch];
+    nation.research.progress[targetBranch] = Math.min(
+      cost,
+      round(progressBefore + terms.progressAdded),
     );
     nation.treasury = round(nation.treasury - terms.cost);
     nation.manualActionUses.researchSurge += 1;
     nation.researchSurgeAvailableTick = this.state.tick + RESEARCH_SURGE_COOLDOWN_TICKS;
+    if (cost > 0 && progressBefore + 1e-9 < cost
+      && nation.research.progress[targetBranch] + 1e-9 >= cost) {
+      addWorldEventV2(
+        this.state,
+        'research',
+        isHumanPlayerV2(this.state, id) ? 'action' : 'info',
+        `${this.content.nations[id]?.name ?? id}: ${targetBranch.replaceAll('-', ' ')} breakthrough ready — choose one upgrade.`,
+        undefined,
+        id,
+      );
+    }
     this.recordAppliedAction();
     this.emit({ reason: 'research-surge' });
     return { accepted: true };
@@ -1400,7 +1418,7 @@ export class WorldEngineV2 {
     return result;
   }
 
-  /** Atomically queues the exact-100 extra-attention mix for the next tick boundary. */
+  /** Retired command compatibility: stores the old exact-100 mix without funding research. */
   setResearchAllocations(playerId: string, allocations: ResearchAllocationsV2): CommandResultV2 {
     const id = nationIdV2(playerId);
     const nation = this.state.players[id];
@@ -1411,6 +1429,108 @@ export class WorldEngineV2 {
     nation.research.allocations = canonical;
     this.recordAppliedAction();
     this.emit({ reason: 'research-allocations' });
+    return { accepted: true };
+  }
+
+  /** Selects the sole national program that receives research progress. */
+  setResearchFocus(
+    playerId: string,
+    branch: ResearchBranchV2 | null,
+  ): CommandResultV2 {
+    const id = nationIdV2(playerId);
+    const nation = this.state.players[id];
+    if (!nation || this.territoriesOf(id).length === 0) {
+      return { accepted: false, reason: 'Nation has no gameplay agency.' };
+    }
+    if (branch !== null && !RESEARCH_BRANCHES.includes(branch)) {
+      return { accepted: false, reason: 'Unknown research program.' };
+    }
+    if (nation.research.activeProgram === branch) {
+      return { accepted: false, reason: branch === null
+        ? 'National research is already paused.'
+        : 'That research program is already active.' };
+    }
+    if (branch !== null) {
+      if (selectResearchBranchMaxedV2(this.state, this.content, id, branch)) {
+        return { accepted: false, reason: 'That research program has reached its useful limit.' };
+      }
+      const cost = selectResearchBranchCostV2(this.state, this.content, id, branch);
+      if (cost <= 0) return { accepted: false, reason: 'That research program is unavailable.' };
+      if (nation.research.progress[branch] + 1e-9 >= cost) {
+        return { accepted: false, reason: 'Choose the ready breakthrough before focusing this program.' };
+      }
+    }
+    if (!this.applyingCommand) {
+      return this.queue({ type: 'set-research-focus', playerId: id, branch });
+    }
+    nation.research.activeProgram = branch;
+    addWorldEventV2(
+      this.state,
+      'research',
+      isHumanPlayerV2(this.state, id) ? 'action' : 'info',
+      branch === null
+        ? `${this.content.nations[id]?.name ?? id}: national research paused.`
+        : `${this.content.nations[id]?.name ?? id}: research focused on ${branch.replaceAll('-', ' ')}.`,
+      undefined,
+      id,
+    );
+    this.recordAppliedAction();
+    this.emit({ reason: 'research-focus' });
+    return { accepted: true };
+  }
+
+  /** Claims one ready program by selecting exactly one authored branch effect. */
+  chooseResearchBreakthrough(
+    playerId: string,
+    branch: ResearchBranchV2,
+    effect: ResearchEffectV2,
+  ): CommandResultV2 {
+    const id = nationIdV2(playerId);
+    const nation = this.state.players[id];
+    if (!nation || this.territoriesOf(id).length === 0) {
+      return { accepted: false, reason: 'Nation has no gameplay agency.' };
+    }
+    if (!RESEARCH_BRANCHES.includes(branch)) {
+      return { accepted: false, reason: 'Unknown research program.' };
+    }
+    if (!researchEffectBelongsToBranchV2(branch, effect)) {
+      return { accepted: false, reason: 'That upgrade does not belong to this research program.' };
+    }
+    if (selectResearchBranchMaxedV2(this.state, this.content, id, branch)) {
+      return { accepted: false, reason: 'That research program has reached its useful limit.' };
+    }
+    const cost = selectResearchBranchCostV2(this.state, this.content, id, branch);
+    if (cost <= 0 || nation.research.progress[branch] + 1e-9 < cost) {
+      return { accepted: false, reason: 'That research breakthrough is not ready.' };
+    }
+    if (!this.applyingCommand) {
+      return this.queue({
+        type: 'choose-research-breakthrough',
+        playerId: id,
+        branch,
+        effect,
+      });
+    }
+    nation.research.progress[branch] = 0;
+    nation.research.effectLevels[effect] += 1;
+    nation.research.breakthroughs[branch] += 1;
+    if (nation.research.activeProgram === branch
+      && selectResearchBranchMaxedV2(this.state, this.content, id, branch)) {
+      nation.research.activeProgram = null;
+    }
+    if (effect === 'force-capacity') {
+      synchronizeArmyCapacityV2(this.state, this.content);
+    }
+    addWorldEventV2(
+      this.state,
+      'research',
+      isHumanPlayerV2(this.state, id) ? 'action' : 'info',
+      `${this.content.nations[id]?.name ?? id}: ${effect.replaceAll('-', ' ')} breakthrough selected.`,
+      undefined,
+      id,
+    );
+    this.recordAppliedAction();
+    this.emit({ reason: 'research-breakthrough' });
     return { accepted: true };
   }
 
@@ -1662,6 +1782,12 @@ export class WorldEngineV2 {
         command.front,
       );
       case 'set-research-allocations': return this.setResearchAllocations(command.playerId, command.allocations);
+      case 'set-research-focus': return this.setResearchFocus(command.playerId, command.branch);
+      case 'choose-research-breakthrough': return this.chooseResearchBreakthrough(
+        command.playerId,
+        command.branch,
+        command.effect,
+      );
       case 'adjust-budget': return this.adjustBudget(command.playerId, command.domain, command.delta);
       case 'set-budget-policy': return this.setBudgetPolicy(command.playerId, command.budget);
       case 'rapid-recruitment': return this.rapidRecruitment(command.playerId);

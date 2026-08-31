@@ -84,10 +84,10 @@ export function selectPropagandaTermsV2(
     return { ...terms, allowed: false, reason: 'Propaganda is a manual player program.' };
   }
   if (nation.propagandaProgram) {
-    return { ...terms, allowed: false, reason: `${activeRemainingTicks} weeks remain in the active campaign.` };
+    return { ...terms, allowed: false, reason: `${activeRemainingTicks} days remain in the active campaign.` };
   }
   if (cooldownRemainingTicks > 0) {
-    return { ...terms, allowed: false, reason: `Propaganda is available again in ${cooldownRemainingTicks} weeks.` };
+    return { ...terms, allowed: false, reason: `Propaganda is available again in ${cooldownRemainingTicks} days.` };
   }
   if (!(nation.treasury > 0) || nation.treasury + 0.000_001 < cost) {
     return { ...terms, allowed: false, reason: `Requires ${cost.toFixed(2)}B positive cash.` };

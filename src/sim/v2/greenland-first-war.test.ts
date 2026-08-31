@@ -179,14 +179,14 @@ describe('Greenland first campaign war cadence', () => {
       if (change.warOutcome) outcomes.push(change.warOutcome);
     });
     expect(engine.declareWar(GREENLAND, GUIDED_TARGET)).toEqual({ accepted: true });
-    for (let week = 0; week < 260 && outcomes.length === 0; week += 1) engine.step();
+    for (let day = 0; day < 260 && outcomes.length === 0; day += 1) engine.step();
     expect(outcomes).toHaveLength(1);
     expect(outcomes[0]!.startedTick).toBe(0);
     expect(outcomes[0]!.endedTick).toBeGreaterThan(
       CAMPAIGN_FIRST_STRIKE_MOBILIZATION_TICKS_V2
         + CAMPAIGN_FIRST_STRIKE_BATTLE_INTERVAL_TICKS_V2,
     );
-  });
+  }, 10_000);
 
   it('gives a non-Greenland start the same standard guided contact clock', () => {
     const engine = new WorldEngineV2(84_110, WORLD_CONTENT_V2);

@@ -18,7 +18,7 @@ const SERIOUS_MODES: readonly LoadingTipAudience[] = ['boot', 'campaign', 'survi
  * out of this pool so an old browser cache never teaches the wrong rules.
  */
 export const LOADING_TIPS_V1: readonly LoadingTipV1[] = Object.freeze([
-  { id: 'week', text: 'At normal speed, one real second advances the world by one week.', audiences: EVERYWHERE },
+  { id: 'week', text: 'At normal speed, one real second advances the world by one day.', audiences: EVERYWHERE },
   { id: 'inspect', text: 'Select any nation to inspect its Power, army, supply, terrain and legal actions.', audiences: EVERYWHERE },
   { id: 'controls', text: 'Scroll to zoom, drag to rotate and press Esc to close the active panel.', audiences: EVERYWHERE },
   { id: 'power', text: 'Combat Power is the fastest way to compare military strength.', audiences: EVERYWHERE },
@@ -26,7 +26,7 @@ export const LOADING_TIPS_V1: readonly LoadingTipV1[] = Object.freeze([
   { id: 'combined-power', text: 'Combined Power includes national forces and the active EONSCAR Shield Network.', audiences: SERIOUS_MODES },
   { id: 'army-ready', text: 'Army Ready shows how close deployed forces are to their current capacity.', audiences: EVERYWHERE },
   { id: 'wartime-training', text: 'National recruitment stops during war, so rebuild your Army before opening another front.', audiences: EVERYWHERE },
-  { id: 'peace-recovery', text: 'At peace, each country refills its active Army directly every week.', audiences: EVERYWHERE },
+  { id: 'peace-recovery', text: 'At peace, each country refills its active Army directly every day.', audiences: EVERYWHERE },
   { id: 'army-readiness', text: 'Army readiness shows how much of your current military capacity is fielded.', audiences: EVERYWHERE },
   { id: 'logistics', text: 'Logistics Readiness is the live supply level across your active fronts.', audiences: EVERYWHERE },
   { id: 'low-supply', text: 'Low supply reduces front strength and delays distant operations.', audiences: EVERYWHERE },
@@ -53,9 +53,9 @@ export const LOADING_TIPS_V1: readonly LoadingTipV1[] = Object.freeze([
   { id: 'fun-mode', text: 'Alternative Universe is a pure fun mode with no account progression.', audiences: ['alternative-universe'] },
   { id: 'survival-year', text: 'Survival begins in 2096 with the Rogue AI already awake.', audiences: ['survival'] },
   { id: 'rogue-supply', text: 'Rogue conquests expand physically from Antarctica and enter rapid 4× assimilation.', audiences: ['survival'] },
-  { id: 'survival-readiness', text: 'Every sovereign opens fully mobilised with normal capacity and resources; Greenland-founded Dawnline remains separate.', audiences: ['survival'] },
+  { id: 'survival-readiness', text: 'The Arctic countries begin inside your Empire as 50% Base Packets; unlocked countries deploy at full power with their Mastery.', audiences: ['survival'] },
   { id: 'annual-waves', text: 'Campaign Rogue waves rise from 1% to a permanent 5% active-army commitment.', audiences: ['campaign'] },
-  { id: 'survival-waves', text: 'Every annual Survival wave manufactures 5% of the Rogue’s live Army as verified Antarctic reinforcements.', audiences: ['survival'] },
+  { id: 'survival-waves', text: 'Every 52-day Survival wave manufactures 5% of the Rogue’s live Army as verified Antarctic reinforcements.', audiences: ['survival'] },
   { id: 'survival-gateways', text: 'Survival: all three Antarctic gateways are active from the opening.', audiences: ['survival'] },
   { id: 'antarctic-depth', text: 'Outer Antarctic sectors are weaker; Zero Point Core is the final stronghold.', audiences: ['survival', 'campaign'] },
   { id: 'timeline-end', text: 'Ending a timeline never reduces the progress you already earned.', audiences: SERIOUS_MODES },

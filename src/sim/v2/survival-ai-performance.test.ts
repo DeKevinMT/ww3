@@ -48,7 +48,8 @@ describe('Survival AI planning performance', () => {
         warAccessIndexBuilds: 0,
       });
       expect(commands.every((command) => command.type === 'set-budget-policy'
-        || command.type === 'set-research-allocations')).toBe(true);
+        || command.type === 'set-research-focus'
+        || command.type === 'choose-research-breakthrough')).toBe(true);
       expect(commands.length).toBeLessThanOrEqual(cohort.length * 2);
     }
 

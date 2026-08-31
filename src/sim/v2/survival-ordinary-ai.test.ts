@@ -6,17 +6,20 @@ import {
   type WorldContentV2,
 } from './content';
 import { resolveScenarioV2 } from './scenarios';
+import { selectSurvivalDawnlineLeaderIdV2 } from './survivalEmpire';
 import {
-  selectSurvivalDawnlineLeaderIdV2,
-  survivalDawnlineNationIdsV2,
-} from './survivalEmpire';
+  registerCountryMasteryRuntimeV2,
+  resetCountryMasteryRuntimeV2,
+  selectTerritoryCountryMasteryRuntimeV2,
+} from './countryMasteryRuntime';
 import {
   selectWeeklyFinanceBreakdownV2,
 } from './selectors';
 import {
-  SURVIVAL_ORDINARY_AI_CAPACITY_FACTOR_V2,
+  SURVIVAL_BASE_PACKET_ARMY_CAPACITY_FACTOR_V2,
   SURVIVAL_ORDINARY_AI_REINFORCEMENT_FACTOR_V2,
   isSurvivalOrdinaryAiNationV2,
+  survivalBasePacketTerritoryCapacityFactorV2,
   survivalOrdinaryAiReinforcementFactorV2,
   survivalOrdinaryAiTerritoryCapacityFactorV2,
 } from './survivalOrdinaryAi';
@@ -33,7 +36,7 @@ function createUnformedSurvival(seed = 70_081): {
 }
 
 describe('ordinary Survival AI parity', () => {
-  it('keeps ordinary sovereigns full-strength beside the explicit Arctic Dawnline', () => {
+  it('keeps ordinary sovereigns full-strength beside fused Arctic Base Packets', () => {
     const seed = 70_080;
     const resolved = resolveScenarioV2({ mode: 'survival', seed });
     const engine = new WorldEngineV2(seed, resolved.content);
@@ -41,32 +44,29 @@ describe('ordinary Survival AI parity', () => {
     const germany = nationIdV2('deu');
     const germanyTerritory = territoryIdV2('deu');
     const netherlandsTerritory = territoryIdV2('nld');
+    const basePacketTerritoryId = territoryIdV2('can');
     const antarcticTerritory = ANTARCTIC_TERRITORY_IDS_V2[0]!;
 
     expect(engine.chooseCountry(greenland)).toEqual({ accepted: true });
-    const dawnlineMembers = survivalDawnlineNationIdsV2(
-      engine.state,
-      resolved.content,
-      new Set([greenland]),
-    );
-    const dawnlineTerritoryId = resolved.content.territoryIds.find((territoryId) => (
-      engine.state.territories[territoryId]?.owner === dawnlineMembers[0]
-    ))!;
-    const dawnlineBefore = structuredClone(engine.state.territories[dawnlineTerritoryId]!);
+    const basePacketBefore = structuredClone(engine.state.territories[basePacketTerritoryId]!);
     const unlockedMemberManpower = engine.state.territories[netherlandsTerritory]!.army.manpower;
     const germanConnectionsBefore = resolved.content.territories[germanyTerritory]!.connections;
+
+    const fullControl = new WorldEngineV2(seed, resolved.content);
+    expect(fullControl.chooseCountry(greenland)).toEqual({ accepted: true });
+    expect(fullControl.formSurvivalEmpire(greenland, ['nld', 'can']))
+      .toEqual({ accepted: true });
 
     expect(engine.formSurvivalEmpire(greenland, ['nld'])).toEqual({ accepted: true });
 
     const ordinary = engine.state.territories[germanyTerritory]!;
-    const dawnlineLeader = selectSurvivalDawnlineLeaderIdV2(engine.state)!;
+    expect(selectSurvivalDawnlineLeaderIdV2(engine.state)).toBeUndefined();
     expect(engine.state.players[germany]).toBeDefined();
     expect(ordinary.owner).toBe(germany);
     expect(ordinary.coreOwner).toBe(germany);
     expect(ordinary.integration).toBe(1);
     expect(ordinary.army.manpower).toBeCloseTo(ordinary.army.capacity, 9);
     expect(isSurvivalOrdinaryAiNationV2(engine.state, resolved.content, germany)).toBe(true);
-    expect(isSurvivalOrdinaryAiNationV2(engine.state, resolved.content, dawnlineLeader)).toBe(false);
     expect(isSurvivalOrdinaryAiNationV2(engine.state, resolved.content, greenland)).toBe(false);
     expect(isSurvivalOrdinaryAiNationV2(
       engine.state,
@@ -76,9 +76,15 @@ describe('ordinary Survival AI parity', () => {
     expect(survivalOrdinaryAiTerritoryCapacityFactorV2(
       engine.state,
       resolved.content,
-      dawnlineTerritoryId,
-      dawnlineLeader,
+      basePacketTerritoryId,
+      greenland,
     )).toBe(1);
+    expect(survivalBasePacketTerritoryCapacityFactorV2(
+      engine.state,
+      resolved.content,
+      basePacketTerritoryId,
+      greenland,
+    )).toBe(SURVIVAL_BASE_PACKET_ARMY_CAPACITY_FACTOR_V2);
     expect(survivalOrdinaryAiTerritoryCapacityFactorV2(
       engine.state,
       resolved.content,
@@ -98,19 +104,78 @@ describe('ordinary Survival AI parity', () => {
       netherlandsTerritory,
       greenland,
     )).toBe(1);
-    expect(engine.state.territories[dawnlineTerritoryId]!.owner).toBe(dawnlineLeader);
-    expect(engine.state.territories[dawnlineTerritoryId]!.economy)
-      .toBeCloseTo(dawnlineBefore.economy, 9);
-    expect(engine.state.territories[dawnlineTerritoryId]!.army.capacity)
-      .toBeGreaterThan(dawnlineBefore.army.capacity / SURVIVAL_ORDINARY_AI_CAPACITY_FACTOR_V2 * 0.90);
-    expect(engine.state.territories[dawnlineTerritoryId]!.army.manpower)
-      .toBeCloseTo(engine.state.territories[dawnlineTerritoryId]!.army.capacity, 9);
+    expect(engine.state.territories[netherlandsTerritory]!.survivalBasePacket).toBeUndefined();
+    expect(engine.state.territories[basePacketTerritoryId]).toMatchObject({
+      owner: greenland,
+      coreOwner: greenland,
+      integration: 1,
+      survivalBasePacket: true,
+    });
+    expect(engine.state.territories[basePacketTerritoryId]!.economy)
+      .toBeCloseTo(basePacketBefore.economy, 9);
+    expect(engine.state.territories[basePacketTerritoryId]!.population)
+      .toBeCloseTo(basePacketBefore.population, 9);
+    expect(engine.state.territories[basePacketTerritoryId]!.army.capacity)
+      .toBeCloseTo(
+        fullControl.state.territories[basePacketTerritoryId]!.army.capacity
+          * SURVIVAL_BASE_PACKET_ARMY_CAPACITY_FACTOR_V2,
+        5,
+      );
+    expect(engine.state.territories[basePacketTerritoryId]!.army.manpower)
+      .toBeCloseTo(engine.state.territories[basePacketTerritoryId]!.army.capacity, 9);
     expect(resolved.content.territoryIds.filter((territoryId) => (
       engine.state.territories[territoryId]?.owner === ROGUE_AI_NATION_ID_V2
         && !ANTARCTIC_TERRITORY_IDS_V2.includes(territoryId)
     ))).toEqual([]);
     expect(resolved.content.territories[germanyTerritory]!.connections)
       .toBe(germanConnectionsBefore);
+  });
+
+  it('suppresses locked-country Mastery while retaining it for a full unlocked member', () => {
+    const seed = 70_083;
+    const { content } = resolveScenarioV2({ mode: 'survival', seed });
+    const usa = nationIdV2('usa');
+    const belgium = nationIdV2('bel');
+    registerCountryMasteryRuntimeV2(content, belgium, {
+      armyCapacityMultiplier: 1,
+      recruitmentMultiplier: 1,
+      reserveTrainingMultiplier: 1,
+    });
+    registerCountryMasteryRuntimeV2(content, usa, {
+      armyCapacityMultiplier: 2,
+      recruitmentMultiplier: 2,
+      reserveTrainingMultiplier: 1,
+    });
+    try {
+      const base = new WorldEngineV2(seed, content);
+      const full = new WorldEngineV2(seed, content);
+      expect(base.chooseCountry(belgium)).toEqual({ accepted: true });
+      expect(full.chooseCountry(belgium)).toEqual({ accepted: true });
+      expect(base.formSurvivalEmpire(belgium, [])).toEqual({ accepted: true });
+      expect(full.formSurvivalEmpire(belgium, [usa])).toEqual({ accepted: true });
+
+      const usaTerritoryId = territoryIdV2('usa');
+      expect(base.state.territories[usaTerritoryId]!.survivalBasePacket).toBe(true);
+      expect(full.state.territories[usaTerritoryId]!.survivalBasePacket).toBeUndefined();
+      expect(selectTerritoryCountryMasteryRuntimeV2(
+        content,
+        usaTerritoryId,
+        belgium,
+        base.state,
+      ).armyCapacityMultiplier).toBe(1);
+      expect(selectTerritoryCountryMasteryRuntimeV2(
+        content,
+        usaTerritoryId,
+        belgium,
+        full.state,
+      ).armyCapacityMultiplier).toBe(2);
+      expect(base.state.territories[usaTerritoryId]!.army.capacity).toBeCloseTo(
+        full.state.territories[usaTerritoryId]!.army.capacity * 0.25,
+        5,
+      );
+    } finally {
+      resetCountryMasteryRuntimeV2(content);
+    }
   });
 
   it('keeps active rebuilding symmetric while reserve compatibility stays neutral', () => {

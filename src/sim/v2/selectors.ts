@@ -135,7 +135,6 @@ import {
   WAR_FATIGUE_OPERATION_COST_PER_POINT,
   WAR_OPERATION_COST_PER_MILLION,
   WAR_OPERATION_REVENUE_SHARE,
-  researchFundingShareV2,
   clamp,
   debtPressureV2,
   diminishingResearchLevelV2,
@@ -237,7 +236,6 @@ import {
   PopulationDynamicsV2,
   RapidRecruitmentTermsV2,
   RankingEntryV2,
-  ResearchAllocationsV2,
   ResearchBranchV2,
   ResearchEffectV2,
   ResearchPortfolioV2,
@@ -255,8 +253,6 @@ import {
 
 const nationIdCache = new WeakMap<WorldStateV2, PlayerId[]>();
 const territoryIdCache = new WeakMap<WorldStateV2, TerritoryId[]>();
-const ordinaryResearchFundingSharesCache = new WeakMap<ResearchAllocationsV2, Readonly<Record<ResearchBranchV2, number>>>();
-const cappedEducationFundingSharesCache = new WeakMap<ResearchAllocationsV2, Readonly<Record<ResearchBranchV2, number>>>();
 interface TerritoryIndexV2 {
   owned: Map<PlayerId, TerritoryId[]>;
 }
@@ -1302,6 +1298,7 @@ function selectCountryMasteryCombatRuntimeV2(
       content,
       localTerritoryId,
       playerId,
+      state,
     );
   }
   // Forecast/HUD callers sometimes pass a synthetic national army. Preserve
@@ -1318,6 +1315,7 @@ function selectCountryMasteryCombatRuntimeV2(
       content,
       territoryId,
       playerId,
+      state,
     );
     const attackMass = territory.army.baseAttack * territory.army.manpower;
     const defenseMass = territory.army.baseDefense * territory.army.manpower;
@@ -1658,7 +1656,7 @@ export function selectRapidRecruitmentTermsV2(
   let reason: string | undefined;
   if (!nation || selectTerritoriesOfV2(state, playerId).length === 0) reason = 'Country is unavailable.';
   else if (atWar) reason = 'Rapid Recruitment is unavailable during war.';
-  else if (cooldownRemaining > 0) reason = `Emergency recruitment returns in ${cooldownRemaining} weeks.`;
+  else if (cooldownRemaining > 0) reason = `Emergency recruitment returns in ${cooldownRemaining} days.`;
   else if (nation.treasury <= 0) reason = 'Recruitment is locked while the treasury is in debt.';
   else if (amount <= 0.0000001) reason = 'Army is already at its population cap.';
   else if (nation.treasury + 0.0000001 < cost) reason = `Requires $${cost.toFixed(2)}B in cash.`;
@@ -2400,33 +2398,23 @@ export function selectNationalAggressivenessV2(
   ), 1);
 }
 
-/** Reassigns every passive and focused research dollar when a program reaches its useful cap. */
+/** The active program receives the complete national research pool; every other branch is paused. */
 export function selectResearchFundingSharesV2(
   state: WorldStateV2,
   content: WorldContentV2,
   playerId: PlayerId,
+  powerSnapshot?: PowerSnapshotV2,
 ): Readonly<Record<ResearchBranchV2, number>> {
-  const nation = state.players[playerId];
-  if (!nation) return Object.fromEntries(RESEARCH_BRANCHES.map((branch) => [branch, 0])) as Record<ResearchBranchV2, number>;
-  const educationMaxed = nation.research.effectLevels['iq-increase'] > 0
-    && selectResearchBranchMaxedV2(state, content, playerId, 'education-intelligence');
-  const cache = educationMaxed
-    ? cappedEducationFundingSharesCache : ordinaryResearchFundingSharesCache;
-  const cached = cache.get(nation.research.allocations);
-  if (cached) return cached;
-  const raw = Object.fromEntries(RESEARCH_BRANCHES.map((branch) => [
+  const activeProgram = selectResearchFundableActiveProgramV2(
+    state,
+    content,
+    playerId,
+    powerSnapshot,
+  );
+  return Object.fromEntries(RESEARCH_BRANCHES.map((branch) => [
     branch,
-    educationMaxed && branch === 'education-intelligence'
-      ? 0 : researchFundingShareV2(nation.research.allocations, branch),
+    branch === activeProgram ? 1 : 0,
   ])) as Record<ResearchBranchV2, number>;
-  const total = RESEARCH_BRANCHES.reduce((sum, branch) => sum + raw[branch], 0);
-  if (total <= 0) return raw;
-  const normalized = Object.fromEntries(RESEARCH_BRANCHES.map((branch) => [
-    branch,
-    raw[branch] / total,
-  ])) as Record<ResearchBranchV2, number>;
-  cache.set(nation.research.allocations, normalized);
-  return normalized;
 }
 
 function researchBranchCostForCompletionsV2(
@@ -2469,6 +2457,27 @@ export function selectResearchBranchCostV2(
   );
 }
 
+/**
+ * The sole program that can consume this tick's R&D budget. A paused, maxed,
+ * unavailable or choice-ready branch preserves its funding in the treasury.
+ */
+export function selectResearchFundableActiveProgramV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  playerId: PlayerId,
+  powerSnapshot?: PowerSnapshotV2,
+): ResearchBranchV2 | null {
+  const nation = state.players[playerId];
+  const activeProgram = nation?.research.activeProgram;
+  if (!nation || !activeProgram
+    || selectResearchBranchMaxedV2(state, content, playerId, activeProgram)) return null;
+  const cost = powerSnapshot
+    ? selectResearchBranchCostV2(state, content, playerId, activeProgram, powerSnapshot)
+    : selectResearchBranchCostV2(state, content, playerId, activeProgram);
+  if (cost <= 0 || nation.research.progress[activeProgram] + 1e-9 >= cost) return null;
+  return activeProgram;
+}
+
 export function selectResearchOutputV2(
   state: WorldStateV2,
   content: WorldContentV2,
@@ -2476,11 +2485,15 @@ export function selectResearchOutputV2(
   finance = selectWeeklyFinanceBreakdownV2(state, content, playerId),
   catchUpOverride?: number,
   nationContextOverride?: TraitEvaluationContextV2,
+  powerSnapshot?: PowerSnapshotV2,
 ): number {
   const nation = state.players[playerId];
-  if (!nation || RESEARCH_BRANCHES.every((branch) => (
-    selectResearchBranchMaxedV2(state, content, playerId, branch)
-  ))) return 0;
+  if (!nation || !selectResearchFundableActiveProgramV2(
+    state,
+    content,
+    playerId,
+    powerSnapshot,
+  )) return 0;
   const fundingRatio = finance.research / Math.max(0.001, finance.revenue * 0.25);
   // Research has an institutional base, but cash still has to activate it.
   // Logarithmic cash returns stop giant economies converting raw scale into an
@@ -2671,8 +2684,21 @@ export function selectResearchPortfolioV2(
 ): ResearchPortfolioV2 {
   const nation = state.players[playerId];
   if (!nation) return [];
-  const poolOutput = selectResearchOutputV2(state, content, playerId, finance, catchUpOverride);
-  const fundingShares = selectResearchFundingSharesV2(state, content, playerId);
+  const poolOutput = selectResearchOutputV2(
+    state,
+    content,
+    playerId,
+    finance,
+    catchUpOverride,
+    undefined,
+    powerSnapshot,
+  );
+  const fundingShares = selectResearchFundingSharesV2(
+    state,
+    content,
+    playerId,
+    powerSnapshot,
+  );
   const lastFundedIndex = RESEARCH_BRANCHES.reduce((last, branch, index) => (
     fundingShares[branch] > 0 ? index : last
   ), -1);
@@ -2740,13 +2766,21 @@ export function selectResearchSurgeTermsV2(
   const portfolio = nation && finance
     ? selectResearchPortfolioV2(state, content, playerId, finance) : [];
   const target = portfolio.find((branch) => branch.branch === targetBranch);
-  const progressAdded = round((target?.weeklyProgress ?? 0) * RESEARCH_SURGE_PROGRESS_WEEKS);
+  const remainingProgress = target
+    ? Math.max(0, target.nextCost - target.progress) : 0;
+  const progressAdded = round(Math.min(
+    remainingProgress,
+    (target?.weeklyProgress ?? 0) * RESEARCH_SURGE_PROGRESS_WEEKS,
+  ));
   let reason: string | undefined;
   if (!nation || selectTerritoriesOfV2(state, playerId).length === 0) reason = 'Country is unavailable.';
   else if (!target) reason = 'Research program is unavailable.';
-  else if (cooldownRemaining > 0) reason = `Research Surge returns in ${cooldownRemaining} weeks.`;
+  else if (nation.research.activeProgram !== targetBranch) reason = 'Research Surge can only advance the active program.';
+  else if (target.maxed) reason = 'Selected research program has reached its useful limit.';
+  else if (target.nextCost > 0 && target.progress + 1e-9 >= target.nextCost) reason = 'Active research breakthrough is ready for a choice.';
+  else if (cooldownRemaining > 0) reason = `Research Surge returns in ${cooldownRemaining} days.`;
   else if (nation.treasury <= 0) reason = 'Research Surge is locked while the treasury is in debt.';
-  else if (target.maxed || progressAdded <= 0.0000001) reason = 'Selected research program cannot advance.';
+  else if (progressAdded <= 0.0000001) reason = 'Selected research program cannot advance.';
   else if (nation.treasury + 0.0000001 < cost) reason = `Requires $${cost.toFixed(2)}B in cash.`;
   return {
     playerId,
@@ -3016,7 +3050,13 @@ export function selectWeeklyFinanceBreakdownV2(
   );
   const excessResearch = excessCashRemaining * excessResearchShare;
   const excessDevelopment = excessCashRemaining - excessResearch;
-  const research = envelope * budget.research / 100 + excessResearch;
+  const plannedResearch = envelope * budget.research / 100 + excessResearch;
+  const research = selectResearchFundableActiveProgramV2(
+    state,
+    content,
+    playerId,
+    powerSnapshot,
+  ) ? plannedResearch : 0;
   const plannedDevelopment = envelope * budget.development / 100 + excessDevelopment;
   const development = plannedDevelopment;
   const standingOperations = Math.max(

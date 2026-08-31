@@ -1,6 +1,5 @@
 import { AI_FIRST_WAR_TICK, BATTLE_INTERVAL_TICKS, WAR_MOBILIZATION_TICKS } from './balance';
 import type { WorldContentV2 } from './content';
-import { campaignTutorialBypassedV2 } from './campaignTutorial';
 import type { PlayerId, WarStateV2, WorldStateV2 } from './types';
 
 export const CAMPAIGN_WAR_LOCK_REASON_V2
@@ -64,31 +63,19 @@ export function campaignCommunicationsBlackoutActiveV2(
     && state.polarEndgame.communicationsBlackoutTick !== null;
 }
 
-/** Survival/Alternative keep their own opening rules; only Campaign has this prologue lock. */
+/** Campaign no longer has a guided opening lock; ordinary war rules apply immediately. */
 export function campaignWarsUnlockedV2(
-  state: Pick<WorldStateV2, 'polarEndgame' | 'wars' | 'nextWarId'>,
-  content: WorldContentV2,
+  _state: Pick<WorldStateV2, 'polarEndgame' | 'wars' | 'nextWarId'>,
+  _content: WorldContentV2,
 ): boolean {
-  if (content.metadata?.scenarioId !== 'standard-2026') return true;
-  if (campaignCommunicationsBlackoutActiveV2(state, content)) return true;
-  // Defence-in-depth for authenticated legacy saves: an old timeline that
-  // already fought can never be frozen by a newly introduced prologue field.
-  return state.wars.length > 0 || state.nextWarId > 1;
+  return true;
 }
 
 export function campaignAiVsAiWarOpeningTickV2(
-  state: Pick<WorldStateV2, 'humanPlayerIds' | 'polarEndgame'>,
-  content: WorldContentV2,
+  _state: Pick<WorldStateV2, 'humanPlayerIds' | 'polarEndgame'>,
+  _content: WorldContentV2,
 ): number {
-  if (content.metadata?.scenarioId !== 'standard-2026') return AI_FIRST_WAR_TICK;
-  if (state.humanPlayerIds.length > 0 && state.humanPlayerIds.every((playerId) => (
-    campaignTutorialBypassedV2(state, content, playerId)
-  ))) return AI_FIRST_WAR_TICK;
-  const blackoutTick = state.polarEndgame.communicationsBlackoutTick;
-  if (blackoutTick === null) return Number.POSITIVE_INFINITY;
-  // The Campaign proof conflict belongs to the tutorial chronology, not the
-  // ordinary autonomous-AI year-one floor. Other modes keep that global floor.
-  return blackoutTick + CAMPAIGN_AI_VS_AI_POST_BLACKOUT_GRACE_TICKS_V2;
+  return AI_FIRST_WAR_TICK;
 }
 
 /**
@@ -98,17 +85,10 @@ export function campaignAiVsAiWarOpeningTickV2(
  * save has no transmission history at all and keeps its established cadence.
  */
 export function campaignBlackoutBriefingAcknowledgedV2(
-  state: Pick<WorldStateV2, 'humanPlayerIds' | 'polarEndgame'>,
-  content: WorldContentV2,
+  _state: Pick<WorldStateV2, 'humanPlayerIds' | 'polarEndgame'>,
+  _content: WorldContentV2,
 ): boolean {
-  if (content.metadata?.scenarioId !== 'standard-2026') return true;
-  const histories = state.humanPlayerIds.map((playerId) => (
-    state.polarEndgame.apexNarrative.players[playerId]?.transmissions ?? []
-  ));
-  if (histories.every((history) => history.length === 0)) return true;
-  return histories.every((history) => history.some((item) => (
-    item.id === 'campaign-communications-blackout' && item.choice !== null
-  )));
+  return true;
 }
 
 export function campaignAiVsAiWarsUnlockedV2(
@@ -121,26 +101,18 @@ export function campaignAiVsAiWarsUnlockedV2(
 
 /** The first-strike preview becomes available after the manipulation is explained. */
 export function campaignHumanWarStoryReadyV2(
-  state: Pick<WorldStateV2, 'polarEndgame'>,
-  content: WorldContentV2,
-  playerId: PlayerId,
+  _state: Pick<WorldStateV2, 'polarEndgame'>,
+  _content: WorldContentV2,
+  _playerId: PlayerId,
 ): boolean {
-  if (content.metadata?.scenarioId !== 'standard-2026') return true;
-  if (campaignTutorialBypassedV2(state, content, playerId)) return true;
-  return state.polarEndgame.apexNarrative.players[playerId]?.transmissions.some((item) => (
-    item.id === 'campaign-ai-defeat-pattern' && item.choice !== null
-  )) === true;
+  return true;
 }
 
 /** No Campaign declaration may involve this seat before its tutorial briefing resolves. */
 export function campaignHumanWarsUnlockedV2(
-  state: Pick<WorldStateV2, 'polarEndgame'>,
-  content: WorldContentV2,
-  playerId: PlayerId,
+  _state: Pick<WorldStateV2, 'polarEndgame'>,
+  _content: WorldContentV2,
+  _playerId: PlayerId,
 ): boolean {
-  if (content.metadata?.scenarioId !== 'standard-2026') return true;
-  if (campaignTutorialBypassedV2(state, content, playerId)) return true;
-  return state.polarEndgame.apexNarrative.players[playerId]?.transmissions.some((item) => (
-    item.id === 'campaign-first-strike-guidance' && item.choice !== null
-  )) === true;
+  return true;
 }

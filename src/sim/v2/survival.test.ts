@@ -24,7 +24,7 @@ import { assertInvariantsV2 } from './invariants';
 import { canonicalStateHashV2 } from './persistence';
 import { nationIdV2, territoryIdV2 } from './types';
 import {
-  selectSurvivalDawnlineLeaderIdV2,
+  SURVIVAL_DAWNLINE_ARCTIC_NATION_IDS_V2,
 } from './survivalEmpire';
 import {
   selectRecruitmentTrainingPipelineV2,
@@ -130,10 +130,17 @@ describe('Survival Rogue AI empire', () => {
     const flagshipResearch = structuredClone(engine.state.players[belgium]!.research);
     const rosterAttackKnowledge = flagshipResearch.effectLevels.attack + 2;
     engine.state.players[netherlands]!.research.effectLevels.attack = rosterAttackKnowledge;
-    const initialTreasury = [belgium, netherlands, luxembourg].reduce(
+    engine.state.players[nationIdV2('usa')]!.research.effectLevels.attack
+      = rosterAttackKnowledge + 50;
+    const fullTreasury = [belgium, netherlands, luxembourg].reduce(
       (sum, id) => sum + engine.state.players[id]!.treasury,
       0,
     );
+    const basePacketTreasury = SURVIVAL_DAWNLINE_ARCTIC_NATION_IDS_V2.reduce(
+      (sum, id) => sum + (engine.state.players[nationIdV2(id)]?.treasury ?? 0) * 0.50,
+      0,
+    );
+    const initialTreasury = fullTreasury + basePacketTreasury;
     const territoryBaselines = Object.fromEntries(memberTerritories.map((territoryId) => [
       territoryId,
       {
@@ -150,6 +157,9 @@ describe('Survival Rogue AI empire', () => {
     expect(engine.state.players[belgium]!.capitalId).toBe(flagshipCapital);
     expect(engine.state.players[netherlands]).toBeUndefined();
     expect(engine.state.players[luxembourg]).toBeUndefined();
+    for (const arcticId of SURVIVAL_DAWNLINE_ARCTIC_NATION_IDS_V2) {
+      expect(engine.state.players[nationIdV2(arcticId)]).toBeUndefined();
+    }
     expect(engine.state.players[ROGUE_AI_NATION_ID_V2]).toBeDefined();
     expect(engine.state.players[germany]).toBeDefined();
     expect(engine.state.territories[territoryIdV2('deu')]).toMatchObject({
@@ -202,6 +212,7 @@ describe('Survival Rogue AI empire', () => {
     const reloaded = WorldEngineV2.fromSave(engine.save());
     expect(reloaded.canonicalHash()).toBe(hash);
     expect(reloaded.state.territories[territoryIdV2('nld')]!.owner).toBe(belgium);
+    expect(reloaded.state.territories[territoryIdV2('usa')]!.survivalBasePacket).toBe(true);
     expect(reloaded.state.players[netherlands]).toBeUndefined();
     expect(reloaded.state.players[germany]).toBeDefined();
   });
@@ -278,7 +289,7 @@ describe('Survival Rogue AI empire', () => {
     left.step(1);
     expect(left.formSurvivalEmpire('bel', ['deu'])).toEqual({
       accepted: false,
-      reason: 'The Survival empire must be formed before week one.',
+      reason: 'The Survival empire must be formed before day one.',
     });
   });
 
@@ -293,7 +304,14 @@ describe('Survival Rogue AI empire', () => {
 
     const openingHumanTerritories = Object.values(engine.state.territories)
       .filter((territory) => territory.owner === flagshipId);
-    expect(openingHumanTerritories).toHaveLength(weakestUnlockedIds.length);
+    const rosterOrigins = new Set<string>([
+      ...weakestUnlockedIds,
+      ...SURVIVAL_DAWNLINE_ARCTIC_NATION_IDS_V2,
+    ]);
+    const expectedOpeningTerritories = engine.content.territoryIds.filter((territoryId) => (
+      rosterOrigins.has(engine.content.territories[territoryId]?.initialOwnerId ?? '')
+    ));
+    expect(openingHumanTerritories).toHaveLength(expectedOpeningTerritories.length);
 
     const availableFronts = Object.entries(engine.state.territories).flatMap(([
       sourceKey,
@@ -362,7 +380,15 @@ describe('Survival Rogue AI empire', () => {
       id,
       structuredClone(engine.state.territories[id]),
     ]));
-    engine.step(208);
+    for (let tick = 1; tick <= 208; tick += 1) {
+      engine.state.tick = tick;
+      expect(processRogueAiSurvivalV2(engine.state, engine.content)).toEqual({
+        activated: false,
+        waveStarted: null,
+        targets: [],
+        victory: false,
+      });
+    }
     expect(engine.state.players[ROGUE_AI_NATION_ID_V2]).toEqual(rogueBefore);
     for (const territoryId of ANTARCTIC_TERRITORY_IDS_V2) {
       expect(engine.state.territories[territoryId]).toEqual(territoriesBefore[territoryId]);
@@ -377,7 +403,10 @@ describe('Survival Rogue AI empire', () => {
       engine.content,
       nationIdV2('bel'),
     )).toBe(true);
-    engine.step(80);
+    for (let tick = 209; tick <= 288; tick += 1) {
+      engine.state.tick = tick;
+      processRogueAiSurvivalV2(engine.state, engine.content);
+    }
     expect(engine.state.wars.some((war) => war.attackerId === ROGUE_AI_NATION_ID_V2)).toBe(true);
   }, 30_000);
 
@@ -409,7 +438,7 @@ describe('Survival Rogue AI empire', () => {
     const resolved = resolveScenarioV2({ mode: 'survival', seed: 5_043 });
     const engine = new WorldEngineV2(5_043, resolved.content);
     const belgium = nationIdV2('bel');
-    const dawnline = selectSurvivalDawnlineLeaderIdV2(engine.state)!;
+    const ordinary = nationIdV2('nld');
     expect(engine.chooseCountry(belgium)).toEqual({ accepted: true });
     expect(engine.formSurvivalEmpire(belgium, [])).toEqual({ accepted: true });
     const save = JSON.parse(engine.save()) as Record<string, any>;
@@ -431,7 +460,7 @@ describe('Survival Rogue AI empire', () => {
       defenderOperations: [],
     });
     save.wars = [
-      war('war-legacy-ai-offensive', dawnline, belgium),
+      war('war-legacy-ai-offensive', ordinary, belgium),
       war('war-human-offensive', belgium, ROGUE_AI_NATION_ID_V2),
     ];
     save.canonicalStateHash = canonicalStateHashV2(save);

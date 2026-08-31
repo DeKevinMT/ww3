@@ -1,10 +1,13 @@
 import type { SaveGameV2 } from '../sim/v2/persistence';
+import { RESEARCH_BRANCHES } from '../sim/v2/balance';
+import { researchEffectBelongsToBranchV2 } from '../sim/v2/research';
 import { normalizeScenarioConfigV2, type ScenarioConfigV2 } from '../sim/v2/scenarios';
 import { APEX_TRANSMISSION_IDS_V2 } from '../sim/v2/types';
 import type {
   CommanderForceInitializationV2,
   PlayerId,
   ResearchBranchV2,
+  ResearchEffectV2,
   WorldCommandV2,
   WorldSpeedV2,
 } from '../sim/v2/types';
@@ -12,7 +15,7 @@ import type { CountryMasteryRuntimeModifiersV2 } from '../sim/v2/countryMasteryR
 import { APEX_EMPIRE_ANNUAL_FOOD_OUTPUT_CAP_V2 } from '../sim/v2/commanderForce';
 import type { EmpireFlagIdentityV1 } from '../meta/commanderProfile';
 
-export const MULTIPLAYER_PROTOCOL_VERSION = 6 as const;
+export const MULTIPLAYER_PROTOCOL_VERSION = 7 as const;
 export const MULTIPLAYER_DEPLOYMENT_SCHEMA_VERSION = 1 as const;
 export const MIN_MULTIPLAYER_PLAYERS = 2;
 export const MAX_MULTIPLAYER_PLAYERS = 8;
@@ -29,19 +32,6 @@ const WIRE_MESSAGE_TTL_MS = 30_000;
 const MAX_ID_LENGTH = 128;
 const MAX_NAME_LENGTH = 40;
 const MAX_REASON_LENGTH = 300;
-
-const RESEARCH_BRANCHES = [
-  'population-recruitment',
-  'military-industry',
-  'advanced-weapons',
-  'defensive-systems',
-  'logistics-medicine',
-  'economy-science',
-  'food-systems',
-  'reserve-doctrine',
-  'public-administration',
-  'education-intelligence',
-] as const satisfies readonly ResearchBranchV2[];
 
 const RESEARCH_BRANCH_SET = new Set<string>(RESEARCH_BRANCHES);
 const ARCTIC_PROJECT_SET = new Set([
@@ -639,9 +629,11 @@ function validateResearchAllocations(value: unknown): void {
   if (keys.length !== RESEARCH_BRANCHES.length || keys.some((key) => !RESEARCH_BRANCH_SET.has(key))) {
     fail('command.allocations must contain every supported research branch exactly once.');
   }
-  for (const branch of RESEARCH_BRANCHES) {
-    const allocation = requireFiniteNumber(allocations[branch], `command.allocations.${branch}`);
-    if (allocation < 0 || allocation > 100) fail(`command.allocations.${branch} must be from 0 through 100.`);
+  const values = RESEARCH_BRANCHES.map((branch) => requireInteger(
+    allocations[branch], `command.allocations.${branch}`, 0, 100,
+  ));
+  if (values.reduce((sum, allocation) => sum + allocation, 0) !== 100) {
+    fail('command.allocations must total exactly 100.');
   }
 }
 
@@ -718,9 +710,38 @@ function validateWorldCommand(value: unknown): WorldCommandV2 {
       break;
     }
     case 'set-research-allocations':
+      requireExactKeys(command, ['allocations', 'playerId', 'type'], 'Research allocation commands');
       requirePlayerId(command.playerId, 'command.playerId');
       validateResearchAllocations(command.allocations);
       break;
+    case 'set-research-focus': {
+      requireExactKeys(command, ['branch', 'playerId', 'type'], 'Research focus commands');
+      requirePlayerId(command.playerId, 'command.playerId');
+      if (command.branch !== null
+        && (typeof command.branch !== 'string' || !RESEARCH_BRANCH_SET.has(command.branch))) {
+        fail('command.branch is invalid.');
+      }
+      break;
+    }
+    case 'choose-research-breakthrough': {
+      requireExactKeys(
+        command,
+        ['branch', 'effect', 'playerId', 'type'],
+        'Research breakthrough commands',
+      );
+      requirePlayerId(command.playerId, 'command.playerId');
+      if (typeof command.branch !== 'string' || !RESEARCH_BRANCH_SET.has(command.branch)) {
+        fail('command.branch is invalid.');
+      }
+      const effect = requireString(command.effect, 'command.effect', 64);
+      if (!researchEffectBelongsToBranchV2(
+        command.branch as ResearchBranchV2,
+        effect as ResearchEffectV2,
+      )) {
+        fail('command.effect is invalid for command.branch.');
+      }
+      break;
+    }
     case 'adjust-budget':
       requirePlayerId(command.playerId, 'command.playerId');
       if (command.domain !== 'military' && command.domain !== 'research' && command.domain !== 'development') {
@@ -783,6 +804,7 @@ function validateWorldCommand(value: unknown): WorldCommandV2 {
       }
       break;
     case 'research-surge':
+      requireExactKeys(command, ['playerId', 'targetBranch', 'type'], 'Research surge commands');
       requirePlayerId(command.playerId, 'command.playerId');
       if (typeof command.targetBranch !== 'string' || !RESEARCH_BRANCH_SET.has(command.targetBranch)) {
         fail('command.targetBranch is invalid.');

@@ -396,7 +396,7 @@ describe('V2 one-source manpower combat', () => {
     const cooldown = engine.rapidRecruitmentTerms(bel);
     expect(cooldown.allowed).toBe(false);
     expect(cooldown.cooldownRemaining).toBe(RAPID_RECRUITMENT_COOLDOWN_TICKS - 1);
-    expect(cooldown.reason).toMatch(/weeks/i);
+    expect(cooldown.reason).toMatch(/days/i);
     assertInvariantsV2(engine.state, WORLD_CONTENT_V2);
   });
 

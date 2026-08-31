@@ -406,7 +406,7 @@ function schedulePrimeSortieV2(
     state,
     'polar',
     'critical',
-    `ROGUE PRIME SORTIE: a rival machine intelligence is moving toward ${content.territories[candidate.operation.targetId]?.name ?? candidate.operation.targetId}. Impact in ${warningTicks} weeks; forced withdrawal follows within ${outsideTicks} weeks.`,
+    `ROGUE PRIME SORTIE: a rival machine intelligence is moving toward ${content.territories[candidate.operation.targetId]?.name ?? candidate.operation.targetId}. Impact in ${warningTicks} days; forced withdrawal follows within ${outsideTicks} days.`,
     gatewayTerritoryId,
     ROGUE_AI_NATION_ID_V2,
     { polarRegion: 'antarctica', polarSectorId: candidate.gatewayId },
@@ -601,7 +601,7 @@ export function reconcileRoguePrimeV2(state: WorldStateV2): void {
   state.polarEndgame.visualRevision += 1;
   addWorldEventV2(
     state, 'polar', 'critical',
-    `ROGUE PRIME DOWN: Zero Point needs ${prime.rebuildReadyTick - state.tick} weeks to reconstruct its elite intelligence.`,
+    `ROGUE PRIME DOWN: Zero Point needs ${prime.rebuildReadyTick - state.tick} days to reconstruct its elite intelligence.`,
     ROGUE_PRIME_CORE_TERRITORY_ID_V2,
     ROGUE_AI_NATION_ID_V2,
     { polarRegion: 'antarctica', polarSectorId: 'zero-point-core' },

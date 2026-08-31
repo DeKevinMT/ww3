@@ -72,7 +72,7 @@ function twoTerritoryFixture(
 }
 
 describe('simple Army Capacity logistics', () => {
-  it('uses one fixed 8% land share independent of empire size or research', () => {
+  it('uses one fixed 10% land share independent of empire size or research', () => {
     expect(logisticsThroughputShareV2(0.03, 0)).toBe(LAND_ARMY_CAPACITY_SUPPLY_SHARE_V2);
     expect(logisticsThroughputShareV2(5, 20, 1.1)).toBe(LAND_ARMY_CAPACITY_SUPPLY_SHARE_V2);
   });

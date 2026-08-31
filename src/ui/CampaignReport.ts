@@ -258,7 +258,7 @@ export function renderCampaignReportHtmlV1(input: CampaignReportRenderInputV1): 
         <div class="campaign-report__nation">
           <span>COMMAND</span>
           <strong>${escapeHtml(country.name)}</strong>
-          <small>WEEK ${whole(snapshot.terminalTick)}</small>
+          <small>DAY ${whole(snapshot.terminalTick)}</small>
         </div>
       </header>
 
@@ -289,7 +289,7 @@ export function renderCampaignReportHtmlV1(input: CampaignReportRenderInputV1): 
       ${unlockedAccess}
 
       <section class="campaign-report__stats" aria-label="Campaign statistics">
-        <article><span>WEEKS SURVIVED</span><strong>${whole(snapshot.weeksSurvived)}</strong><small>${Math.floor(snapshot.weeksSurvived / 52)} years in command</small></article>
+        <article><span>DAYS SURVIVED</span><strong>${whole(snapshot.weeksSurvived)}</strong><small>${Math.floor(snapshot.weeksSurvived / 365)} years in command</small></article>
         <article><span>LIBERATION DELTA</span><strong class="${snapshot.territoryDelta < 0 ? 'is-negative' : snapshot.territoryDelta > 0 ? 'is-positive' : ''}">${signed(snapshot.territoryDelta)}</strong><small>${snapshot.currentTerritoryIds.length} held · ${snapshot.territoriesGainedIds.length} liberated · ${snapshot.territoriesLostIds.length} lost</small></article>
         <article><span>WAR RECORD</span><strong>${whole(snapshot.warsWon)}–${whole(snapshot.warsLost)}</strong><small>${warRecordNote}</small></article>
         <article><span>ROGUE WAVE</span><strong>${whole(snapshot.highestSurvivalWave)}</strong></article>

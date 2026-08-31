@@ -789,6 +789,8 @@ describe('commander level and talent menu', () => {
       expect(mounted.host.innerHTML).toContain('is-unlocked is-selected');
       expect(mounted.host.innerHTML).not.toContain('data-action="start-mode"');
       expect(mounted.host.innerHTML).toContain('OPENING INTELLIGENCE');
+      expect(mounted.host.innerHTML).toContain('Neutral day-one national strength');
+      expect(mounted.host.innerHTML).not.toContain('Neutral week-one national strength');
       expect(mounted.host.innerHTML).toContain('FULL STRATEGIC INTELLIGENCE');
       expect(mounted.host.innerHTML).toContain('5 MORE METRICS');
       expect(mounted.host.innerHTML).toContain('EONSCAR &amp; META LOADOUT');
@@ -844,6 +846,9 @@ describe('commander level and talent menu', () => {
       expect(mounted.host.innerHTML).toContain('Single-player only. Defeat nations');
       expect(mounted.host.innerHTML).toContain('ENTER FUN MODE →');
       expect(mounted.host.innerHTML).toContain('DEPLOY YOUR EMPIRE →');
+      expect(mounted.host.innerHTML).toContain('All 9 Arctic countries begin inside your Empire');
+      expect(mounted.host.innerHTML).toContain('locked Arctic countries as 50% Base Packets');
+      expect(mounted.host.innerHTML).toContain('unlocked Arctic countries at full power with Mastery');
       expect(mounted.host.innerHTML.indexOf('commander-mode-grid'))
         .toBeLessThan(mounted.host.innerHTML.indexOf('commander-mode-loadout'));
       expect(commanderMenuSource).toContain("['ArrowDown', 'ArrowUp', 'Home', 'End']");
@@ -1029,7 +1034,7 @@ describe('commander level and talent menu', () => {
     }
   });
 
-  it('shows spendable Home badges and a one-time post-Campaign guide with direct actions', () => {
+  it('keeps spendable Home badges while suppressing the retired post-Campaign tutorial', () => {
     const base = grantStarterCountriesV1(
       createCommanderProfileV1(1, 'home-progression-guide'),
       [STARTER_COUNTRY_ID],
@@ -1074,29 +1079,19 @@ describe('commander level and talent menu', () => {
       onAcknowledgeCampaignProgressionTutorial: acknowledge,
     });
     try {
-      expect(mounted.host.innerHTML).toContain('FIRST CAMPAIGN COMPLETE');
-      expect(mounted.host.innerHTML).toContain('Spend the power you earned');
-      expect(mounted.host.innerHTML).toContain('unspent points give no bonus');
-      expect(mounted.host.innerHTML).toContain('EONSCAR TALENT POINTS');
-      expect(mounted.host.innerHTML).toContain('NATION MASTERY POINTS');
-      expect(mounted.host.innerHTML).toContain('Credits only pay for Survival entry.');
-      expect(mounted.host.innerHTML).toContain(
-        'Defeating a nation in Campaign unlocks it',
-      );
-      expect(mounted.host.innerHTML).toContain('SPEND 4 EONSCAR TALENT POINTS →');
-      expect(mounted.host.innerHTML).toContain('SPEND 2 NATION MASTERY POINTS →');
-      expect(mounted.host.innerHTML).toContain('data-action="tutorial-open-talents"');
-      expect(mounted.host.innerHTML).toContain('data-action="tutorial-open-arsenal"');
+      expect(mounted.host.innerHTML).not.toContain('FIRST CAMPAIGN COMPLETE');
+      expect(mounted.host.innerHTML).not.toContain('Spend the power you earned');
+      expect(mounted.host.innerHTML).not.toContain('data-action="tutorial-open-talents"');
+      expect(mounted.host.innerHTML).not.toContain('data-action="tutorial-open-arsenal"');
       expect(mounted.host.innerHTML).toContain('data-action="open-talents"');
       expect(mounted.host.innerHTML).toContain('data-action="open-arsenal"');
       expect(mounted.host.innerHTML).toContain('commander-meta-card--apex has-unspent');
       expect(mounted.host.innerHTML).toContain('commander-meta-card--arsenal has-unspent');
 
       mounted.setPageScroll(142, 3);
-      mounted.click('tutorial-open-arsenal');
-      expect(acknowledge).toHaveBeenCalledOnce();
+      mounted.click('open-arsenal');
+      expect(acknowledge).not.toHaveBeenCalled();
       expect(mounted.host.innerHTML).toContain('commander-menu-shell--arsenal');
-      expect(mounted.host.innerHTML).not.toContain('FIRST CAMPAIGN COMPLETE');
       expect(mounted.pageScroll).toEqual({ top: 142, left: 3 });
 
       mounted.click('home');
@@ -1120,6 +1115,7 @@ describe('commander level and talent menu', () => {
     try {
       expect(mounted.host.innerHTML).toContain('MULTIPLAYER SEAT RESERVED');
       expect(mounted.host.innerHTML).toContain('REJOIN MATCH');
+      expect(mounted.host.innerHTML).toContain("synchronize the host's latest day");
       expect(mounted.host.innerHTML).toContain('Belgium');
       expect(mounted.host.innerHTML).toContain('Survival · Belgium');
       expect(mounted.host.innerHTML).not.toContain('rejoinToken');
@@ -1180,6 +1176,8 @@ describe('commander level and talent menu', () => {
     });
     try {
       expect(mounted.host.innerHTML).toContain('CONTINUE CAMPAIGN');
+      expect(mounted.host.innerHTML).toContain('SURVIVAL · DAY 78');
+      expect(mounted.host.innerHTML).not.toContain('SURVIVAL · WEEK 78');
       expect(mounted.host.innerHTML).toContain('commander-theater has-active-operation');
       expect(mounted.host.innerHTML).toContain('ENERGY</small><b>50%');
       expect(mounted.host.innerHTML).toContain('TERRITORIES</small><b>2');

@@ -45,15 +45,15 @@ Ross Entry   ─┘                                                        × 3 
 
 The standalone expedition system is retired. Antarctica now uses normal territories, active armies, supply routes and wars. Personnel remain in territorial armies; there is no secondary manpower pool or return step. Depth and the core phase increase opposition strength. In Survival, every annual mobilization from wave one onward manufactures provenance-tagged personnel equal to exactly 5% of the pre-wave live Rogue active Army and routes them from the three gateways.
 
-## Survival opening and Dawnline
+## Survival opening and Arctic Base Packets
 
-Survival begins with the Rogue awake and owning only Antarctica. All three Antarctic gateways are operational immediately. Player-roster territories deploy at 100% of their post-mastery live Army Capacity. Every ordinary sovereign retains its normal population, economy, resources and capacity and opens at 100% Army readiness.
+Survival begins with the Rogue awake and owning only Antarctica. All three Antarctic gateways are operational immediately. Player-roster territories deploy at 100% of their post-mastery live Army Capacity. Every ordinary sovereign outside the player's Arctic foundation retains its normal population, economy, resources and capacity and opens at 100% Army readiness.
 
-The non-human Arctic states Canada, Denmark, Finland, Iceland, Norway, Russia, Sweden and the United States, plus Greenland when it is not part of a human Empire, form the full-strength **Dawnline Accord**. Human-roster members are excluded. Greenland is the lore founder, the first available priority member is the runtime controller, and all Accord territory displays one dedicated alliance flag. Dawnline is non-hostile to every human seat and launches offensive action only against the Rogue; it is not a mechanism for absorbing or controlling human territory. The Rogue opening is calibrated to about 120% of Dawnline's combined actual Combat Power.
+Canada, Denmark, Finland, Greenland, Iceland, Norway, Russia, Sweden and the United States belong directly to the player's Empire as the Survival foundation. Unlocked countries contribute full live Army Capacity plus their Country Mastery. Locked countries contribute full economy and population, a 50% structural Army Capacity Base Packet, half their opening treasury contribution and no mastery. In co-op, each selected human country remains sovereign and every unselected Arctic Base Packet belongs to the host. The Rogue opening is calibrated to roughly 120% of the base Arctic benchmark plus a bounded mastery allowance.
 
-Ordinary countries outside Dawnline remain independent. Their systemic wars and declarations against humans are suppressed in Survival, but humans may still declare otherwise legal ordinary wars. Rogue conquest continues to use normal ownership, population, economy, production, integration and logistics in every ordinary territory. Visible Rogue assimilation advances at 4× the ordinary integration rate, but it is never instant and creates no personnel or progression reward.
+Ordinary countries outside the Arctic foundation remain independent. Their systemic wars and declarations against humans are suppressed in Survival, but humans may still declare otherwise legal ordinary wars. Rogue conquest continues to use normal ownership, population, economy, production, integration and logistics in every ordinary territory. Visible Rogue assimilation advances at 4× the ordinary integration rate, but it is never instant and creates no personnel or progression reward.
 
-Every 52 weeks, Antarctica manufactures provenance-tagged personnel equal to exactly 5% of its pre-wave live active Army and divides them across the three gateways, starting with the first wave. Existing formations are not drained. Wave launch itself grants no reward. Survival score and XP come only from defeating provenance-verified Antarctic-origin Rogue personnel and from unique currently-held Antarctic sector/core captures. Ordinary combat and captures grant zero Survival progression, and the mode always pays zero Credits after its 50-Credit-per-seat entry cost.
+Every 52 days, Antarctica manufactures provenance-tagged personnel equal to exactly 5% of its pre-wave live active Army and divides them across the three gateways, starting with the first wave. Existing formations are not drained. Wave launch itself grants no reward. Survival score and XP come only from defeating provenance-verified Antarctic-origin Rogue personnel and from unique currently-held Antarctic sector/core captures. Ordinary combat and captures grant zero Survival progression, and the mode always pays zero Credits after its 50-Credit-per-seat entry cost.
 
 ## Determinism, saves and multiplayer
 
@@ -61,7 +61,7 @@ Every 52 weeks, Antarctica manufactures provenance-tagged personnel equal to exa
 - Authenticated v2.64 saves are verified before receiving an initial dormant polar state.
 - New commands are validated by the authoritative multiplayer host and are restricted to the sender's assigned country.
 - Polar combat derives its variation from stable hashes and never advances the ordinary world RNG.
-- The state has a fixed project list, nine sectors and at most one expedition per player, keeping weekly work bounded.
+- The state has a fixed project list, nine sectors and at most one expedition per player, keeping per-tick work bounded.
 
 ## Rendering and performance
 
@@ -74,4 +74,4 @@ Every 52 weeks, Antarctica manufactures provenance-tagged personnel equal to exa
 
 ## Verification focus
 
-The automated suite covers project sequencing and payment, the warning transition, corridor access, territorial logistics, deterministic combat, the sector graph, Survival opening ownership and Army fill, Dawnline membership and strength, yearly wave commitment, provenance-gated rewards, multiplayer protocol and authorisation, map routing and UI accessibility. The browser smoke test additionally covers desktop and mobile top bars, the Research gateway, confirmation flow, progress display and polar camera handoff.
+The automated suite covers project sequencing and payment, the warning transition, corridor access, territorial logistics, deterministic combat, the sector graph, Survival opening ownership and Army fill, Arctic Base Packet ownership and strength, 52-day wave commitment, provenance-gated rewards, multiplayer protocol and authorisation, map routing and UI accessibility. The browser smoke test additionally covers desktop and mobile top bars, the Research gateway, confirmation flow, progress display and polar camera handoff.

@@ -85,6 +85,11 @@ describe('campaign report', () => {
 
     expect(html).toContain('Victory secured.');
     expect(html).toContain('FINAL TIMELINE REPORT · Survival');
+    expect(html).toContain('DAY 160');
+    expect(html).toContain('DAYS SURVIVED');
+    expect(html).toContain('<strong>160</strong><small>0 years in command</small>');
+    expect(html).not.toContain('WEEKS SURVIVED');
+    expect(html).not.toContain('WEEK 160');
     expect(html).toContain('+640 XP');
     expect(html).toContain('EONSCAR LEVEL');
     expect(html).toContain('+480 XP');

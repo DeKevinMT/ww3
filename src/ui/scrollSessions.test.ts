@@ -19,7 +19,7 @@ function target(
 }
 
 describe('DOM scroll sessions', () => {
-  it('preserves the position when a weekly render replaces the same drawer', () => {
+  it('preserves the position when a daily render replaces the same drawer', () => {
     const before = target(drawerScrollSessionId('war'), 438);
     const snapshot = captureScrollSessions([before]);
     const after = target(drawerScrollSessionId('war'), 0);
@@ -133,7 +133,7 @@ describe('drawer disclosure sessions', () => {
     open,
   });
 
-  it('keeps an Economy detail section open across a weekly render', () => {
+  it('keeps an Economy detail section open across a daily render', () => {
     const snapshot = captureDisclosureSessions([
       disclosure('drawer:economy:annual-ledger', true),
     ]);
@@ -187,7 +187,7 @@ describe('drawer disclosure sessions', () => {
     expect(disclosureTags.length).toBeGreaterThan(0);
     expect(disclosureTags.every((tag) => tag.includes('data-disclosure-session='))).toBe(true);
     expect(worldUiSource).toContain('data-disclosure-session="drawer:economy:annual-ledger"');
-    expect(worldUiSource).toContain('data-disclosure-session="drawer:research:programs"');
+    expect(worldUiSource).not.toContain('data-disclosure-session="drawer:research:programs"');
     expect(worldUiSource).toContain(
       'data-disclosure-session="modal:war-outcome:${escapeHtml(outcome.warId)}:full-breakdown"',
     );

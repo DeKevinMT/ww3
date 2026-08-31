@@ -22,6 +22,8 @@ import { MapStatsRefreshCadence } from '../game/map/mapStatsCadence';
 import { terrainPresentation } from '../game/terrainPresentation';
 import {
   BASE_OPERATING_COST_TAX_REVENUE_SHARE,
+  calendarAnnualGrowthRateV2,
+  calendarAnnualLossRateV2,
   CONQUEST_CAPTURE_GUARD_TICKS,
   DEFENSE_RESEARCH_HALF_SATURATION,
   DEFENSE_RESEARCH_MAX_BONUS,
@@ -35,7 +37,10 @@ import {
   TAX_EFFICIENCY_RESEARCH_BONUS_PER_EFFECTIVE_LEVEL,
   TAX_EFFICIENCY_RESEARCH_EFFECTIVE_CEILING,
   TAX_EFFICIENCY_RESEARCH_HALF_SATURATION,
+  V2_CALENDAR_DAYS_PER_TICK,
+  V2_CALENDAR_DAYS_PER_YEAR,
   WAR_MOBILIZATION_TICKS,
+  WEEKS_PER_YEAR,
 } from '../sim/v2/balance';
 import {
   territoryTerrainEffectsV2,
@@ -84,6 +89,7 @@ import {
   campaignWarMobilizationTicksV2,
   campaignWarsUnlockedV2,
 } from '../sim/v2/campaignPrologue';
+import { isCampaignTutorialTransmissionV2 } from '../sim/v2/campaignTutorial';
 import type { GameModeV2, ScenarioConfigV2 } from '../sim/v2/scenarios';
 import {
   selectArmyStrengthV2,
@@ -103,10 +109,7 @@ import {
 import type { OpeningCandidatePreviewSnapshotV2 } from '../sim/v2/WorldEngineV2';
 import { territoryIdV2 } from '../sim/v2/types';
 import { humanStartingArmyMultiplierForContentV2 } from '../sim/v2/traits';
-import {
-  countryFlagHtml,
-  DAWNLINE_ACCORD_FLAG_NATION_ID,
-} from './countryFlags';
+import { countryFlagHtml } from './countryFlags';
 import { selectRogueLogisticsTelemetryV2 } from './antarcticaLogistics';
 import { projectMapArmyV2 } from './mapArmyProjection';
 import {
@@ -130,7 +133,6 @@ import {
   type SurvivalCounteroffensiveTargetV2,
 } from '../sim/v2/war';
 import { isSurvivalStateV2 } from '../sim/v2/survival';
-import { isSurvivalDawnlineNationV2 } from '../sim/v2/survivalOrdinaryAi';
 import {
   captureDisclosureSessions,
   captureScrollSessions,
@@ -172,6 +174,7 @@ import type {
   ResearchBranchV2,
   ResearchEffectV2,
   ResearchBranchProgressV2,
+  ResearchSurgeTermsV2,
   TerritoryId,
   TerritoryStateV2,
   TerritoryViewV2,
@@ -182,6 +185,7 @@ import type {
   WarStateV2,
   WeeklyFinanceBreakdownV2,
   WeeklyManpowerProjectionV2,
+  WorldCommandV2,
   WorldChangeV2,
   WorldEventV2,
   WorldStateV2,
@@ -189,6 +193,38 @@ import type {
 } from '../sim/v2/types';
 
 type CommandOutcome = boolean | CommandResultV2 | void;
+type ResearchCommandV2 = Extract<WorldCommandV2, {
+  type: 'set-research-focus' | 'choose-research-breakthrough' | 'research-surge';
+}>;
+type PendingResearchActionV2 = {
+  command: ResearchCommandV2;
+  submittedTick: number;
+  submittedActionSequence: number;
+  queuedActionSequence: number;
+  activeProgramBefore: ResearchBranchV2 | null | undefined;
+  effectLevelBefore?: number;
+  progressBefore?: number;
+  surgeUsesBefore?: number;
+};
+
+function isResearchCommandV2(command: WorldCommandV2): command is ResearchCommandV2 {
+  return command.type === 'set-research-focus'
+    || command.type === 'choose-research-breakthrough'
+    || command.type === 'research-surge';
+}
+
+function sameResearchCommandV2(left: ResearchCommandV2, right: ResearchCommandV2): boolean {
+  if (left.type !== right.type || left.playerId !== right.playerId) return false;
+  switch (left.type) {
+    case 'set-research-focus':
+      return right.type === left.type && right.branch === left.branch;
+    case 'choose-research-breakthrough':
+      return right.type === left.type && right.branch === left.branch && right.effect === left.effect;
+    case 'research-surge':
+      return right.type === left.type && right.targetBranch === left.targetBranch;
+  }
+}
+
 type WarTargetCandidate = {
   targetId: PlayerId;
   target: NationViewV2;
@@ -277,6 +313,14 @@ export interface WorldEngineV2UIContract {
     playerId: string,
     finance?: WeeklyFinanceBreakdownV2,
   ): readonly ResearchBranchProgressV2[];
+  setResearchFocus(playerId: string, branch: ResearchBranchV2 | null): CommandOutcome;
+  chooseResearchBreakthrough(
+    playerId: string,
+    branch: ResearchBranchV2,
+    effect: ResearchEffectV2,
+  ): CommandOutcome;
+  researchSurgeTerms(playerId: string, targetBranch: ResearchBranchV2): ResearchSurgeTermsV2;
+  researchSurge(playerId: string, targetBranch: ResearchBranchV2): CommandOutcome;
   activeWarBetween(leftId: string, rightId: string): WarStateV2 | undefined;
   warAccessType(attackerId: string, defenderId: string): WarAccessV2;
   conquestForecast(attackerId: string, targetId: string): ConquestForecastV2;
@@ -366,7 +410,7 @@ const RESEARCH_META: Record<ResearchBranchV2, {
 }> = {
   'population-recruitment': {
     label: 'Population & Recruitment', shortLabel: 'Recruitment',
-    effect: 'Faster population growth and more trained manpower each week.',
+    effect: 'Faster population growth and more trained manpower each day.',
   },
   'military-industry': {
     label: 'Military Industry', shortLabel: 'Industry',
@@ -418,6 +462,59 @@ const RESEARCH_COLORS: Record<ResearchBranchV2, string> = {
   'public-administration': '#63d5c0',
   'education-intelligence': '#d39bea',
 };
+
+const RESEARCH_PILLARS: readonly Readonly<{
+  label: string;
+  icon: string;
+  purpose: string;
+  branches: readonly [ResearchBranchV2, ResearchBranchV2];
+}>[] = [
+  {
+    label: 'People', icon: 'POP', purpose: 'Grow citizens, recruits and national intelligence.',
+    branches: ['population-recruitment', 'education-intelligence'],
+  },
+  {
+    label: 'Army', icon: 'MIL', purpose: 'Expand capacity, training and replacement strength.',
+    branches: ['military-industry', 'reserve-doctrine'],
+  },
+  {
+    label: 'Combat', icon: 'ATK', purpose: 'Choose sharper attacks or stronger protection.',
+    branches: ['advanced-weapons', 'defensive-systems'],
+  },
+  {
+    label: 'Sustainment', icon: 'SUP', purpose: 'Keep forces supplied, recovered and in the field.',
+    branches: ['logistics-medicine', 'food-systems'],
+  },
+  {
+    label: 'State', icon: 'ECO', purpose: 'Build a richer, faster and cheaper empire.',
+    branches: ['economy-science', 'public-administration'],
+  },
+] as const;
+
+const RESEARCH_EFFECT_COPY: Readonly<Record<ResearchEffectV2, Readonly<{
+  name: string;
+  description: string;
+}>>> = Object.freeze({
+  'population-growth': { name: 'Civil Renewal', description: 'Accelerate the population base that feeds your economy and Army.' },
+  training: { name: 'Professional Command', description: 'Turn available manpower into trained soldiers faster.' },
+  'force-capacity': { name: 'Expanded Force Structure', description: 'Raise the maximum active Army your Empire can sustain.' },
+  'reinforcement-efficiency': { name: 'Modular Arsenals', description: 'Reduce the treasury cost of replacing combat losses.' },
+  attack: { name: 'Precision Weapons', description: 'Increase the effective ATK of every national formation.' },
+  defense: { name: 'Layered Defence', description: 'Increase the effective DEF of every national formation.' },
+  'casualty-reduction': { name: 'Force Protection', description: 'Lose fewer trained soldiers in every combat exchange.' },
+  recovery: { name: 'Field Medicine', description: 'Reduce preventable deaths and preserve national manpower.' },
+  supply: { name: 'Strategic Logistics', description: 'Improve the supply systems supporting your armed forces.' },
+  'economy-growth': { name: 'Industrial Modernisation', description: 'Increase long-term national economic growth.' },
+  'research-speed': { name: 'Open Science Network', description: 'Generate more research progress from the same daily budget.' },
+  'research-efficiency': { name: 'Lean Laboratories', description: 'Reduce the cost of every future breakthrough.' },
+  'food-production': { name: 'Domestic Production', description: 'Strengthen the Empire supply base.' },
+  'food-storage': { name: 'Strategic Reserves', description: 'Improve recovery through deeper national reserves.' },
+  'reserve-training': { name: 'Reserve Academies', description: 'Train reserve formations faster.' },
+  'reserve-mobilization': { name: 'Mobilisation Network', description: 'Raise the force available to the active Army.' },
+  'tax-efficiency': { name: 'Revenue Modernisation', description: 'Collect more usable treasury income from the same economy.' },
+  'operating-efficiency': { name: 'Efficient State', description: 'Reduce the fixed daily cost of running the Empire.' },
+  'iq-increase': { name: 'National Learning Grid', description: 'Raise live national IQ and the systems that depend on it.' },
+});
 
 function researchEffectLabel(effect: string): string {
   return ({
@@ -574,8 +671,7 @@ function signedCash(value: number, digits = 2): string {
   return `${value >= 0 ? '+' : '−'}${cash(Math.abs(value), digits)}`;
 }
 
-const WEEKS_PER_YEAR = 52;
-const annual = (weekly: number): number => weekly * WEEKS_PER_YEAR;
+const annual = (daily: number): number => daily * V2_CALENDAR_DAYS_PER_YEAR;
 
 function people(millions: number): string {
   return compactNumber(Math.abs(millions) * 1e6);
@@ -682,9 +778,9 @@ export function treasuryTopbarPresentationV2(
     value: cash(treasury),
     reserveFill,
     reserveFillClassName,
-    trend: `${signedCash(weeklyNet)}/wk`,
+    trend: `${signedCash(weeklyNet)}/day`,
     trendClassName: weeklyNet >= 0 ? 'is-positive' : 'is-negative',
-    ariaLabel: `Current empire treasury ${cash(treasury)}; projected recurring net ${signedCash(weeklyNet)} per week`,
+    ariaLabel: `Current empire treasury ${cash(treasury)}; projected recurring net ${signedCash(weeklyNet)} per day`,
   });
 }
 
@@ -743,16 +839,18 @@ function population(millions: number): string {
   return compactNumber(millions * 1e6);
 }
 
-function compactWarTime(weeks: number): string {
-  if (weeks >= 520) return '10Y+';
-  if (weeks >= 52) return `${format(weeks / 52, 1)}Y`;
-  if (weeks >= 9) return `${Math.max(2, Math.round(weeks / 4.33))}M`;
-  return `${Math.max(1, Math.round(weeks))}W`;
+function compactWarTime(days: number): string {
+  if (days >= V2_CALENDAR_DAYS_PER_YEAR * 10) return '10Y+';
+  if (days >= V2_CALENDAR_DAYS_PER_YEAR) {
+    return `${format(days / V2_CALENDAR_DAYS_PER_YEAR, 1)}Y`;
+  }
+  if (days >= 30) return `${Math.max(1, Math.round(days / 30.4375))}M`;
+  return `${Math.max(1, Math.round(days))}D`;
 }
 
-function warTimeRange(minWeeks: number, maxWeeks: number): string {
-  if (minWeeks >= 520) return '10Y+';
-  return `${compactWarTime(minWeeks)}–${compactWarTime(maxWeeks)}`;
+function warTimeRange(minDays: number, maxDays: number): string {
+  if (minDays >= V2_CALENDAR_DAYS_PER_YEAR * 10) return '10Y+';
+  return `${compactWarTime(minDays)}–${compactWarTime(maxDays)}`;
 }
 
 function warOutlookLabel(estimate: LiveWarEstimateV2): string {
@@ -798,7 +896,9 @@ const WORLD_DATE_FORMATTER = new Intl.DateTimeFormat('en-GB', {
 
 function worldDateLabel(tick: number, startYear = 2026): string {
   const start = Date.UTC(startYear, 7, 17);
-  return WORLD_DATE_FORMATTER.format(new Date(start + tick * 7 * 24 * 60 * 60 * 1_000)).toUpperCase();
+  return WORLD_DATE_FORMATTER.format(new Date(
+    start + tick * V2_CALENDAR_DAYS_PER_TICK * 24 * 60 * 60 * 1_000,
+  )).toUpperCase();
 }
 
 function armyReadinessLabel(army: ArmyStateV2): string {
@@ -812,15 +912,6 @@ function armyReadinessLabel(army: ArmyStateV2): string {
 
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.max(minimum, Math.min(maximum, value));
-}
-
-function nextResearchMilestone(
-  portfolio: readonly ResearchBranchProgressV2[],
-): ResearchBranchProgressV2 | undefined {
-  return portfolio.reduce<ResearchBranchProgressV2 | undefined>((nearest, program) => {
-    if (program.maxed) return nearest;
-    return !nearest || program.progressRatio > nearest.progressRatio ? program : nearest;
-  }, undefined);
 }
 
 function mapTerritory(
@@ -946,10 +1037,10 @@ export class IntroOpeningMetricsCacheV2 {
         manpower: army.deployed,
         economy: economyView.output,
         'gdp-per-capita': economyView.wealthPerPerson / 1e6,
-        'economic-growth': finance.annualEconomyGrowthRate * 100,
+        'economic-growth': calendarAnnualGrowthRateV2(finance.annualEconomyGrowthRate) * 100,
         tax: economyView.dynamicTaxRate * 100,
         population: economyView.population,
-        growth: populationDynamics.annualNetRate * 100,
+        growth: calendarAnnualGrowthRateV2(populationDynamics.annualNetRate) * 100,
       });
     }
 
@@ -1044,9 +1135,9 @@ export function introRelativeStatSourcesV2(
     population: metrics.economyView.population,
     economy: metrics.economyView.output,
     treasury: metrics.player.treasury,
-    economicGrowth: metrics.finance.annualEconomyGrowthRate * 100,
+    economicGrowth: calendarAnnualGrowthRateV2(metrics.finance.annualEconomyGrowthRate) * 100,
     tax: metrics.economyView.dynamicTaxRate * 100,
-    populationGrowth: metrics.populationDynamics.annualNetRate * 100,
+    populationGrowth: calendarAnnualGrowthRateV2(metrics.populationDynamics.annualNetRate) * 100,
     gdpPerCapita: metrics.economyView.wealthPerPerson / 1e6,
   };
 }
@@ -1112,7 +1203,7 @@ function terrainEffectMetrics(effects: TerritoryTerrainEffectsV2): string {
     const tone = Math.abs(delta) < 0.05 ? 'is-neutral' : benefit > 0 ? 'is-positive' : 'is-negative';
     return `<b class="${tone}"><em>${label}</em>${delta >= 0 ? '+' : '−'}${format(Math.abs(delta), 1)}%</b>`;
   };
-  const growth = effects.annualEconomyGrowthAdjustment * 100;
+  const growth = calendarAnnualGrowthRateV2(effects.annualEconomyGrowthAdjustment) * 100;
   const growthTone = Math.abs(growth) < 0.005 ? 'is-neutral' : growth > 0 ? 'is-positive' : 'is-negative';
   return `<span class="terrain-effect-metrics">${[
     multiplierMetric('DEF', effects.defense),
@@ -1154,7 +1245,7 @@ function terrainProfilePanel(
     const tone = Math.abs(delta) < 0.05 ? 'is-neutral' : benefit > 0 ? 'is-positive' : 'is-negative';
     return `<article class="${tone}"><i>${code}</i><div><span>${label}</span><strong>${delta >= 0 ? '+' : '−'}${format(Math.abs(delta), 1)}%</strong></div></article>`;
   };
-  const growth = effects.annualEconomyGrowthAdjustment * 100;
+  const growth = calendarAnnualGrowthRateV2(effects.annualEconomyGrowthAdjustment) * 100;
   const growthTone = Math.abs(growth) < 0.005 ? 'is-neutral' : growth > 0 ? 'is-positive' : 'is-negative';
   return `<section class="terrain-profile-card" style="--terrain:${dominantStyle.cssColor}">
     <header class="terrain-profile-card__head"><i>${dominantStyle.glyph}</i><div><span>STRATEGIC TERRAIN</span><strong>${escapeHtml(dominantStyle.label)}-led profile</strong></div><b>${highlights.length} ACTIVE TYPES</b></header>
@@ -1328,19 +1419,23 @@ export function renderNationPickerV2(
   const startingArmyBonus = Math.max(0, startingArmy - army.deployed);
   const openingForceIsBoosted = startingArmyMultiplier > 1.000000001;
   const openingForceIsLimited = startingArmyMultiplier < 0.999999999;
+  const openingArmyDurationYears = OPENING_ARMY_BONUS_DURATION_TICKS_V2
+    * V2_CALENDAR_DAYS_PER_TICK / V2_CALENDAR_DAYS_PER_YEAR;
+  const openingArmyDurationShort = `${format(openingArmyDurationYears, 1)} YEARS`;
+  const openingArmyDurationLong = `${format(openingArmyDurationYears, 1)} years`;
   const startingArmyAdjustmentNote = openingForceIsBoosted
     ? accountManagedSolo
       ? `<small>+${people(startingArmyBonus)} FROM HIGHER ARMY CAPACITY</small>`
-      : `<small>+${people(startingArmyBonus)} FULLY FREE · FADES OVER 30 YEARS</small>`
+      : `<small>+${people(startingArmyBonus)} FULLY FREE · FADES OVER ${openingArmyDurationShort}</small>`
     : openingForceIsLimited
-      ? '<small>OPENING LIMIT · FORCE CAPS UNLOCK TO 1× OVER 30 YEARS</small>'
+      ? `<small>OPENING LIMIT · FORCE CAPS UNLOCK TO 1× OVER ${openingArmyDurationShort}</small>`
       : '';
   const startingArmyTitle = openingForceIsBoosted
     ? accountManagedSolo
         ? 'Deploys full at its mastery-raised Army Capacity and never starts above that cap.'
-      : 'The player-only deployed surplus has no upkeep. It fades over thirty years and never refills.'
+      : `The player-only deployed surplus has no upkeep. It fades over ${openingArmyDurationLong} and never refills.`
     : openingForceIsLimited
-      ? `Opening limit: the deployed Army starts at ×${format(startingArmyMultiplier, 2)} and its capacity unlocks gradually to 1× over thirty years; new troops still require normal recruitment and training.`
+      ? `Opening limit: the deployed Army starts at ×${format(startingArmyMultiplier, 2)} and its capacity unlocks gradually to 1× over ${openingArmyDurationLong}; new troops still require normal recruitment and training.`
       : 'Normal 1× opening Army with no player-only opening boost or limit.';
   const startingArmyClass = openingForceIsBoosted
     ? 'stat-player-army--boost'
@@ -1374,9 +1469,9 @@ export function renderNationPickerV2(
     ${relativeStat('population', 'POPULATION', population(economy.population))}
     ${relativeStat('economy', 'ECONOMY', cash(economy.output), 'stat-economy')}
     ${relativeStat('treasury', 'STARTING TREASURY', cash(startingTreasury), 'stat-treasury')}
-    ${relativeStat('economicGrowth', 'ECONOMIC GROWTH', `${signed(finance.annualEconomyGrowthRate * 100, 2)}%`)}
+    ${relativeStat('economicGrowth', 'ECONOMIC GROWTH', `${signed(calendarAnnualGrowthRateV2(finance.annualEconomyGrowthRate) * 100, 2)}%`)}
     ${relativeStat('tax', 'TAX', `${format(economy.dynamicTaxRate * 100, 1)}%`, '', '', 'Automatic 10–20% rate from liberated GDP per baseline productive person.')}
-    ${relativeStat('populationGrowth', 'POPULATION GROWTH', `${populationDynamics.annualNetRate >= 0 ? '+' : ''}${format(populationDynamics.annualNetRate * 100, 2)}%`)}
+    ${relativeStat('populationGrowth', 'POPULATION GROWTH', `${signed(calendarAnnualGrowthRateV2(populationDynamics.annualNetRate) * 100, 2)}%`)}
     ${relativeStat('gdpPerCapita', 'GDP / CAPITA', cash(economy.wealthPerPerson / 1e6), '', '', 'Live GDP divided by the currently controlled population.')}
   </div>`;
   const query = options.searchQuery.trim().toLocaleLowerCase('en');
@@ -1939,12 +2034,9 @@ export function createMapEngineAdapter(
         ...player,
         isHuman: player.isHuman,
         controllerName: player.isHuman ? controllerNames.get(player.id) : undefined,
-        flagCountryId: engine.content.metadata?.scenarioId === 'survival'
-          && isSurvivalDawnlineNationV2(engine.state, player.id)
-          ? DAWNLINE_ACCORD_FLAG_NATION_ID
-          : player.isHuman
-            ? empireFlagCountryIds.get(player.id) ?? player.id
-            : player.id,
+        flagCountryId: player.isHuman
+          ? empireFlagCountryIds.get(player.id) ?? player.id
+          : player.id,
       } : undefined;
     },
     territoriesOf: (playerId) => {
@@ -2105,6 +2197,7 @@ export class WorldUIV2 {
   private warLogisticsPreviewCacheEpoch = '';
   private readonly warLogisticsPreviewCache = new Map<string, WarLogisticsPreviewV2>();
   private unsubscribe?: () => void;
+  private pendingResearchAction?: PendingResearchActionV2;
   private renderTimer?: number;
   private renderFrame?: number;
   private empireDefenceGlowAnimation?: Animation;
@@ -2226,14 +2319,117 @@ export class WorldUIV2 {
     return this.engine.viewerPlayerId ?? this.engine.state.humanPlayerId;
   }
 
+  private submitResearchAction(
+    command: ResearchCommandV2,
+    submit: () => CommandOutcome,
+    rejectionFallback: string,
+  ): void {
+    if (this.pendingResearchAction) {
+      this.toast('A RESEARCH ORDER IS ALREADY AWAITING CONFIRMATION');
+      return;
+    }
+    const nation = this.engine.state.players[command.playerId];
+    const pending: PendingResearchActionV2 = {
+      command,
+      submittedTick: this.engine.state.tick,
+      submittedActionSequence: this.engine.state.actionSequence,
+      queuedActionSequence: this.engine.state.actionSequence,
+      activeProgramBefore: nation?.research.activeProgram,
+      ...(command.type === 'choose-research-breakthrough'
+        ? { effectLevelBefore: nation?.research.effectLevels[command.effect] ?? 0 }
+        : {}),
+      ...(command.type === 'research-surge'
+        ? {
+            progressBefore: nation?.research.progress[command.targetBranch] ?? 0,
+            surgeUsesBefore: nation?.manualActionUses.researchSurge ?? 0,
+          }
+        : {}),
+    };
+    // Install the guard before submitting. A local authority emits
+    // `action-queued` synchronously, while replicas wait for the host tick.
+    this.pendingResearchAction = pending;
+    let result: CommandOutcome;
+    try {
+      result = submit();
+    } catch (error) {
+      if (this.pendingResearchAction === pending) this.pendingResearchAction = undefined;
+      throw error;
+    }
+    pending.queuedActionSequence = this.engine.state.actionSequence;
+    if (!commandAccepted(result)) {
+      if (this.pendingResearchAction === pending) this.pendingResearchAction = undefined;
+      this.toast(commandReason(result) ?? rejectionFallback);
+      this.render();
+      return;
+    }
+    if (this.pendingResearchAction === pending) {
+      this.toast('RESEARCH ORDER QUEUED · AWAITING CONFIRMATION');
+      this.render();
+    }
+  }
+
+  private pendingResearchActionWasApplied(change: WorldChangeV2): boolean {
+    const pending = this.pendingResearchAction;
+    if (!pending) return false;
+    const nation = this.engine.state.players[pending.command.playerId];
+    if (!nation) return false;
+    switch (pending.command.type) {
+      case 'set-research-focus':
+        return change.reason === 'research-focus'
+          && pending.activeProgramBefore !== pending.command.branch
+          && nation.research.activeProgram === pending.command.branch;
+      case 'choose-research-breakthrough':
+        return change.reason === 'research-breakthrough'
+          && nation.research.effectLevels[pending.command.effect] > (pending.effectLevelBefore ?? 0);
+      case 'research-surge':
+        return change.reason === 'research-surge'
+          && (nation.manualActionUses.researchSurge > (pending.surgeUsesBefore ?? 0)
+            || nation.research.progress[pending.command.targetBranch] > (pending.progressBefore ?? 0));
+    }
+  }
+
+  private resolvePendingResearchActionFromChange(change: WorldChangeV2): boolean {
+    const pending = this.pendingResearchAction;
+    if (!pending || change.reason === 'action-queued') return false;
+    const applied = this.pendingResearchActionWasApplied(change);
+    const crossedAuthoritativeTick = change.reason === 'tick'
+      && this.engine.state.tick > pending.submittedTick
+      && this.engine.state.actionSequence >= Math.max(
+        pending.submittedActionSequence,
+        pending.queuedActionSequence,
+      );
+    if (!applied && !crossedAuthoritativeTick) return false;
+    this.pendingResearchAction = undefined;
+    return true;
+  }
+
+  /**
+   * Multiplayer guests receive host rejection separately from replica ticks.
+   * Main/session glue may forward that result here for immediate unlock; an
+   * accepted acknowledgement remains pending until its authoritative tick.
+   */
+  handleAuthoritativeResearchCommandResult(
+    command: WorldCommandV2,
+    result: CommandResultV2 & { assignedSequence?: number },
+  ): void {
+    const pending = this.pendingResearchAction;
+    if (!pending || !isResearchCommandV2(command) || !sameResearchCommandV2(pending.command, command)) return;
+    if (result.accepted) {
+      if (result.assignedSequence !== undefined) {
+        pending.queuedActionSequence = Math.max(pending.queuedActionSequence, result.assignedSequence);
+      }
+      return;
+    }
+    this.pendingResearchAction = undefined;
+    this.toast(result.reason ?? 'The host rejected that research order.');
+    this.render();
+  }
+
   private playerFlagHtml(
     player: Pick<NationViewV2, 'id' | 'sigil'>,
     eager = false,
   ): string {
-    const countryId = this.engine.content.metadata?.scenarioId === 'survival'
-      && isSurvivalDawnlineNationV2(this.engine.state, player.id)
-      ? DAWNLINE_ACCORD_FLAG_NATION_ID
-      : this.options.empireFlagCountryIds?.get(player.id) ?? player.id;
+    const countryId = this.options.empireFlagCountryIds?.get(player.id) ?? player.id;
     return countryFlagHtml(countryId, player.sigil, eager);
   }
 
@@ -2378,6 +2574,7 @@ export class WorldUIV2 {
   }
 
   private onStateChange(change: WorldChangeV2): void {
+    this.resolvePendingResearchActionFromChange(change);
     this.tooltipContentCache.invalidate();
     if (!this.survivalRealContactEstablished
       && this.engine.content.metadata?.scenarioId === 'survival'
@@ -2682,7 +2879,7 @@ export class WorldUIV2 {
       <div class="tooltip__opening-mobilisation tooltip__opening-mobilisation--${openingMobilisation.direction}">
         <div><span>OPENING MOBILISATION · ${openingDirectionLabel}</span><strong>${openingRemainingPercent}% REMAINING</strong></div>
         <i role="progressbar" aria-label="Opening mobilisation remaining" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${openingRemainingPercent}"><b style="width:${openingRemainingPercent}%"></b></i>
-        <small><b>×${format(openingMobilisation.currentMultiplier, 2)} · ${openingEffectLabel}</b><span>${format(openingMobilisation.remainingTicks / 52, 1)} years until permanent ×1</span></small>
+        <small><b>×${format(openingMobilisation.currentMultiplier, 2)} · ${openingEffectLabel}</b><span>${compactWarTime(openingMobilisation.remainingTicks)} until permanent ×1</span></small>
       </div>` : '';
     const controllerName = this.options.controllerNames?.get(owner.id);
     const controller = owner.isHuman
@@ -2852,6 +3049,12 @@ export class WorldUIV2 {
     // calculate a second full finance/power snapshot for the same render.
     const populationDynamics = humanOpening?.populationDynamics
       ?? this.engine.populationDynamics(human.id, finance.populationGrowth);
+    const calendarEconomyGrowth = calendarAnnualGrowthRateV2(
+      finance.annualEconomyGrowthRate,
+    );
+    const calendarPopulationGrowth = calendarAnnualGrowthRateV2(
+      populationDynamics.annualNetRate,
+    );
     const integratedPopulation = this.engine.controlledPopulation(human.id);
     const completedUpgrades = Object.values(human.research.breakthroughs).reduce((sum, value) => sum + value, 0);
     const ranking = introOpening?.ranking ?? this.ranking();
@@ -2901,21 +3104,39 @@ export class WorldUIV2 {
       ? 'NO ACTIVE FRONTS'
       : `WEAK ${logisticsReadiness.weakest?.percent ?? logisticsReadiness.percent}% · ${logisticsReadiness.frontCount} ${logisticsReadiness.frontCount === 1 ? 'FRONT' : 'FRONTS'}`;
     const researchPortfolio = this.engine.researchPortfolio(human.id, finance);
-    const nextTopbarResearch = nextResearchMilestone(researchPortfolio);
-    const activePolarResearch = state.polarEndgame.arcticPrograms[human.id]?.activeProject;
-    const activePolarDefinition = activePolarResearch
-      ? ARCTIC_PROJECTS_V2.find((project) => project.id === activePolarResearch.projectId)
-      : undefined;
-    const activePolarTerms = activePolarResearch
-      ? this.engine.arcticProjectTerms(human.id, activePolarResearch.projectId)
-      : undefined;
-    const topbarResearchProgress = activePolarTerms
-      ? Math.round(clamp(activePolarTerms.progress, 0, 1) * 100)
-      : nextTopbarResearch
-        ? Math.round(clamp(nextTopbarResearch.progressRatio, 0, 1) * 100)
-        : 100;
-    const topbarResearchLabel = activePolarDefinition?.name
-      ?? (nextTopbarResearch ? RESEARCH_META[nextTopbarResearch.branch].shortLabel : 'All programs complete');
+    const researchState = state.players[human.id]!.research;
+    const activeTopbarResearch = researchPortfolio.find((program) => (
+      program.branch === researchState.activeProgram
+    ));
+    const readyTopbarResearch = researchPortfolio.find((program) => (
+      !program.maxed && program.nextCost > 0 && program.progress + 1e-9 >= program.nextCost
+    ));
+    const allResearchMastered = researchPortfolio.length > 0
+      && researchPortfolio.every((program) => program.maxed);
+    const topbarResearchProgress = readyTopbarResearch
+      ? 100 : activeTopbarResearch
+        ? Math.round(clamp(activeTopbarResearch.progressRatio, 0, 1) * 100)
+        : allResearchMastered ? 100 : 0;
+    const topbarResearchValue = readyTopbarResearch
+      ? 'CHOOSE' : allResearchMastered
+        ? 'MASTERED' : activeTopbarResearch
+          ? `${topbarResearchProgress}%` : 'SELECT';
+    const topbarResearchDays = activeTopbarResearch && activeTopbarResearch.weeklyProgress > 0
+      ? Math.max(1, Math.ceil(Math.max(
+        0,
+        activeTopbarResearch.nextCost - activeTopbarResearch.progress,
+      ) / activeTopbarResearch.weeklyProgress))
+      : 0;
+    const topbarResearchLabel = readyTopbarResearch
+      ? 'Breakthrough ready'
+      : activeTopbarResearch
+        ? `${RESEARCH_META[activeTopbarResearch.branch].shortLabel}${topbarResearchDays ? ` · ${topbarResearchDays}D` : ''}`
+        : allResearchMastered ? 'Empire Blueprint complete' : 'Select an Empire focus';
+    const researchDockLabel = readyTopbarResearch
+      ? 'CHOOSE EFFECT'
+      : activeTopbarResearch
+        ? `${RESEARCH_META[activeTopbarResearch.branch].shortLabel} · ${topbarResearchProgress}%`
+        : allResearchMastered ? 'All mastered' : 'SELECT FOCUS';
     const warOutcome = this.warOutcomeQueue[0];
     const apexTransmission = !warOutcome ? this.pendingApexTransmission() : undefined;
     const commandOpen = this.contextPanelOpen && !this.selectedTerritoryId && !this.selectedPolarRegion;
@@ -2931,11 +3152,11 @@ export class WorldUIV2 {
           <span class="country-flag" aria-hidden="true">${this.playerFlagHtml(human, true)}</span><div class="coalition-chip__body"><small><time>${worldDateLabel(state.tick, this.engine.content.metadata?.startYear ?? 2026)}</time>${wars.length ? `<b class="topbar-war-alert">${wars.length === 1 ? 'WAR ACTIVE' : `${wars.length} WARS ACTIVE`}</b>` : ''}</small><div class="command-identity__line"><strong title="${escapeHtml(human.name)}">${escapeHtml(human.shortName)}</strong><button class="v2-rank-badge" data-action="ranking" aria-label="Open global military ranking; ${escapeHtml(human.name)} is military rank ${humanRank} of ${ranking.length} active countries">#${humanRank}/${ranking.length}</button></div></div>
         </div>
         <nav class="strategic-metrics v2-metrics simple-metrics topbar-status" aria-label="Command status">
-          <button type="button" class="top-metric top-metric--economy" data-action="panel" data-panel="economy" title="Empire output, shared cash and annual growth; EONSCAR income is included" aria-label="Open Economy. Empire output ${cash(economy.controlledOutput)}; shared treasury ${cash(human.treasury)}; projected net cashflow ${signedCash(annual(displayedNet))} per year including EONSCAR income; annual growth ${signed(finance.annualEconomyGrowthRate * 100, 2)} percent"><span>ECONOMY</span><strong>${cash(economy.controlledOutput)}<i class="${finance.annualEconomyGrowthRate >= 0 ? 'is-positive' : 'is-negative'}">${signed(finance.annualEconomyGrowthRate * 100, 2)}%</i></strong><small><span>CASH ${cash(human.treasury)}</span><b class="${displayedNet >= 0 ? 'is-positive' : 'is-negative'}">${signedCash(annual(displayedNet))}/YR</b></small></button>
-          <button type="button" class="top-metric top-metric--population" data-action="panel" data-panel="nation" title="Integrated population and annual change" aria-label="Open Nation. Integrated population ${format(integratedPopulation, 2)} million; annual change ${signed(populationDynamics.annualNetRate * 100, 2)} percent"><span>POPULATION</span><strong>${population(integratedPopulation)}<i class="${populationDynamics.annualNetRate >= 0 ? 'is-positive' : 'is-negative'}">${signed(populationDynamics.annualNetRate * 100, 2)}%</i></strong></button>
+          <button type="button" class="top-metric top-metric--economy" data-action="panel" data-panel="economy" title="Empire output, shared cash and annual growth; EONSCAR income is included" aria-label="Open Economy. Empire output ${cash(economy.controlledOutput)}; shared treasury ${cash(human.treasury)}; projected net cashflow ${signedCash(annual(displayedNet))} per year including EONSCAR income; annual growth ${signed(calendarEconomyGrowth * 100, 2)} percent"><span>ECONOMY</span><strong>${cash(economy.controlledOutput)}<i class="${calendarEconomyGrowth >= 0 ? 'is-positive' : 'is-negative'}">${signed(calendarEconomyGrowth * 100, 2)}%</i></strong><small><span>CASH ${cash(human.treasury)}</span><b class="${displayedNet >= 0 ? 'is-positive' : 'is-negative'}">${signedCash(annual(displayedNet))}/YR</b></small></button>
+          <button type="button" class="top-metric top-metric--population" data-action="panel" data-panel="nation" title="Integrated population and annual change" aria-label="Open Nation. Integrated population ${format(integratedPopulation, 2)} million; annual change ${signed(calendarPopulationGrowth * 100, 2)} percent"><span>POPULATION</span><strong>${population(integratedPopulation)}<i class="${calendarPopulationGrowth >= 0 ? 'is-positive' : 'is-negative'}">${signed(calendarPopulationGrowth * 100, 2)}%</i></strong></button>
           <button type="button" class="top-metric top-metric--combined-power top-metric--defence-stack ${wars.length ? 'has-war' : ''}" data-action="panel" data-panel="war" title="Empire Army with EONSCAR Energy projected over it" aria-label="Open War. Shield-supported army power ${compactNumber(combinedPower)}. Base Empire Army power ${compactNumber(combatPower)}, ${armyReadiness.percent} percent ready, ${armyReadiness.status.toLowerCase()}. ${apexPowerState.recovering ? `EONSCAR Energy recharging at ${apexPowerState.integrityPercent} percent and currently unavailable` : `EONSCAR Energy ${apexPowerState.integrityPercent} percent; Army support plus ${format(apexPowerState.supportBonusPercent, 1)} percent`}"><span>EMPIRE DEFENCE</span><strong>${compactNumber(combinedPower)}<i class="topbar-army-ready ${armyReadiness.className}">${armyReadiness.value} ARMY</i></strong><i class="topbar-defence-stack" role="img" aria-label="Army readiness ${armyReadiness.percent} percent with EONSCAR Energy ${apexPowerState.integrityPercent} percent overlaid"><b style="--army-ready:${armyReadiness.percent}%"></b><em class="${apexPowerState.recovering ? 'is-recharging' : 'is-active'}" style="--shield-integrity:${apexPowerState.integrityPercent}%"><i data-empire-defence-glow></i></em></i><small><span>ARMY ${compactNumber(combatPower)}</span><b class="${apexPowerState.recovering ? 'is-warn' : 'is-positive'}">ENERGY ${apexPowerState.integrityPercent}% · +${format(apexPowerState.supportBonusPercent, 1)}% SUPPORT</b></small></button>
           <button type="button" class="top-metric top-metric--logistics is-${logisticsReadiness.status}" data-action="panel" data-panel="war" title="Actual supply delivered to active war fronts" aria-label="Open War. War Supply ${logisticsReadiness.percent} percent. ${escapeHtml(logisticsDetail)}"><span>WAR SUPPLY</span><strong>${logisticsReadiness.percent}%<i>${logisticsReadiness.frontCount === 0 ? 'NO WAR' : logisticsReadiness.statusLabel}</i></strong><i class="topbar-progress-bar" role="progressbar" aria-label="War supply delivered" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${logisticsReadiness.percent}"><b style="width:${logisticsReadiness.percent}%"></b></i></button>
-          <button type="button" class="top-metric top-metric--research" data-action="panel" data-panel="research" title="Active research and progress" aria-label="Open Research. ${escapeHtml(topbarResearchLabel)}, ${topbarResearchProgress} percent complete"><span>RESEARCH</span><strong>${topbarResearchProgress}%</strong><i class="topbar-progress-bar" role="progressbar" aria-label="Research progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${topbarResearchProgress}"><b style="width:${topbarResearchProgress}%"></b></i><small>${escapeHtml(topbarResearchLabel)}</small></button>
+          <button type="button" class="top-metric top-metric--research ${readyTopbarResearch ? 'is-actionable' : !activeTopbarResearch && !allResearchMastered ? 'is-idle' : ''}" data-action="panel" data-panel="research" title="Choose and direct Empire research" aria-label="Open Research. ${escapeHtml(topbarResearchLabel)}"><span>RESEARCH</span><strong>${topbarResearchValue}</strong><i class="topbar-progress-bar" role="progressbar" aria-label="Research progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${topbarResearchProgress}"><b style="width:${topbarResearchProgress}%"></b></i><small>${escapeHtml(topbarResearchLabel)}</small></button>
         </nav>
         <div class="top-actions">
           ${this.options.onSurrenderRequested && !this.introOpen && !spectating && !state.gameOver
@@ -2957,8 +3178,8 @@ export class WorldUIV2 {
         <button class="${commandOpen && this.panelMode === 'war' ? 'is-active' : ''} ${wars.length ? 'has-war' : ''}" data-action="panel" data-panel="war"><i>⚔</i><span><b>WAR</b><small>${wars.length ? `${wars.length} active` : 'Choose target'}</small></span></button>
         <button class="${commandOpen && this.panelMode === 'commander' ? 'is-active' : ''}" data-action="panel" data-panel="commander"><i class="eonscar-command-mark"><img src="${eonscarLogoUrl}" alt=""></i><span><b>EONSCAR</b><small>AUTO · ${escapeHtml(apexDockStatus)}</small></span></button>
         <button class="${commandOpen && this.panelMode === 'nation' ? 'is-active' : ''}" data-action="panel" data-panel="nation"><i>◇</i><span><b>NATION</b><small>AI · ${escapeHtml(finance.aiMode)}</small></span></button>
-        <button class="${commandOpen && this.panelMode === 'research' ? 'is-active' : ''}" data-action="panel" data-panel="research"><i>⌁</i><span><b>RESEARCH</b><small>${completedUpgrades} upgrades</small></span></button>
-        <button class="${commandOpen && this.panelMode === 'economy' ? 'is-active' : ''} ${displayedNet < 0 ? 'is-negative' : ''}" data-action="panel" data-panel="economy"><i>$</i><span><b>ECONOMY</b><small>${signed(finance.annualEconomyGrowthRate * 100, 2)}%/yr</small></span></button>
+        <button class="${commandOpen && this.panelMode === 'research' ? 'is-active' : ''} ${readyTopbarResearch ? 'has-alert' : ''}" data-action="panel" data-panel="research"><i>⌁</i><span><b>RESEARCH</b><small>${escapeHtml(researchDockLabel)}</small></span></button>
+        <button class="${commandOpen && this.panelMode === 'economy' ? 'is-active' : ''} ${displayedNet < 0 ? 'is-negative' : ''}" data-action="panel" data-panel="economy"><i>$</i><span><b>ECONOMY</b><small>${signed(calendarEconomyGrowth * 100, 2)}%/yr</small></span></button>
       </nav>` : ''}
       ${!warOutcome && !spectating && !state.gameOver && !this.introOpen
         ? this.renderApexTransmissionOverlay(human) : ''}
@@ -3091,7 +3312,8 @@ export class WorldUIV2 {
       }
     }
     const unresolved = transmissions.filter((item) => (
-      item.choice === null && item.id !== this.apexTransmissionPendingResponseId
+      !isCampaignTutorialTransmissionV2(item.id)
+        && item.choice === null && item.id !== this.apexTransmissionPendingResponseId
     ));
     return unresolved.find((item) => item.id === 'campaign-signal-anomaly') ?? unresolved[0];
   }
@@ -3231,7 +3453,7 @@ export class WorldUIV2 {
           <b>EONSCAR</b><span>ALLIED STRATEGIC AI</span>
         </div>
         <div class="apex-transmission__message">
-          <header><span>SECURE ALLIED CHANNEL · WEEK ${transmission.sentTick}</span><b><i></i> EONSCAR LIVE</b></header>
+          <header><span>SECURE ALLIED CHANNEL · DAY ${transmission.sentTick}</span><b><i></i> EONSCAR LIVE</b></header>
           <small class="apex-transmission__context">${context}</small>
           <h2 id="apex-transmission-title">${escapeHtml(transmission.title)}</h2>
           <p class="apex-transmission__visible-copy" aria-hidden="true"><span class="apex-transmission__copy">${escapeHtml(visibleCopy)}</span><i class="apex-transmission__cursor"${complete ? ' hidden' : ''}>▋</i></p>
@@ -3310,7 +3532,7 @@ export class WorldUIV2 {
     addMultiplier('Antarctic supply', modifiers.antarcticSupplyMultiplier);
     addMultiplier('Antarctic power', modifiers.antarcticOperationMultiplier);
     if (modifiers.rogueWarningLeadTicks > 0) {
-      effects.push(`Warning +${modifiers.rogueWarningLeadTicks} week`);
+      effects.push(`Warning +${modifiers.rogueWarningLeadTicks} day`);
     }
     if (modifiers.primeTracking) effects.push('ROGUE PRIME tracking');
     return `<article class="research-effect-card research-effect-card--signal" aria-label="North Pole network, ${completedIds.size} of ${ARCTIC_PROJECTS_V2.length} stages complete"><i aria-hidden="true">⌁</i><div><span>NORTH POLE NETWORK · ${completedIds.size}/${ARCTIC_PROJECTS_V2.length}</span><strong>${escapeHtml(effects.join(' · '))}</strong></div><small>ACTIVE</small></article>`;
@@ -3344,7 +3566,7 @@ export class WorldUIV2 {
     if (!intelligenceKnown) {
       const share = attention.liberatedWorldShare * 100;
       const timeRemaining = Math.max(0, ROGUE_ATTENTION_MIN_CAMPAIGN_TICK_V2 - state.tick);
-      return `<aside class="world-panel command-drawer glass-panel command-drawer--clean command-drawer--unified polar-command polar-command--antarctica is-locked" data-scroll-session="${drawerScrollSessionId('polar:antarctica')}"><button class="panel-close" data-action="close-panel" aria-label="Close Antarctica intelligence">×</button><div class="drawer-heading drawer-heading--compact drawer-heading--single"><div><h2>Rogue Attention</h2></div><strong>DORMANT</strong></div><section class="polar-hero polar-hero--locked"><div><span>CAMPAIGN BENCHMARK</span><strong>${format(share, 1)}% / ${format(ROGUE_ATTENTION_LIBERATED_WORLD_SHARE_V2 * 100, 0)}% world liberated</strong><small>Earliest response: ${timeRemaining > 0 ? `${compactWarTime(timeRemaining)} from now` : 'time requirement met'}. Both conditions start a 78-week buildup, never an instant attack.</small></div><b>${format(share, 0)}%</b></section></aside>`;
+      return `<aside class="world-panel command-drawer glass-panel command-drawer--clean command-drawer--unified polar-command polar-command--antarctica is-locked" data-scroll-session="${drawerScrollSessionId('polar:antarctica')}"><button class="panel-close" data-action="close-panel" aria-label="Close Antarctica intelligence">×</button><div class="drawer-heading drawer-heading--compact drawer-heading--single"><div><h2>Rogue Attention</h2></div><strong>DORMANT</strong></div><section class="polar-hero polar-hero--locked"><div><span>CAMPAIGN BENCHMARK</span><strong>${format(share, 1)}% / ${format(ROGUE_ATTENTION_LIBERATED_WORLD_SHARE_V2 * 100, 0)}% world liberated</strong><small>Earliest response: ${timeRemaining > 0 ? `${compactWarTime(timeRemaining)} from now` : 'time requirement met'}. Both conditions start a 78-day buildup, never an instant attack.</small></div><b>${format(share, 0)}%</b></section></aside>`;
     }
     const rogueId = this.engine.content.nationIds.find((id) => (
       this.engine.content.nations[id]?.kind === 'rogue-ai'
@@ -3428,11 +3650,11 @@ export class WorldUIV2 {
     return `<aside class="world-panel command-drawer glass-panel command-drawer--clean command-drawer--unified polar-command polar-command--antarctica" data-scroll-session="${drawerScrollSessionId('polar:antarctica')}">
       <button class="panel-close" data-action="close-panel" aria-label="Close Rogue Empire intelligence">×</button>
       <div class="drawer-heading drawer-heading--compact drawer-heading--single"><div><h2>Codex Ascendancy</h2></div><strong class="${coreHeld ? 'is-negative' : 'is-positive'}">${escapeHtml(phaseLabel)}</strong></div>
-      <section class="rogue-empire-hero"><div class="country-flag">${rogue ? countryFlagHtml(rogue.id, rogue.sigil, true) : '◆'}</div><div><span>ROGUE AI · ANTARCTIC EMPIRE</span><strong>${escapeHtml(rogue?.name ?? 'Codex Ascendancy')}</strong><small>Its real opening army is roughly 20% stronger than the full Arctic Dawnline bloc.</small></div></section>
-      <section class="polar-campaign-overview" aria-label="Rogue empire status"><article><span>ROGUE ATTENTION</span><strong>${escapeHtml(attention.stage.replace('-', ' ').toUpperCase())}</strong><small>${format(attention.liberatedWorldShare * 100, 1)}% liberated · next stage ${attentionEta}</small></article><article><span>ANTARCTIC CONTROL</span><strong>${machineAntarctica}/${ANTARCTIC_SECTORS_V2.length}</strong><small>Sectors still held</small></article><article><span>NEXT WAVE</span><strong>${nextWave}</strong><small>+5% verified Antarctic reinforcements each year</small></article><article><span>ACTIVE FRONTS</span><strong>${activeWars.length}</strong><small>${attention.stage === 'active' ? 'Permanent machine war' : 'Buildup only'}</small></article></section>
+      <section class="rogue-empire-hero"><div class="country-flag">${rogue ? countryFlagHtml(rogue.id, rogue.sigil, true) : '◆'}</div><div><span>ROGUE AI · ANTARCTIC EMPIRE</span><strong>${escapeHtml(rogue?.name ?? 'Codex Ascendancy')}</strong><small>${isSurvivalStateV2(state) ? 'Its opening army is calibrated above the Arctic Base Packet line; every unlocked country adds full power and Mastery to your Empire.' : 'Its Antarctic core grows from guarded perimeter states into the strongest machine stronghold.'}</small></div></section>
+      <section class="polar-campaign-overview" aria-label="Rogue empire status"><article><span>ROGUE ATTENTION</span><strong>${escapeHtml(attention.stage.replace('-', ' ').toUpperCase())}</strong><small>${format(attention.liberatedWorldShare * 100, 1)}% liberated · next stage ${attentionEta}</small></article><article><span>ANTARCTIC CONTROL</span><strong>${machineAntarctica}/${ANTARCTIC_SECTORS_V2.length}</strong><small>Sectors still held</small></article><article><span>NEXT WAVE</span><strong>${nextWave}</strong><small>+5% verified Antarctic reinforcements each wave</small></article><article><span>ACTIVE FRONTS</span><strong>${activeWars.length}</strong><small>${attention.stage === 'active' ? 'Permanent machine war' : 'Buildup only'}</small></article></section>
       <section class="polar-gateway-grid" aria-label="Antarctic gateway breach status">${gatewayRows}</section>
-      <section class="polar-logistics-overview" aria-label="Live Rogue AI logistics"><article><span>TROOP MOVEMENTS · THIS WEEK</span><strong>${rogueLogistics?.movementCount ?? 0} MOVES · ${people(rogueLogistics?.movedManpower ?? 0)}</strong><small>Machine troops transferred</small></article><article><span>FROM ANTARCTICA</span><strong>${rogueLogistics?.antarcticMovementCount ?? 0} MOVES · ${people(rogueLogistics?.antarcticMovedManpower ?? 0)}</strong><small>Routes entering or crossing the ice</small></article><article><span>NAVAL ROUTES</span><strong>${rogueLogistics?.navalMovementCount ?? 0} MOVES · ${format(rogueLogistics?.navalMeanDistanceKm ?? 0, 0)} KM AVG</strong><small>${cash(rogueLogistics?.navalCost ?? 0)} paid · ${people(rogueLogistics?.navalMovedManpower ?? 0)} moved</small></article><article><span>FRONT SUPPLY</span><strong>${(rogueLogistics?.frontOperationCount ?? 0) > 0 ? `${format((rogueLogistics?.averageFrontSupply ?? 0) * 100, 1)}% AVG` : 'MOBILISING'}</strong><small>${(rogueLogistics?.frontOperationCount ?? 0) > 0 ? `${format((rogueLogistics?.weakestFrontSupply ?? 0) * 100, 1)}% weakest · ${rogueLogistics?.frontOperationCount ?? 0} routes` : 'No active machine route'}</small></article></section>
-      <section class="polar-earth-grid"><article><span>PHYSICAL EXPANSION</span><strong>${occupiedWorld} WORLD CAPTURES</strong><small>Every conquest advances from Antarctica through an open gateway and enters rapid assimilation.</small></article><article><span>SOVEREIGN WORLD</span><strong>${independentWorldNations} INDEPENDENT COMMANDS</strong><small>Every country opens fully mobilised with normal resources; Greenland-founded Dawnline remains separate.</small></article></section>
+      <section class="polar-logistics-overview" aria-label="Live Rogue AI logistics"><article><span>TROOP MOVEMENTS · TODAY</span><strong>${rogueLogistics?.movementCount ?? 0} MOVES · ${people(rogueLogistics?.movedManpower ?? 0)}</strong><small>Machine troops transferred</small></article><article><span>FROM ANTARCTICA</span><strong>${rogueLogistics?.antarcticMovementCount ?? 0} MOVES · ${people(rogueLogistics?.antarcticMovedManpower ?? 0)}</strong><small>Routes entering or crossing the ice</small></article><article><span>NAVAL ROUTES</span><strong>${rogueLogistics?.navalMovementCount ?? 0} MOVES · ${format(rogueLogistics?.navalMeanDistanceKm ?? 0, 0)} KM AVG</strong><small>${cash(rogueLogistics?.navalCost ?? 0)} paid · ${people(rogueLogistics?.navalMovedManpower ?? 0)} moved</small></article><article><span>FRONT SUPPLY</span><strong>${(rogueLogistics?.frontOperationCount ?? 0) > 0 ? `${format((rogueLogistics?.averageFrontSupply ?? 0) * 100, 1)}% AVG` : 'MOBILISING'}</strong><small>${(rogueLogistics?.frontOperationCount ?? 0) > 0 ? `${format((rogueLogistics?.weakestFrontSupply ?? 0) * 100, 1)}% weakest · ${rogueLogistics?.frontOperationCount ?? 0} routes` : 'No active machine route'}</small></article></section>
+      <section class="polar-earth-grid"><article><span>PHYSICAL EXPANSION</span><strong>${occupiedWorld} WORLD CAPTURES</strong><small>Every conquest advances from Antarctica through an open gateway and enters rapid assimilation.</small></article><article><span>SOVEREIGN WORLD</span><strong>${independentWorldNations} INDEPENDENT COMMANDS</strong><small>${isSurvivalStateV2(state) ? 'Arctic Base Packets belong to your Empire from deployment; unlocked members contribute full power and Mastery.' : 'Every surviving nation remains an independent command until conquered or allied.'}</small></article></section>
       <section class="polar-boss-card ${coreHeld ? 'is-sealed' : 'is-exposed'}"><div><span>ZERO-POINT CORE · SOVEREIGN CAPITAL</span><strong>${coreHeld ? 'THE STRONGEST MACHINE STATE' : 'CORE TAKEN · SURVIVAL WON'}</strong><small>${coreHeld ? `${compactNumber(core ? this.engine.territoryPower(coreId) : 0)} power · ${people(core?.army.manpower ?? 0)} active · capture this territory to end the invasion.` : 'The Codex Ascendancy can no longer generate invasion waves.'}</small></div></section>
       ${sectorGroups}
     </aside>`;
@@ -3489,9 +3711,15 @@ export class WorldUIV2 {
       .join('');
     const integratedPopulation = this.engine.controlledPopulation(human.id);
     const populationShare = world.population > 0 ? economy.population / world.population * 100 : 0;
-    const annualPopulationChange = economy.population * populationDynamics.annualNetRate;
-    const annualBirths = economy.population * populationDynamics.annualBirthRate;
-    const annualDeaths = economy.population * populationDynamics.annualDeathRate;
+    const calendarNetRate = calendarAnnualGrowthRateV2(populationDynamics.annualNetRate);
+    const calendarBirthRate = calendarAnnualGrowthRateV2(populationDynamics.annualBirthRate);
+    const calendarDeathRate = calendarAnnualLossRateV2(populationDynamics.annualDeathRate);
+    const calendarWarPenaltyRate = calendarAnnualLossRateV2(
+      populationDynamics.annualWarPenaltyRate,
+    );
+    const annualPopulationChange = economy.population * calendarNetRate;
+    const annualBirths = economy.population * calendarBirthRate;
+    const annualDeaths = economy.population * calendarDeathRate;
     const nationPower = this.engine.currentPower(human.id);
     const purgePercent = fusionCompletion * 100;
     return `
@@ -3502,12 +3730,12 @@ export class WorldUIV2 {
           <article class="is-primary"><span>POWER</span><strong>${compactNumber(nationPower)}</strong><small>National combat power</small></article>
           <article><span>TERRITORIES</span><strong>${world.controlledTerritories}</strong><small>${format(world.controlledLandShare * 100, 2)}% mapped land</small></article>
           <article class="${integratingTerritories.length ? 'is-warn' : 'is-good'}"><span>EONSCAR SIGNAL PURGE</span><strong>${format(purgePercent, 1)}%</strong><small>${nextIntegration ? `${escapeHtml(this.engine.content.territories[nextIntegration.id]?.name ?? nextIntegration.id)} · ${escapeHtml(purgeState)}${integrationWeeks === undefined ? '' : ` · ${compactWarTime(integrationWeeks)}`}` : 'Complete'}</small></article>
-          <article><span>PEOPLE</span><strong>${population(economy.population)}</strong><small class="${populationDynamics.annualNetRate >= 0 ? 'is-positive' : 'is-negative'}">${signedPeople(annualPopulationChange)} / year</small></article>
+          <article><span>PEOPLE</span><strong>${population(economy.population)}</strong><small class="${calendarNetRate >= 0 ? 'is-positive' : 'is-negative'}">${signedPeople(annualPopulationChange)} / year</small></article>
         </section>
 
-        <details class="decision-details" data-disclosure-session="drawer:nation:people"><summary>People <b>${populationShare.toFixed(2)}% world population</b></summary><div class="decision-details__body"><section class="nation-system-block nation-life-grid" aria-label="Population"><article class="nation-life-card nation-life-card--population"><div><span>DEMOGRAPHICS</span><strong class="${populationDynamics.annualNetRate >= 0 ? 'is-positive' : 'is-negative'}">${signedPeople(annualPopulationChange)} / year</strong></div><div class="nation-demographic-flow"><span><b>+${population(annualBirths)}</b>BIRTHS</span><i>−</i><span><b>−${population(annualDeaths)}</b>DEATHS</span>${populationDynamics.annualWarPenaltyRate > 0 ? `<i>−</i><span><b>−${population(economy.population * populationDynamics.annualWarPenaltyRate)}</b>WAR DRAG</span>` : ''}</div></article></section></div></details>
+        <details class="decision-details" data-disclosure-session="drawer:nation:people"><summary>People <b>${populationShare.toFixed(2)}% world population</b></summary><div class="decision-details__body"><section class="nation-system-block nation-life-grid" aria-label="Population"><article class="nation-life-card nation-life-card--population"><div><span>DEMOGRAPHICS</span><strong class="${calendarNetRate >= 0 ? 'is-positive' : 'is-negative'}">${signedPeople(annualPopulationChange)} / year</strong></div><div class="nation-demographic-flow"><span><b>+${population(annualBirths)}</b>BIRTHS</span><i>−</i><span><b>−${population(annualDeaths)}</b>DEATHS</span>${calendarWarPenaltyRate > 0 ? `<i>−</i><span><b>−${population(economy.population * calendarWarPenaltyRate)}</b>WAR DRAG</span>` : ''}</div></article></section></div></details>
 
-        <details class="decision-details" data-disclosure-session="drawer:nation:apex-purge"><summary>EONSCAR purge &amp; national IQ <b>IQ ${format(iqFusion.score, 1)}</b></summary><div class="decision-details__body"><section class="nation-fusion-panel ${integratingTerritories.length ? 'is-active' : 'is-complete'}" aria-label="Empire liberation, EONSCAR Signal Purge and national IQ fusion"><header><span>EONSCAR SIGNAL PURGE</span><strong>IQ ${format(iqFusion.score, 1)}</strong></header><div class="nation-fusion-score"><span><small>NATIVE</small><b>${format(iqFusion.nativeBaseline, 1)}</b></span><i aria-hidden="true">&rarr;</i><span><small>FUSED</small><b>${format(iqFusion.fusedBaseline, 1)}</b></span><em class="${fusionTone}">${signed(iqFusion.fusionDelta, 1)} IQ</em></div><div class="nation-fusion-progress"><span><b>${format(purgePercent, 1)}% SIGNAL PURGED</b><small>${integratingTerritories.length ? `EONSCAR focus · ${activeFrontPurges} front · ${remotePurges} remote · ${format(integrationProgress * 100, 1)}%` : 'Complete'}</small></span><i role="progressbar" aria-label="Empire signal purge" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${format(purgePercent, 1)}"><b style="width:${format(purgePercent, 2)}%"></b></i></div><div class="nation-fusion-origins" aria-label="Liberated population origins">${fusionOriginMix || '<span><b>NATIVE</b>100%</span>'}</div><footer><span>${format(iqFusion.foreignContributingShare * 100, 1)}% foreign influence${iqFusion.researchBonus > 0 ? ` · +${format(iqFusion.researchBonus, 1)} research IQ` : ''}</span><strong>${nextIntegration ? `${escapeHtml(this.engine.content.territories[nextIntegration.id]?.name ?? nextIntegration.id)} · ${escapeHtml(purgeState)}${integrationWeeks === undefined ? '' : ` · ${format(integrationWeeks / 52, 1)}Y`}` : 'ALL CORE'}</strong></footer></section></div></details>
+        <details class="decision-details" data-disclosure-session="drawer:nation:apex-purge"><summary>EONSCAR purge &amp; national IQ <b>IQ ${format(iqFusion.score, 1)}</b></summary><div class="decision-details__body"><section class="nation-fusion-panel ${integratingTerritories.length ? 'is-active' : 'is-complete'}" aria-label="Empire liberation, EONSCAR Signal Purge and national IQ fusion"><header><span>EONSCAR SIGNAL PURGE</span><strong>IQ ${format(iqFusion.score, 1)}</strong></header><div class="nation-fusion-score"><span><small>NATIVE</small><b>${format(iqFusion.nativeBaseline, 1)}</b></span><i aria-hidden="true">&rarr;</i><span><small>FUSED</small><b>${format(iqFusion.fusedBaseline, 1)}</b></span><em class="${fusionTone}">${signed(iqFusion.fusionDelta, 1)} IQ</em></div><div class="nation-fusion-progress"><span><b>${format(purgePercent, 1)}% SIGNAL PURGED</b><small>${integratingTerritories.length ? `EONSCAR focus · ${activeFrontPurges} front · ${remotePurges} remote · ${format(integrationProgress * 100, 1)}%` : 'Complete'}</small></span><i role="progressbar" aria-label="Empire signal purge" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${format(purgePercent, 1)}"><b style="width:${format(purgePercent, 2)}%"></b></i></div><div class="nation-fusion-origins" aria-label="Liberated population origins">${fusionOriginMix || '<span><b>NATIVE</b>100%</span>'}</div><footer><span>${format(iqFusion.foreignContributingShare * 100, 1)}% foreign influence${iqFusion.researchBonus > 0 ? ` · +${format(iqFusion.researchBonus, 1)} research IQ` : ''}</span><strong>${nextIntegration ? `${escapeHtml(this.engine.content.territories[nextIntegration.id]?.name ?? nextIntegration.id)} · ${escapeHtml(purgeState)}${integrationWeeks === undefined ? '' : ` · ${compactWarTime(integrationWeeks)}`}` : 'ALL CORE'}</strong></footer></section></div></details>
 
         <details class="decision-details" data-disclosure-session="drawer:nation:systems"><summary>Nation systems <b>STABLE</b></summary><div class="decision-details__body"><section class="unified-stat-grid"><article><span>INTEGRATED PEOPLE</span><strong>${population(integratedPopulation)}</strong><small>${format(populationShare, 2)}% of world</small></article><article><span>NATIONAL AI</span><strong>${escapeHtml(finance.aiMode.toUpperCase())}</strong><small>${format(finance.aiEfficiency * 100, 1)}% efficiency</small></article></section></div></details>
       </aside>
@@ -3520,7 +3748,7 @@ export class WorldUIV2 {
   ): string {
     const totalIncome = finance.revenue + finance.apexContribution;
     const totalExpenses = finance.expenses;
-    const growth = finance.annualEconomyGrowthRate;
+    const growth = calendarAnnualGrowthRateV2(finance.annualEconomyGrowthRate);
     const incomeItems = [
       { label: 'TAX REVENUE', weekly: Math.max(0, finance.revenue), tone: 'tax', always: true },
       { label: 'EONSCAR CONTRIBUTION', weekly: Math.max(0, finance.apexContribution), tone: 'apex', always: true },
@@ -3594,7 +3822,7 @@ export class WorldUIV2 {
           <article><span>ECONOMY</span><strong>${cash(economy.controlledOutput)}</strong><small class="${growth >= 0 ? 'is-positive' : 'is-negative'}">${signed(growth * 100, 2)}% / year</small></article>
           <article><span>TAX</span><strong>${format(economy.taxRate * 100, 1)}%</strong><small>${cash(annual(finance.revenue))} / year</small></article>
         </section>
-        ${finance.newBorrowing > 0 || human.treasury < 0 ? `<div class="simple-panel-alert is-debt"><b>DEBT FINANCING</b><span>${cash(finance.newBorrowing)} new borrowing this week · ${cash(annual(finance.debtPremium))}/year debt premium</span></div>` : ''}
+        ${finance.newBorrowing > 0 || human.treasury < 0 ? `<div class="simple-panel-alert is-debt"><b>DEBT FINANCING</b><span>${cash(finance.newBorrowing)} new borrowing today · ${cash(annual(finance.debtPremium))}/year debt premium</span></div>` : ''}
 
         <section class="compact-ledger" aria-label="Annual categorized costs">${compactLedger.map(([label, weekly]) => `<article><span>${label}</span><strong>−${cash(annual(weekly))}<small>/year</small></strong></article>`).join('')}</section>
 
@@ -3618,8 +3846,17 @@ export class WorldUIV2 {
       iqResearchBonus: liveIq.researchBonus,
     };
     const portfolio = this.engine.researchPortfolio(human.id, finance);
+    const research = this.engine.state.players[human.id]!.research;
+    const researchOrderPending = this.pendingResearchAction !== undefined;
+    const pendingResearchCommand = this.pendingResearchAction?.command;
     const deterrence = this.engine.nuclearPower(human.id);
-    const next = nextResearchMilestone(portfolio);
+    const active = portfolio.find((program) => program.branch === research.activeProgram);
+    const readyPrograms = portfolio.filter((program) => (
+      !program.maxed && program.nextCost > 0 && program.progress + 1e-9 >= program.nextCost
+    ));
+    const ready = readyPrograms.find((program) => program.branch === research.activeProgram)
+      ?? readyPrograms[0];
+    const allMastered = portfolio.length > 0 && portfolio.every((program) => program.maxed);
     const completed = portfolio.reduce((sum, branch) => sum + branch.breakthroughs, 0);
     const polarCompleted = this.engine.state.polarEndgame
       .arcticPrograms[human.id]?.completedProjects.length ?? 0;
@@ -3643,54 +3880,76 @@ export class WorldUIV2 {
         return `<article class="research-effect-card research-effect-card--${visual.tone}" aria-label="${escapeHtml(label)}, ${escapeHtml(total)}, level ${level}"><i aria-hidden="true">${visual.icon}</i><div><span>${escapeHtml(label)}</span><strong>${escapeHtml(total)}</strong></div><small>LEVEL ${level}</small></article>`;
       })
       .join('');
-    const nextProgress = next ? Math.round(clamp(next.progressRatio, 0, 1) * 100) : 100;
-    const nextWeeks = next && next.weeklyProgress > 0
-      ? Math.max(1, Math.ceil(Math.max(0, next.nextCost - next.progress) / next.weeklyProgress))
+    const activeProgress = active ? Math.round(clamp(active.progressRatio, 0, 1) * 100) : 0;
+    const activeDays = active && active.weeklyProgress > 0
+      ? Math.max(1, Math.ceil(Math.max(0, active.nextCost - active.progress) / active.weeklyProgress))
       : 0;
-    const nextRemaining = next ? Math.max(0, next.nextCost - next.progress) : 0;
-    const nextEffects = next?.effects.map((effect) => (
-      `${researchEffectLabel(effect.effect)} ${researchEffectTransitionV2(
+    const activeRemaining = active ? Math.max(0, active.nextCost - active.progress) : 0;
+    const nuclearProgress = Math.round(deterrence.progressRatio * 100);
+    const dailyOutput = active?.weeklyProgress ?? 0;
+    const choiceCards = ready?.effects.map((effect) => {
+      const copy = RESEARCH_EFFECT_COPY[effect.effect];
+      const visual = researchEffectVisualV2(effect.effect);
+      const transition = researchEffectTransitionV2(
         effect.effect,
         effect.level,
         1,
         effect.impactPerLevel,
         effectDisplayContext,
-      )}`
-    )).join(' · ') ?? 'No further effect';
-    const nuclearProgress = Math.round(deterrence.progressRatio * 100);
-    const programs = portfolio.map((branch) => {
-      const progress = branch.maxed ? 100 : Math.round(clamp(branch.progressRatio, 0, 1) * 100);
-      const effects = branch.effects.map((effect) => `${researchEffectLabel(effect.effect)} LV ${effect.level}`).join(' · ');
-      const harder = branch.maxed ? 'maximum useful level reached'
-        : branch.nextCostIncreaseRatio > 1
-        ? `${format((branch.nextCostIncreaseRatio - 1) * 100)}% harder after completion` : 'final level';
-      const description = `${RESEARCH_META[branch.branch].label}: ${effects} · ${harder}`;
-      return `<article class="progress-program progress-program--compact${branch.maxed ? ' is-maxed' : ''}" tabindex="0" aria-label="${escapeHtml(description)}" style="--project:${RESEARCH_COLORS[branch.branch]}" title="${escapeHtml(description)}"><div><span>${escapeHtml(RESEARCH_META[branch.branch].shortLabel)}</span><b>${branch.maxed ? 'MAX' : `${progress}%`}</b></div><strong>${branch.breakthroughs} upgrades · ${branch.maxed ? 'focus redistributed' : `${branch.allocation}% focus`}</strong><i><b style="width:${progress}%"></b></i></article>`;
+      );
+      return `<button type="button" class="research-choice-card research-choice-card--${visual.tone}" data-action="choose-research-breakthrough" data-branch="${ready.branch}" data-effect="${effect.effect}" ${researchOrderPending ? 'disabled aria-disabled="true" aria-busy="true"' : ''} aria-label="Choose ${escapeHtml(copy.name)}. ${escapeHtml(transition)}"><i aria-hidden="true">${visual.icon}</i><span><small>${escapeHtml(researchEffectLabel(effect.effect))} · LEVEL ${effect.level} → ${effect.level + 1}</small><strong>${escapeHtml(copy.name)}</strong><p>${escapeHtml(copy.description)}</p><b>${escapeHtml(transition)}</b></span><em>${researchOrderPending ? 'ORDER PENDING' : 'CHOOSE'}</em></button>`;
+    }).join('') ?? '';
+    const surgeTerms = active && !ready
+      ? this.engine.researchSurgeTerms(human.id, active.branch)
+      : undefined;
+    const hero = ready
+      ? `<section class="research-blueprint-hero is-ready" style="--project:${RESEARCH_COLORS[ready.branch]}" aria-label="Breakthrough ready"><header><span>BREAKTHROUGH READY</span><b>CHOOSE 1 OF ${ready.effects.length}</b></header><h3>${escapeHtml(RESEARCH_META[ready.branch].label)}</h3><p>The research is complete. Pick the exact capability your Empire receives; nothing is awarded automatically.</p><div class="research-choice-grid">${choiceCards}</div></section>`
+      : allMastered
+        ? `<section class="research-blueprint-hero is-mastered" style="--project:#69e3a2"><header><span>EMPIRE BLUEPRINT</span><b>MASTERED</b></header><h3>Every programme is complete</h3><p>Your full national research portfolio is active. Completed effects remain permanent for this run.</p></section>`
+        : active
+          ? `<section class="research-blueprint-hero is-active" style="--project:${RESEARCH_COLORS[active.branch]}"><header><span>ACTIVE EMPIRE FOCUS</span><b>${activeProgress}%</b></header><h3>${escapeHtml(RESEARCH_META[active.branch].label)}</h3><p>${escapeHtml(RESEARCH_META[active.branch].effect)}</p><i role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${activeProgress}"><b style="width:${activeProgress}%"></b></i><footer><span>${format(activeRemaining, 2)} R&amp;D remaining${activeDays ? ` · about ${activeDays} days` : ''}</span>${surgeTerms ? `<button type="button" class="secondary-button research-surge-button" data-action="research-surge" data-branch="${active.branch}" ${researchOrderPending || !surgeTerms.allowed ? 'disabled aria-disabled="true"' : ''} ${researchOrderPending ? 'aria-busy="true"' : ''} title="${escapeHtml(researchOrderPending ? 'Another research order is awaiting confirmation.' : (surgeTerms.reason ?? `Add ${format(surgeTerms.progressAdded, 2)} progress`))}">${researchOrderPending ? 'ORDER PENDING' : `NATIONAL INITIATIVE · ${cash(surgeTerms.cost)}`}</button>` : ''}</footer></section>`
+          : `<section class="research-blueprint-hero is-idle" style="--project:#b59cff"><header><span>EMPIRE BLUEPRINT</span><b>YOUR CHOICE</b></header><h3>Choose your first national focus</h3><p>Research is no longer passive. Select one programme below; the full daily R&amp;D output goes there, and you can switch direction without losing progress.</p></section>`;
+    const pillars = RESEARCH_PILLARS.map((pillar) => {
+      const programs = pillar.branches.map((branchId) => {
+        const program = portfolio.find((entry) => entry.branch === branchId)!;
+        const progress = program.maxed ? 100 : Math.round(clamp(program.progressRatio, 0, 1) * 100);
+        const isActive = research.activeProgram === branchId;
+        const isReady = !program.maxed && program.nextCost > 0
+          && program.progress + 1e-9 >= program.nextCost;
+        const effectSummary = program.effects.map((effect) => (
+          `${RESEARCH_EFFECT_COPY[effect.effect].name} · LV ${effect.level}`
+        )).join(' / ');
+        const pendingForBranch = pendingResearchCommand?.type === 'set-research-focus'
+          && pendingResearchCommand.branch === branchId;
+        const status = pendingForBranch ? 'ORDER QUEUED'
+          : program.maxed ? 'MASTERED'
+          : isReady ? 'CHOOSE UPGRADE'
+            : isActive ? 'ACTIVE' : 'SET FOCUS';
+        const nextDifficulty = !program.maxed && program.nextCostIncreaseRatio > 1
+          ? ` · next level +${format((program.nextCostIncreaseRatio - 1) * 100)}% cost` : '';
+        return `<article class="research-program-card ${isActive ? 'is-active' : ''} ${isReady ? 'is-ready' : ''} ${program.maxed ? 'is-maxed' : ''}" style="--project:${RESEARCH_COLORS[branchId]}"><header><span>${escapeHtml(RESEARCH_META[branchId].shortLabel)}</span><b>${program.maxed ? 'MAX' : `${progress}%`}</b></header><h4>${escapeHtml(RESEARCH_META[branchId].label)}</h4><p>${escapeHtml(RESEARCH_META[branchId].effect)}</p><small>${escapeHtml(effectSummary)}${nextDifficulty}</small><i><b style="width:${progress}%"></b></i><button type="button" data-action="${isReady ? 'noop' : 'set-research-focus'}" data-branch="${branchId}" ${researchOrderPending || program.maxed || isActive || isReady ? 'disabled aria-disabled="true"' : ''} ${researchOrderPending ? 'aria-busy="true"' : ''}>${status}</button></article>`;
+      }).join('');
+      return `<section class="research-pillar"><header><i aria-hidden="true">${pillar.icon}</i><div><strong>${pillar.label}</strong><small>${pillar.purpose}</small></div></header><div>${programs}</div></section>`;
     }).join('');
     return `
       <aside class="world-panel command-drawer glass-panel progress-command research-command command-drawer--clean command-drawer--unified command-drawer--decision" data-scroll-session="${drawerScrollSessionId('research')}">
         <button class="panel-close" data-action="close-panel" aria-label="Close research">×</button>
-        <div class="drawer-heading drawer-heading--compact drawer-heading--single"><div><h2>Research</h2></div><strong class="is-positive">${totalCompleted} COMPLETE</strong></div>
+        <div class="drawer-heading drawer-heading--compact drawer-heading--single"><div><span class="panel-kicker">CUSTOMIZE THE WHOLE EMPIRE</span><h2>Research · Empire Blueprint</h2></div><strong class="${researchOrderPending || ready ? 'is-warning' : 'is-positive'}" aria-live="polite">${researchOrderPending ? 'ORDER QUEUED' : ready ? 'CHOICE READY' : `${totalCompleted} COMPLETE`}</strong></div>
 
-        ${this.renderPolarResearchItem(human)}
-
-        <section class="research-next-card" style="--project:${next ? RESEARCH_COLORS[next.branch] : '#69e3a2'}" aria-label="Next research breakthrough">
-          <div><span>NEXT BREAKTHROUGH</span><strong>${next ? escapeHtml(RESEARCH_META[next.branch].label) : 'ALL PROGRAMS COMPLETE'}</strong><b>${nextProgress}%</b></div>
-          <i role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${nextProgress}"><b style="width:${nextProgress}%"></b></i>
-          <strong class="research-next-effect">${escapeHtml(nextEffects)}</strong>
-          <small>${next ? `${format(nextRemaining, 2)} R&D remaining · ${nextWeeks || 0} weeks · ${next.allocation}% focus` : 'Every useful research level has been completed.'}</small>
-        </section>
+        ${hero}
 
         <section class="decision-stat-grid decision-stat-grid--research" aria-label="Research status">
-          <article class="is-primary"><span>R&D / WEEK</span><strong>${format(portfolio.reduce((sum, branch) => sum + branch.weeklyProgress, 0), 2)}</strong><small>${cash(annual(finance.research))} funded / year</small></article>
+          <article class="is-primary"><span>ACTIVE R&amp;D / DAY</span><strong>${format(dailyOutput, 2)}</strong><small>${cash(annual(finance.research))} projected / year</small></article>
           <article><span>CONVERSION</span><strong>×${format(nationalQuality?.researchConversion ?? 1, 2)}</strong><small>Live system output</small></article>
           <article><span>LIVE IQ</span><strong>${format(liveIq.score, 1)}</strong><small>${signed(liveIq.researchBonus, 1)} education</small></article>
           <article class="${finance.warResearchPenalty > 0 ? 'is-warn' : 'is-good'}"><span>THROUGHPUT</span><strong>${format((1 - finance.warResearchPenalty) * 100, 1)}%</strong><small>${finance.warResearchPenalty > 0 ? 'Reduced by active war' : 'No wartime disruption'}</small></article>
           <article><span>DETERRENCE</span><strong>${deterrence.level ? `TIER ${deterrence.level}` : `${nuclearProgress}%`}</strong><small>+${format(deterrence.attackBonus * 100)}% attack</small></article>
         </section>
 
+        <section class="research-blueprint" aria-label="Empire research programmes"><header><span>CHOOSE A DIRECTION</span><small>One active focus · switching preserves progress</small></header>${pillars}</section>
+
+        <details class="decision-details research-special-lane" data-disclosure-session="drawer:research:polar"><summary>Special project lane <b>NORTH POLE</b></summary><div class="decision-details__body">${this.renderPolarResearchItem(human)}</div></details>
         <details class="decision-details" data-disclosure-session="drawer:research:completed-effects"><summary>Completed effects <b>${totalCompleted} upgrades</b></summary><div class="decision-details__body"><section class="research-effects" aria-labelledby="research-effects-title"><header><span class="section-label" id="research-effects-title">ACTIVE EFFECTS</span></header><div class="upgrade-total-grid">${upgradeTotals}${polarCompletedEffects}${!upgradeTotals && !polarCompletedEffects ? '<div class="empty-state">No completed research effects yet.</div>' : ''}</div></section></div></details>
-        <details class="decision-details" data-disclosure-session="drawer:research:programs"><summary>All research programs <b>${portfolio.filter((branch) => !branch.maxed).length} active</b></summary><div class="decision-details__body"><div class="progress-programs progress-programs--compact">${programs}</div></div></details>
       </aside>
     `;
   }
@@ -3733,7 +3992,7 @@ export class WorldUIV2 {
       <div class="military-opening-status ${openingMultiplier > 1 ? 'is-boost' : 'is-limit'}">
         <div><span>${openingMultiplier > 1 ? 'PLAYER OPENING FORCE' : 'OPENING BALANCE LIMIT'}</span><strong>×${format(openingMultiplier, 2)} HOMELAND CAP</strong></div>
         <b>${openingMultiplier > 1 ? `${people(openingForce)} free troops left` : 'TEMPORARILY REDUCED'}</b>
-        <small>${format(openingWeeks / 52, 1)} years remaining · returns to ×1 · ${openingMultiplier > 1 ? 'free contingent never refills · paid homeland recruits can use cap' : 'homeland cap restriction only'}</small>
+        <small>${compactWarTime(openingWeeks)} remaining · returns to ×1 · ${openingMultiplier > 1 ? 'free contingent never refills · paid homeland recruits can use cap' : 'homeland cap restriction only'}</small>
       </div>`;
     const readinessRow = (
       label: string,
@@ -4034,7 +4293,7 @@ export class WorldUIV2 {
       this.engine.content,
       war,
     ) - warAge);
-    const status = mobilizationWeeks > 0 ? `Mobilising · combat in ${mobilizationWeeks}w`
+    const status = mobilizationWeeks > 0 ? `Mobilising · combat in ${mobilizationWeeks}d`
       : score >= 25 ? 'Advantage' : score <= -25 ? 'Under pressure' : 'Contested';
     const eta = estimate
       ? `${warTimeRange(estimate.estimatedWeeksMin, estimate.estimatedWeeksMax)} · ${warOutlookLabel(estimate)}`
@@ -4047,7 +4306,7 @@ export class WorldUIV2 {
     const logisticsDetail = frontLogistics
       ? `${frontLogistics.percent}% SUPPLIED`
       : 'MOBILISING';
-    return `<article class="war-card-compact ${weakestLogistics ? 'is-logistics-weakest' : ''}" style="--enemy:${enemy.cssColor}"><div class="war-card-compact__head"><i class="country-flag">${this.playerFlagHtml(enemy)}</i><div><strong>${escapeHtml(enemy.name)}</strong><small>Week ${warAge} · ${war.battles} battles · ${accessLabel}</small></div><b class="${score < 0 ? 'danger-text' : 'is-positive'}">${signed(score)}</b></div><div class="war-card-compact__state"><span>${escapeHtml(status)}</span><small>${cash(perWarCost)}/year</small></div><div class="war-card-compact__metrics"><span><small>ACTIVE ARMIES</small><b>${people(ownArmy.deployed)} / ${people(enemyArmy.deployed)}</b><small>All available troops feed active fronts</small></span><span class="logistics-${frontLogistics?.status ?? 'ready'}"><small>WAR SUPPLY</small><b>${escapeHtml(logisticsDetail)}</b><small>${escapeHtml(logisticsRoute)}${frontLogistics ? ` · NEXT BATTLE ${frontLogistics.nextBattleWeeks}W` : ''}</small></span><span><small>MILITARY LOST</small><b>−${people(estimate?.totalOwnLosses ?? 0)} / −${people(estimate?.totalEnemyLosses ?? 0)}</b></span><span><small>EST. END</small><b>${escapeHtml(eta)}</b></span></div></article>`;
+    return `<article class="war-card-compact ${weakestLogistics ? 'is-logistics-weakest' : ''}" style="--enemy:${enemy.cssColor}"><div class="war-card-compact__head"><i class="country-flag">${this.playerFlagHtml(enemy)}</i><div><strong>${escapeHtml(enemy.name)}</strong><small>Day ${warAge} · ${war.battles} battles · ${accessLabel}</small></div><b class="${score < 0 ? 'danger-text' : 'is-positive'}">${signed(score)}</b></div><div class="war-card-compact__state"><span>${escapeHtml(status)}</span><small>${cash(perWarCost)}/year</small></div><div class="war-card-compact__metrics"><span><small>ACTIVE ARMIES</small><b>${people(ownArmy.deployed)} / ${people(enemyArmy.deployed)}</b><small>All available troops feed active fronts</small></span><span class="logistics-${frontLogistics?.status ?? 'ready'}"><small>WAR SUPPLY</small><b>${escapeHtml(logisticsDetail)}</b><small>${escapeHtml(logisticsRoute)}${frontLogistics ? ` · NEXT BATTLE ${frontLogistics.nextBattleWeeks}D` : ''}</small></span><span><small>MILITARY LOST</small><b>−${people(estimate?.totalOwnLosses ?? 0)} / −${people(estimate?.totalEnemyLosses ?? 0)}</b></span><span><small>EST. END</small><b>${escapeHtml(eta)}</b></span></div></article>`;
   }
 
   private renderTerritoryPanel(
@@ -4096,6 +4355,10 @@ export class WorldUIV2 {
         : undefined);
     const integrationPercent = clamp(territory.integration * 100, 0, 100);
     const territoryIntegrationAnnualCost = territory.integrationProgram?.annualCost ?? 0;
+    // Integration saves retain their original annual quote, while the charged
+    // amount remains one legacy finance slice per simulation tick. Annualize
+    // that live per-day cost so this card agrees with the economy ledger.
+    const territoryIntegrationDailyCost = territoryIntegrationAnnualCost / WEEKS_PER_YEAR;
     const guardWeeks = territory.integrationProgram
       ? Math.max(0, territory.integrationProgram.startedTick
         + CONQUEST_CAPTURE_GUARD_TICKS - this.engine.state.tick)
@@ -4123,7 +4386,7 @@ export class WorldUIV2 {
     const integrationPanel = survivalTransitOnly
       ? '<section class="territory-integration-card territory-integration-card--corridor" aria-label="Supply corridor, transit only"><div class="territory-integration-card__head"><span>SUPPLY CORRIDOR</span><strong>TRANSIT ONLY</strong></div><small>Transit control only · no local production or recruits.</small></section>'
       : territory.integrationProgram
-      ? `<section class="territory-integration-card"><div class="territory-integration-card__head"><span>${rogueRapidAssimilation ? 'RAPID ASSIMILATION' : `${owner.isHuman ? 'EONSCAR ' : ''}SIGNAL PURGE`} · ${escapeHtml(integratingCore?.shortName ?? definition.name).toUpperCase()}</span><strong>${escapeHtml(rogueRapidAssimilation ? '4× INTEGRATION' : apexPurgeStatus?.label ?? 'INTEGRATING')} · ${format(integrationPercent, 1)}%</strong></div><i role="progressbar" aria-label="${rogueRapidAssimilation ? 'Rapid assimilation' : 'Signal purge'} progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${format(integrationPercent, 1)}"><b style="width:${integrationPercent}%"></b></i><div class="territory-integration-card__metrics"><div><span>ETA</span><strong>${integrationWeeks === undefined ? 'WAITING FOR SUPPLY' : compactWarTime(integrationWeeks)}</strong></div><div><span>${escapeHtml(integrationPayer)}</span><strong class="is-negative">−${cash(territoryIntegrationAnnualCost)} / YEAR</strong></div></div><small>${cash(unlockedOutput)} active output · permanent ${escapeHtml(owner.shortName)} core at completion${guardWeeks > 0 ? ` · guard ${guardWeeks}w` : ''}</small></section>`
+      ? `<section class="territory-integration-card"><div class="territory-integration-card__head"><span>${rogueRapidAssimilation ? 'RAPID ASSIMILATION' : `${owner.isHuman ? 'EONSCAR ' : ''}SIGNAL PURGE`} · ${escapeHtml(integratingCore?.shortName ?? definition.name).toUpperCase()}</span><strong>${escapeHtml(rogueRapidAssimilation ? '4× INTEGRATION' : apexPurgeStatus?.label ?? 'INTEGRATING')} · ${format(integrationPercent, 1)}%</strong></div><i role="progressbar" aria-label="${rogueRapidAssimilation ? 'Rapid assimilation' : 'Signal purge'} progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${format(integrationPercent, 1)}"><b style="width:${integrationPercent}%"></b></i><div class="territory-integration-card__metrics"><div><span>ETA</span><strong>${integrationWeeks === undefined ? 'WAITING FOR SUPPLY' : compactWarTime(integrationWeeks)}</strong></div><div><span>${escapeHtml(integrationPayer)}</span><strong class="is-negative">−${cash(annual(territoryIntegrationDailyCost))} / YEAR</strong></div></div><small>${cash(unlockedOutput)} active output · permanent ${escapeHtml(owner.shortName)} core at completion${guardWeeks > 0 ? ` · guard ${guardWeeks}d` : ''}</small></section>`
       : '';
     const blockedWarNote = !activeWar && declaration && !declaration.allowed
       ? `<div class="war-rule-note is-blocked"><b>WAR UNAVAILABLE</b><span>${escapeHtml(declaration.reason ?? 'Requirements are not met.')}</span></div>`
@@ -4205,9 +4468,9 @@ export class WorldUIV2 {
     const playerAlliancePanel = !playerAlliancesVisible || !otherHumanPlayer ? '' : allied
       ? '<div class="war-rule-note is-alliance"><b>PLAYER ALLIANCE ACTIVE</b><span>Mutual non-aggression pact · war between both human countries is blocked.</span></div>'
       : allianceOffer?.toId === humanId
-        ? `<div class="war-rule-note is-alliance"><b>ALLIANCE INVITATION · ${allianceWeeks}W LEFT</b><span>${escapeHtml(owner.shortName)} proposes a mutual non-aggression pact.</span></div><div class="territory-actions territory-actions--alliance"><button class="ghost-button" data-action="respond-alliance" data-from="${owner.id}" data-to="${humanId}" data-accept="false">DECLINE</button><button class="primary-button" data-action="respond-alliance" data-from="${owner.id}" data-to="${humanId}" data-accept="true">ACCEPT ALLIANCE</button></div>`
+        ? `<div class="war-rule-note is-alliance"><b>ALLIANCE INVITATION · ${allianceWeeks}D LEFT</b><span>${escapeHtml(owner.shortName)} proposes a mutual non-aggression pact.</span></div><div class="territory-actions territory-actions--alliance"><button class="ghost-button" data-action="respond-alliance" data-from="${owner.id}" data-to="${humanId}" data-accept="false">DECLINE</button><button class="primary-button" data-action="respond-alliance" data-from="${owner.id}" data-to="${humanId}" data-accept="true">ACCEPT ALLIANCE</button></div>`
         : allianceOffer
-          ? `<div class="war-rule-note is-alliance"><b>ALLIANCE INVITATION SENT · ${allianceWeeks}W LEFT</b><span>Waiting for ${escapeHtml(owner.shortName)} to accept or decline.</span></div>`
+          ? `<div class="war-rule-note is-alliance"><b>ALLIANCE INVITATION SENT · ${allianceWeeks}D LEFT</b><span>Waiting for ${escapeHtml(owner.shortName)} to accept or decline.</span></div>`
           : `<div class="territory-actions territory-actions--alliance"><button class="secondary-button" data-action="propose-alliance" data-player="${owner.id}" ${allianceStatus?.allowed ? '' : 'disabled'} title="${escapeHtml(allianceStatus?.reason ?? 'Offer a mutual non-aggression pact to this human player.')}">PROPOSE PLAYER ALLIANCE</button></div>`;
     const ownerIntel = isOwnTerritory ? '' : `
       <span class="section-label territory-section-label">OWNER INTEL</span>
@@ -4324,7 +4587,7 @@ export class WorldUIV2 {
       const outlookTone = estimate?.outlook === 'our-collapse' ? 'is-danger'
         : estimate?.outlook === 'enemy-collapse' ? 'is-positive' : 'is-neutral';
       return `<article class="war-command-conflict" style="--enemy:${escapeHtml(enemy.cssColor)}"><button type="button" data-action="focus-war" data-territory="${escapeHtml(hostileTerritoryId ?? '')}" aria-label="Open war with ${escapeHtml(enemy.name)}. Your combined Power ${compactNumber(combinedOwnPower)}, enemy Power ${compactNumber(hostile.power)}">
-        <header><i class="country-flag" aria-hidden="true">${this.playerFlagHtml(enemy)}</i><div><span>${escapeHtml(route)} · WEEK ${warAge}</span><strong>${escapeHtml(enemy.shortName)}</strong><small>${escapeHtml(frontName)}</small></div><b class="${outlookTone}">${escapeHtml(outlook)}</b></header>
+        <header><i class="country-flag" aria-hidden="true">${this.playerFlagHtml(enemy)}</i><div><span>${escapeHtml(route)} · DAY ${warAge}</span><strong>${escapeHtml(enemy.shortName)}</strong><small>${escapeHtml(frontName)}</small></div><b class="${outlookTone}">${escapeHtml(outlook)}</b></header>
         <section class="war-command-conflict__power" aria-label="Combined Power balance"><span><small>YOU</small><strong>${compactNumber(combinedOwnPower)}</strong></span><i role="progressbar" aria-label="Your share of combined Power" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${format(balance, 1)}"><b style="width:${balance}%"></b></i><span><small>ENEMY</small><strong>${compactNumber(hostile.power)}</strong></span></section>
         <footer><span>SCORE <b class="${score < 0 ? 'danger-text' : 'is-positive'}">${signed(score)}</b></span>${hasLosses ? `<span>LOSSES <b>−${people(ownLosses)} / −${people(enemyLosses)}</b></span>` : ''}${eta ? `<span>ETA <b>${escapeHtml(eta)}</b></span>` : ''}${allyReadout ? `<span class="is-positive">${escapeHtml(allyReadout)}</span>` : ''}${apexReadout ? `<span class="is-apex">${escapeHtml(apexReadout)}</span>` : ''}</footer>
       </button>
@@ -4348,13 +4611,13 @@ export class WorldUIV2 {
   private renderEventTicker(): string {
     const events = this.engine.state.events.filter(isMajorWorldEvent).slice(-8).reverse();
     const latest = events[0];
-    return `<aside class="world-feed glass-panel ${this.eventFeedOpen ? 'is-open' : ''}"><button class="world-feed__head" data-action="toggle-feed"><span><b class="event-dot event-dot--${latest?.severity ?? 'info'}"></b> REPORT</span><strong>${latest ? escapeHtml(latest.message) : 'No reports'}</strong><i>${this.eventFeedOpen ? '×' : '↑'}</i></button><div class="world-feed__list">${events.map((event) => `<button data-action="focus-event" data-territory="${event.territoryId ?? ''}"><span>W${event.tick}</span><b class="event-dot event-dot--${event.severity}"></b><p>${escapeHtml(event.message)}</p></button>`).join('')}</div></aside>`;
+    return `<aside class="world-feed glass-panel ${this.eventFeedOpen ? 'is-open' : ''}"><button class="world-feed__head" data-action="toggle-feed"><span><b class="event-dot event-dot--${latest?.severity ?? 'info'}"></b> REPORT</span><strong>${latest ? escapeHtml(latest.message) : 'No reports'}</strong><i>${this.eventFeedOpen ? '×' : '↑'}</i></button><div class="world-feed__list">${events.map((event) => `<button data-action="focus-event" data-territory="${event.territoryId ?? ''}"><span>D${event.tick}</span><b class="event-dot event-dot--${event.severity}"></b><p>${escapeHtml(event.message)}</p></button>`).join('')}</div></aside>`;
   }
 
   private renderAllianceOfferBanner(offer: AllianceOfferV2): string {
     const from = this.engine.player(offer.fromId)!;
     const responseWeeks = Math.max(0, offer.expiresTick - this.engine.state.tick);
-    return `<div class="decision-banner decision-banner--alliance glass-panel" style="--sender:${from.cssColor}" title="A player alliance is a mutual non-aggression pact; neither country can declare war on the other."><i class="country-flag">${this.playerFlagHtml(from)}</i><div><span>PLAYER ALLIANCE · ${responseWeeks}W LEFT</span><strong>${escapeHtml(from.shortName)} offers mutual non-aggression</strong></div><button class="ghost-button" data-action="respond-alliance" data-from="${from.id}" data-to="${offer.toId}" data-accept="false">DECLINE</button><button class="primary-button" data-action="respond-alliance" data-from="${from.id}" data-to="${offer.toId}" data-accept="true">ALLY</button></div>`;
+    return `<div class="decision-banner decision-banner--alliance glass-panel" style="--sender:${from.cssColor}" title="A player alliance is a mutual non-aggression pact; neither country can declare war on the other."><i class="country-flag">${this.playerFlagHtml(from)}</i><div><span>PLAYER ALLIANCE · ${responseWeeks}D LEFT</span><strong>${escapeHtml(from.shortName)} offers mutual non-aggression</strong></div><button class="ghost-button" data-action="respond-alliance" data-from="${from.id}" data-to="${offer.toId}" data-accept="false">DECLINE</button><button class="primary-button" data-action="respond-alliance" data-from="${from.id}" data-to="${offer.toId}" data-accept="true">ALLY</button></div>`;
   }
 
   private renderIntro(opening: IntroOpeningMetricsSnapshotV2): string {
@@ -4384,11 +4647,11 @@ export class WorldUIV2 {
     return `<div class="modal-backdrop"><section class="modal-card world-help" data-scroll-session="modal:help" aria-labelledby="game-guide-title"><button class="modal-close" data-action="help" aria-label="Close game guide">×</button><header class="world-help__heading"><h2 id="game-guide-title">Field guide</h2><p>You choose expansion and targets. EONSCAR projects an autonomous neural shield.</p></header><div class="world-help-grid">
       <article><i aria-hidden="true">◎</i><div><h3>Win and survive</h3><p>Become the final sovereign power, or unite Earth and destroy Antarctica's Zero-Point Core.</p></div></article>
       <article><i aria-hidden="true">HUD</i><div><h3>Core loop and HUD</h3><p>Read five top metrics, choose a target and let time, logistics and EONSCAR execute.</p></div></article>
-      <article><i aria-hidden="true">$</i><div><h3>Economy and treasury</h3><p>Output creates tax income; the shared treasury pays weekly commitments and EONSCAR adds its own contribution.</p></div></article>
+      <article><i aria-hidden="true">$</i><div><h3>Economy and treasury</h3><p>Output creates tax income; the shared treasury pays daily commitments and EONSCAR adds its own contribution.</p></div></article>
       <article><i aria-hidden="true">MIL</i><div><h3>Army and EONSCAR</h3><p>EONSCAR projects one autonomous shield across the Empire and concentrates it where the fighting matters most.</p></div></article>
       <article><i aria-hidden="true">⚔</i><div><h3>War Supply</h3><p>100% means every active front receives its full Army Capacity allocation. Naval routes deliver half the land amount.</p></div></article>
       <article><i aria-hidden="true">AI</i><div><h3>EONSCAR autonomy</h3><p>Energy powers the dome. At 0% it collapses, recharges safely and returns only at 100%.</p></div></article>
-      <article><i aria-hidden="true">R&amp;D</i><div><h3>Research</h3><p>Ten programmes advance automatically, while Active Effects shows the real totals applied to your empire.</p></div></article>
+      <article><i aria-hidden="true">R&amp;D</i><div><h3>Research</h3><p>Choose one Empire focus for your full daily R&amp;D output. When it finishes, you choose the exact permanent breakthrough; switching focus never loses progress.</p></div></article>
       <article><i aria-hidden="true">◇</i><div><h3>Liberation and signal purge</h3><p>${campaignEveryNationForItself ? 'The machine signal shattered every alliance; each nation now fights for itself. ' : ''}Captured land starts partly usable while EONSCAR purges the Rogue signal. A short post-war recovery window prevents immediate redeclaration.</p></div></article>
       <article><i aria-hidden="true">POL</i><div><h3>North Pole and Rogue Attention</h3><p>The staged North Pole investigation gradually improves EONSCAR intel and preparation; it never awakens the Rogue. Time and world liberation determine when Antarctica begins to react.</p></div></article>
       <article><i aria-hidden="true">↔</i><div><h3>Controls and multiplayer</h3><p>Click territories, drag the globe, wheel or pinch to zoom, recenter with ⌖ and close drawers with Escape. Multiplayer orders are host-validated; absorbed commanders spectate.</p></div></article>
@@ -4401,7 +4664,9 @@ export class WorldUIV2 {
       !event.message.startsWith('EONSCAR TRANSMISSION ·')
       && !event.message.startsWith('APEX TRANSMISSION ·')
     ));
-    const transmissions = [...this.engine.apexTransmissions(this.viewerPlayerId())].reverse();
+    const transmissions = [...this.engine.apexTransmissions(this.viewerPlayerId())]
+      .filter((item) => !isCampaignTutorialTransmissionV2(item.id))
+      .reverse();
     const transmissionRows = transmissions.map((item) => {
       const response = item.action === 'north-pole-investigation'
         ? item.choice === 'accept'
@@ -4413,9 +4678,9 @@ export class WorldUIV2 {
           ? '<b class="apex-inbox-status">READ</b>'
           : `<button class="ghost-button" data-action="respond-apex-transmission" data-transmission="${item.id}" data-choice="acknowledge">ACKNOWLEDGE</button>`;
       const pendingClass = item.choice === null ? ' is-pending' : '';
-      return `<article class="apex-inbox-row${pendingClass}"><i aria-hidden="true">◆</i><div><span>EONSCAR · ALLIED AI · WEEK ${item.sentTick}</span><strong>${escapeHtml(item.title)}</strong><p>${escapeHtml(item.body)}</p></div>${response}</article>`;
+      return `<article class="apex-inbox-row${pendingClass}"><i aria-hidden="true">◆</i><div><span>EONSCAR · ALLIED AI · DAY ${item.sentTick}</span><strong>${escapeHtml(item.title)}</strong><p>${escapeHtml(item.body)}</p></div>${response}</article>`;
     }).join('');
-    return `<div class="modal-backdrop modal-backdrop--soft"><section class="modal-card inbox-modal"><button class="modal-close" data-action="inbox">×</button><div class="panel-kicker">SITUATION INBOX</div><h2>Briefings &amp; world events</h2><div class="inbox-filters"><span>${allEvents.filter((event) => this.eventIsUnread(event)).length} unread</span><button data-action="mark-read">Mark all read</button></div><div class="inbox-list" data-scroll-session="modal:inbox">${transmissionRows ? `<section class="apex-inbox-history" aria-label="EONSCAR transmission history"><header><div><span>EONSCAR · ALLIED AI</span><strong>Briefing log</strong></div><small>NEWEST FIRST</small></header>${transmissionRows}</section>` : ''}${events.map((event) => `<button class="${this.eventIsUnread(event) ? 'is-unread' : ''}" data-action="focus-event" data-territory="${event.territoryId ?? ''}"><b class="event-dot event-dot--${event.severity}"></b><div><span>WEEK ${event.tick} · ${event.kind.toUpperCase()}</span><strong>${escapeHtml(event.message)}</strong></div></button>`).join('')}</div></section></div>`;
+    return `<div class="modal-backdrop modal-backdrop--soft"><section class="modal-card inbox-modal"><button class="modal-close" data-action="inbox">×</button><div class="panel-kicker">SITUATION INBOX</div><h2>Briefings &amp; world events</h2><div class="inbox-filters"><span>${allEvents.filter((event) => this.eventIsUnread(event)).length} unread</span><button data-action="mark-read">Mark all read</button></div><div class="inbox-list" data-scroll-session="modal:inbox">${transmissionRows ? `<section class="apex-inbox-history" aria-label="EONSCAR transmission history"><header><div><span>EONSCAR · ALLIED AI</span><strong>Briefing log</strong></div><small>NEWEST FIRST</small></header>${transmissionRows}</section>` : ''}${events.map((event) => `<button class="${this.eventIsUnread(event) ? 'is-unread' : ''}" data-action="focus-event" data-territory="${event.territoryId ?? ''}"><b class="event-dot event-dot--${event.severity}"></b><div><span>DAY ${event.tick} · ${event.kind.toUpperCase()}</span><strong>${escapeHtml(event.message)}</strong></div></button>`).join('')}</div></section></div>`;
   }
 
   private renderWarConfirmation(targetId: PlayerId): string {
@@ -4459,7 +4724,7 @@ export class WorldUIV2 {
     const ownTotalPower = ownPower * (1 + apexSupportBonus / 100);
     const powerRatio = targetPower > 0 ? ownTotalPower / targetPower : 99;
     const apexPowerLine = apexIncluded
-      ? `<small class="review-apex-contribution"><b>ARMY ${compactNumber(ownPower)}</b> · EONSCAR +${format(apexSupportBonus, 1)}%${apexForecast.etaWeeks && apexForecast.etaWeeks > 0 ? ` · ARRIVES W${apexForecast.etaWeeks}` : ''}</small>`
+      ? `<small class="review-apex-contribution"><b>ARMY ${compactNumber(ownPower)}</b> · EONSCAR +${format(apexSupportBonus, 1)}%${apexForecast.etaWeeks && apexForecast.etaWeeks > 0 ? ` · ARRIVES D${apexForecast.etaWeeks}` : ''}</small>`
       : `<small class="review-apex-contribution is-unavailable"><b>EONSCAR UNAVAILABLE</b> · ${escapeHtml(apexForecast.reason)}</small>`;
     const terrainLabel = forecast.terrain
       ? terrainPresentation(forecast.terrain).label.toUpperCase()
@@ -4487,7 +4752,7 @@ export class WorldUIV2 {
       forecast.attackerStrength > 0.000000001,
     );
     const costDetail = logisticsPreview
-      ? `${cash(logisticsPreview.additionalWeeklyWarOperations)} / week`
+      ? `${cash(logisticsPreview.additionalWeeklyWarOperations)} / day`
       : '—';
     const annualCostDetail = logisticsPreview
       ? `${cash(annual(logisticsPreview.additionalWeeklyWarOperations))} / year`
@@ -4513,7 +4778,7 @@ export class WorldUIV2 {
     if (navalLogistics && logisticsPreview && logisticsPreview.routeOperationMultiplier >= 1.75) {
       criticalRisks.push({
         label: 'LONG SEA CROSSING',
-        detail: `${routeDistance} · naval attacks field 4% Army Capacity`,
+        detail: `${routeDistance} · naval attacks field 5% Army Capacity`,
       });
     }
     if (forecast.retaliationExpected) {
@@ -4540,7 +4805,7 @@ export class WorldUIV2 {
       <section class="review-operation-facts" aria-label="Operation route, supply, preparation and cost">
         <article class="${navalLogistics ? 'is-naval' : 'is-land'}"><span>${navalLogistics ? 'NAVAL ROUTE' : 'LAND ROUTE'}</span><strong>${routeDistance}</strong><small>${escapeHtml(routeDetail)}</small></article>
         <article class="${reviewLogistics.status === 'ready' ? 'is-ready' : 'is-risk'}"><span>WAR SUPPLY</span><strong>${reviewLogistics.percent}% SUPPLIED</strong><small>${supplyRule}${forecast.supportingForces > 0 ? ` · ${supportText}` : ''}</small></article>
-        <article><span>PREPARATION</span><strong>${mobilizationWeeks} WEEKS</strong><small>${warTimeRange(forecast.estimatedWeeksMin, forecast.estimatedWeeksMax)} expected campaign</small></article>
+        <article><span>PREPARATION</span><strong>${mobilizationWeeks} DAYS</strong><small>${warTimeRange(forecast.estimatedWeeksMin, forecast.estimatedWeeksMax)} expected campaign</small></article>
         <article class="is-cost"><span>OPERATION COST</span><strong>${costDetail}</strong><small>${annualCostDetail}</small></article>
       </section>
 
@@ -4589,7 +4854,7 @@ export class WorldUIV2 {
       <div class="panel-kicker">END TIMELINE</div>
       <h2 id="surrender-title">End this future for ${escapeHtml(human.name)}?</h2>
       <p>EONSCAR returns acquired intelligence to the origin point.</p>
-      <div class="surrender-confirm__summary"><span><small>TIMELINE AGE</small><b>${weeks} weeks</b></span><span><small>TERRITORIES HELD</small><b>${territories}</b></span><span><small>REWARDS</small><b>FULL EARNED VALUE</b></span></div>
+      <div class="surrender-confirm__summary"><span><small>TIMELINE AGE</small><b>${weeks} days</b></span><span><small>TERRITORIES HELD</small><b>${territories}</b></span><span><small>REWARDS</small><b>FULL EARNED VALUE</b></span></div>
       <div class="war-rule-note is-warning"><b>PROGRESSION RETAINED</b><span>Nation Mastery XP and EONSCAR XP use actual performance without a surrender penalty.</span><small>The final timeline report appears before you return to command.</small></div>
       <div class="panel-actions"><button class="ghost-button" data-action="cancel-surrender">KEEP PLAYING</button><button class="danger-button" data-action="confirm-surrender">END TIMELINE</button></div>
     </section></div>`;
@@ -4661,8 +4926,8 @@ export class WorldUIV2 {
       : '';
     const reportId = `war-report-${outcome.warId.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
     return `<div class="modal-backdrop war-outcome-backdrop"><section class="modal-card war-outcome-modal war-outcome-modal--${outcome.result}" role="dialog" aria-modal="true" aria-labelledby="${escapeHtml(reportId)}-title" aria-describedby="${escapeHtml(reportId)}-reason" data-scroll-session="modal:war-outcome:${escapeHtml(outcome.warId)}" style="--outcome:${opponent?.cssColor ?? '#69d7ef'}">
-      <header class="war-report__header">${opponentFlag}<div><span>WAR REPORT · WEEK ${outcome.endedTick}</span><h2 id="${escapeHtml(reportId)}-title">${escapeHtml(resultLabels[outcome.result])}</h2><p>${escapeHtml(opponent?.name ?? outcome.opponentId)}</p></div><div class="war-report__score"><small>FRONT SCORE</small><b>${signed(outcome.warScore)}</b></div></header>
-      <section class="war-report__power" aria-label="Nation Power result"><div><span>NATION POWER</span><strong>${compactNumber(outcome.combatPowerBefore)}<i aria-hidden="true">→</i>${compactNumber(outcome.combatPowerAfter)}</strong><small class="${powerDeltaClass}">${signedPowerDelta}</small></div><dl><div><dt>DURATION</dt><dd>${duration} WEEKS</dd></div><div><dt>BATTLES</dt><dd>${outcome.battles}</dd></div></dl></section>
+      <header class="war-report__header">${opponentFlag}<div><span>WAR REPORT · DAY ${outcome.endedTick}</span><h2 id="${escapeHtml(reportId)}-title">${escapeHtml(resultLabels[outcome.result])}</h2><p>${escapeHtml(opponent?.name ?? outcome.opponentId)}</p></div><div class="war-report__score"><small>FRONT SCORE</small><b>${signed(outcome.warScore)}</b></div></header>
+      <section class="war-report__power" aria-label="Nation Power result"><div><span>NATION POWER</span><strong>${compactNumber(outcome.combatPowerBefore)}<i aria-hidden="true">→</i>${compactNumber(outcome.combatPowerAfter)}</strong><small class="${powerDeltaClass}">${signedPowerDelta}</small></div><dl><div><dt>DURATION</dt><dd>${duration} DAYS</dd></div><div><dt>BATTLES</dt><dd>${outcome.battles}</dd></div></dl></section>
       <p class="war-report__reason" id="${escapeHtml(reportId)}-reason">${escapeHtml(outcome.reason)}</p>
       <div class="war-report__summary">
         <section class="war-report__card war-report__card--losses" aria-label="Military losses"><header><span>LOSSES</span><b>${people(outcome.survivingManpower)} ACTIVE</b></header><div><span><small>YOU</small><strong>−${people(outcome.ownLosses)}</strong></span><i aria-hidden="true"></i><span><small>ENEMY</small><strong>−${people(outcome.enemyLosses)}</strong></span></div>${allySupportDetail}</section>
@@ -4709,7 +4974,7 @@ export class WorldUIV2 {
       const machineTerritoriesRemaining = rogueId
         ? Object.values(state.territories).filter((territory) => territory.owner === rogueId).length
         : 0;
-      return `<div class="modal-backdrop polar-victory-backdrop"><section class="modal-card victory-card polar-victory-card" style="--winner:${commanderColor}"><div class="victory-sigil" aria-hidden="true">◉</div><div class="panel-kicker">ZERO-POINT CORE CAPTURED · SURVIVAL COMPLETE</div><h1>Humanity survives.</h1><p>The strongest country of the Codex Ascendancy has fallen after ${campaignWeeks} weeks of permanent war. Its armies, economy and invasion-wave network are now offline.</p><div class="polar-victory-metrics"><span><small>ANTARCTIC STATES TAKEN</small><b>${liberatedAntarctica}/${ANTARCTIC_SECTORS_V2.length}</b></span><span><small>MACHINE TERRITORIES LEFT</small><b>${machineTerritoriesRemaining}</b></span><span><small>WAVES REACHED</small><b>${Math.max(1, polar.globalWave - 1)}</b></span></div><small>${escapeHtml(commanderName)} captured the real Zero-Point territory and ended the Rogue Empire.</small><button class="primary-button" data-action="new-game">Return to command</button></section></div>`;
+      return `<div class="modal-backdrop polar-victory-backdrop"><section class="modal-card victory-card polar-victory-card" style="--winner:${commanderColor}"><div class="victory-sigil" aria-hidden="true">◉</div><div class="panel-kicker">ZERO-POINT CORE CAPTURED · SURVIVAL COMPLETE</div><h1>Humanity survives.</h1><p>The strongest country of the Codex Ascendancy has fallen after ${campaignWeeks} days of permanent war. Its armies, economy and invasion-wave network are now offline.</p><div class="polar-victory-metrics"><span><small>ANTARCTIC STATES TAKEN</small><b>${liberatedAntarctica}/${ANTARCTIC_SECTORS_V2.length}</b></span><span><small>MACHINE TERRITORIES LEFT</small><b>${machineTerritoriesRemaining}</b></span><span><small>WAVES REACHED</small><b>${Math.max(1, polar.globalWave - 1)}</b></span></div><small>${escapeHtml(commanderName)} captured the real Zero-Point territory and ended the Rogue Empire.</small><button class="primary-button" data-action="new-game">Return to command</button></section></div>`;
     }
     const viewerId = this.viewerPlayerId();
     const absorbed = !state.players[viewerId];
@@ -4770,7 +5035,7 @@ export class WorldUIV2 {
       const nextWaveTick = this.engine.state.polarEndgame.nextCounteroffensiveTick;
       const nextWaveWeeks = nextWaveTick === null
         ? 'STAGING'
-        : `${Math.max(0, nextWaveTick - this.engine.state.tick)}W`;
+        : `${Math.max(0, nextWaveTick - this.engine.state.tick)}D`;
       const wave = Math.max(1, Math.floor(this.engine.state.polarEndgame.globalWave));
       return `<button type="button" class="survival-contact-fast-forward survival-front-status glass-panel is-front-status" data-action="open-polar-region" data-polar-region="antarctica" aria-label="Open Antarctica intelligence. Rogue wave ${wave}, next wave ${nextWaveWeeks}, ${activeFronts} active fronts"><i aria-hidden="true">◈</i><div><strong>MACHINE OFFENSIVE · WAVE ${wave}</strong><small>NEXT ${nextWaveWeeks} · ${activeFronts} ACTIVE ${activeFronts === 1 ? 'FRONT' : 'FRONTS'}</small></div><b class="survival-contact-fast-forward__speed">INTEL</b></button>`;
     }
@@ -5022,6 +5287,42 @@ export class WorldUIV2 {
             this.render();
             break;
           }
+          case 'set-research-focus': {
+            const branch = element.dataset.branch as ResearchBranchV2 | undefined;
+            if (!branch || !RESEARCH_META[branch]) break;
+            const playerId = this.viewerPlayerId();
+            this.submitResearchAction(
+              { type: 'set-research-focus', playerId, branch },
+              () => this.engine.setResearchFocus(playerId, branch),
+              'That research focus is unavailable.',
+            );
+            break;
+          }
+          case 'choose-research-breakthrough': {
+            const branch = element.dataset.branch as ResearchBranchV2 | undefined;
+            const effect = element.dataset.effect as ResearchEffectV2 | undefined;
+            if (!branch || !effect || !RESEARCH_META[branch] || !RESEARCH_EFFECT_COPY[effect]) break;
+            const playerId = this.viewerPlayerId();
+            this.submitResearchAction(
+              { type: 'choose-research-breakthrough', playerId, branch, effect },
+              () => this.engine.chooseResearchBreakthrough(playerId, branch, effect),
+              'That breakthrough choice is no longer available.',
+            );
+            break;
+          }
+          case 'research-surge': {
+            const branch = element.dataset.branch as ResearchBranchV2 | undefined;
+            if (!branch || !RESEARCH_META[branch]) break;
+            const playerId = this.viewerPlayerId();
+            this.submitResearchAction(
+              { type: 'research-surge', playerId, targetBranch: branch },
+              () => this.engine.researchSurge(playerId, branch),
+              'The National Initiative is unavailable.',
+            );
+            break;
+          }
+          case 'noop':
+            break;
           case 'close-panel':
           case 'clear-territory':
             this.selectedTerritoryId = undefined;

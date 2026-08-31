@@ -184,8 +184,10 @@ export const AUTHORED_INTERCONTINENTAL_SEA_GATEWAYS: readonly (
   ['dom', 'guy'],
   ['gmb', 'guy'],
   ['grl', 'guy'],
+  ['guy', 'hti'],
   ['sle', 'sur'],
   ['mdg', 'tls'],
+  ['cri', 'png'],
   ['pan', 'png'],
   ['slv', 'png'],
 ];
@@ -204,6 +206,11 @@ const AUTHORED_SEA_ROUTE_GEOMETRY_BY_KEY: Readonly<Record<string, AuthoredSeaRou
   'gnb:grl': {
     leftCoast: [-15.2015, 11.0325],
     rightCoast: [-43.2775, 59.9595],
+    bendDirections: [-1, 1],
+  },
+  'guy:hti': {
+    leftCoast: [-58.165, 6.82],
+    rightCoast: [-73.015, 18.12],
     bendDirections: [-1, 1],
   },
 };

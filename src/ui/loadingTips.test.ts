@@ -22,6 +22,12 @@ describe('loading tips', () => {
     expect(loadingTipAudienceForModeV1('random-world')).toBe('alternative-universe');
   });
 
+  it('describes the normal simulation step as one day', () => {
+    const cadence = LOADING_TIPS_V1.find((tip) => tip.id === 'week');
+    expect(cadence?.text).toContain('one day');
+    expect(cadence?.text).not.toContain('one week');
+  });
+
   it('never immediately repeats a tip when another option exists', () => {
     const audiences: readonly LoadingTipAudience[] = [
       'boot', 'campaign', 'survival', 'alternative-universe',

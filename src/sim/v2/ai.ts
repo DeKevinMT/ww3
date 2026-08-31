@@ -16,6 +16,7 @@ import {
   NATIONAL_IQ_SCORE_MIN,
   aiHighSuspicionAlertV2,
   aiActiveWarCapV2,
+  RESEARCH_BRANCH_EFFECTS,
   RESEARCH_BRANCHES,
   clamp,
   smoothstep,
@@ -33,7 +34,6 @@ import { selectHumanPlayerIdsV2 } from './humanPlayers';
 import { selectLocalHostileThreatV2 } from './localHostileThreat';
 import {
   moveBudgetTowardTargetV2,
-  moveResearchTowardTargetV2,
 } from './nationalAi';
 import {
   campaignStrategicVariationV2,
@@ -51,6 +51,8 @@ import {
   selectNationalIqViewV2,
   selectNuclearPowerV2,
   selectPopulationDynamicsV2,
+  selectResearchBranchCostV2,
+  selectResearchBranchMaxedV2,
   selectTerritoriesOfV2,
   selectTotalManpowerV2,
   selectWarAccessTypeV2,
@@ -96,6 +98,7 @@ import type {
   PlayerId,
   ResearchAllocationsV2,
   ResearchBranchV2,
+  ResearchEffectV2,
   WarAccessV2,
   WarStateV2,
   WorldCommandV2,
@@ -251,7 +254,7 @@ function boxedHumanWarningMessageV2(
   threatenerId: PlayerId,
 ): string {
   const name = content.nations[threatenerId]?.shortName ?? threatenerId;
-  return `EONSCAR EARLY WARNING · ${name} is mobilising along a local route. Pressure window: ${AI_BOXED_HUMAN_WARNING_TICKS} weeks.`;
+  return `EONSCAR EARLY WARNING · ${name} is mobilising along a local route. Pressure window: ${AI_BOXED_HUMAN_WARNING_TICKS} days.`;
 }
 
 function assessAiBoxedHumanV2(
@@ -940,10 +943,6 @@ function aiBudgetTargetV2(
   });
 }
 
-function sameResearchAllocationsV2(left: ResearchAllocationsV2, right: ResearchAllocationsV2): boolean {
-  return RESEARCH_BRANCHES.every((branch) => left[branch] === right[branch]);
-}
-
 function weightedResearchAllocationsV2(
   scores: Readonly<Record<ResearchBranchV2, number>>,
   inactiveBranches: ReadonlySet<ResearchBranchV2> = new Set(),
@@ -1070,6 +1069,74 @@ export function selectAiResearchAllocationsV2(
   return weightedResearchAllocationsV2(scores, inactiveBranches);
 }
 
+/** One deterministic strategic focus; allocations now serve only as an AI scoring projection. */
+export function selectAiResearchFocusV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  playerId: PlayerId,
+  powers: PowerSnapshotV2 = createPowerSnapshotV2(state, content),
+  planningView?: AiNationalPlanningViewV2,
+): ResearchBranchV2 | undefined {
+  if (selectHumanPlayerIdsV2(state).includes(playerId)) return undefined;
+  const allocations = selectAiResearchAllocationsV2(
+    state,
+    content,
+    playerId,
+    powers,
+    planningView,
+  );
+  return RESEARCH_BRANCHES
+    .filter((branch) => !selectResearchBranchMaxedV2(state, content, playerId, branch))
+    .sort((left, right) => allocations[right] - allocations[left]
+      || RESEARCH_BRANCHES.indexOf(left) - RESEARCH_BRANCHES.indexOf(right))[0];
+}
+
+/** Lowest-level authored effect first gives every AI a stable, diversified build. */
+export function selectAiResearchBreakthroughEffectV2(
+  state: WorldStateV2,
+  playerId: PlayerId,
+  branch: ResearchBranchV2,
+): ResearchEffectV2 {
+  const levels = state.players[playerId]!.research.effectLevels;
+  return RESEARCH_BRANCH_EFFECTS[branch]
+    .map((effect, index) => ({ effect, index, level: levels[effect] }))
+    .sort((left, right) => left.level - right.level || left.index - right.index)[0]!.effect;
+}
+
+function planAiResearchCommandsV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  playerId: PlayerId,
+  powers: PowerSnapshotV2,
+  planningView: AiNationalPlanningViewV2,
+): WorldCommandV2[] {
+  if (selectHumanPlayerIdsV2(state).includes(playerId)) return [];
+  const nation = state.players[playerId];
+  if (!nation || selectIsEliminatedV2(state, playerId)) return [];
+  const commands: WorldCommandV2[] = [];
+  for (const branch of RESEARCH_BRANCHES) {
+    const cost = selectResearchBranchCostV2(state, content, playerId, branch, powers);
+    if (cost <= 0 || nation.research.progress[branch] + 1e-9 < cost) continue;
+    commands.push({
+      type: 'choose-research-breakthrough',
+      playerId,
+      branch,
+      effect: selectAiResearchBreakthroughEffectV2(state, playerId, branch),
+    });
+  }
+  const focus = selectAiResearchFocusV2(
+    state,
+    content,
+    playerId,
+    powers,
+    planningView,
+  );
+  if (focus !== nation.research.activeProgram) {
+    commands.push({ type: 'set-research-focus', playerId, branch: focus ?? null });
+  }
+  return commands;
+}
+
 /**
  * Runtime-only accounting used by deterministic performance regressions. It
  * records bounded work units, never wall-clock time, and is not canonical
@@ -1132,20 +1199,13 @@ function planSurvivalAiManagementCommandsV2(
       powerSnapshot.leaderBreakthroughs,
       planningView,
     ), effectiveIq));
-    const allocations = moveResearchTowardTargetV2(
-      player.research.allocations,
-      selectAiResearchAllocationsV2(
-        state,
-        content,
-        playerId,
-        powerSnapshot,
-        planningView,
-      ),
-      effectiveIq,
-    );
-    if (!sameResearchAllocationsV2(player.research.allocations, allocations)) {
-      commands.push({ type: 'set-research-allocations', playerId, allocations });
-    }
+    commands.push(...planAiResearchCommandsV2(
+      state,
+      content,
+      playerId,
+      powerSnapshot,
+      planningView,
+    ));
   }
   return commands;
 }
@@ -1328,21 +1388,13 @@ export function planAiCommandsV2(
       powerSnapshot.leaderBreakthroughs,
       planningView,
     ), effectiveIq));
-    const targetAllocations = selectAiResearchAllocationsV2(
+    commands.push(...planAiResearchCommandsV2(
       state,
       content,
       playerId,
       powerSnapshot,
       planningView,
-    );
-    const allocations = moveResearchTowardTargetV2(
-      player.research.allocations,
-      targetAllocations,
-      effectiveIq,
-    );
-    if (!sameResearchAllocationsV2(player.research.allocations, allocations)) {
-      commands.push({ type: 'set-research-allocations', playerId, allocations });
-    }
+    ));
     // Waves own the Rogue empire's target timing. Once active it still uses
     // the normal national AI for budgets/research and the normal war engine
     // for fronts, but it never enters ordinary diplomacy or random expansion.

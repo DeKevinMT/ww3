@@ -133,13 +133,32 @@ describe('command UI information architecture', () => {
     expect(economy).not.toMatch(/APEX UPKEEP|APEX TREASURY|APEX INVESTMENT/);
   });
 
-  it('integrates North Pole stages into ordinary Research with canonical terms', () => {
+  it('projects one-day recurring values across a 365-day display year', () => {
+    expect(worldUiSource).toContain('V2_CALENDAR_DAYS_PER_YEAR,');
+    expect(worldUiSource).toContain(
+      'const annual = (daily: number): number => daily * V2_CALENDAR_DAYS_PER_YEAR;',
+    );
+    expect(worldUiSource).not.toContain('const WEEKS_PER_YEAR = 52;');
+  });
+
+  it('makes Research an active Empire Blueprint with explicit breakthrough choices', () => {
     const research = methodSource('  private renderResearchPanel(', '  private renderWarPanel(');
     const polar = methodSource('  private renderPolarResearchItem(', '  private renderPolarCompletedEffects(');
     expect(research).toContain('${this.renderPolarResearchItem(human)}');
-    expect(research).toContain('NEXT BREAKTHROUGH');
+    expect(research).toContain('Research · Empire Blueprint');
+    expect(research).toContain('CHOOSE A DIRECTION');
+    expect(research).toContain('One active focus · switching preserves progress');
+    expect(research).toContain('Choose your first national focus');
+    expect(research).toContain('ACTIVE R&amp;D / DAY');
+    expect(research).toContain('about ${activeDays} days');
+    expect(research).toContain('nothing is awarded automatically');
+    expect(research).toContain("isReady ? 'noop' : 'set-research-focus'");
+    expect(research).toContain('data-action="choose-research-breakthrough"');
+    expect(research).toContain('RESEARCH_PILLARS.map');
+    expect(research).toContain('Special project lane <b>NORTH POLE</b>');
     expect(research).toContain('Completed effects');
-    expect(research).toContain('All research programs');
+    expect(research).not.toContain('NEXT BREAKTHROUGH');
+    expect(research).not.toContain('All research programs');
     expect(polar).toContain('this.engine.arcticProjectTerms(human.id, project.id)');
     expect(polar).toContain('project.benefits.join');
     expect(polar).toContain('data-action="start-arctic-project"');
@@ -186,7 +205,10 @@ describe('command UI information architecture', () => {
     expect(review).toContain('apexForecast.supportBonusPercent');
     expect(review).not.toMatch(/ownPower \+ apexPower|INCLUDES \+\$\{compactNumber\(apexPower\)\} APEX/);
     expect(review).toContain('logisticsPreview.additionalWeeklyWarOperations');
+    expect(review).toContain('${cash(logisticsPreview.additionalWeeklyWarOperations)} / day');
     expect(review).toContain('annual(logisticsPreview.additionalWeeklyWarOperations)');
+    expect(review).toContain('<strong>${mobilizationWeeks} DAYS</strong>');
+    expect(review).toContain('ARRIVES D${apexForecast.etaWeeks}');
     expect(review).toContain('criticalRisks.slice(0, 3)');
     expect(review).toContain('aria-label="Power and win chance"');
     expect(review).toContain('aria-label="Exact combat detail"');

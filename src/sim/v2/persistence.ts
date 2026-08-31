@@ -4,6 +4,7 @@ import {
   EMPTY_RESEARCH_EFFECT_LEVELS,
   EMPTY_RESEARCH_PROGRESS,
   DEFAULT_RESEARCH_ALLOCATIONS_V2,
+  RESEARCH_BRANCHES,
   V2_CONTENT_VERSION,
   V2_MAP_ID,
   V2_RULES_VERSION,
@@ -74,6 +75,7 @@ import type {
   PeaceOfferV2,
   PlayerId,
   PolarEndgameStateV2,
+  ResearchBranchV2,
   RunProgressionStateV2,
   TerritoryId,
   TerritoryStateV2,
@@ -165,6 +167,10 @@ const LEGACY_RULES_VERSION_V22_75 = 'frontier-command-v2.75-no-land-condition';
 const LEGACY_RULES_VERSION_V22_76 = 'frontier-command-v2.76-logistics-readiness';
 /** Last release before the Antarctic base garrison was redistributed toward its perimeter. */
 const LEGACY_RULES_VERSION_V22_77 = 'frontier-command-v2.77-apex-shield-multipliers';
+/** Last allocation-driven research release before one active national programme became canonical. */
+const LEGACY_RULES_VERSION_V22_78 = 'frontier-command-v2.78-rogue-perimeter-balance';
+/** Last weekly-calendar release; its canonical state already uses active research. */
+const LEGACY_RULES_VERSION_V22_79 = 'frontier-command-v2.79-active-research';
 const LEGACY_CONTENT_VERSION_V16 = 'natural-earth-countries-2026-v6-naval';
 const LEGACY_CONTENT_VERSION_V17 = 'natural-earth-countries-2026-v7-greenland';
 const LEGACY_BOT_MANPOWER_PER_UNIT = 0.10;
@@ -172,6 +178,8 @@ const LEGACY_BOT_TECH_STRENGTH_MULTIPLIER = 1.22;
 
 function hasCurrentCanonicalShapeV2(rulesVersion: string): boolean {
   return rulesVersion === V2_RULES_VERSION
+    || rulesVersion === LEGACY_RULES_VERSION_V22_79
+    || rulesVersion === LEGACY_RULES_VERSION_V22_78
     || rulesVersion === LEGACY_RULES_VERSION_V22_77;
 }
 
@@ -231,6 +239,14 @@ type LegacyNationV20 = Omit<NationStateV2, 'openingArmyBonus'> & {
   research: NationStateV2['research'] & {
     effectLevels: NationStateV2['research']['effectLevels'] & { control?: number };
   };
+};
+type LegacyResearchStateV278 = Omit<NationStateV2['research'], 'activeProgram'>;
+type LegacyNationV278 = Omit<NationStateV2, 'research'> & {
+  research: LegacyResearchStateV278;
+};
+type LegacySaveGameV22ResearchV278 = Omit<SaveGameV2, 'rulesVersion' | 'players'> & {
+  rulesVersion: typeof LEGACY_RULES_VERSION_V22_78;
+  players: Record<PlayerId, LegacyNationV278>;
 };
 type LegacyTerritoryV20 = TerritoryStateV2 & { condition: number; control?: LegacyControlStateV2 };
 type LegacyPeaceOfferV20 = Omit<PeaceOfferV2, 'settlement'> & {
@@ -536,6 +552,16 @@ export function canonicalStateHashV2(value: object): string {
   return fnv1a(stableStringify(payloadWithoutHash(value)));
 }
 
+function cloneResearchStateV2(research: NationStateV2['research']): NationStateV2['research'] {
+  return {
+    ...research,
+    allocations: { ...research.allocations },
+    progress: { ...research.progress },
+    effectLevels: { ...research.effectLevels },
+    breakthroughs: { ...research.breakthroughs },
+  };
+}
+
 export function createSaveV2(state: WorldStateV2, content: WorldContentV2): SaveGameV2 {
   assertInvariantsV2(state, content);
   const payload: Omit<SaveGameV2, 'canonicalStateHash'> = {
@@ -557,6 +583,7 @@ export function createSaveV2(state: WorldStateV2, content: WorldContentV2): Save
       .map(([id, nation]) => [id, {
         ...nation,
         ceasefiresRequested: 0,
+        research: cloneResearchStateV2(nation.research),
         openingArmyBonus: nation.openingArmyBonus ? { ...nation.openingArmyBonus } : null,
       }])) as Record<PlayerId, NationStateV2>,
     territories: sortedRecord(state.territories) as Record<TerritoryId, TerritoryStateV2>,
@@ -607,6 +634,22 @@ function exactKeys(value: object, allowed: readonly string[]): boolean {
     .filter((key) => key !== 'control' || key in value)
     .sort();
   return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+}
+
+/**
+ * V2.78 is authenticated before conversion, but a caller can still re-sign a
+ * structurally forged payload. Require the exact historical research envelope
+ * so migration never legitimizes a missing or pre-seeded active programme.
+ */
+function assertLegacyResearchShapeV278(save: LegacySaveGameV22ResearchV278): void {
+  const legacyResearchKeys = ['allocations', 'breakthroughs', 'effectLevels', 'progress'];
+  for (const [playerId, nation] of Object.entries(save.players)) {
+    const research = (nation as { research?: unknown }).research;
+    if (!research || typeof research !== 'object' || Array.isArray(research)
+      || !exactKeys(research, legacyResearchKeys)) {
+      throw new Error(`Legacy V2 nation ${playerId} has non-canonical research state.`);
+    }
+  }
 }
 
 /**
@@ -1241,7 +1284,7 @@ function migrateLegacyStateV17(
 }
 
 function currentStateFromSave(
-  save: SaveGameV2 | LegacySaveGameV22ApexArmyV276 | LegacySaveGameV22FoodV275 | LegacySaveGameV22ConditionV274 | LegacySaveGameV22FinanceV272 | LegacySaveGameV22RunV271 | LegacySaveGameV22CommanderV268 | LegacySaveGameV22CommanderV269 | LegacySaveGameV22CommanderV270 | LegacySaveGameV22PreCommander | LegacySaveGameV22PrePolar | LegacySaveGameV21 | LegacySaveGameV20 | LegacySaveGameV19 | LegacySaveGameV18,
+  save: SaveGameV2 | LegacySaveGameV22ResearchV278 | LegacySaveGameV22ApexArmyV276 | LegacySaveGameV22FoodV275 | LegacySaveGameV22ConditionV274 | LegacySaveGameV22FinanceV272 | LegacySaveGameV22RunV271 | LegacySaveGameV22CommanderV268 | LegacySaveGameV22CommanderV269 | LegacySaveGameV22CommanderV270 | LegacySaveGameV22PreCommander | LegacySaveGameV22PrePolar | LegacySaveGameV21 | LegacySaveGameV20 | LegacySaveGameV19 | LegacySaveGameV18,
   content: WorldContentV2,
   retireLegacyCombatExperience = false,
 ): WorldStateV2 {
@@ -1648,6 +1691,32 @@ function migrateLegacyStateV18(
  * breakthrough becomes worthless. V2.55 portfolios also gain the four V2.56
  * branches at zero without changing their exact-100 allocation.
  */
+function selectLegacyResearchActiveProgramV2(
+  allocations: Partial<Record<ResearchBranchV2, unknown>>,
+): ResearchBranchV2 {
+  let selected = RESEARCH_BRANCHES[0]!;
+  let highestAllocation = Number.NEGATIVE_INFINITY;
+  for (const branch of RESEARCH_BRANCHES) {
+    const rawAllocation = allocations[branch];
+    const allocation = typeof rawAllocation === 'number' && Number.isFinite(rawAllocation)
+      ? rawAllocation : Number.NEGATIVE_INFINITY;
+    // Strictly greater preserves RESEARCH_BRANCHES as the stable tie-break.
+    if (allocation > highestAllocation) {
+      selected = branch;
+      highestAllocation = allocation;
+    }
+  }
+  return selected;
+}
+
+function migrateLegacyResearchActiveProgramsV2(state: WorldStateV2): void {
+  for (const nation of Object.values(state.players)) {
+    nation.research.activeProgram = selectLegacyResearchActiveProgramV2(
+      nation.research.allocations,
+    );
+  }
+}
+
 function migrateRetiredSystemsV2(state: WorldStateV2): void {
   for (const territory of Object.values(state.territories)) {
     delete (territory as LegacyTerritoryV20).control;
@@ -1660,11 +1729,13 @@ function migrateRetiredSystemsV2(state: WorldStateV2): void {
     };
     const retiredControlLevel = Number.isFinite(legacyLevels.control) ? legacyLevels.control! : 0;
     const { control: _retiredControl, ...currentLevels } = legacyLevels;
+    const allocations = {
+      ...DEFAULT_RESEARCH_ALLOCATIONS_V2,
+      ...nation.research.allocations,
+    };
     nation.research = {
-      allocations: {
-        ...DEFAULT_RESEARCH_ALLOCATIONS_V2,
-        ...nation.research.allocations,
-      },
+      activeProgram: selectLegacyResearchActiveProgramV2(allocations),
+      allocations,
       progress: {
         ...EMPTY_RESEARCH_PROGRESS,
         ...nation.research.progress,
@@ -1847,7 +1918,7 @@ function reconcileLegacyAntarcticBaseGarrisonV276V277(
 }
 
 export function loadSaveV2(
-  input: string | SaveGameV2 | LegacySaveGameV22ApexArmyV276 | LegacySaveGameV22FoodV275 | LegacySaveGameV22ConditionV274 | LegacySaveGameV22FinanceV272 | LegacySaveGameV22RunV271 | LegacySaveGameV22CommanderV268 | LegacySaveGameV22CommanderV269 | LegacySaveGameV22CommanderV270 | LegacySaveGameV22PreCommander | LegacySaveGameV22PrePolar | LegacySaveGameV21 | LegacySaveGameV20 | LegacySaveGameV19 | LegacySaveGameV18 | LegacySaveGameV17 | LegacySaveGameV16 | LegacySaveGameV15 | LegacySaveGameV14 | LegacySaveGameV13,
+  input: string | SaveGameV2 | LegacySaveGameV22ResearchV278 | LegacySaveGameV22ApexArmyV276 | LegacySaveGameV22FoodV275 | LegacySaveGameV22ConditionV274 | LegacySaveGameV22FinanceV272 | LegacySaveGameV22RunV271 | LegacySaveGameV22CommanderV268 | LegacySaveGameV22CommanderV269 | LegacySaveGameV22CommanderV270 | LegacySaveGameV22PreCommander | LegacySaveGameV22PrePolar | LegacySaveGameV21 | LegacySaveGameV20 | LegacySaveGameV19 | LegacySaveGameV18 | LegacySaveGameV17 | LegacySaveGameV16 | LegacySaveGameV15 | LegacySaveGameV14 | LegacySaveGameV13,
   content: WorldContentV2,
 ): WorldStateV2 {
   registerTraitContentV2(content);
@@ -1869,6 +1940,8 @@ export function loadSaveV2(
                 : LEGACY_RULES_VERSION_V13;
   const supportedRules = schemaVersion === 22
     ? parsed.rulesVersion === V2_RULES_VERSION
+      || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_79
+      || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_78
       || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_77
       || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_76
       || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_75
@@ -1902,6 +1975,8 @@ export function loadSaveV2(
     : keys;
   const expectedSaveKeys = schemaVersion === 22
     ? parsed.rulesVersion === V2_RULES_VERSION
+      || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_79
+      || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_78
       || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_77
       || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_76
       || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_75
@@ -1940,6 +2015,8 @@ export function loadSaveV2(
   if (schemaVersion === 22 && parsed.contentVersion !== V2_CONTENT_VERSION
     && !legacyV7Content
     && parsed.rulesVersion !== V2_RULES_VERSION
+    && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_79
+    && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_78
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_77
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_76
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_75
@@ -1970,9 +2047,12 @@ export function loadSaveV2(
   if (schemaVersion === 22 && parsed.rulesVersion === LEGACY_RULES_VERSION_V22_74) {
     assertLegacyCanonicalShapeV274(parsed as unknown as LegacySaveGameV22ConditionV274);
   }
+  if (schemaVersion === 22 && parsed.rulesVersion === LEGACY_RULES_VERSION_V22_78) {
+    assertLegacyResearchShapeV278(parsed as unknown as LegacySaveGameV22ResearchV278);
+  }
 
   const state = schemaVersion === 22
-    ? currentStateFromSave(parsed as unknown as SaveGameV2 | LegacySaveGameV22ApexArmyV276 | LegacySaveGameV22FoodV275 | LegacySaveGameV22ConditionV274 | LegacySaveGameV22FinanceV272 | LegacySaveGameV22RunV271 | LegacySaveGameV22CommanderV268 | LegacySaveGameV22CommanderV269 | LegacySaveGameV22CommanderV270 | LegacySaveGameV22PreCommander | LegacySaveGameV22PrePolar, content)
+    ? currentStateFromSave(parsed as unknown as SaveGameV2 | LegacySaveGameV22ResearchV278 | LegacySaveGameV22ApexArmyV276 | LegacySaveGameV22FoodV275 | LegacySaveGameV22ConditionV274 | LegacySaveGameV22FinanceV272 | LegacySaveGameV22RunV271 | LegacySaveGameV22CommanderV268 | LegacySaveGameV22CommanderV269 | LegacySaveGameV22CommanderV270 | LegacySaveGameV22PreCommander | LegacySaveGameV22PrePolar, content)
     : schemaVersion === 21
       ? currentStateFromSave(parsed as unknown as LegacySaveGameV21, content)
       : schemaVersion === 20
@@ -1993,8 +2073,14 @@ export function loadSaveV2(
                   : migrateLegacySaveV13(parsed as unknown as LegacySaveGameV13),
                 content,
               )), content), content);
+  if (parsed.rulesVersion !== V2_RULES_VERSION
+    && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_79) {
+    migrateLegacyResearchActiveProgramsV2(state);
+  }
   if (schemaVersion === 22
     && parsed.rulesVersion !== V2_RULES_VERSION
+    && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_79
+    && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_78
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_77
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_76
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_75
@@ -2006,6 +2092,8 @@ export function loadSaveV2(
   // those would resurrect defeated nations and break its canonical hash.
   if (legacyV7Content) hydrateNewContentAfterAuthenticationV2(state, content);
   if (parsed.rulesVersion !== V2_RULES_VERSION
+    && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_79
+    && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_78
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_77
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_76
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_75

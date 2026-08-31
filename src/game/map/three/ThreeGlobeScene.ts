@@ -69,7 +69,7 @@ import {
 import {
   AUTHORED_NAVAL_GATEWAY_PRESENTATION_ROUTES,
   NAVAL_GATEWAY_PRESENTATION_STYLE,
-  navalGatewayRouteEmphasized,
+  resolveNavalGatewayRoutePresentation,
 } from '../navalGatewayPresentation';
 import {
   APEX_INTELLIGENCE_FOG_STYLE,
@@ -1421,8 +1421,10 @@ export class ThreeGlobeScene implements MapSceneAdapter {
   private neuralPulseCounterpulseDamage = 0;
   private readonly globe: THREE.Mesh<THREE.SphereGeometry, THREE.MeshStandardMaterial>;
   private readonly borderDetail: LineSegments2;
-  private readonly gatewayRoutes: THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial>;
-  private readonly gatewayRouteVertexRouteIndexes: number[] = [];
+  private readonly gatewayRoutes: THREE.Group;
+  private readonly gatewayRouteCore: LineSegments2;
+  private readonly gatewayRouteGlow: LineSegments2;
+  private readonly gatewayRouteSegmentRouteIndexes: number[] = [];
   private readonly raycaster = new THREE.Raycaster();
   private readonly pointer = new THREE.Vector2();
   private readonly pickSphere = new THREE.Sphere(new THREE.Vector3(), GLOBE_RADIUS);
@@ -1772,7 +1774,10 @@ export class ThreeGlobeScene implements MapSceneAdapter {
     this.intelligenceFogCloudLayer.userData.sharedApexFogCloudLayer = true;
     this.borderDetail = this.createGlobeBorderDetail(mapBridge.engine);
     this.borderOwnershipSignature = globeBorderOwnershipSignature(mapBridge.engine);
-    this.gatewayRoutes = this.createAuthoredGatewayRoutes();
+    const gatewayRoutes = this.createAuthoredGatewayRoutes();
+    this.gatewayRoutes = gatewayRoutes.group;
+    this.gatewayRouteCore = gatewayRoutes.core;
+    this.gatewayRouteGlow = gatewayRoutes.glow;
     this.globeGroup.add(
       this.globe,
       this.intelligenceFogClearLayer,
@@ -1850,6 +1855,7 @@ export class ThreeGlobeScene implements MapSceneAdapter {
       this.rebuildCountryLabels();
     }
     this.rebuildRoutes();
+    this.updateAuthoredGatewayRouteEmphasis();
   }
 
   private captureApexFogClearAtlas(): void {
@@ -2284,8 +2290,12 @@ export class ThreeGlobeScene implements MapSceneAdapter {
     texture.offset.y = GALAXY_UV_BASE_OFFSET_Y + nextPanY;
   }
 
-  /** One immutable dashed buffer for the exact authored world gateways. */
-  private createAuthoredGatewayRoutes(): THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial> {
+  /** Two immutable dashed buffers: one restrained glow and one crisp route core. */
+  private createAuthoredGatewayRoutes(): {
+    readonly group: THREE.Group;
+    readonly core: LineSegments2;
+    readonly glow: LineSegments2;
+  } {
     const positions: number[] = [];
     const colors: number[] = [];
     const baseColor = new THREE.Color(NAVAL_GATEWAY_PRESENTATION_STYLE.color);
@@ -2296,55 +2306,100 @@ export class ThreeGlobeScene implements MapSceneAdapter {
           const position = vectorFor(longitude, latitude, GLOBE_RADIUS * 1.018);
           positions.push(position.x, position.y, position.z);
           colors.push(baseColor.r, baseColor.g, baseColor.b);
-          this.gatewayRouteVertexRouteIndexes.push(routeIndex);
         }
+        this.gatewayRouteSegmentRouteIndexes.push(routeIndex);
       }
     });
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-    geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-    geometry.computeBoundingSphere();
-    const material = new THREE.LineBasicMaterial({
-      color: 0xffffff,
-      vertexColors: true,
-      transparent: true,
-      opacity: NAVAL_GATEWAY_PRESENTATION_STYLE.opacity,
-      depthTest: true,
-      depthWrite: false,
-      toneMapped: false,
-    });
-    const lines = new THREE.LineSegments(geometry, material);
-    lines.frustumCulled = false;
-    lines.renderOrder = 1;
-    lines.userData.authoredIntercontinentalGatewayBatch = true;
-    lines.userData.drawCalls = 1;
-    return lines;
+    const createLayer = (
+      widthPx: number,
+      opacity: number,
+      glow: boolean,
+    ): LineSegments2 => {
+      const geometry = new LineSegmentsGeometry()
+        .setPositions(positions)
+        .setColors(colors);
+      geometry.computeBoundingSphere();
+      const material = new LineMaterial({
+        color: 0xffffff,
+        vertexColors: true,
+        transparent: true,
+        opacity,
+        depthTest: true,
+        depthWrite: false,
+        worldUnits: false,
+        alphaToCoverage: true,
+        resolution: new THREE.Vector2(
+          Math.max(1, this.renderWidth * this.renderPixelRatio),
+          Math.max(1, this.renderHeight * this.renderPixelRatio),
+        ),
+      });
+      material.linewidth = widthPx;
+      material.toneMapped = false;
+      if (glow) material.blending = THREE.AdditiveBlending;
+      const lines = new LineSegments2(geometry, material);
+      lines.frustumCulled = false;
+      lines.renderOrder = glow ? 0.9 : 1;
+      lines.userData.authoredIntercontinentalGatewayLayer = glow ? 'glow' : 'core';
+      return lines;
+    };
+    const glow = createLayer(
+      NAVAL_GATEWAY_PRESENTATION_STYLE.glowWidthPx,
+      NAVAL_GATEWAY_PRESENTATION_STYLE.glowOpacity,
+      true,
+    );
+    const core = createLayer(
+      NAVAL_GATEWAY_PRESENTATION_STYLE.widthPx,
+      NAVAL_GATEWAY_PRESENTATION_STYLE.opacity,
+      false,
+    );
+    const group = new THREE.Group();
+    group.add(glow, core);
+    group.userData.authoredIntercontinentalGatewayBatch = true;
+    group.userData.drawCalls = 2;
+    return { group, core, glow };
   }
 
   private updateAuthoredGatewayRouteEmphasis(): void {
-    const signature = [
-      this.hoveredTerritoryId ?? '',
-      this.selection.sourceId ?? '',
-      this.selection.targetId ?? '',
-    ].join(':');
-    if (signature === this.gatewayRouteEmphasisSignature) return;
-    this.gatewayRouteEmphasisSignature = signature;
-    const colors = this.gatewayRoutes.geometry.getAttribute('color') as THREE.BufferAttribute;
-    const baseColor = new THREE.Color(NAVAL_GATEWAY_PRESENTATION_STYLE.color);
-    const emphasizedColor = new THREE.Color(NAVAL_GATEWAY_PRESENTATION_STYLE.emphasizedColor);
-    const emphasizedRoutes = AUTHORED_NAVAL_GATEWAY_PRESENTATION_ROUTES.map((route) => (
-      navalGatewayRouteEmphasized(
+    const presentations = AUTHORED_NAVAL_GATEWAY_PRESENTATION_ROUTES.map((route) => (
+      resolveNavalGatewayRoutePresentation(
         route,
+        this.engine?.state,
         this.hoveredTerritoryId,
         this.selection.sourceId,
         this.selection.targetId,
       )
     ));
-    for (let index = 0; index < this.gatewayRouteVertexRouteIndexes.length; index += 1) {
-      const color = emphasizedRoutes[this.gatewayRouteVertexRouteIndexes[index]!] ? emphasizedColor : baseColor;
-      colors.setXYZ(index, color.r, color.g, color.b);
-    }
-    colors.needsUpdate = true;
+    const signature = presentations.map((presentation, routeIndex) => [
+      routeIndex,
+      presentation.activity,
+      presentation.emphasized ? 1 : 0,
+      presentation.activePulse,
+    ].join(':')).join('|');
+    if (signature === this.gatewayRouteEmphasisSignature) return;
+    this.gatewayRouteEmphasisSignature = signature;
+    const color = new THREE.Color();
+    const updateLayer = (layer: LineSegments2, glow: boolean): void => {
+      const starts = layer.geometry.getAttribute(
+        'instanceColorStart',
+      ) as THREE.InterleavedBufferAttribute;
+      const ends = layer.geometry.getAttribute(
+        'instanceColorEnd',
+      ) as THREE.InterleavedBufferAttribute;
+      for (let segmentIndex = 0;
+        segmentIndex < this.gatewayRouteSegmentRouteIndexes.length;
+        segmentIndex += 1) {
+        const presentation = presentations[
+          this.gatewayRouteSegmentRouteIndexes[segmentIndex]!
+        ]!;
+        color.setHex(glow ? presentation.glowColor : presentation.color);
+        starts.setXYZ(segmentIndex, color.r, color.g, color.b);
+        ends.setXYZ(segmentIndex, color.r, color.g, color.b);
+      }
+      starts.data.needsUpdate = true;
+      ends.data.needsUpdate = true;
+    };
+    updateLayer(this.gatewayRouteGlow, true);
+    updateLayer(this.gatewayRouteCore, false);
   }
 
   /** One screen-space draw call reuses the already-loaded Natural Earth edges. */
@@ -4352,6 +4407,8 @@ export class ThreeGlobeScene implements MapSceneAdapter {
     this.renderPixelRatio = pixelRatio;
     if (pixelRatioChanged) this.renderer.setPixelRatio(pixelRatio);
     this.borderDetail.material.resolution.set(width * pixelRatio, height * pixelRatio);
+    this.gatewayRouteCore.material.resolution.set(width * pixelRatio, height * pixelRatio);
+    this.gatewayRouteGlow.material.resolution.set(width * pixelRatio, height * pixelRatio);
     if (sizeChanged) {
       this.renderer.setSize(width, height, false);
       this.camera.aspect = width / height;

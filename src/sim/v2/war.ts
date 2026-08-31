@@ -870,10 +870,11 @@ export function warDeclarationStatusV2(
     && isHumanPlayerV2(state, defenderId)) {
     return status(false, 'Ordinary countries do not initiate wars against human commands in Survival.');
   }
-  if (!campaignWarsUnlockedV2(state, content)) {
+  const playerDeclaration = isHumanPlayerV2(state, attackerId);
+  if (!playerDeclaration && !campaignWarsUnlockedV2(state, content)) {
     return status(false, CAMPAIGN_WAR_LOCK_REASON_V2);
   }
-  const storyLockedHuman = options.ignoreCampaignTutorialLock
+  const storyLockedHuman = options.ignoreCampaignTutorialLock || playerDeclaration
     ? undefined
     : state.humanPlayerIds.find((playerId) => (
       (playerId === attackerId || playerId === defenderId)
@@ -890,7 +891,7 @@ export function warDeclarationStatusV2(
   if (selectActiveWarBetweenV2(state, attackerId, defenderId)) return status(false, 'These nations are already at war.');
   if (areAlliedV2(state, attackerId, defenderId)) return status(false, 'Player allies cannot declare war on each other.');
   const truceWeeks = truceWeeksRemainingV2(state, attackerId, defenderId);
-  if (truceWeeks > 0) return status(false, `Recent-war cooldown active for ${truceWeeks} more weeks.`);
+  if (truceWeeks > 0) return status(false, `Recent-war cooldown active for ${truceWeeks} more days.`);
   const coolingDownRival = rivalInvaders.find((rivalId) => truceWeeksRemainingV2(state, attackerId, rivalId) > 0);
   if (coolingDownRival) return status(false, 'A recent-war cooldown with an existing invader blocks entry into this contested war.');
   if (access === 'none') return status(false, 'No legal land or naval route.');
@@ -1257,7 +1258,7 @@ export function projectCombatExchangeV2(
     * defenderRogueDefense * defenderPolarOperation;
   const attackerCombatDefense = combatDefenseEffectV2(attackerDefense, defenderAttack);
   const defenderCombatDefense = combatDefenseEffectV2(defenderDefense, attackerAttack);
-  // The 8%/4% quote is the supply requirement for this battle, not an
+  // The 10%/5% quote is the supply requirement for this battle, not an
   // artificial deletion of the soldiers already deployed on the front.
   // Readiness scales their effectiveness once; naval supply is therefore not
   // halved a second time inside combat.
@@ -1296,11 +1297,13 @@ export function projectCombatExchangeV2(
     content,
     sourceId,
     attackerId,
+    state,
   );
   const defenderMastery = selectTerritoryCountryMasteryRuntimeV2(
     content,
     targetId,
     defenderId,
+    state,
   );
   const attackerCasualtyModifier = (1 - 0.50 * attackerCasualtyLevel / (attackerCasualtyLevel + 30))
     * selectRunModifiersV2(state, attackerId).regularCasualtyMultiplier
@@ -4195,7 +4198,7 @@ export function resolveBattlePulseV2(
         state,
         'war',
         'action',
-        `${content.nations[defenderId]?.name ?? defenderId} gained a one-year counteroffensive priority after losing ${content.territories[operation.targetId]?.name ?? operation.targetId}.`,
+        `${content.nations[defenderId]?.name ?? defenderId} gained a 52-day counteroffensive priority after losing ${content.territories[operation.targetId]?.name ?? operation.targetId}.`,
         operation.targetId,
         defenderId,
       );
@@ -4543,7 +4546,7 @@ export function internalArmyTransferLogisticsTermsV2(
     distanceKm: round(distanceKm, 3),
     interiorDistanceKm: 0,
     interiorOperationMultiplier: 1,
-    // This is a ratio against the land 8% budget: naval is exactly half.
+    // This is a ratio against the land 10% budget: naval is exactly half.
     throughputMultiplier: access === 'naval' ? 0.5 : 1,
     costPerMillion: quote.costPerMillion,
     logisticsCost: round(Math.max(0, manpower) * quote.costPerMillion, 9),
@@ -5243,8 +5246,8 @@ export function redistributeArmiesV2(state: WorldStateV2, content: WorldContentV
               ? rogueWaveManpowerAtV2(state, plan.id) : 0,
           )];
     }));
-    // Each ordinary donor gets one weekly 8%-of-local-cap pool. A naval edge
-    // may consume at most half, making sea throughput exactly 4%. Literal
+    // Each ordinary donor gets one weekly 10%-of-local-cap pool. A naval edge
+    // may consume at most half, making sea throughput exactly 5%. Literal
     // Routed expedition formations use the external empire support envelope.
     const donorBudget = new Map(plans.map((plan) => {
       const capacity = plan.scorchedTransit
@@ -5483,7 +5486,7 @@ export function processWarsV2(
       endWarV2(
         state,
         war,
-        'The five-year campaign window ended; both empires consolidated their positions.',
+        'The 260-day campaign window ended; both empires consolidated their positions.',
         TRUCE_TICKS,
         endedWars,
       );
@@ -5503,7 +5506,7 @@ export function processWarsV2(
       || hasLegalWarFrontV2(state, content, war.defenderId, war.attackerId);
     if (!permanentSurvivalWar
       && (!legalFront || state.tick - war.lastBattleTick >= STALE_WAR_TICKS)) {
-      endWarV2(state, war, 'Conflict closed after 26 weeks without a legal battle front.', TRUCE_TICKS, endedWars);
+      endWarV2(state, war, 'Conflict closed after 26 days without a legal battle front.', TRUCE_TICKS, endedWars);
       continue;
     }
     const warAge = state.tick - war.startedTick;

@@ -1315,7 +1315,21 @@ describe('global commander progression', () => {
       startedAt: 10,
       updatedAt: 20,
     });
+    const storedSurvival = JSON.parse(
+      storage.getItem(CAMPAIGN_SLOT_STORAGE_KEY)!,
+    ) as Record<string, any>;
+    storedSurvival.survivalMemberLoadouts = {
+      bel: storedSurvival.loadout,
+      can: { ...storedSurvival.loadout, masteryLevel: 5 },
+      invalid: null,
+    };
+    storage.setItem(CAMPAIGN_SLOT_STORAGE_KEY, JSON.stringify(storedSurvival));
     expect(loadCampaignSlotV1(storage)?.scenario.mode).toBe('survival');
+    expect(loadCampaignSlotV1(storage)?.survivalMemberLoadouts).toMatchObject({
+      bel: { masteryLevel: 3 },
+      can: { masteryLevel: 5 },
+    });
+    expect(loadCampaignSlotV1(storage)?.survivalMemberLoadouts).not.toHaveProperty('invalid');
     expect(loadCampaignSlotV1(storage)?.loadout.masteryLevel).toBe(3);
     expect(loadCampaignSlotV1(storage)?.loadout).toMatchObject({
       masteryAllocations: { force: 0, firepower: 0, defense: 0, mobilization: 0 },
@@ -1406,6 +1420,7 @@ describe('global commander progression', () => {
     forgedAlternative.rewardEligible = true;
     storage.setItem(CAMPAIGN_SLOT_STORAGE_KEY, JSON.stringify(forgedAlternative));
     expect(loadCampaignSlotV1(storage)?.rewardEligible).toBe(false);
+    expect(loadCampaignSlotV1(storage)?.survivalMemberLoadouts).toBeUndefined();
     delete forgedAlternative.rewardEligible;
     storage.setItem(CAMPAIGN_SLOT_STORAGE_KEY, JSON.stringify(forgedAlternative));
     expect(loadCampaignSlotV1(storage)?.rewardEligible).toBe(false);

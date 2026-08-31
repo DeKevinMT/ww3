@@ -17,6 +17,7 @@ function selectedCountryCalibration(code: string): { output: number; firstCost: 
   engine.chooseCountry(code);
   engine.stopClock();
   const id = nationIdV2(code);
+  engine.state.players[id]!.research.activeProgram = 'economy-science';
   const powers = createPowerSnapshotV2(engine.state, WORLD_CONTENT_V2);
   const finance = selectWeeklyFinanceBreakdownV2(engine.state, WORLD_CONTENT_V2, id, powers);
   return {

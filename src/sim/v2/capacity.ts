@@ -11,7 +11,10 @@ import { selectTerritoryCountryMasteryRuntimeV2 } from './countryMasteryRuntime'
 import { isHumanPlayerV2 } from './humanPlayers';
 import { OPENING_ARMY_BONUS_DURATION_TICKS_V2 } from './openingArmyBonus';
 import { selectRunModifiersV2 } from './runProgression';
-import { survivalOrdinaryAiCapacityFactorV2 } from './survivalOrdinaryAi';
+import {
+  survivalBasePacketTerritoryCapacityFactorV2,
+  survivalOrdinaryAiCapacityFactorV2,
+} from './survivalOrdinaryAi';
 import { traitNationContextV2 } from './traitContext';
 import {
   countryTraitFactorV2,
@@ -64,6 +67,7 @@ const armyCapacityFactorsV2 = (
 });
 
 const territoryArmyCapacityFactorV2 = (
+  state: WorldStateV2,
   content: WorldContentV2,
   territoryId: TerritoryId,
   ownerId: PlayerId,
@@ -73,13 +77,20 @@ const territoryArmyCapacityFactorV2 = (
     content,
     territoryId,
     ownerId,
+    state,
   ).armyCapacityMultiplier
   * (content.territories[territoryId]?.initialOwnerId === ownerId
     ? factors.homelandOpening
     : 1)
   * ((content.territories[territoryId]?.kind ?? 'sovereign') === 'sovereign'
     ? factors.survivalOrdinaryAi
-    : 1);
+    : 1)
+  * survivalBasePacketTerritoryCapacityFactorV2(
+    state,
+    content,
+    territoryId,
+    ownerId,
+  );
 
 const liveTerritoryArmyCapacityTargetV2 = (
   state: WorldStateV2,
@@ -316,7 +327,7 @@ const nationalArmyCapacityTargetWithFactorsV2 = (
       content,
       territoryId,
       playerId,
-      territoryArmyCapacityFactorV2(content, territoryId, playerId, factors),
+      territoryArmyCapacityFactorV2(state, content, territoryId, playerId, factors),
     );
   }, 0));
 };
@@ -353,7 +364,7 @@ export function stateArmyCapacityTargetsV2(
       content,
       id,
       ownerId,
-      territoryArmyCapacityFactorV2(content, id, ownerId, factors),
+      territoryArmyCapacityFactorV2(state, content, id, ownerId, factors),
     )] as const] : [];
   }));
 }
@@ -372,6 +383,7 @@ export function stateTerritoryArmyCapacityTargetV2(
     territoryId,
     ownerId,
     territoryArmyCapacityFactorV2(
+      state,
       content,
       territoryId,
       ownerId,
@@ -462,6 +474,7 @@ export function synchronizeArmyCapacityV2(state: WorldStateV2, content: WorldCon
       territoryId,
       territory.owner,
       territoryArmyCapacityFactorV2(
+        state,
         content,
         territoryId,
         territory.owner,

@@ -58,8 +58,8 @@ function snapshotWithExtraPayload(payload: string): SnapshotMessage {
 }
 
 describe('multiplayer protocol', () => {
-  it('uses multiplayer protocol version 6 for reload-safe guest command ordering', () => {
-    expect(MULTIPLAYER_PROTOCOL_VERSION).toBe(6);
+  it('uses multiplayer protocol version 7 for active research commands', () => {
+    expect(MULTIPLAYER_PROTOCOL_VERSION).toBe(7);
   });
 
   it('replicates the bounded Survival contact speed', () => {
@@ -377,6 +377,76 @@ describe('multiplayer protocol', () => {
       ...message,
       command: { ...message.command, allocations: { 'military-industry': 100 } },
     })).toThrow(/every supported research branch/i);
+    expect(() => validateProtocolMessage({
+      ...message,
+      command: {
+        ...message.command,
+        allocations: { ...allocations, 'population-recruitment': 9.5, 'military-industry': 10.5 },
+      },
+    })).toThrow(/must be an integer/i);
+    expect(() => validateProtocolMessage({
+      ...message,
+      command: {
+        ...message.command,
+        allocations: { ...allocations, 'population-recruitment': 9 },
+      },
+    })).toThrow(/total exactly 100/i);
+    expect(() => validateProtocolMessage({
+      ...message,
+      command: { ...message.command, debug: true },
+    })).toThrow(/must contain exactly/i);
+  });
+
+  it('round-trips exact research focus and breakthrough choices', () => {
+    const focus: MultiplayerProtocolMessage = {
+      type: 'command',
+      requestId: 'research_focus_1',
+      clientSequence: 4,
+      baseTick: 18,
+      command: {
+        type: 'set-research-focus',
+        playerId: nationIdV2('bel'),
+        branch: 'economy-science',
+      },
+    };
+    const pause: MultiplayerProtocolMessage = {
+      ...focus,
+      requestId: 'research_focus_2',
+      clientSequence: 5,
+      command: { ...focus.command, branch: null },
+    };
+    const breakthrough: MultiplayerProtocolMessage = {
+      type: 'command',
+      requestId: 'research_breakthrough_1',
+      clientSequence: 6,
+      baseTick: 18,
+      command: {
+        type: 'choose-research-breakthrough',
+        playerId: nationIdV2('bel'),
+        branch: 'economy-science',
+        effect: 'research-speed',
+      },
+    };
+
+    expect(decodeProtocolMessage(encodeProtocolMessage(focus))).toEqual(focus);
+    expect(decodeProtocolMessage(encodeProtocolMessage(pause))).toEqual(pause);
+    expect(decodeProtocolMessage(encodeProtocolMessage(breakthrough))).toEqual(breakthrough);
+    expect(() => validateProtocolMessage({
+      ...focus,
+      command: { ...focus.command, branch: 'forged-branch' },
+    })).toThrow(/command\.branch is invalid/i);
+    expect(() => validateProtocolMessage({
+      ...focus,
+      command: { ...focus.command, debug: true },
+    })).toThrow(/must contain exactly/i);
+    expect(() => validateProtocolMessage({
+      ...breakthrough,
+      command: { ...breakthrough.command, effect: 'attack' },
+    })).toThrow(/invalid for command\.branch/i);
+    expect(() => validateProtocolMessage({
+      ...breakthrough,
+      command: { ...breakthrough.command, autoChoose: true },
+    })).toThrow(/must contain exactly/i);
   });
 
   it('round-trips manual Commander orders and strictly validates their policy and front', () => {

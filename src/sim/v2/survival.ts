@@ -53,7 +53,7 @@ export const SURVIVAL_RECAPTURE_PRESSURE_RELIEF_V2 = 2;
 export const SURVIVAL_ROGUE_ASSAULT_MULTIPLIER_V2 = 1.5;
 export const SURVIVAL_ROGUE_FRONT_PROTECTION_MULTIPLIER_V2 = 1.25;
 /** A concentrated gateway breach force, deliberately not a global machine buff. */
-export const SURVIVAL_ROGUE_GATEWAY_BREAKOUT_ASSAULT_MULTIPLIER_V2 = 3.5;
+export const SURVIVAL_ROGUE_GATEWAY_BREAKOUT_ASSAULT_MULTIPLIER_V2 = 4.7;
 export const SURVIVAL_ROGUE_GATEWAY_BREAKOUT_PROTECTION_MULTIPLIER_V2 = 1.75;
 
 const ROGUE_AI_MINIMUM_RESEARCH_V2: Readonly<Partial<Record<ResearchEffectV2, number>>> = Object.freeze({
@@ -650,7 +650,7 @@ export function processRogueAiSurvivalV2(
         state,
         'polar',
         'critical',
-        `${content.territories[gatewayTerritoryId]?.name ?? gatewayId} BREACHING: route opens in ${LATER_GATEWAY_BREACH_TICKS_V2} weeks.`,
+        `${content.territories[gatewayTerritoryId]?.name ?? gatewayId} BREACHING: route opens in ${LATER_GATEWAY_BREACH_TICKS_V2} days.`,
         gatewayTerritoryId,
         ROGUE_AI_NATION_ID_V2,
         { polarRegion: 'antarctica', polarSectorId: gatewayId },

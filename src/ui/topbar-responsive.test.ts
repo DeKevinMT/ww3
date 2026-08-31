@@ -70,7 +70,7 @@ describe('responsive strategic topbar', () => {
     const combinedPower = worldUiSource.indexOf('class="top-metric top-metric--combined-power ');
     const population = worldUiSource.indexOf('class="top-metric top-metric--population"');
     const logistics = worldUiSource.indexOf('class="top-metric top-metric--logistics ');
-    const research = worldUiSource.indexOf('class="top-metric top-metric--research"');
+    const research = worldUiSource.indexOf('class="top-metric top-metric--research ');
 
     expect(economy).toBeGreaterThan(0);
     expect(population).toBeGreaterThan(economy);
@@ -91,9 +91,16 @@ describe('responsive strategic topbar', () => {
     expect(worldUiSource).toContain('<span>POPULATION</span>');
     expect(worldUiSource).toContain('<span>WAR SUPPLY</span>');
     expect(worldUiSource).toContain('data-panel="research"');
+    expect(worldUiSource).toContain("? 'CHOOSE' : allResearchMastered");
+    expect(worldUiSource).toContain("? `${topbarResearchProgress}%` : 'SELECT'");
+    expect(worldUiSource).toContain("'Breakthrough ready'");
+    expect(worldUiSource).toContain("'Select an Empire focus'");
+    expect(worldUiSource).toContain('const topbarResearchDays =');
+    expect(worldUiSource).toContain("topbarResearchDays ? ` · ${topbarResearchDays}D` : ''");
+    expect(worldUiSource).not.toContain('const topbarResearchWeeks =');
     expect(worldUiSource).not.toContain('data-panel="progress"');
     expect(worldUiSource).toContain('<small><span>CASH ${cash(human.treasury)}</span>');
-    expect(worldUiSource).toContain('${signed(finance.annualEconomyGrowthRate * 100, 2)}%</i>');
+    expect(worldUiSource).toContain('${signed(calendarEconomyGrowth * 100, 2)}%</i>');
     expect(worldUiSource).not.toContain('class="top-metric top-metric--treasury');
     expect(worldUiSource).not.toContain('class="top-metric top-metric--military');
     expect(worldUiSource).not.toContain('class="top-metric top-metric--apex');
@@ -116,7 +123,8 @@ describe('responsive strategic topbar', () => {
     expect(topbar).not.toContain('EMPIRE TOTAL');
     expect(topbar).toContain('aria-label="Open War. War Supply');
     expect(topbar).not.toContain('<small>${escapeHtml(logisticsDetail)}</small>');
-    expect(topbar).toContain('${topbarResearchProgress}%');
+    expect(topbar).toContain('${topbarResearchValue}');
+    expect(topbar).toContain('aria-valuenow="${topbarResearchProgress}"');
     expect(topbar).toContain('${escapeHtml(topbarResearchLabel)}');
     expect(topbar.match(/class="topbar-progress-bar"/g)).toHaveLength(2);
     expect(topbar).not.toMatch(/food|apexFood|foodReserve/i);

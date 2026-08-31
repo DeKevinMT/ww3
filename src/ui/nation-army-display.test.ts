@@ -21,22 +21,22 @@ describe('nation army display', () => {
     expect(globalRankingDetail(1_250_000, 5)).toBe('MILITARY POWER 1.25M');
   });
 
-  it('presents current treasury separately from its weekly forecast', () => {
+  it('presents current treasury separately from its daily forecast', () => {
     expect(treasuryTopbarPresentationV2(4.25, -0.125, 8.5)).toEqual({
       className: 'top-metric--economy is-positive',
       value: '$4.25B',
       reserveFill: '50%',
       reserveFillClassName: 'is-warn',
-      trend: '−$125M/wk',
+      trend: '−$125M/day',
       trendClassName: 'is-negative',
-      ariaLabel: 'Current empire treasury $4.25B; projected recurring net −$125M per week',
+      ariaLabel: 'Current empire treasury $4.25B; projected recurring net −$125M per day',
     });
     expect(treasuryTopbarPresentationV2(-0.5, 0.05, 2)).toMatchObject({
       className: 'top-metric--economy is-debt is-negative',
       value: '−$500M',
       reserveFill: '0%',
       reserveFillClassName: 'is-negative',
-      trend: '+$50M/wk',
+      trend: '+$50M/day',
       trendClassName: 'is-positive',
     });
   });

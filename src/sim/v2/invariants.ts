@@ -24,7 +24,10 @@ import {
 import { selectCoopMilitaryAccessRouteBetweenV2 } from './coopAccess';
 import { isHumanPlayerV2 } from './humanPlayers';
 import { OPENING_ARMY_BONUS_DURATION_TICKS_V2 } from './openingArmyBonus';
-import { isSurvivalDawnlineNationV2 } from './survivalOrdinaryAi';
+import {
+  SURVIVAL_DAWNLINE_ARCTIC_NATION_IDS_V2,
+  isSurvivalDawnlineNationV2,
+} from './survivalOrdinaryAi';
 import {
   ANTARCTIC_SECTOR_IDS_V2,
   ARCTIC_PROJECT_IDS_V2,
@@ -58,8 +61,8 @@ import {
 } from './types';
 
 const NATION_KEYS = ['budget', 'capitalId', 'ceasefiresRequested', 'domesticFoodCapacity', 'empireName', 'foodSecurity', 'foodStock', 'manualActionUses', 'openingArmyBonus', 'propagandaAvailableTick', 'propagandaProgram', 'rapidRecruitmentAvailableTick', 'research', 'researchSurgeAvailableTick', 'trainedReserves', 'treasury', 'warFatigue'];
-const TERRITORY_KEYS = ['army', 'coreOwner', 'economy', 'integration', 'integrationProgram', 'owner', 'population'];
-const RESEARCH_KEYS = ['allocations', 'breakthroughs', 'effectLevels', 'progress'];
+const TERRITORY_KEYS = ['army', 'coreOwner', 'economy', 'integration', 'integrationProgram', 'owner', 'population', 'survivalBasePacket'];
+const RESEARCH_KEYS = ['activeProgram', 'allocations', 'breakthroughs', 'effectLevels', 'progress'];
 const BUDGET_KEYS = ['development', 'military', 'research'];
 const MANUAL_ACTION_USE_KEYS = ['propaganda', 'rapidRecruitment', 'researchSurge'];
 const EFFECT_KEYS = [
@@ -167,7 +170,7 @@ const RUN_PLAYER_KEYS = ['activeOffer', 'picks', 'queuedMilestones', 'recaptured
 const RUN_OFFER_KEYS = ['createdTick', 'id', 'milestoneId', 'milestoneKind', 'milestoneLabel', 'optionIds', 'playerId'];
 const RUN_MILESTONE_KEYS = ['createdTick', 'id', 'kind', 'label'];
 const RUN_PICK_KEYS = ['milestoneId', 'milestoneLabel', 'offerId', 'pickedTick', 'upgradeId'];
-const OPTIONAL_CANONICAL_KEYS = ['cause', 'integrationProgram'] as const;
+const OPTIONAL_CANONICAL_KEYS = ['cause', 'integrationProgram', 'survivalBasePacket'] as const;
 const allowedKeySetCache = new WeakMap<readonly string[], ReadonlySet<string>>();
 
 function allowedKeySet(allowed: readonly string[]): ReadonlySet<string> {
@@ -941,6 +944,10 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
     if (!exactKeys(nation.research.breakthroughs, BREAKTHROUGH_KEYS)) errors.push(`Nation ${id} breakthroughs have non-canonical keys.`);
     if (!exactKeys(nation.research.allocations, BREAKTHROUGH_KEYS)) errors.push(`Nation ${id} research allocations have non-canonical keys.`);
     if (!exactKeys(nation.research.progress, BREAKTHROUGH_KEYS)) errors.push(`Nation ${id} research progress has non-canonical keys.`);
+    if (nation.research.activeProgram !== null
+      && !RESEARCH_BRANCHES.includes(nation.research.activeProgram)) {
+      errors.push(`Nation ${id} has an invalid active research programme.`);
+    }
     const budget = nation.budget;
     if (![budget.military, budget.research, budget.development].every((value) => Number.isInteger(value) && value >= 5 && value <= 90)
       || budget.military + budget.research + budget.development !== 100) errors.push(`Nation ${id} has an invalid budget.`);
@@ -979,6 +986,15 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
     if (!exactKeys(territory.army, ARMY_KEYS)) errors.push(`Territory ${id} army has non-canonical keys.`);
     if (!state.players[territory.owner]) errors.push(`Territory ${id} has an unknown owner.`);
     if (!state.players[territory.coreOwner]) errors.push(`Territory ${id} has an unknown core owner.`);
+    const basePacketOriginId = content.territories[id]?.initialOwnerId;
+    if (territory.survivalBasePacket !== undefined && (
+      territory.survivalBasePacket !== true
+        || content.metadata?.scenarioId !== 'survival'
+        || basePacketOriginId === undefined
+        || !SURVIVAL_DAWNLINE_ARCTIC_NATION_IDS_V2.includes(
+          basePacketOriginId as (typeof SURVIVAL_DAWNLINE_ARCTIC_NATION_IDS_V2)[number],
+        )
+    )) errors.push(`Territory ${id} has an invalid Survival Base Packet marker.`);
     const expectedCapacity = stateTerritoryArmyCapacityTargetV2(state, content, id, territory.owner);
     const destroyedSurvivalCorridor = isSurvivalScorchedTransitTerritoryV2(state, id);
     const invalidPopulation = destroyedSurvivalCorridor

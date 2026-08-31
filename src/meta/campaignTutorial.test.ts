@@ -66,18 +66,24 @@ function campaignSlot(engine: WorldEngineV2): StoredCampaignV1 {
   };
 }
 
-describe('one-time account Campaign tutorial', () => {
-  it('gives a brand-new profile the guided opening exactly once', () => {
+describe('retired Campaign opening tutorial compatibility', () => {
+  it('starts a brand-new profile without tutorial messages or an attack lock', () => {
     const fresh = createCommanderProfileV1(1, 'first-campaign');
     expect(fresh.campaignTutorialCompleted).toBe(false);
 
     const first = new WorldEngineV2(101);
     const playerId = first.state.humanPlayerId;
     first.state.tick = 6;
-    expect(processApexNarrativeV2(first.state, first.content)).toBe(1);
-    expect(first.apexTransmissions(playerId).map((item) => item.id))
-      .toEqual(['campaign-signal-anomaly']);
+    expect(campaignTutorialBypassedV2(first.state, first.content, playerId)).toBe(true);
+    expect(campaignHumanWarsUnlockedV2(first.state, first.content, playerId)).toBe(true);
+    expect(campaignAiVsAiWarOpeningTickV2(first.state, first.content))
+      .toBe(AI_FIRST_WAR_TICK);
+    expect(processOpeningConflictsV2(first.state, first.content)).toBe(false);
+    expect(processApexNarrativeV2(first.state, first.content)).toBe(0);
+    expect(first.apexTransmissions(playerId)).toEqual([]);
 
+    // The durable marker remains readable/writable for existing account data,
+    // even though it no longer gates the opening experience.
     const recorded = recordCampaignTutorialExperiencedV1(fresh, 2);
     expect(recorded.accepted).toBe(true);
     expect(recorded.profile.campaignTutorialCompleted).toBe(true);
@@ -88,7 +94,7 @@ describe('one-time account Campaign tutorial', () => {
     expect(loadCommanderProfileV1(storage, 5).campaignTutorialCompleted).toBe(true);
   });
 
-  it('starts every later Campaign playable with Stage I complete and no tutorial queue', () => {
+  it('initializes every Campaign with Stage I complete and no tutorial queue', () => {
     const engine = new WorldEngineV2(202);
     const playerId = engine.state.humanPlayerId;
     expect(initializeExperiencedCampaignV2(engine.state, engine.content, playerId)).toBe(true);
@@ -138,7 +144,7 @@ describe('one-time account Campaign tutorial', () => {
     expect(storedCampaignWasPlayedV1(playedSlot)).toBe(true);
   });
 
-  it('keeps the repeat-Campaign marker and automatic research across save/reconnect', () => {
+  it('keeps the compatibility marker and tutorial-free opener across save/reconnect', () => {
     const engine = new WorldEngineV2(404);
     const playerId = engine.state.humanPlayerId;
     initializeExperiencedCampaignV2(engine.state, engine.content, playerId);

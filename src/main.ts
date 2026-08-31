@@ -78,7 +78,10 @@ import {
   initializeExperiencedCampaignV2,
 } from './sim/v2/campaignTutorial';
 import { acknowledgePolarWarningV2 } from './sim/v2/polarEndgame';
-import { V2_RULES_VERSION } from './sim/v2/balance';
+import {
+  calendarAnnualGrowthRateV2,
+  V2_RULES_VERSION,
+} from './sim/v2/balance';
 import {
   normalizeScenarioConfigV2,
   resolveScenarioV2,
@@ -197,8 +200,12 @@ function buildCommanderCountryCatalog(): readonly CommanderCountryCatalogEntryV1
         population: metrics.economyView.population,
         economy: metrics.economyView.output,
         treasury: metrics.player.treasury,
-        economicGrowth: metrics.finance.annualEconomyGrowthRate * 100,
-        populationGrowth: metrics.populationDynamics.annualNetRate * 100,
+        economicGrowth: calendarAnnualGrowthRateV2(
+          metrics.finance.annualEconomyGrowthRate,
+        ) * 100,
+        populationGrowth: calendarAnnualGrowthRateV2(
+          metrics.populationDynamics.annualNetRate,
+        ) * 100,
         gdpPerCapita: metrics.economyView.wealthPerPerson / 1e6,
       },
       quote: quotes.get(nation.id)!,
@@ -709,6 +716,23 @@ function registerStoredCampaignMasteryRuntime(
   campaign: StoredCampaignV1,
 ): void {
   resetCountryMasteryRuntimeV2(content);
+  if (campaign.scenario.mode === 'survival' && campaign.survivalMemberLoadouts) {
+    const frozenEntries = Object.entries(campaign.survivalMemberLoadouts)
+      .filter(([countryId]) => Boolean(content.nations[countryId as PlayerId]))
+      .sort(([left], [right]) => left.localeCompare(right));
+    for (const [countryId, loadout] of frozenEntries) {
+      registerCountryMasteryRuntimeV2(content, countryId, loadout.masteryMilitary);
+    }
+    if (!campaign.survivalMemberLoadouts[campaign.countryId]
+      && content.nations[campaign.countryId as PlayerId]) {
+      registerCountryMasteryRuntimeV2(
+        content,
+        campaign.countryId,
+        campaign.loadout.masteryMilitary,
+      );
+    }
+    return;
+  }
   const rosterCountryIds = campaign.scenario.mode === 'survival'
     ? [...new Set(commanderProfile.unlockedCountryIds)]
     : [campaign.countryId];
@@ -729,7 +753,7 @@ async function beginStoredCampaign(engine: WorldEngineV2, countryId: PlayerId): 
   const now = Date.now();
   const loadout = resolveCountryLoadoutV1(commanderProfile, countryId);
   const scenario = scenarioConfigFromEngineV2(engine);
-  if (scenario.mode === 'standard-2026' && commanderProfile.campaignTutorialCompleted) {
+  if (scenario.mode === 'standard-2026') {
     initializeExperiencedCampaignV2(engine.state, engine.content, countryId);
   }
   resetCountryMasteryRuntimeV2(engine.content);
@@ -784,6 +808,13 @@ async function beginStoredCampaign(engine: WorldEngineV2, countryId: PlayerId): 
       warOutcomeLedgerStartedTick: engine.state.tick,
       profileRevisionAtStart: commanderProfile.revision,
       loadout,
+      ...(scenario.mode === 'survival' ? {
+        survivalMemberLoadouts: Object.fromEntries(rosterCountryIds.map((rosterCountryId) => [
+          rosterCountryId,
+          rosterCountryId === countryId
+            ? loadout : resolveCountryLoadoutV1(commanderProfile, rosterCountryId),
+        ])),
+      } : {}),
       rewardEligible: scenario.mode !== 'random-world',
       stateSave: engine.save(),
       baseline: {
@@ -1105,7 +1136,10 @@ function attachGuestStatus(
       if (session.engine?.state.gameOver) clearActiveGuestReconnectSession();
       else refreshActiveGuestReconnectSession();
     },
-    onCommandResult: (event) => activeSessionStatus?.showCommandResult(event),
+    onCommandResult: (event) => {
+      activeSessionStatus?.showCommandResult(event);
+      activeUi?.handleAuthoritativeResearchCommandResult(event.command, event.result);
+    },
     onSnapshot: ({ engine }) => {
       if (activeSession !== session) return;
       const worldEngine = worldEngineFromSession(engine);

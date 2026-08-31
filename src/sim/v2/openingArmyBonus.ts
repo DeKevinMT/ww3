@@ -3,7 +3,7 @@ import { resetEmptyArmyBaseQualityV2 } from './armyQuality';
 import type { WorldContentV2 } from './content';
 import type { ArmyStateV2, PlayerId, TerritoryId, WorldStateV2 } from './types';
 
-/** Every player-only opening army/cap adjustment returns to neutral over thirty years. */
+/** Every player-only opening army/cap adjustment returns to neutral over 1,560 daily ticks. */
 export const OPENING_ARMY_BONUS_DURATION_TICKS_V2 = 1_560;
 
 const MANPOWER_PRECISION_V2 = 9;

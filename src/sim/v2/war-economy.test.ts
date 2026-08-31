@@ -36,6 +36,7 @@ function pressureState(fronts: 0 | 1 | 2): WorldStateV2 {
   const state = createWorldStateV2(880);
   state.wars = [];
   state.players[nationIdV2('bel')].warFatigue = 30;
+  state.players[nationIdV2('bel')].research.activeProgram = 'economy-science';
   if (fronts >= 1) addFront(state, 1, 'nld');
   if (fronts >= 2) addFront(state, 2, 'lux');
   return state;

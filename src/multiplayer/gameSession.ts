@@ -358,7 +358,7 @@ export class HostGameSession {
     const authorization = authorizeMultiplayerCommandV2(this.engine.state, this.hostCountryId, command, true);
     if (!authorization.accepted) return authorization;
     if (command.type !== 'set-speed' && this.targetTickActions().length >= MAX_ACTIONS_PER_TICK) {
-      return rejected('Too many commands are already queued for the next week.');
+      return rejected('Too many commands are already queued for the next day.');
     }
     const context: SubmissionContext = { senderPeerId: this.transport.hostPeerId };
     this.activeSubmission = context;
@@ -562,7 +562,7 @@ export class HostGameSession {
         type: 'command-result',
         requestId: message.requestId,
         accepted: false,
-        reason: 'Too many commands are already queued for the next week.',
+        reason: 'Too many commands are already queued for the next day.',
       });
       return;
     }

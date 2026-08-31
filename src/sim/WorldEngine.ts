@@ -505,7 +505,7 @@ export class WorldEngine {
       startedTick: this.state.tick,
     };
     this.addEvent(upgrade.domain === 'war' ? 'war' : upgrade.domain === 'finance' ? 'economy' : 'research', 'action',
-      `${player.shortName} begins ${upgrade.name}: $${cost.toFixed(1)}B committed over ${duration} weeks.`, undefined, playerId);
+      `${player.shortName} begins ${upgrade.name}: $${cost.toFixed(1)}B committed over ${duration} day${duration === 1 ? '' : 's'}.`, undefined, playerId);
     this.emit({ reason: 'management-upgrade' });
     return true;
   }
@@ -924,7 +924,7 @@ export class WorldEngine {
   }
 
   date(): Date {
-    return new Date(START_DATE_UTC + this.state.tick * 7 * 24 * 60 * 60 * 1000);
+    return new Date(START_DATE_UTC + this.state.tick * 24 * 60 * 60 * 1000);
   }
 
   strategicScore(playerId: PlayerId): number {

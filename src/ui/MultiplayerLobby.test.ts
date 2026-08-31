@@ -532,7 +532,7 @@ describe('multiplayer lobby launch recovery', () => {
     ui.destroy(false);
   });
 
-  it('explains the two sovereign Survival commands without implying shared logistics', () => {
+  it('explains the two sovereign Survival commands and host-owned Arctic Base Packets', () => {
     const scenario = normalizeScenarioConfigV2({ mode: 'survival', seed: 404_456 });
     const ui = new MultiplayerLobby({
       onClose: vi.fn(), onHostLaunch: vi.fn(), onGuestLaunch: vi.fn(), openingMetrics,
@@ -552,7 +552,11 @@ describe('multiplayer lobby launch recovery', () => {
 
     expect(internals.root.innerHTML).toContain('PRIMARY COMMAND');
     expect(internals.root.innerHTML).toContain('CO-OP COMMAND');
-    expect(internals.root.innerHTML).toContain('Arctic Dawnline deploys separately as an NPC ally.');
+    expect(internals.root.innerHTML).toContain(
+      'The Arctic countries deploy inside your host Empire: reduced while locked, full strength when unlocked.',
+    );
+    expect(internals.root.innerHTML).not.toContain('NPC ally');
+    expect(internals.root.innerHTML).not.toContain('separate AI alliance');
     expect(internals.root.innerHTML).toContain('/2 CONNECTED');
     expect(internals.root.innerHTML).not.toContain('allied territory carries team supply');
     ui.destroy(false);

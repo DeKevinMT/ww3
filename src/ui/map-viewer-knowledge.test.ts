@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { WorldEngineV2 } from '../sim/v2/WorldEngineV2';
 import { territoryIdV2 } from '../sim/v2/types';
-import { enterPostBlackoutCampaignForTestV2 } from '../sim/v2/testSupport';
 import { serializeSaveV2 } from '../sim/v2/persistence';
 import { resolveScenarioV2 } from '../sim/v2/scenarios';
 import { SURVIVAL_DAWNLINE_ACCORD_NAME_V2 } from '../sim/v2/survivalOrdinaryAi';
@@ -28,20 +27,21 @@ describe('viewer-local map knowledge', () => {
     expect(engine.state.players[playerId]).not.toHaveProperty('flagCountryId');
   });
 
-  it('projects one custom Dawnline flag across its non-human Survival realm', () => {
+  it('does not synthesize a separate Dawnline flag for non-human Survival nations', () => {
     const resolved = resolveScenarioV2({ mode: 'survival', seed: 96_416 });
     const engine = new WorldEngineV2(96_416, resolved.content);
-    const dawnlineId = resolved.content.nationIds.find((playerId) => (
+    const formerDawnlineId = resolved.content.nationIds.find((playerId) => (
       playerId !== engine.state.humanPlayerId
         && resolved.content.nations[playerId]?.kind !== 'rogue-ai'
     ))!;
-    engine.state.players[dawnlineId]!.empireName = SURVIVAL_DAWNLINE_ACCORD_NAME_V2;
+    engine.state.players[formerDawnlineId]!.empireName = SURVIVAL_DAWNLINE_ACCORD_NAME_V2;
     const adapter = createMapEngineAdapter(engine, () => engine.globalRanking());
     adapter.refreshSnapshot?.();
 
-    expect(adapter.player(dawnlineId)?.flagCountryId)
-      .toBe(DAWNLINE_ACCORD_FLAG_NATION_ID);
-    expect(engine.state.players[dawnlineId]).not.toHaveProperty('flagCountryId');
+    expect(adapter.player(formerDawnlineId)?.flagCountryId).toBe(formerDawnlineId);
+    expect(adapter.player(formerDawnlineId)?.flagCountryId)
+      .not.toBe(DAWNLINE_ACCORD_FLAG_NATION_ID);
+    expect(engine.state.players[formerDawnlineId]).not.toHaveProperty('flagCountryId');
   });
 
   it('projects only scenario identity and strategic connection targets', () => {
@@ -92,55 +92,21 @@ describe('viewer-local map knowledge', () => {
     expect(first.viewerKnowledge?.chartedTerritoryIds).toEqual(['jpn', 'usa']);
   });
 
-  it('keeps Campaign clear until acknowledgement, then activates the relevance veil once', () => {
+  it('keeps the retired Campaign blackout presentation dormant without tutorial messages', () => {
     const engine = new WorldEngineV2(96_412);
-    const playerId = engine.state.humanPlayerId;
     const adapter = createMapEngineAdapter(engine, () => engine.globalRanking());
     adapter.refreshSnapshot?.();
     expect(adapter.viewerKnowledge?.communicationsBlackoutActive).toBe(false);
     expect(adapter.viewerKnowledge?.communicationsBlackoutTick).toBeNull();
-
-    (engine.state.polarEndgame as typeof engine.state.polarEndgame & {
-      communicationsBlackoutTick: number | null;
-    }).communicationsBlackoutTick = 104;
-    engine.state.tick = 104;
-    engine.state.polarEndgame.apexNarrative.players[playerId] = {
-      investigationAuthorized: true,
-      transmissions: [{
-        id: 'campaign-communications-blackout',
-        playerId,
-        sentTick: 104,
-        title: 'The world is going dark',
-        body: 'Test blackout briefing.',
-        action: null,
-        targetId: null,
-        choice: null,
-        resolvedTick: null,
-      }],
-    };
-    expect(adapter.viewerKnowledge?.communicationsBlackoutActive).toBe(false);
-    expect(adapter.viewerKnowledge?.communicationsBlackoutTick).toBe(104);
     expect(adapter.viewerKnowledge?.communicationsBlackoutAnimateActivation).toBe(false);
-
-    const briefing = engine.state.polarEndgame.apexNarrative.players[playerId]!.transmissions[0]!;
-    briefing.choice = 'acknowledge';
-    briefing.resolvedTick = 104;
-    expect(adapter.viewerKnowledge?.communicationsBlackoutActive).toBe(true);
-    expect(adapter.viewerKnowledge?.communicationsBlackoutAnimateActivation).toBe(true);
-
-    const settledAdapter = createMapEngineAdapter(engine, () => engine.globalRanking());
-    settledAdapter.refreshSnapshot?.();
-    expect(settledAdapter.viewerKnowledge?.communicationsBlackoutActive).toBe(true);
-    expect(settledAdapter.viewerKnowledge?.communicationsBlackoutAnimateActivation).toBe(false);
+    expect(adapter.viewerKnowledge?.apexFieldActivated).toBe(true);
+    expect(engine.apexTransmissions(engine.state.humanPlayerId)).toEqual([]);
   });
 
-  it('projects the resolved first-strike shield gate per viewer and preserves it on load', () => {
+  it('projects the immediate Campaign attack state per viewer and preserves it on load', () => {
     const engine = new WorldEngineV2(96_414);
     const adapter = createMapEngineAdapter(engine, () => engine.globalRanking());
     adapter.refreshSnapshot?.();
-    expect(adapter.viewerKnowledge?.apexFieldActivated).toBe(false);
-
-    enterPostBlackoutCampaignForTestV2(engine.state);
     expect(adapter.viewerKnowledge?.apexFieldActivated).toBe(true);
 
     const loaded = WorldEngineV2.fromSave(serializeSaveV2(engine.state, engine.content));

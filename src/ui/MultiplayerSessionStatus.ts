@@ -139,7 +139,7 @@ export class MultiplayerSessionStatus {
       ? `${Math.min(status.seatCount, status.connectedPeers + 1)}/${status.seatCount} PLAYERS`
       : status.connectedPeers > 0 ? 'HOST ONLINE' : 'HOST OFFLINE';
     const speed = status.speed === 0 ? 'PAUSED' : `${status.speed}×`;
-    const label = `${status.role.toUpperCase()} · ${phaseLabel(status)} · ${playerStatus} · WEEK ${status.tick} · ${speed}`;
+    const label = `${status.role.toUpperCase()} · ${phaseLabel(status)} · ${playerStatus} · DAY ${status.tick} · ${speed}`;
     this.root.textContent = label;
     if (status.role === 'guest'
       && (status.phase === 'disconnected' || status.phase === 'error')

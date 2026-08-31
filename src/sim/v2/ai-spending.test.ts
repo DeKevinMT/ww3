@@ -152,6 +152,7 @@ describe('shared national-AI spending discipline', () => {
     const state = createWorldStateV2(91_001);
     const belgium = nationIdV2('bel');
     state.players[belgium]!.treasury = 0;
+    state.players[belgium]!.research.activeProgram = 'advanced-weapons';
 
     const building = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, belgium);
     const economyScale = Math.max(0, Math.min(1, Math.log10(building.revenue + 1) / 2));
@@ -282,6 +283,7 @@ describe('shared national-AI spending discipline', () => {
   it('routes a full army surplus away from useless standing operations', () => {
     const state = createWorldStateV2(91_005);
     const netherlands = nationIdV2('nld');
+    state.players[netherlands]!.research.activeProgram = 'advanced-weapons';
     for (const territory of Object.values(state.territories)) {
       if (territory.owner === netherlands) territory.army.manpower = territory.army.capacity;
     }

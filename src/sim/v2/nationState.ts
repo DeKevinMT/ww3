@@ -182,6 +182,7 @@ export function createNationStateV2(
     budget: { ...DEFAULT_BUDGET_V2 },
     research: {
       allocations: { ...DEFAULT_RESEARCH_ALLOCATIONS_V2 },
+      activeProgram: null,
       progress: { ...EMPTY_RESEARCH_PROGRESS },
       effectLevels: { ...EMPTY_RESEARCH_EFFECT_LEVELS },
       breakthroughs: { ...EMPTY_RESEARCH_BREAKTHROUGHS },

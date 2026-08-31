@@ -344,6 +344,9 @@ describe('retired country-trait selector runtime', () => {
 
   it('keeps research output, catch-up and branch progress neutral', () => {
     const estonia = identityFixtureV2('est', 82_040);
+    configureBothV2(estonia, (state, playerId) => {
+      state.players[playerId]!.research.activeProgram = 'economy-science';
+    });
     const sharedFinance = selectWeeklyFinanceBreakdownV2(
       estonia.neutralState, estonia.neutralContent, estonia.neutralId,
     );
@@ -371,6 +374,9 @@ describe('retired country-trait selector runtime', () => {
         'research-catch-up-bonus'), 5);
 
     const china = identityFixtureV2('chn', 82_042);
+    configureBothV2(china, (state, playerId) => {
+      state.players[playerId]!.research.activeProgram = 'military-industry';
+    });
     const finance = selectWeeklyFinanceBreakdownV2(
       china.neutralState, china.neutralContent, china.neutralId,
     );

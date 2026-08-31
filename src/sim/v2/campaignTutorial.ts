@@ -40,15 +40,14 @@ export function isCampaignTutorialTransmissionV2(
  * have also entered the inbox.
  */
 export function campaignTutorialBypassedV2(
-  state: Pick<WorldStateV2, 'polarEndgame'>,
+  _state: Pick<WorldStateV2, 'polarEndgame'>,
   content: WorldContentV2,
-  playerId: PlayerId,
+  _playerId: PlayerId,
 ): boolean {
-  if (content.metadata?.scenarioId !== 'standard-2026') return false;
-  const research = state.polarEndgame.arcticPrograms[playerId];
-  if (!research?.completedProjects.includes(CAMPAIGN_TUTORIAL_PROJECT_ID_V2)) return false;
-  const transmissions = state.polarEndgame.apexNarrative.players[playerId]?.transmissions ?? [];
-  return !transmissions.some((item) => isCampaignTutorialTransmissionV2(item.id));
+  // The guided Campaign opener is temporarily retired. Keeping this as the
+  // single compatibility switch prevents old saves, AI pacing and narrative
+  // schedulers from reintroducing its locks or queued tutorial transmissions.
+  return content.metadata?.scenarioId === 'standard-2026';
 }
 
 /**
