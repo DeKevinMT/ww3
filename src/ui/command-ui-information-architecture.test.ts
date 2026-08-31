@@ -103,14 +103,15 @@ describe('command UI information architecture', () => {
     expect(apex).toContain('<h2>APEX</h2>');
     expect(apex).toContain('selectCommanderAutonomyStatusV2');
     expect(apex).toContain('AUTO · ${escapeHtml(networkStatus)}');
-    for (const label of ['ENERGY', 'ARMY MULTIPLIER', 'RESERVE ENERGY', 'EMPIRE CONTRIBUTION', 'NETWORK SUPPORT']) {
+    for (const label of ['ENERGY', 'ARMY SUPPORT', 'BACKUP ENERGY', 'EMPIRE CONTRIBUTION', 'NETWORK SUPPORT']) {
       expect(apex).toContain(label);
     }
     expect(apex).toContain('OVERDRIVE ${lancer.supportedAssaultCount}/3');
-    expect(apex).toContain('COUNTERMEASURE · 15% INTERCEPT RETURN');
+    expect(apex).toContain('ADAPTIVE BARRIER · +15% DEFENSIVE ENERGY EFFICIENCY');
     expect(apex).toContain('THEATER MESH · ${frontAllocationPercent}% × ${activeFrontCount} FRONTS');
     expect(apex).toContain('EMPIRE-WIDE SHIELD NETWORK');
-    expect(apex).toContain('PULSE ${people(network?.pulseAttack ?? 0)}');
+    expect(apex).toContain("((network?.attackMultiplier ?? 1) - 1) * 100");
+    expect(apex).not.toContain('PULSE ATTACK');
     expect(apex).toContain('${totalProjectionBudgetPercent}% total grid budget');
     expect(apex).toContain('finance.apexContribution');
     expect(apex).not.toMatch(/DOME POWER|SHIELD INTEGRITY|SINGULARITY|MIRROR MATRIX|OMNIPRESENCE/);
@@ -153,7 +154,14 @@ describe('command UI information architecture', () => {
     expect(territory).toContain('COMBAT POWER</span>');
     expect(terrainIndex).toBeLessThan(markup.indexOf('SELECTED LAND'));
     expect(markup.indexOf('SELECTED LAND')).toBeLessThan(markup.indexOf('${ownerIntel}'));
-    expect(territory).toContain('ACTIVE FRONT · APEX AUTO-SHIELD');
+    expect(territory).toContain('ACTIVE FRONT · APEX SHIELD ONLINE');
+    expect(territory).toContain('ACTIVE COUNTEROFFENSIVE');
+    expect(territory).toContain('ROGUE FRONT · COUNTERATTACK');
+    expect(territory).toContain('this.engine.survivalCounteroffensiveTargets(humanId).find');
+    expect(territory).toContain('data-action="push-survival-front"');
+    expect(territory).toContain('PUSH FRONT');
+    expect(worldUiSource).toContain("case 'push-survival-front':");
+    expect(worldUiSource).toContain('this.engine.selectSurvivalCounteroffensive(');
     expect(territory).not.toContain('FOCUS FRONT');
     expect(territory).not.toContain('commander-front-quick');
     expect(territory).toContain('SUPPLY CORRIDOR');

@@ -781,7 +781,14 @@ export function globePoliticalStateSignature(engine: WorldMapEngineContract): st
   const humanSignature = [...engine.state.humanPlayerIds].sort().map((playerId) => (
     `${playerId}:${engine.player(playerId)?.flagCountryId ?? playerId}`
   )).join(',');
-  return `${humanSignature}|${antarcticaSurfaceSignature(engine)}|${apexIntelligenceAtlasSignature(engine)}|${territorySignature}`;
+  const realmFlagSignature = [...new Set(paintedTerritoryIds.map((territoryId) => {
+    const territory = engine.state.territories[territoryId];
+    return territory ? globeTerritoryFlagOwnerId(territory) : undefined;
+  }).filter((playerId): playerId is string => Boolean(playerId)))]
+    .sort((left, right) => left.localeCompare(right))
+    .map((playerId) => `${playerId}:${engine.player(playerId)?.flagCountryId ?? playerId}`)
+    .join(',');
+  return `${humanSignature}|flags:${realmFlagSignature}|${antarcticaSurfaceSignature(engine)}|${apexIntelligenceAtlasSignature(engine)}|${territorySignature}`;
 }
 
 export interface GlobePoliticalPaintState {
@@ -826,7 +833,10 @@ export function captureGlobePoliticalPaintSnapshot(
     };
   }
   return {
-    humanSignature: [...engine.state.humanPlayerIds].sort().map((playerId) => (
+    humanSignature: [...new Set([
+      ...engine.state.humanPlayerIds,
+      ...Object.values(territories).map((territory) => territory.flagOwnerId),
+    ])].sort().map((playerId) => (
       `${playerId}:${engine.player(playerId)?.flagCountryId ?? playerId}`
     )).join(','),
     surfaceSignature: `${antarcticaSurfaceSignature(engine)}|${apexIntelligenceAtlasSignature(engine)}`,

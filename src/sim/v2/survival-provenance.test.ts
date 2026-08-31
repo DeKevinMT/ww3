@@ -11,7 +11,7 @@ import { retireAbsorbedNationV2 } from './integration';
 import { resolveScenarioV2 } from './scenarios';
 import {
   ROGUE_AI_CORE_TERRITORY_ID_V2,
-  SURVIVAL_FIRST_WAVE_DELAY_TICKS_V2,
+  ROGUE_ANNUAL_WAVE_INTERVAL_TICKS_V2,
   processRogueAiSurvivalV2,
 } from './survival';
 import {
@@ -40,7 +40,7 @@ function survival(seed: number, flagship = 'arg'): WorldEngineV2 {
   const engine = new WorldEngineV2(seed, resolved.content);
   expect(engine.chooseCountry(flagship)).toEqual({ accepted: true });
   expect(engine.formSurvivalEmpire(flagship, [])).toEqual({ accepted: true });
-  engine.state.tick = SURVIVAL_FIRST_WAVE_DELAY_TICKS_V2;
+  engine.state.tick = ROGUE_ANNUAL_WAVE_INTERVAL_TICKS_V2;
   expect(processRogueAiSurvivalV2(engine.state, engine.content).waveStarted).toBe(1);
   return engine;
 }
@@ -186,7 +186,7 @@ describe('Survival gateway and wave provenance', () => {
     const human = nationIdV2('bel');
     expect(engine.chooseCountry(human)).toEqual({ accepted: true });
     expect(engine.formSurvivalEmpire(human, [nationIdV2('lux')])).toEqual({ accepted: true });
-    engine.state.tick = SURVIVAL_FIRST_WAVE_DELAY_TICKS_V2;
+    engine.state.tick = ROGUE_ANNUAL_WAVE_INTERVAL_TICKS_V2;
     processRogueAiSurvivalV2(engine.state, engine.content);
     const machineSourceId = territoryIdV2('nld');
     const contestedId = territoryIdV2('bel');
@@ -256,7 +256,18 @@ describe('Survival gateway and wave provenance', () => {
     expect(engine.state.polarEndgame.gatewayBreaches[gatewayId]!.status).toBe('open');
     const externalId = route[route.length - 1]!;
     transferSovereigntyForTest(engine, externalId, ROGUE_AI_NATION_ID_V2);
-    const staged = rogueWaveManpowerAtV2(engine.state, ROGUE_AI_CORE_TERRITORY_ID_V2);
+    // Annual scheduling now commits at the three gateways. Seed a bounded
+    // verified core slice here to isolate provenance splitting across this
+    // authored five-hop route from the scheduler's destination choice.
+    const staged = Math.min(
+      0.001,
+      engine.state.territories[ROGUE_AI_CORE_TERRITORY_ID_V2]!.army.manpower,
+    );
+    addRogueWaveManpowerV2(
+      engine.state,
+      ROGUE_AI_CORE_TERRITORY_ID_V2,
+      staged,
+    );
     expect(staged).toBeGreaterThan(0);
     const detached = staged / 2;
     for (let index = 1; index < route.length; index += 1) {

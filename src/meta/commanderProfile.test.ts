@@ -31,7 +31,7 @@ import {
   commanderPulseAttackV1,
   commanderLevelFromXpV1,
   commanderXpForLevelV1,
-  countryMasteryOpeningBonusV1,
+  countryMasteryCapacityBonusV1,
   countryMasteryLevelFromXpV1,
   countryMasteryPointsAvailableV1,
   countryMasteryPointsEarnedV1,
@@ -185,7 +185,7 @@ describe('global commander progression', () => {
       .toEqual([...scaled].map(([id, quote]) => [id, quote.strengthRank]));
   });
 
-  it('applies the automatic +0.25% only to the opening army and never to the economy', () => {
+  it('applies the automatic +0.25% to live Army Capacity and never to the economy', () => {
     const profile = {
       ...createCommanderProfileV1(14, 'mastery-bonus'),
       countryMastery: {
@@ -196,17 +196,17 @@ describe('global commander progression', () => {
       },
     };
     const loadout = resolveCountryLoadoutV1(profile, 'bel');
-    expect(countryMasteryOpeningBonusV1(1)).toBe(0);
-    expect(countryMasteryOpeningBonusV1(3)).toBeCloseTo(0.005, 9);
-    expect(countryMasteryOpeningBonusV1(50)).toBeCloseTo(0.1225, 9);
-    expect(countryMasteryOpeningBonusV1(MAX_COUNTRY_MASTERY_LEVEL)).toBeCloseTo(0.3725, 9);
-    expect(loadout.masteryOpeningArmyMultiplier).toBeCloseTo(1.005, 9);
+    expect(countryMasteryCapacityBonusV1(1)).toBe(0);
+    expect(countryMasteryCapacityBonusV1(3)).toBeCloseTo(0.005, 9);
+    expect(countryMasteryCapacityBonusV1(50)).toBeCloseTo(0.1225, 9);
+    expect(countryMasteryCapacityBonusV1(MAX_COUNTRY_MASTERY_LEVEL)).toBeCloseTo(0.3725, 9);
+    expect(loadout.masteryOpeningArmyMultiplier).toBe(1);
     expect(loadout.masteryOpeningEconomyMultiplier).toBe(1);
-    expect(loadout.openingArmyMultiplier).toBeCloseTo(1.04 * 1.005, 9);
+    expect(loadout.openingArmyMultiplier).toBeCloseTo(1.04, 9);
     expect(loadout.openingEconomyMultiplier).toBeCloseTo(1.04, 9);
     expect(loadout.masteryMilitary).toEqual({
-      openingArmyMultiplier: 1.005,
-      armyCapacityMultiplier: 1,
+      openingArmyMultiplier: 1,
+      armyCapacityMultiplier: 1.005,
       attackMultiplier: 1,
       defenseMultiplier: 1,
       recruitmentMultiplier: 1,
@@ -267,12 +267,12 @@ describe('global commander progression', () => {
     expect(loadout.masteryPointsSpent).toBe(5);
     expect(loadout.masteryPointsAvailable).toBe(0);
     expect(loadout.masteryMilitary).toEqual({
-      openingArmyMultiplier: 1.0125,
-      armyCapacityMultiplier: 1.02,
+      openingArmyMultiplier: 1,
+      armyCapacityMultiplier: 1.03275,
       attackMultiplier: 1.015,
       defenseMultiplier: 1.015,
-      recruitmentMultiplier: 1.02,
-      reserveTrainingMultiplier: 1.025,
+      recruitmentMultiplier: 1.025,
+      reserveTrainingMultiplier: 1,
       landSupplyMultiplier: 1,
       landTransferThroughputMultiplier: 1,
       navalSupplyMultiplier: 1,
@@ -341,8 +341,8 @@ describe('global commander progression', () => {
     expect(resolveCountryMasteryMilitaryEffectsV1(5, {
       force: 1, firepower: 1, defense: 1, mobilization: 1,
     })).toEqual({
-      openingArmyMultiplier: 1.01,
-      armyCapacityMultiplier: 1 + COUNTRY_MASTERY_FORCE_CAPACITY_PER_POINT_V1,
+      openingArmyMultiplier: 1,
+      armyCapacityMultiplier: 1.01 * (1 + COUNTRY_MASTERY_FORCE_CAPACITY_PER_POINT_V1),
       attackMultiplier: 1 + COUNTRY_MASTERY_FIREPOWER_PER_POINT_V1,
       defenseMultiplier: 1 + COUNTRY_MASTERY_DEFENSE_PER_POINT_V1,
       recruitmentMultiplier: 1 + COUNTRY_MASTERY_RECRUITMENT_PER_POINT_V1,
@@ -358,8 +358,8 @@ describe('global commander progression', () => {
     });
     expect(resolveCountryMasteryMilitaryEffectsV1(150, { force: 149 }))
       .toMatchObject({
-        openingArmyMultiplier: 1.3725,
-        armyCapacityMultiplier: 2.49,
+        openingArmyMultiplier: 1,
+        armyCapacityMultiplier: 3.417525,
       });
     expect(resolveCountryMasteryMilitaryEffectsV1(5, {
       'land-logistics': 1,
@@ -513,7 +513,8 @@ describe('global commander progression', () => {
       input: {
         campaignId: 'pace-early-survival', countryId: 'gnb', mode: 'survival', outcome: 'surrender',
         weeksSurvived: 52, territoriesGained: 1, warsWon: 0,
-        highestSurvivalWave: 2, verifiedRogueWaveLosses: 0.004, militaryLosses: 0.25,
+        highestSurvivalWave: 2, verifiedRogueWaveLosses: 0.004,
+        antarcticTerritoriesCaptured: 1, militaryLosses: 0.25,
       } as const,
     },
     {
@@ -529,7 +530,8 @@ describe('global commander progression', () => {
       input: {
         campaignId: 'pace-deep-survival', countryId: 'gnb', mode: 'survival', outcome: 'victory',
         weeksSurvived: 1_040, territoriesGained: 20, warsWon: 12,
-        highestSurvivalWave: 18, verifiedRogueWaveLosses: 10, militaryLosses: 5,
+        highestSurvivalWave: 18, verifiedRogueWaveLosses: 10,
+        antarcticTerritoriesCaptured: 9, militaryLosses: 5,
       } as const,
     },
   ])('settles $label with progression pacing', ({ input, active }) => {
@@ -575,7 +577,7 @@ describe('global commander progression', () => {
       ...common, mode: 'standard-2026', outcome: 'defeat',
     });
     const survivalVictory = calculateCampaignRewardV1({
-      ...common, mode: 'survival', outcome: 'victory',
+      ...common, mode: 'survival', outcome: 'victory', antarcticTerritoriesCaptured: 1,
     });
     expect(standardDefeat.commanderXp).toBeGreaterThan(0);
     expect(standardDefeat.masteryXp).toBeGreaterThan(0);
@@ -599,7 +601,7 @@ describe('global commander progression', () => {
     expect(claimCampaignRewardV1(claimed.profile, survivalVictory, 4).accepted).toBe(false);
   });
 
-  it('keeps verified post-launch Rogue losses a small bounded XP contribution', () => {
+  it('uses verified post-launch Rogue losses as a bounded Survival reward source', () => {
     const input = {
       countryId: 'gnb', mode: 'survival' as const, outcome: 'defeat' as const,
       weeksSurvived: 104, territoriesGained: 0, warsWon: 0,
@@ -616,9 +618,48 @@ describe('global commander progression', () => {
     });
 
     expect(placeholderOnly.verifiedRogueWaveLosses).toBe(0);
-    expect(tinyVerified.masteryXp - placeholderOnly.masteryXp).toBeLessThanOrEqual(1);
-    expect(extremeVerified.masteryXp - placeholderOnly.masteryXp).toBeLessThanOrEqual(11);
-    expect(extremeVerified.commanderXp - placeholderOnly.commanderXp).toBeLessThanOrEqual(7);
+    expect(placeholderOnly).toMatchObject({ masteryXp: 0, commanderXp: 0, score: 0 });
+    expect(tinyVerified.masteryXp).toBeGreaterThan(0);
+    expect(tinyVerified.score).toBeGreaterThan(0);
+    expect(extremeVerified.masteryXp).toBeLessThanOrEqual(84);
+    expect(extremeVerified.commanderXp).toBeLessThanOrEqual(51);
+    expect(extremeVerified.score).toBe(500);
+  });
+
+  it('ignores all ordinary Survival performance when XP and score sources are unchanged', () => {
+    const sourceOnly = calculateCampaignRewardV1({
+      campaignId: 'survival-source-only', countryId: 'gnb', mode: 'survival', outcome: 'defeat',
+      weeksSurvived: 0, territoriesGained: 0, territoriesLost: 0,
+      warsWon: 0, warsFought: 0, highestSurvivalWave: 0,
+      verifiedRogueWaveLosses: 0.25, antarcticTerritoriesCaptured: 2,
+      militaryLosses: 0,
+    });
+    const noisyTimeline = calculateCampaignRewardV1({
+      campaignId: 'survival-noisy-timeline', countryId: 'gnb', mode: 'survival', outcome: 'victory',
+      weeksSurvived: 50_000, territoriesGained: 200, territoriesLost: 150,
+      warsWon: 99, warsFought: 150, highestSurvivalWave: 999,
+      verifiedRogueWaveLosses: 0.25, antarcticTerritoriesCaptured: 2,
+      militaryLosses: 100_000,
+    });
+    const noPhysicalSource = calculateCampaignRewardV1({
+      ...noisyTimeline,
+      campaignId: 'survival-no-physical-source',
+      verifiedRogueWaveLosses: 0,
+      antarcticTerritoriesCaptured: 0,
+    });
+
+    expect(noisyTimeline).toMatchObject({
+      masteryXp: sourceOnly.masteryXp,
+      commanderXp: sourceOnly.commanderXp,
+      score: sourceOnly.score,
+      creditsEarned: 0,
+    });
+    expect(noPhysicalSource).toMatchObject({
+      masteryXp: 0,
+      commanderXp: 0,
+      score: 0,
+      creditsEarned: 0,
+    });
   });
 
   it('keeps Alternative Universe completely outside account progression', () => {
@@ -725,7 +766,7 @@ describe('global commander progression', () => {
       46,
     );
     expect(lockedDoctrine.accepted).toBe(false);
-    expect(lockedDoctrine.reason).toContain('Requires Countermeasure Core Rank 5');
+    expect(lockedDoctrine.reason).toContain('Requires Adaptive Barrier Core Rank 5');
     const forgedLockedDoctrine = selectCommanderDoctrineV1({
       ...createCommanderProfileV1(46, 'forged-doctrine'),
       commanderTalents: {
@@ -734,7 +775,7 @@ describe('global commander progression', () => {
       },
     }, 'bastion', 47);
     expect(forgedLockedDoctrine.accepted).toBe(false);
-    expect(forgedLockedDoctrine.reason).toContain('Requires Countermeasure Core Rank 5');
+    expect(forgedLockedDoctrine.reason).toContain('Requires Adaptive Barrier Core Rank 5');
 
     const onePointProfile = normalizeCommanderProfileV1({
       ...createCommanderProfileV1(48, 'free-point'),
@@ -765,10 +806,10 @@ describe('global commander progression', () => {
       armyCasualtyMultiplier: 1,
       armyPeaceRecoveryMultiplier: 1,
     });
-    expect(defaultInitialization.shield.integrity).toBe(0.001);
-    expect(defaultInitialization.shield.maxIntegrity).toBe(0.001);
+    expect(defaultInitialization.shield.integrity).toBe(0.002);
+    expect(defaultInitialization.shield.maxIntegrity).toBe(0.002);
     expect(defaultInitialization.shield.rechargeBuffer).toBe(0.00004);
-    expect(defaultInitialization.shield.pulseAttack).toBe(0.001);
+    expect(defaultInitialization.shield.pulseAttack).toBe(0);
     expect(defaultInitialization.treasury).toBe(0);
     expect(defaultInitialization.annualOutput).toBe(0.015);
     expect(defaultInitialization).not.toHaveProperty('army');
@@ -784,7 +825,7 @@ describe('global commander progression', () => {
       rechargeBufferBonus: 0.18,
       rechargeRateBonus: 0.36,
       armyAttackBonus: 0.099,
-      pulseAttackBonus: 0.36,
+      pulseAttackBonus: 0.072,
       pulseProjectionRetention: 0.063,
       pulseChargeBonusPerStep: 0.09,
       interceptEfficiencyBonus: 0.09,
@@ -885,16 +926,13 @@ describe('global commander progression', () => {
     const levelFiftyShield = commanderMaxIntegrityV1(50, emptyCommanderTalentsV1());
 
     expect(levelOneShield).toBeLessThan(greenlandOpeningArmy);
-    expect(levelOneShield / greenlandOpeningArmy).toBeGreaterThan(0.27);
-    expect(levelOneShield / greenlandOpeningArmy).toBeLessThan(0.29);
-    expect(levelFiftyShield / franceOpeningArmy).toBeGreaterThan(0.04);
-    expect(levelFiftyShield / franceOpeningArmy).toBeLessThan(0.05);
+    expect(levelOneShield / greenlandOpeningArmy).toBeGreaterThan(0.55);
+    expect(levelOneShield / greenlandOpeningArmy).toBeLessThan(0.56);
+    expect(levelFiftyShield / franceOpeningArmy).toBeGreaterThan(0.09);
+    expect(levelFiftyShield / franceOpeningArmy).toBeLessThan(0.10);
     expect(levelFiftyShield).toBeLessThan(franceOpeningArmy);
-    const levelOnePulse = commanderPulseAttackV1(1, emptyCommanderTalentsV1());
-    const levelFiftyPulse = commanderPulseAttackV1(50, emptyCommanderTalentsV1());
-    expect(levelOnePulse / greenlandOpeningArmy).toBeGreaterThan(0.25);
-    expect(levelFiftyPulse / franceOpeningArmy).toBeGreaterThan(0.06);
-    expect(levelFiftyPulse).toBeLessThan(franceOpeningArmy * 0.10);
+    expect(commanderPulseAttackV1(1, emptyCommanderTalentsV1())).toBe(0);
+    expect(commanderPulseAttackV1(50, emptyCommanderTalentsV1())).toBe(0);
   });
 
   it('authors three distinct APEX branches and exactly one national-Army branch', () => {
@@ -907,9 +945,9 @@ describe('global commander progression', () => {
     })));
     expect(copy).not.toMatch(/soldier|personnel|troop|manpower|trained reserve|corps|brigade|cadre|quartermaster|barracks|hospital|treasury|income|food|research/i);
     expect(COMMANDER_TALENTS_V1.map((talent) => talent.label)).toEqual([
-      'Pulse Output', 'Front Projection', 'Pulse Charge',
-      'Energy Efficiency', 'Impact Recovery', 'Defense Pulse',
-      'Max Energy', 'Energy Recharge', 'Reserve Energy',
+      'Forward Shield', 'Front Projection', 'Shield Charge',
+      'Energy Efficiency', 'Impact Recovery', 'Adaptive Shield',
+      'Max Energy', 'Energy Recharge', 'Backup Energy',
       'Army Attack', 'Army Defense', 'Peace Recovery',
     ]);
     expect(COMMANDER_TALENTS_V1.map(({ branch, tier }) => `${branch}:${tier}`)).toEqual([
@@ -919,16 +957,16 @@ describe('global commander progression', () => {
       'military-command:1', 'military-command:2', 'military-command:3',
     ]);
     expect(COMMANDER_TALENTS_V1.find((talent) => talent.id === 'science-corps')?.perRank)
-      .toBe('+2% Pulse Attack per effective rank. Shared Pulse ceiling: +200%.');
+      .toBe('+0.40% attack-side Energy efficiency per effective rank.');
     expect(COMMANDER_TALENTS_V1.find((talent) => talent.id === 'elite-vanguard')?.milestones[2]?.description)
-      .toBe('+9% Pulse per stored charge.');
+      .toBe('+9% efficiency per charge.');
     expect(COMMANDER_TALENTS_V1.find((talent) => talent.id === 'civil-defense')?.milestones[2]?.description)
-      .toBe('Recovers 6.30% of spent Energy to Reserve.');
+      .toBe('Recovers 6.30% of spent Energy to Backup.');
     expect(COMMANDER_TALENTS_V1.find((talent) => talent.id === 'theater-network')?.milestones[0]?.description)
       .toContain('+20% shared Army buff pool per extra front, capped at 140%');
     expect(COMMANDER_DOCTRINES_V1.map(({ label, description }) => `${label}: ${description}`)).toEqual([
-      'Overdrive: Every third supported attack doubles APEX Pulse Attack only, then spends 2% Max Energy. Army Attack never changes.',
-      'Countermeasure: Returns 15% of damage actually intercepted by APEX, within the hostile Army’s remaining 10% hit budget.',
+      'Overdrive: Every third supported attack makes the shield block the same damage for twice as little Energy.',
+      'Adaptive Barrier: Raises shield Energy efficiency by another 15% while defending.',
       'Emergency Reboot: Once per campaign, reaching 0% Energy immediately restores 20% after the battle. An Army at zero still loses.',
       'Theater Mesh: Each additional front adds 20% to the shared national Army buff pool, capped at 140%, then divides it across all fronts.',
     ]);
@@ -1005,9 +1043,9 @@ describe('global commander progression', () => {
       unmetPrerequisite: {
         talentId: 'science-corps',
         rank: 3,
-        label: 'Pulse Output',
+        label: 'Forward Shield',
       },
-      reason: 'Requires Pulse Output Rank 3 before Front Projection.',
+      reason: 'Requires Forward Shield Rank 3 before Front Projection.',
     });
     const blocked = allocateCommanderTalentV1(levelOne, 'treasury-reserve', 67);
     expect(blocked.accepted).toBe(false);
@@ -1070,7 +1108,7 @@ describe('global commander progression', () => {
       }),
     };
     expect(branchEffects.pulse).toMatchObject({
-      pulseAttackBonus: 0.36,
+      pulseAttackBonus: 0.072,
       pulseProjectionRetention: 0.063,
       pulseChargeBonusPerStep: 0.09,
       interceptEfficiencyBonus: 0,
@@ -1176,6 +1214,7 @@ describe('global commander progression', () => {
     const common = {
       countryId: 'bel', mode: 'survival' as const,
       weeksSurvived: 52, territoriesGained: 1, warsWon: 0, highestSurvivalWave: 2, militaryLosses: 5,
+      antarcticTerritoriesCaptured: 1,
     };
     const surrender = calculateCampaignRewardV1({
       ...common, campaignId: 'surrender', outcome: 'surrender',
@@ -1282,8 +1321,8 @@ describe('global commander progression', () => {
       masteryPointsSpent: 0,
       masteryPointsAvailable: 2,
       masteryMilitary: {
-        openingArmyMultiplier: 1.005,
-        armyCapacityMultiplier: 1,
+        openingArmyMultiplier: 1,
+        armyCapacityMultiplier: 1.005,
         attackMultiplier: 1,
         defenseMultiplier: 1,
         recruitmentMultiplier: 1,
@@ -1297,9 +1336,9 @@ describe('global commander progression', () => {
         standingOperatingCostMultiplier: 1,
         casualtyMultiplier: 1,
       },
-      openingArmyMultiplier: 1.0452,
+      openingArmyMultiplier: 1.04,
       openingEconomyMultiplier: 1,
-      masteryOpeningArmyMultiplier: 1.005,
+      masteryOpeningArmyMultiplier: 1,
       masteryOpeningEconomyMultiplier: 1,
     });
     expect(loadCampaignSlotV1(storage)?.loadout.commanderLevel).toBe(175);
@@ -1325,8 +1364,8 @@ describe('global commander progression', () => {
       masteryPointsSpent: 149,
       masteryPointsAvailable: 0,
       masteryMilitary: {
-        openingArmyMultiplier: 1.3725,
-        armyCapacityMultiplier: 2,
+        openingArmyMultiplier: 1,
+        armyCapacityMultiplier: 1.3725 * 2,
         attackMultiplier: 1.735,
         defenseMultiplier: 1,
         recruitmentMultiplier: 1,

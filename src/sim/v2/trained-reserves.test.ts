@@ -1,390 +1,147 @@
 import { describe, expect, it } from 'vitest';
-import {
-  TRAINED_RESERVE_DEPLOYMENT_THROUGHPUT_MULTIPLIER,
-  TRAINED_RESERVE_PEACETIME_BASE_TRICKLE_FACTOR,
-  TRAINED_RESERVE_PEACETIME_TRICKLE_FACTOR,
-  TRAINED_RESERVE_TRAINING_COST_MULTIPLIER,
-  TRAINED_RESERVE_WARTIME_TRAINING_FACTOR,
-} from './balance';
-import { planAiCommandsV2 } from './ai';
+import { RESEARCH_BRANCH_EFFECTS } from './balance';
 import { createWorldStateV2 } from './bootstrap';
+import { WORLD_CONTENT_V2 } from './content';
+import { processFinanceMilitaryV2 } from './economy';
+import { initialTrainedReserveManpowerV2 } from './reserveForces';
+import { normalizeRetiredReserveCompatibilityV2 } from './retiredReserves';
 import {
-  initialNationArmyCapacityBenchmarkV2,
-  synchronizeArmyCapacityV2,
-} from './capacity';
-import { WORLD_CONTENT_V2, type WorldContentV2 } from './content';
-import { createFinancePlansV2, processFinanceMilitaryV2 } from './economy';
-import { synchronizeOpeningArmyHumanRosterV2 } from './nationState';
-import {
-  BELGIUM_OPENING_RESERVE_CAPACITY_SHARE_V2,
-  INITIAL_RESERVE_CADRE_CAPACITY_SHARE_V2,
-  INITIAL_REPORTED_RESERVE_READY_SHARE_V2,
-  initialTrainedReserveManpowerV2,
-} from './reserveForces';
-import {
-  projectFinanceManpowerPhaseV2,
   activeArmyReadyForReserveTrainingV2,
   peacetimeReserveTrainingPipelineShareV2,
+  projectFinanceManpowerPhaseV2,
   selectRecruitmentTrainingPipelineV2,
-  selectRecruitmentUnitCostV2,
   selectRapidRecruitmentTermsV2,
   selectTotalManpowerV2,
   selectTrainedReserveCapacityV2,
   selectWeeklyFinanceBreakdownV2,
 } from './selectors';
-import {
-  nationIdV2,
-  type PlayerId,
-  type WorldStateV2,
-} from './types';
-import { humanStartingArmyMultiplierForContentV2 } from './traits';
+import { nationIdV2, type PlayerId, type WarStateV2, type WorldStateV2 } from './types';
 
 const belgium = nationIdV2('bel');
 const netherlands = nationIdV2('nld');
-const unitedStates = nationIdV2('usa');
 
-function setActiveFill(state: WorldStateV2, playerId: PlayerId, ratio: number): void {
+function setFill(state: WorldStateV2, playerId: PlayerId, ratio: number): void {
   for (const territory of Object.values(state.territories)) {
-    if (territory.owner !== playerId) continue;
-    territory.army.manpower = territory.army.capacity * ratio;
+    if (territory.owner === playerId) territory.army.manpower = territory.army.capacity * ratio;
   }
 }
 
-function addWar(state: WorldStateV2): void {
-  state.tick = 100;
-  state.wars = [{
-    id: 'reserve-war',
+function war(): WarStateV2 {
+  return {
+    id: 'retired-reserve-war',
     attackerId: belgium,
     defenderId: netherlands,
     startedTick: 80,
     lastBattleTick: 100,
     warScore: 0,
-    battles: 4,
+    battles: 1,
     attackerLosses: 0,
     defenderLosses: 0,
-    lastPeaceOfferTick: -1,
+    attackerCivilianLosses: 0,
+    defenderCivilianLosses: 0,
+    lastPeaceOfferTick: -1_000_000,
+    revenge: null,
     attackerOperations: [],
     defenderOperations: [],
-  }];
+  };
 }
 
-function fundedState(seed: number): WorldStateV2 {
-  const state = createWorldStateV2(seed);
-  const previousHumanPlayerIds = [...state.humanPlayerIds];
-  state.humanPlayerId = unitedStates;
-  state.humanPlayerIds = [unitedStates];
-  synchronizeOpeningArmyHumanRosterV2(
-    state,
-    WORLD_CONTENT_V2,
-    previousHumanPlayerIds,
-    [unitedStates],
-  );
-  synchronizeArmyCapacityV2(state, WORLD_CONTENT_V2);
-  const nation = state.players[belgium]!;
-  nation.treasury = 1_000_000;
-  nation.foodSecurity = 1;
-  nation.budget = { military: 90, research: 5, development: 5 };
-  return state;
-}
-
-describe('finite trained reserves', () => {
-  it('starts every country with a positive reserve inside the shared one-army cap', () => {
+describe('retired trained-reserve compatibility', () => {
+  it('starts every nation with a neutral compatibility pool', () => {
     const state = createWorldStateV2(71_000);
     for (const id of WORLD_CONTENT_V2.nationIds) {
-      const capacity = selectTrainedReserveCapacityV2(state, id);
-      expect(state.players[id]!.trainedReserves, String(id)).toBeGreaterThan(0);
-      expect(state.players[id]!.trainedReserves, String(id)).toBeLessThanOrEqual(capacity);
+      expect(state.players[id]!.trainedReserves, String(id)).toBe(0);
+      expect(selectTrainedReserveCapacityV2(state, id), String(id)).toBe(0);
+      expect(initialTrainedReserveManpowerV2(String(id), 10, WORLD_CONTENT_V2)).toBe(0);
     }
+    expect(activeArmyReadyForReserveTrainingV2(1, 1)).toBe(false);
+    expect(peacetimeReserveTrainingPipelineShareV2(1)).toBe(0);
   });
 
-  it('preserves real reserve-system differences while adapting them to the game cap', () => {
-    const state = createWorldStateV2(71_011);
-    const finland = nationIdV2('fin');
-    const israel = nationIdV2('isr');
-    const india = nationIdV2('ind');
-    const china = nationIdV2('chn');
-    const albania = nationIdV2('alb');
-    const belgiumCapacity = selectTrainedReserveCapacityV2(state, belgium);
-    const belgiumOpeningBenchmark = initialNationArmyCapacityBenchmarkV2(
-      WORLD_CONTENT_V2,
-      belgium,
-    );
+  it('migrates paid legacy reserve research once and zeros its stable keys', () => {
+    const state = createWorldStateV2(71_001);
+    const nation = state.players[belgium]!;
+    nation.trainedReserves = 0.5;
+    nation.research.effectLevels.training = 2;
+    nation.research.effectLevels['force-capacity'] = 3;
+    nation.research.effectLevels['reserve-training'] = 4;
+    nation.research.effectLevels['reserve-mobilization'] = 5;
 
-    expect(state.players[finland]!.trainedReserves).toBe(
-      initialTrainedReserveManpowerV2('fin', selectTrainedReserveCapacityV2(state, finland)),
-    );
-    expect(state.players[israel]!.trainedReserves).toBe(
-      initialTrainedReserveManpowerV2('isr', selectTrainedReserveCapacityV2(state, israel)),
-    );
-    expect(state.players[india]!.trainedReserves).toBeCloseTo(
-      1.155 * INITIAL_REPORTED_RESERVE_READY_SHARE_V2,
-      9,
-    );
-    expect(state.players[china]!.trainedReserves).toBeCloseTo(
-      0.510 * INITIAL_REPORTED_RESERVE_READY_SHARE_V2,
-      9,
-    );
-    expect(state.players[india]!.trainedReserves).toBeGreaterThan(
-      state.players[china]!.trainedReserves,
-    );
-    expect(state.players[albania]!.trainedReserves).toBeCloseTo(
-      selectTrainedReserveCapacityV2(state, albania) * INITIAL_RESERVE_CADRE_CAPACITY_SHARE_V2,
-      9,
-    );
-    const canonicalBelgiumReserves = initialTrainedReserveManpowerV2(
-      String(belgium),
-      belgiumOpeningBenchmark,
-      WORLD_CONTENT_V2,
-    );
-    expect(BELGIUM_OPENING_RESERVE_CAPACITY_SHARE_V2).toBe(0.40);
-    expect(canonicalBelgiumReserves).toBeCloseTo(
-      belgiumOpeningBenchmark * BELGIUM_OPENING_RESERVE_CAPACITY_SHARE_V2,
-      9,
-    );
-    expect(state.players[belgium]!.trainedReserves).toBeCloseTo(Math.min(
-      belgiumCapacity,
-      canonicalBelgiumReserves
-        * humanStartingArmyMultiplierForContentV2(WORLD_CONTENT_V2, belgium),
-    ), 6);
-    expect(canonicalBelgiumReserves / belgiumOpeningBenchmark)
-      .toBeCloseTo(BELGIUM_OPENING_RESERVE_CAPACITY_SHARE_V2, 5);
-    expect(initialTrainedReserveManpowerV2('unreported-fixture', 1)).toBe(
-      INITIAL_RESERVE_CADRE_CAPACITY_SHARE_V2,
-    );
+    normalizeRetiredReserveCompatibilityV2(state);
+    expect(nation.trainedReserves).toBe(0);
+    expect(nation.research.effectLevels.training).toBe(6);
+    expect(nation.research.effectLevels['force-capacity']).toBe(8);
+    expect(nation.research.effectLevels['reserve-training']).toBe(0);
+    expect(nation.research.effectLevels['reserve-mobilization']).toBe(0);
+
+    normalizeRetiredReserveCompatibilityV2(state);
+    expect(nation.research.effectLevels.training).toBe(6);
+    expect(nation.research.effectLevels['force-capacity']).toBe(8);
   });
 
-  it('keeps the 85% readiness diagnostic without using it as a training gate', () => {
-    expect(activeArmyReadyForReserveTrainingV2(0.849999, 1)).toBe(false);
-    expect(activeArmyReadyForReserveTrainingV2(0.85, 1)).toBe(true);
+  it('keeps the stable research branch but gives it two live active-army effects', () => {
+    expect(RESEARCH_BRANCH_EFFECTS['reserve-doctrine']).toEqual([
+      'training',
+      'force-capacity',
+    ]);
   });
 
-  it('trains reserves continuously alongside active recruiting on a smooth peace curve', () => {
-    expect(peacetimeReserveTrainingPipelineShareV2(0))
-      .toBe(TRAINED_RESERVE_PEACETIME_BASE_TRICKLE_FACTOR);
-    expect(peacetimeReserveTrainingPipelineShareV2(0.425)).toBeCloseTo(0.10, 9);
-    expect(peacetimeReserveTrainingPipelineShareV2(0.85))
-      .toBe(TRAINED_RESERVE_PEACETIME_TRICKLE_FACTOR);
-    expect(peacetimeReserveTrainingPipelineShareV2(1)).toBe(1);
-
-    const state = fundedState(71_001);
-    setActiveFill(state, belgium, 0.50);
-    state.players[belgium]!.trainedReserves = 0;
-    const concurrent = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, belgium);
-    expect(concurrent.passiveRecruitment + concurrent.acceleratedRecruitment).toBeGreaterThan(0);
-    expect(concurrent.reserveTraining).toBeGreaterThan(0);
-
-    setActiveFill(state, belgium, 1);
-    state.players[belgium]!.trainedReserves = 0;
-    const full = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, belgium);
-    expect(full.reserveTraining).toBeGreaterThan(0);
-    expect(full.trainedReservesAfter).toBe(full.reserveTraining);
-  });
-
-  it('caps training at one live active capacity without deleting an over-cap legacy pool', () => {
-    const state = fundedState(71_002);
-    setActiveFill(state, belgium, 1);
-    const capacity = selectTrainedReserveCapacityV2(state, belgium);
-    const finalRoom = 0.00001;
-    state.players[belgium]!.trainedReserves = capacity - finalRoom;
-
-    const finalFill = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, belgium);
-    expect(finalFill.trainedReservesAfter).toBeCloseTo(capacity, 6);
-    expect(finalFill.trainedReservesAfter).toBeLessThanOrEqual(capacity);
-    expect(finalFill.reserveTraining).toBeCloseTo(finalRoom, 6);
-
-    state.players[belgium]!.trainedReserves = capacity * 1.25;
-    const overCap = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, belgium);
-    expect(overCap.reserveTraining).toBe(0);
-    expect(overCap.trainedReservesAfter).toBeCloseTo(capacity * 1.25, 6);
-  });
-
-  it('pays reserve training from the military envelope and conserves its subdivisions', () => {
-    const state = fundedState(71_003);
-    setActiveFill(state, belgium, 1);
-    const finance = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, belgium);
-    const unitCost = selectRecruitmentUnitCostV2(state, belgium, WORLD_CONTENT_V2);
-
-    expect(finance.reserveTrainingCost).toBeGreaterThan(0);
-    expect(finance.reserveTrainingCost).toBeCloseTo(
-      finance.reserveTraining * unitCost * TRAINED_RESERVE_TRAINING_COST_MULTIPLIER,
-      5,
-    );
-    expect(finance.fundedArmyUpkeep + finance.recruitmentAccelerationCost
-      + finance.reserveTrainingCost + finance.standingOperations).toBeCloseTo(finance.military, 5);
-  });
-
-  it('uses one fast, fixed-rate peace rebuild without a paid readiness curve', () => {
-    const state = fundedState(71_012);
-    setActiveFill(state, belgium, 0.10);
-    state.players[belgium]!.trainedReserves = 0;
-    const before = selectTotalManpowerV2(state, belgium);
-    const finance = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, belgium);
-    expect(finance.passiveRecruitment).toBeGreaterThan(0);
-    expect(finance.acceleratedRecruitment).toBe(0);
-    expect(finance.recruitmentAccelerationCost).toBe(0);
-
-    for (let week = 0; week < 52; week += 1) {
-      processFinanceMilitaryV2(
-        state,
-        WORLD_CONTENT_V2,
-        createFinancePlansV2(state, WORLD_CONTENT_V2),
-      );
-      state.tick += 1;
-    }
-    const after = selectTotalManpowerV2(state, belgium);
-    // A shattered 10%-ready peer now visibly rebuilds most of its field army
-    // during one calm year instead of barely moving for several campaigns.
-    expect(after.deployed / after.capacity).toBeGreaterThan(0.58);
-    expect(after.deployed).toBeGreaterThan(before.deployed);
-  });
-
-  it('freezes fresh active and reserve training completely during war', () => {
-    const peace = fundedState(71_004);
-    setActiveFill(peace, belgium, 1);
-    const war = structuredClone(peace);
-    addWar(war);
-
-    const peaceFinance = selectWeeklyFinanceBreakdownV2(peace, WORLD_CONTENT_V2, belgium);
-    const warFinance = selectWeeklyFinanceBreakdownV2(war, WORLD_CONTENT_V2, belgium);
-    expect(peaceFinance.reserveTraining).toBeGreaterThan(0);
-    expect(warFinance.reserveDeployment).toBe(0);
-    expect(TRAINED_RESERVE_WARTIME_TRAINING_FACTOR).toBe(0);
-    expect(warFinance.passiveRecruitment).toBe(0);
-    expect(warFinance.acceleratedRecruitment).toBe(0);
-    expect(warFinance.reserveTraining).toBe(0);
-    expect(warFinance.recruitment).toBe(0);
-    expect(warFinance.recruitmentAccelerationCost).toBe(0);
-    expect(warFinance.reserveTrainingCost).toBe(0);
-  });
-
-  it('draws wartime replacements from reserves with no double recruitment and conserves personnel', () => {
-    const state = fundedState(71_005);
-    setActiveFill(state, belgium, 0.70);
-    state.players[belgium]!.trainedReserves = selectTrainedReserveCapacityV2(state, belgium) / 2;
-    addWar(state);
+  it('refills territorial active armies directly during peace and never creates reserves', () => {
+    const state = createWorldStateV2(71_002);
+    setFill(state, belgium, 0.4);
+    state.players[belgium]!.treasury = 1_000_000;
+    state.players[belgium]!.budget = { military: 90, research: 5, development: 5 };
     const before = selectTotalManpowerV2(state, belgium).deployed;
-    const reserveBefore = state.players[belgium]!.trainedReserves;
-    const trainingPipeline = selectRecruitmentTrainingPipelineV2(state, WORLD_CONTENT_V2, belgium);
     const finance = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, belgium);
-    const projection = projectFinanceManpowerPhaseV2(state, WORLD_CONTENT_V2, belgium, finance);
-
-    expect(finance.passiveRecruitment).toBe(0);
-    expect(finance.acceleratedRecruitment).toBe(0);
-    expect(trainingPipeline).toBe(0);
-    expect(finance.reserveDeployment).toBeGreaterThan(finance.reserveTraining);
-    expect(finance.reserveDeployment).toBeGreaterThan(0);
-    expect(TRAINED_RESERVE_DEPLOYMENT_THROUGHPUT_MULTIPLIER).toBeGreaterThan(1);
-    expect(finance.recruitment).toBe(0);
-    expect(finance.recruitmentAccelerationCost).toBe(0);
-    expect(finance.reserveTrainingCost).toBe(0);
-    expect(finance.fundedArmyUpkeep + finance.recruitmentAccelerationCost
-      + finance.reserveTrainingCost + finance.standingOperations).toBeCloseTo(finance.military, 5);
-    expect(projection.recruited).toBeCloseTo(projection.reserveDeployed, 6);
-    expect(projection.reserveTrained).toBe(0);
-    expect(projection.deployedAfterFinance + projection.trainedReservesAfter).toBeCloseTo(
-      before + reserveBefore,
-      5,
-    );
-    expect(projection.trainedReservesAfter).toBeLessThan(reserveBefore);
-  });
-
-  it('cannot refill a wartime active gap directly after the reserve pool is exhausted', () => {
-    const state = fundedState(71_006);
-    setActiveFill(state, belgium, 0.50);
-    state.players[belgium]!.trainedReserves = 0;
-    addWar(state);
-    const finance = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, belgium);
-    const projection = projectFinanceManpowerPhaseV2(state, WORLD_CONTENT_V2, belgium, finance);
-
-    expect(finance.reserveDeployment).toBe(0);
-    expect(finance.reserveTraining).toBe(0);
-    expect(finance.reserveTrainingCost).toBe(0);
-    expect(finance.passiveRecruitment + finance.acceleratedRecruitment).toBe(0);
-    expect(projection.recruited).toBe(0);
-    expect(projection.trainedReservesAfter).toBe(0);
-  });
-
-  it('commits the projected pool deterministically during the finance phase', () => {
-    const state = fundedState(71_007);
-    setActiveFill(state, belgium, 1);
-    const plans = createFinancePlansV2(state, WORLD_CONTENT_V2);
-    const expected = plans.get(belgium)!.trainedReservesAfter;
-    processFinanceMilitaryV2(state, WORLD_CONTENT_V2, plans);
-    expect(state.players[belgium]!.trainedReserves).toBe(expected);
-  });
-
-  it('uses only the same modest IQ efficiency and never selection status', () => {
-    const state = fundedState(71_008);
-    setActiveFill(state, belgium, 1);
-    const unselected = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, belgium);
-    state.humanPlayerId = belgium;
-    const selected = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, belgium);
-    expect(selected.reserveTraining).toBe(unselected.reserveTraining);
-    expect(selected.reserveTrainingCost).toBe(unselected.reserveTrainingCost);
-
-    const contentWithIq = (iqScore: number): WorldContentV2 => ({
-      ...WORLD_CONTENT_V2,
-      nations: {
-        ...WORLD_CONTENT_V2.nations,
-        [belgium]: { ...WORLD_CONTENT_V2.nations[belgium]!, iqScore },
-      },
-    });
-    const lowCost = selectRecruitmentUnitCostV2(state, belgium, contentWithIq(80));
-    const highCost = selectRecruitmentUnitCostV2(state, belgium, contentWithIq(108));
-    expect(highCost).toBeLessThan(lowCost);
-    expect(lowCost / highCost).toBeLessThan(1.10);
-  });
-
-  it('blocks wartime rapid recruitment equally for the selected country and rivals', () => {
-    const state = fundedState(71_009);
-    addWar(state);
-    state.tick = 104;
-    state.wars[0]!.lastBattleTick = state.tick;
-    setActiveFill(state, netherlands, 0.05);
-    state.players[netherlands]!.treasury = 1_000_000;
-
-    const rivalTerms = selectRapidRecruitmentTermsV2(
+    const projection = projectFinanceManpowerPhaseV2(
       state,
       WORLD_CONTENT_V2,
-      netherlands,
-    );
-    const selectedState = structuredClone(state);
-    selectedState.humanPlayerId = netherlands;
-    const selectedTerms = selectRapidRecruitmentTermsV2(
-      selectedState,
-      WORLD_CONTENT_V2,
-      netherlands,
+      belgium,
+      finance,
     );
 
-    expect(rivalTerms.allowed).toBe(false);
-    expect(rivalTerms.reason).toMatch(/war.*reserve/i);
-    expect(selectedTerms.allowed).toBe(rivalTerms.allowed);
-    expect(selectedTerms.reason).toBe(rivalTerms.reason);
-    expect(planAiCommandsV2(state, WORLD_CONTENT_V2)).not.toContainEqual({
-      type: 'rapid-recruitment',
-      playerId: netherlands,
+    expect(selectRecruitmentTrainingPipelineV2(state, WORLD_CONTENT_V2, belgium)).toBeGreaterThan(0);
+    expect(finance.passiveRecruitment).toBeGreaterThan(0);
+    expect(projection.deployedAfterFinance).toBeGreaterThan(before);
+    expect(finance).toMatchObject({
+      trainedReserveCapacity: 0,
+      trainedReservesBefore: 0,
+      trainedReservesAfter: 0,
+      reserveTraining: 0,
+      reserveTrainingCost: 0,
+      reserveDeployment: 0,
     });
+
+    processFinanceMilitaryV2(
+      state,
+      WORLD_CONTENT_V2,
+      new Map([[belgium, finance]]),
+    );
+    expect(state.players[belgium]!.trainedReserves).toBe(0);
+    expect(selectTotalManpowerV2(state, belgium).deployed).toBeGreaterThan(before);
   });
 
-  it('keeps selected-country APEX and rivals on gradual peacetime recruitment', () => {
-    const base = fundedState(71_010);
-    base.tick = 104;
-    base.wars = [];
-    base.aiEscalation.lastWarStartTick = 1_000_000;
-    for (const nation of Object.values(base.players)) nation.treasury = 0;
-    base.players[netherlands]!.treasury = 1_000_000;
-    for (const id of WORLD_CONTENT_V2.nationIds) setActiveFill(base, id, 1);
-    setActiveFill(base, netherlands, 0.05);
+  it('never consumes a stale reserve value to refill an army during war', () => {
+    const state = createWorldStateV2(71_003);
+    state.tick = 100;
+    setFill(state, belgium, 0.2);
+    state.players[belgium]!.trainedReserves = 50;
+    state.wars = [war()];
+    const before = selectTotalManpowerV2(state, belgium).deployed;
+    const finance = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, belgium);
+    const projection = projectFinanceManpowerPhaseV2(
+      state,
+      WORLD_CONTENT_V2,
+      belgium,
+      finance,
+    );
 
-    const asRival = structuredClone(base);
-    const asSelected = structuredClone(base);
-    asRival.humanPlayerId = belgium;
-    asSelected.humanPlayerId = netherlands;
-
-    const expected = { type: 'rapid-recruitment', playerId: netherlands } as const;
-    expect(planAiCommandsV2(asRival, WORLD_CONTENT_V2)).not.toContainEqual(expected);
-    expect(planAiCommandsV2(asSelected, WORLD_CONTENT_V2)).not.toContainEqual(expected);
-    const finance = selectWeeklyFinanceBreakdownV2(asRival, WORLD_CONTENT_V2, netherlands);
-    expect(finance.passiveRecruitment + finance.acceleratedRecruitment).toBeGreaterThan(0);
+    expect(selectRecruitmentTrainingPipelineV2(state, WORLD_CONTENT_V2, belgium)).toBe(0);
+    expect(finance.passiveRecruitment).toBe(0);
+    expect(finance.reserveDeployment).toBe(0);
+    expect(projection.deployedAfterFinance).toBe(before);
+    expect(projection.trainedReservesAfter).toBe(0);
+    expect(selectRapidRecruitmentTermsV2(state, WORLD_CONTENT_V2, belgium).reason)
+      .toBe('Rapid Recruitment is unavailable during war.');
   });
 });

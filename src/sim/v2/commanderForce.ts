@@ -115,8 +115,8 @@ export const COMMANDER_RECOVERY_SUPPLY_READINESS_V2 = 0.60;
 export const COMMANDER_FRONTLINE_RECOVERY_MULTIPLIER_V2 = 0.15;
 /** One battle pulse can drain at most twenty percent of maximum shield Energy. */
 export const APEX_SHIELD_MAX_ENERGY_LOSS_SHARE_PER_HIT_V2 = 0.20;
-/** APEX can intercept at most half of the post-DEF national damage in one hit. */
-export const APEX_FRONTLINE_SHIELD_INTERCEPT_SHARE_V2 = 0.50;
+/** APEX can intercept at most 75% of the post-DEF national damage in one hit. */
+export const APEX_FRONTLINE_SHIELD_INTERCEPT_SHARE_V2 = 0.75;
 /** Compatibility export: shield integrity and blocked damage now use the same unit. */
 export const APEX_FRONTLINE_DURABILITY_MAX_V2 = 1;
 const COMMANDER_OPERATIONAL_SUPPLY_WEEKS_V2 = 10;
@@ -126,8 +126,10 @@ const COMMANDER_EXHAUSTED_RECOVERY_HOLD_TICK_V2 = Number.MAX_SAFE_INTEGER;
 const EPSILON = 0.000000001;
 
 export const APEX_LANCER_PULSE_INTERVAL_V2 = 3;
+/** Compatibility name: Overdrive doubles attack-side shield Energy efficiency. */
 export const APEX_LANCER_PULSE_ATTACK_MULTIPLIER_V2 = 2;
-export const APEX_AEGIS_COUNTERPULSE_SHARE_V2 = 0.15;
+/** Retired compatibility constant: human APEX no longer reflects direct damage. */
+export const APEX_AEGIS_COUNTERPULSE_SHARE_V2 = 0;
 /** Theater Mesh adds this much shared army-buff budget per extra front. */
 export const APEX_NEXUS_ADDITIONAL_FRONT_BUDGET_V2 = 0.20;
 /** Theater Mesh can project at most 140% total ATK/DEF across all fronts. */
@@ -236,8 +238,8 @@ function apexDoctrineRuntimeV2(
 
 export const BASE_APEX_ARMY_ATTACK_MULTIPLIER_V2 = 1.12;
 export const BASE_APEX_ARMY_DEFENSE_MULTIPLIER_V2 = 1.07;
-/** Base fixed neural-pulse damage potential (one thousand troop-equivalent). */
-export const BASE_APEX_PULSE_ATTACK_V2 = 0.001;
+/** Retired compatibility value. Human APEX boosts armies and deals no direct damage. */
+export const BASE_APEX_PULSE_ATTACK_V2 = 0;
 
 function apexArmyAttackMultiplierV2(
   state: WorldStateV2,
@@ -266,14 +268,14 @@ export interface ApexFrontlineDamageAllocationV2 {
   interceptedDamage: number;
   /** Damage blocked per Energy spent; one without Energy Efficiency talents. */
   durabilityMultiplier: number;
-  /** Bounded Countermeasure damage reflected toward the hostile formation. */
+  /** Retired compatibility output. Human APEX never deals reflected damage. */
   counterpulseDamage: number;
 }
 
 /**
  * Pure frontline shield allocator. Combat supplies one post-DEF, already-capped
  * hit; ally exposure is resolved first and the separate APEX layer then absorbs
- * at most 50% of the national share while spending at most 20% of its own
+ * at most 75% of the national share while spending at most 20% of its own
  * maximum Energy. Interception talents can make each Energy stop more damage,
  * but cannot bypass either limit. An empty national formation receives no
  * protection that could extend defeat or stalemate.
@@ -302,7 +304,7 @@ export function allocateApexFrontlineDamageV2(input: {
   const interceptEfficiency = clamp(
     input.apex?.interceptEfficiency ?? 1,
     1,
-    1.45,
+    3.5,
   );
   const rawRequestedDamage = Math.max(0, input.requestedDamage);
   const exposed = nationalManpower + allyManpower;
@@ -351,9 +353,7 @@ export function allocateApexFrontlineDamageV2(input: {
     interceptedDamage / interceptEfficiency,
   );
   const nationalLosses = Math.max(0, nationalDamageBeforeShield - interceptedDamage);
-  const counterpulseDamage = input.apex.mirrorMatrixEligible
-    ? interceptedDamage * APEX_AEGIS_COUNTERPULSE_SHARE_V2
-    : 0;
+  const counterpulseDamage = 0;
   return {
     nationalLosses,
     apexLosses: energySpent,
@@ -522,7 +522,7 @@ export interface ApexShieldPresentationV2 {
   readonly attackMultiplier: number;
   /** Multiplier applied to the supported national army; one while offline. */
   readonly defenseMultiplier: number;
-  /** Fixed neural attack potential; zero while the network is offline. */
+  /** Retired compatibility field. Human APEX never deals direct damage. */
   readonly pulseAttack: number;
   /** Readable average percentage bonus, never independent combat strength. */
   readonly supportBonusPercent: number;
@@ -555,7 +555,11 @@ export interface ApexEmpireShieldNetworkV2 extends ApexShieldPresentationV2 {
   readonly fronts: readonly ApexEmpireShieldFrontV2[];
 }
 
-/** Hostile signal remnants block combat-field authentication until purged. */
+/**
+ * Hostile signal remnants block Campaign protection until purged. Survival's
+ * reclaimed world is already scorched beyond integration: ownership alone
+ * authenticates the corridor so it can become a real shielded frontline.
+ */
 function apexEmpireShieldTerritoryEligibleV2(
   state: WorldStateV2,
   playerId: PlayerId,
@@ -564,8 +568,8 @@ function apexEmpireShieldTerritoryEligibleV2(
   const territory = state.territories[territoryId];
   return Boolean(
     territory?.owner === playerId
-      && territory.integration >= 1 - EPSILON
-      && !territory.integrationProgram,
+      && (state.runProgression.mode === 'survival'
+        || (territory.integration >= 1 - EPSILON && !territory.integrationProgram)),
   );
 }
 
@@ -611,7 +615,7 @@ export function selectApexShieldPresentationV2(
     ? round(apexArmyAttackMultiplierV2(state, playerId, force), 6) : 1;
   const defenseMultiplier = operational
     ? round(apexArmyDefenseMultiplierV2(state, playerId, force), 6) : 1;
-  const pulseAttack = operational ? round(Math.max(0, force.shield.pulseAttack), 9) : 0;
+  const pulseAttack = 0;
   const supportBonusPercent = operational ? round(
     ((attackMultiplier - 1) * 0.55 + (defenseMultiplier - 1) * 0.45) * 100,
     3,
@@ -754,7 +758,7 @@ export const selectApexShieldCombatPowerV2 = (
 ): number => selectApexShieldPresentationV2(state, playerId)?.supportBonusPercent ?? 0;
 
 export interface ApexLancerPulseStatusV2 {
-  /** Exact persisted progress toward the next Overdrive Pulse: 0, 1 or 2. */
+  /** Exact persisted progress toward the next Overdrive shield cycle: 0, 1 or 2. */
   readonly supportedAssaultCount: number;
   readonly nextPulseCharged: boolean;
   readonly nextAttackMultiplier: number;
@@ -765,7 +769,7 @@ export interface ApexLancerBattleCommitV2 extends ApexLancerPulseStatusV2 {
   readonly singularityPulse: boolean;
 }
 
-/** Read-only charge state for panels, forecasts and the live battle boundary. */
+/** Read-only attack-side shield charge for panels, forecasts and live combat. */
 export function selectApexLancerPulseStatusV2(
   state: WorldStateV2,
   playerId: PlayerId,
@@ -798,7 +802,7 @@ export function selectApexLancerPulseStatusV2(
  * Commits exactly one actually resolved APEX-supported offensive battle. The
  * resolved attacker formation is the capability token: passing null for an
  * unsupported or defensive battle is a no-op. Selectors never call this, so
- * previews cannot charge or consume the pulse.
+ * previews cannot charge or consume the cycle.
  */
 export function registerApexSupportedAssaultBattleV2(
   state: WorldStateV2,
@@ -835,13 +839,6 @@ export function registerApexSupportedAssaultBattleV2(
     && completedChargeCycle;
   runtime.lancerSupportedAssaultCount = completedChargeCycle
     ? 0 : runtime.lancerSupportedAssaultCount + 1;
-  if (singularityPulse) {
-    applyApexShieldDamageV2(
-      state,
-      playerId,
-      force.shield.maxIntegrity * 0.02,
-    );
-  }
   const next = selectApexLancerPulseStatusV2(state, playerId);
   return {
     recorded: true,
@@ -1268,12 +1265,12 @@ export function selectCommanderForecastMobilityV2(
       1 + (presentation.defenseMultiplier - 1) * allocationShare,
       9,
     ),
-    pulseAttack: round(
-      presentation.pulseAttack
-        * apexPulseProjectionShareV2(force, allocationShare),
-      9,
+    pulseAttack: 0,
+    interceptEfficiency: apexAssaultShieldEfficiencyV2(
+      force,
+      allocationShare,
+      selectApexLancerPulseStatusV2(state, playerId),
     ),
-    interceptEfficiency: clamp(force.shield.interceptEfficiency ?? 1, 1, 1.45),
     reason: prospectiveFrontCount === 1
       ? 'The empire-wide APEX shield can support this front immediately.'
       : `The empire-wide APEX shield can support this front immediately while sharing energy across ${prospectiveFrontCount} fronts.`,
@@ -2834,7 +2831,7 @@ export interface CommanderBattleFormationV2 {
   attackMultiplier: number;
   /** Applied only to the existing national army on this front. */
   defenseMultiplier: number;
-  /** Fixed neural-pulse damage budget after this front's shared allocation. */
+  /** Retired compatibility field; human APEX battle formations always emit zero. */
   pulseAttack: number;
   /** Damage blocked by each point of Energy spent on this hit. */
   interceptEfficiency?: number;
@@ -2842,20 +2839,30 @@ export interface CommanderBattleFormationV2 {
   projection: 'primary' | 'secondary';
   /** Multi-front network share allocated to this battle. */
   projectionCombatShare: number;
-  /** True only when this resolved offensive battle should fire Overdrive Pulse. */
+  /** True when this offensive battle receives the Overdrive shield-efficiency cycle. */
   singularityPulseCharged: boolean;
-  /** Countermeasure may reflect 15% of damage this shield actually intercepts. */
+  /** Retired compatibility flag. Human APEX never reflects damage. */
   mirrorMatrixEligible: boolean;
 }
 
-/** Pulse-specialized builds retain part of the power normally lost to a split network. */
-function apexPulseProjectionShareV2(
+/** Attack-side APEX talents improve Energy efficiency, never direct damage. */
+function apexAssaultShieldEfficiencyV2(
   force: CommanderForceStateV2,
   projectionCombatShare: number,
+  charge: ApexLancerPulseStatusV2,
 ): number {
   const share = clamp(projectionCombatShare, 0, 1);
   const retention = clamp(force.shield.pulseProjectionRetention ?? 0, 0, 0.35);
-  return clamp(share + (1 - share) * retention, 0, 1);
+  const forwardShieldBonus = clamp(force.shield.pulseAttack ?? 0, 0, 0.20);
+  const splitRetentionMultiplier = 1 + (1 - share) * retention;
+  return clamp(
+    (force.shield.interceptEfficiency ?? 1)
+      * (1 + forwardShieldBonus)
+      * splitRetentionMultiplier
+      * charge.nextAttackMultiplier,
+    1,
+    3.5,
+  );
 }
 
 export interface CommanderBattleLogisticsV2 {
@@ -2980,10 +2987,6 @@ export function selectCommanderBattleSupportV2(
     && attackerProjection) {
     if (attackerForce.shield.integrity > EPSILON) {
       const projectionCombatShare = attackerProjection.share;
-      const pulseProjectionShare = apexPulseProjectionShareV2(
-        attackerForce,
-        projectionCombatShare,
-      );
       const lancer = selectApexLancerPulseStatusV2(state, source.owner);
       const attackBonus = Math.max(
         0,
@@ -3000,23 +3003,21 @@ export function selectCommanderBattleSupportV2(
         maxShieldIntegrity: attackerForce.shield.maxIntegrity,
         attackMultiplier: round(1 + attackBonus, 9),
         defenseMultiplier: round(1 + defenseBonus, 9),
-        pulseAttack: round(
-          attackerForce.shield.pulseAttack
-            * pulseProjectionShare
-            * lancer.nextAttackMultiplier,
-          9,
-        ),
-        interceptEfficiency: clamp(
-          attackerForce.shield.interceptEfficiency ?? 1,
-          1,
-          1.45,
-        ),
+        pulseAttack: source.owner === ROGUE_AI_NATION_ID_V2
+          ? round(attackerForce.shield.pulseAttack, 9) : 0,
+        interceptEfficiency: isHumanPlayerV2(state, source.owner)
+          ? apexAssaultShieldEfficiencyV2(
+              attackerForce,
+              projectionCombatShare,
+              lancer,
+            )
+          : clamp(attackerForce.shield.interceptEfficiency ?? 1, 1, 1.45),
         availableSupply: isHumanPlayerV2(state, source.owner)
           ? attackerForce.shield.integrity : attackerForce.economy.supplyStock,
         projection: attackerProjection.role,
         projectionCombatShare,
         singularityPulseCharged: lancer.nextPulseCharged,
-        mirrorMatrixEligible: attackerForce.capabilities.defenseSpecialist,
+        mirrorMatrixEligible: false,
       };
     }
   }
@@ -3025,10 +3026,11 @@ export function selectCommanderBattleSupportV2(
     && defenderProjection) {
     if (defenderForce.shield.integrity > EPSILON) {
       const projectionCombatShare = defenderProjection.share;
-      const pulseProjectionShare = apexPulseProjectionShareV2(
-        defenderForce,
-        projectionCombatShare,
-      );
+      const defensiveShieldEfficiency = clamp(
+        defenderForce.shield.defensivePulseMultiplier ?? 1,
+        1,
+        1.75,
+      ) * (defenderForce.capabilities.defenseSpecialist ? 1.15 : 1);
       result.defender = {
         playerId: target.owner,
         mission: 'defense',
@@ -3042,23 +3044,22 @@ export function selectCommanderBattleSupportV2(
           0,
           apexArmyDefenseMultiplierV2(state, target.owner, defenderForce) - 1,
         ) * projectionCombatShare, 9),
-        pulseAttack: round(
-          defenderForce.shield.pulseAttack
-            * pulseProjectionShare
-            * clamp(defenderForce.shield.defensivePulseMultiplier ?? 1, 1, 1.75),
-          9,
-        ),
-        interceptEfficiency: clamp(
-          defenderForce.shield.interceptEfficiency ?? 1,
-          1,
-          1.45,
-        ),
+        pulseAttack: target.owner === ROGUE_AI_NATION_ID_V2
+          ? round(defenderForce.shield.pulseAttack, 9) : 0,
+        interceptEfficiency: isHumanPlayerV2(state, target.owner)
+          ? clamp(
+              (defenderForce.shield.interceptEfficiency ?? 1)
+                * defensiveShieldEfficiency,
+              1,
+              3.5,
+            )
+          : clamp(defenderForce.shield.interceptEfficiency ?? 1, 1, 1.45),
         availableSupply: isHumanPlayerV2(state, target.owner)
           ? defenderForce.shield.integrity : defenderForce.economy.supplyStock,
         projection: defenderProjection.role,
         projectionCombatShare,
         singularityPulseCharged: false,
-        mirrorMatrixEligible: defenderForce.capabilities.defenseSpecialist,
+        mirrorMatrixEligible: false,
       };
     }
   }
@@ -3186,7 +3187,7 @@ export function applyCommanderCasualtiesV2(
   );
   if (force && recoveredImpactEnergy > EPSILON) {
     // Impact Recovery never repairs the live wartime shield. It only banks
-    // offline Reserve Energy consumed by the existing safe recharge phase.
+    // offline Backup Energy consumed by the existing safe recharge phase.
     force.shield.rechargeBuffer = round(Math.min(
       force.shield.maxIntegrity,
       force.shield.rechargeBuffer + recoveredImpactEnergy,

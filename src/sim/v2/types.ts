@@ -13,7 +13,8 @@ export type TerritoryId = TerritoryIdV2;
 export const nationIdV2 = (value: string): NationIdV2 => value as NationIdV2;
 export const territoryIdV2 = (value: string): TerritoryIdV2 => value as TerritoryIdV2;
 
-export type WorldSpeedV2 = 0 | 1 | 2;
+/** 3× is reserved for the visible Survival contact fast-forward. */
+export type WorldSpeedV2 = 0 | 1 | 2 | 3;
 export type BudgetDomainV2 = 'military' | 'research' | 'development';
 export type ResearchBranchV2 =
   | 'population-recruitment'
@@ -132,7 +133,7 @@ export interface ApexShieldStateV2 {
   pulseChargeBonusPerStep?: number;
   /** Damage blocked by one Energy. Base value is exactly one. */
   interceptEfficiency?: number;
-  /** Spent interception Energy banked as offline Reserve Energy. */
+  /** Spent interception Energy banked as offline Backup Energy. */
   impactRecoveryShare?: number;
   /** Pulse multiplier used only while the network supports a defending front. */
   defensivePulseMultiplier?: number;
@@ -158,9 +159,9 @@ export interface CommanderCapabilitiesV2 {
   rapidResponse: boolean;
   /** Theater Mesh; expands the shared army-buff pool across extra fronts. */
   forceMultiplier: boolean;
-  /** Overdrive: every third resolved supported assault doubles APEX Pulse only. */
+  /** Overdrive: every third supported assault intercepts with better Energy efficiency. */
   assaultSpecialist: boolean;
-  /** Countermeasure: reflects 15% of damage actually intercepted. */
+  /** Countermeasure: improves defensive interception; human APEX reflects no casualties. */
   defenseSpecialist: boolean;
   emergencyExtractionCharges: number;
 }
@@ -385,7 +386,7 @@ export interface NationStateV2 {
   domesticFoodCapacity: number;
   /** Share of last week's national food demand actually supplied. */
   foodSecurity: number;
-  /** Trained personnel held outside the deployed regular army, in millions. */
+  /** Retired save/protocol compatibility key. Canonical runtime value is zero. */
   trainedReserves: number;
   budget: BudgetPolicyV2;
   research: ResearchStateV2;
@@ -654,13 +655,13 @@ export interface BattleEventV2 {
   /** National-equivalent damage actually intercepted by each neural dome. */
   commanderAttackerInterceptedDamage?: number;
   commanderDefenderInterceptedDamage?: number;
-  /** Real hostile personnel removed by a bounded Countermeasure pulse. */
+  /** Legacy/PRIME-only hostile personnel removed by a bounded counterpulse. */
   commanderAttackerCounterpulseDamage?: number;
   commanderDefenderCounterpulseDamage?: number;
-  /** Bounded neural-pulse damage committed by each supporting shield. */
+  /** PRIME-only neural-pulse damage; human APEX always reports zero. */
   commanderAttackerPulseDamage?: number;
   commanderDefenderPulseDamage?: number;
-  /** True only on an actually resolved third APEX-supported offensive Pulse. */
+  /** Legacy telemetry key for a third supported offensive Overdrive cycle. */
   commanderAttackerSingularityPulse?: boolean;
   /** Projection order only; all fronts consume one shared integrity pool. */
   commanderAttackerProjection?: 'primary' | 'secondary' | null;
@@ -773,7 +774,7 @@ export interface AntarcticExpeditionStateV2 {
   id: number;
   playerId: PlayerId;
   sectorId: AntarcticSectorIdV2;
-  /** Surviving deployed trained reserves, in millions. */
+  /** Legacy expedition personnel retained only to deserialize old saves. */
   manpower: number;
   initialManpower: number;
   startedTick: number;
@@ -908,8 +909,9 @@ export interface PolarEndgameStateV2 {
   bossIntegrity: number;
   suspicionReliefEarned: number;
   /**
-   * Survival-only provenance for personnel physically staged by a Rogue wave
-   * at Zero Point and subsequently carried through ordinary army logistics.
+   * Survival-only provenance for newly manufactured Antarctic-origin Rogue
+   * wave personnel staged at the gateways and subsequently carried through
+   * ordinary army logistics.
    * Sparse entries are millions of eligible machine personnel at a territory.
    */
   rogueWaveManpowerByTerritory: Partial<Record<TerritoryId, number>>;
@@ -1096,15 +1098,15 @@ export interface WeeklyFinanceBreakdownV2 {
   /** Extra soldiers trained through the AI's paid mobilization fast-track. */
   acceleratedRecruitment: number;
   recruitmentAccelerationCost: number;
-  /** Maximum trained reserve pool at the live 1x active-capacity rule. */
+  /** Retired compatibility output; always zero. */
   trainedReserveCapacity: number;
   trainedReservesBefore: number;
   trainedReservesAfter: number;
-  /** Newly trained reserve personnel, in millions. */
+  /** Retired compatibility output; always zero. */
   reserveTraining: number;
-  /** Military-envelope spending used to train the reserve pool. */
+  /** Retired compatibility output; always zero. */
   reserveTrainingCost: number;
-  /** Existing reserves transferred into deployed armies this week. */
+  /** Retired compatibility output; always zero. */
   reserveDeployment: number;
   /** Explicit catastrophic-crisis force reduction, capped at 0.05% per week. */
   acceleratedDemobilization: number;
@@ -1339,6 +1341,10 @@ export interface WarForecastV2 {
   access: WarAccessV2;
   sourceId?: TerritoryId;
   targetId?: TerritoryId;
+  /** Exact route selected for this forecast; cards and review must reuse it. */
+  routeDistanceKm?: number;
+  routeHopCount?: number;
+  routeThroughputMultiplier?: number;
   terrain?: TerrainType;
   winChance: number;
   outlook: 'dominant' | 'favored' | 'contested' | 'risky' | 'desperate';
@@ -1450,9 +1456,9 @@ export interface WarOutcomeV2 {
   /** Exact APEX supply delivered and consumed while supporting this conflict. */
   apexSupplyDelivered: number;
   apexSupplySpent: number;
-  /** Actually fired Overdrive Pulses during this conflict. */
+  /** Legacy telemetry count for Overdrive support cycles. */
   apexSingularityPulses?: number;
-  /** Actual hostile personnel removed by Countermeasure pulses. */
+  /** PRIME-only or legacy counterpulse casualties; human APEX records zero. */
   apexMirrorCounterpulseDamage?: number;
   /** Legacy counter for reports created before Omnipresence Grid. */
   apexTwinProjectionBattles?: number;
@@ -1536,6 +1542,7 @@ export type WorldCommandV2 =
   }
   | { type: 'deploy-antarctic-expedition'; playerId: PlayerId; sectorId: AntarcticSectorIdV2; manpower: number }
   | { type: 'set-empire-name'; playerId: PlayerId; name: string }
+  | { type: 'select-survival-counteroffensive'; playerId: PlayerId; targetId: TerritoryId }
   | { type: 'declare-war'; attackerId: PlayerId; defenderId: PlayerId; escalatedFromWarId?: string }
   | { type: 'propose-alliance'; fromId: PlayerId; targetId: PlayerId }
   | { type: 'respond-to-alliance'; fromId: PlayerId; toId: PlayerId; accept: boolean };

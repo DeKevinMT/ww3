@@ -17,6 +17,20 @@ import {
 import { nationIdV2, territoryIdV2 } from './types';
 
 describe('V2 real-world military power calibration', () => {
+  it('keeps Iceland elite but 20% lighter on Greenland\'s Atlantic route', () => {
+    const state = createWorldStateV2(2_026);
+    const iceland = nationIdV2('isl');
+    const routeBuild = ['grl', 'gnb', 'gmb', 'gin'].map(nationIdV2);
+    const icelandPower = selectCurrentPowerV2(state, WORLD_CONTENT_V2, iceland);
+    const routePowers = routeBuild.map((countryId) => (
+      selectCurrentPowerV2(state, WORLD_CONTENT_V2, countryId)
+    ));
+
+    expect(WORLD_CONTENT_V2.nations[iceland]!.real.powerIndex).toBeCloseTo(1.438620792, 8);
+    expect(icelandPower).toBeGreaterThan(Math.max(...routePowers));
+    expect(icelandPower).toBeCloseTo(143.863751, 5);
+  });
+
   it('separates army volume from per-soldier effectiveness', () => {
     const state = createWorldStateV2(2026);
     const usa = nationIdV2('usa');

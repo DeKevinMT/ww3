@@ -8,12 +8,15 @@ import { NATIONAL_AI_REVIEW_TICKS } from './balance';
 import { WorldEngineV2 } from './WorldEngineV2';
 import { resolveScenarioV2 } from './scenarios';
 import {
-  SURVIVAL_BASE_WAVE_INTERVAL_TICKS_V2,
-  SURVIVAL_FIRST_WAVE_DELAY_TICKS_V2,
+  ROGUE_ANNUAL_WAVE_INTERVAL_TICKS_V2,
   SURVIVAL_MAX_CONCURRENT_ROGUE_FRONTS_V2,
-  SURVIVAL_MIN_WAVE_INTERVAL_TICKS_V2,
   survivalRogueFrontCapV2,
 } from './survival';
+import {
+  redistributeArmiesV2,
+  survivalRogueTransitRouteCacheStatsV2,
+} from './war';
+import { ROGUE_AI_NATION_ID_V2 } from './content';
 
 describe('Survival AI planning performance', () => {
   it('spreads country management over eight bounded cohorts without global war-target work', () => {
@@ -72,7 +75,7 @@ describe('Survival AI planning performance', () => {
     expect(work.warAccessIndexBuilds).toBe(1);
   });
 
-  it('keeps the first threat singular, then fans out faster with a hard front cap', () => {
+  it('keeps the first threat singular, then concentrates on at most three axes', () => {
     for (let wave = 1; wave <= 20; wave += 1) {
       expect(survivalRogueFrontCapV2(wave, false)).toBe(1);
       expect(survivalRogueFrontCapV2(wave, true))
@@ -80,16 +83,35 @@ describe('Survival AI planning performance', () => {
     }
     expect([1, 2, 3, 4, 5, 6, 7, 9].map((wave) => (
       survivalRogueFrontCapV2(wave, true)
-    ))).toEqual([2, 2, 3, 3, 4, 4, 5, 6]);
+    ))).toEqual([2, 2, 3, 3, 3, 3, 3, 3]);
   });
 
-  it('uses a faster but still readable Survival wave cadence', () => {
-    expect(SURVIVAL_FIRST_WAVE_DELAY_TICKS_V2).toBeGreaterThanOrEqual(8);
-    expect(SURVIVAL_FIRST_WAVE_DELAY_TICKS_V2).toBeLessThan(13);
-    expect(SURVIVAL_BASE_WAVE_INTERVAL_TICKS_V2).toBeGreaterThanOrEqual(39);
-    expect(SURVIVAL_BASE_WAVE_INTERVAL_TICKS_V2).toBeLessThan(52);
-    expect(SURVIVAL_MIN_WAVE_INTERVAL_TICKS_V2).toBeGreaterThanOrEqual(20);
-    expect(SURVIVAL_MIN_WAVE_INTERVAL_TICKS_V2)
-      .toBeLessThan(SURVIVAL_BASE_WAVE_INTERVAL_TICKS_V2);
+  it('uses one exact annual wave cadence', () => {
+    expect(ROGUE_ANNUAL_WAVE_INTERVAL_TICKS_V2).toBe(52);
+  });
+
+  it('reuses unchanged Rogue transit geometry and invalidates on ownership changes', () => {
+    const seed = 93_003;
+    const { content } = resolveScenarioV2({ mode: 'survival', seed });
+    const engine = new WorldEngineV2(seed, content);
+    expect(engine.chooseCountry('grl')).toEqual({ accepted: true });
+    expect(engine.formSurvivalEmpire('grl', [])).toEqual({ accepted: true });
+
+    redistributeArmiesV2(engine.state, engine.content);
+    const afterFirst = survivalRogueTransitRouteCacheStatsV2(engine.state);
+    engine.state.tick += 1;
+    redistributeArmiesV2(engine.state, engine.content);
+    const unchanged = survivalRogueTransitRouteCacheStatsV2(engine.state);
+    expect(unchanged.builds).toBe(afterFirst.builds);
+    expect(unchanged.hits).toBeGreaterThan(afterFirst.hits);
+
+    const acquiredId = engine.content.territoryIds.find((territoryId) => (
+      engine.state.territories[territoryId]?.owner !== ROGUE_AI_NATION_ID_V2
+    ));
+    expect(acquiredId).toBeDefined();
+    engine.state.territories[acquiredId!]!.owner = ROGUE_AI_NATION_ID_V2;
+    redistributeArmiesV2(engine.state, engine.content);
+    const changed = survivalRogueTransitRouteCacheStatsV2(engine.state);
+    expect(changed.builds).toBe(unchanged.builds + 1);
   });
 });

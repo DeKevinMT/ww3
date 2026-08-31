@@ -20,7 +20,7 @@ import {
 } from './selectors';
 import { traitNationContextV2 } from './traitContext';
 import { countryTraitFactorV2 } from './traits';
-import { nationIdV2, territoryIdV2, type WorldContentV2 } from './types';
+import { nationIdV2, territoryIdV2, type PlayerId, type WorldContentV2 } from './types';
 
 const bel = nationIdV2('bel');
 const usa = nationIdV2('usa');
@@ -211,8 +211,7 @@ describe('V2 fiscal identity and population-linked income', () => {
 
   it('uses canonical automatic income plus a diminishing small-rich-state buffer for starting treasury', () => {
     const state = createWorldStateV2(4_203, WORLD_CONTENT_V2);
-    for (const id of WORLD_CONTENT_V2.nationIds) {
-      if (!isHumanSelectableNationV2(WORLD_CONTENT_V2, id)) continue;
+    const expectedStartingTreasury = (id: PlayerId): number => {
       const real = WORLD_CONTENT_V2.nations[id]!.real;
       const fiscal = calculateBlendedFiscalCapacityV2(real.gdp, real.population, real.population);
       const weeklyRevenue = fiscal.weeklyTaxRevenue;
@@ -224,12 +223,18 @@ describe('V2 fiscal identity and population-linked income', () => {
       // traits no longer add one-off starting cash.
       const traitFactor = countryTraitFactorV2(id, 'starting-treasury');
       expect(traitFactor, String(id)).toBe(1);
-      const expected = Math.round(
+      return Math.round(
         Math.max(0.10, weeklyRevenue * startingCashWeeks) * traitFactor * 1_000,
       ) / 1_000;
-      expect(state.players[id]!.treasury, String(id)).toBe(expected);
+    };
+    for (const id of WORLD_CONTENT_V2.nationIds) {
+      if (!isHumanSelectableNationV2(WORLD_CONTENT_V2, id)) continue;
+      expect(state.players[id]!.treasury, String(id)).toBe(expectedStartingTreasury(id));
     }
-    expect(state.players[ROGUE_AI_NATION_ID_V2]!.treasury).toBe(8_000);
+    // The Rogue uses the same canonical opening economy. Survival adds its
+    // finite war chest later, when the Dawnline comparison is available.
+    expect(state.players[ROGUE_AI_NATION_ID_V2]!.treasury)
+      .toBe(expectedStartingTreasury(ROGUE_AI_NATION_ID_V2));
     const qatarWeeks = state.players[qat]!.treasury
       / calculateBlendedFiscalCapacityV2(
         WORLD_CONTENT_V2.nations[qat]!.real.gdp,

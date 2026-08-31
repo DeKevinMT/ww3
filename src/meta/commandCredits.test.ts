@@ -62,7 +62,7 @@ function campaignReward(
 }
 
 describe('Command Credits', () => {
-  it('starts below the Survival entry fee and safely migrates the retired zero fields', () => {
+  it('starts with exactly one Survival entry fee and safely migrates the retired zero fields', () => {
     const fresh = createCommanderProfileV1(1, 'fresh-credits');
     expect(fresh.commandCredits).toBe(STARTING_COMMAND_CREDITS_V1);
     expect(fresh.lifetimeCreditsEarned).toBe(0);
@@ -70,7 +70,7 @@ describe('Command Credits', () => {
       cost: SURVIVAL_DEPLOYMENT_CREDIT_COST_V1,
       balance: STARTING_COMMAND_CREDITS_V1,
       balanceAfter: 0,
-      affordable: false,
+      affordable: true,
     });
 
     const migrated = normalizeCommanderProfileV1({

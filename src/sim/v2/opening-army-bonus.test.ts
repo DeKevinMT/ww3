@@ -22,7 +22,6 @@ import {
   selectFoodDemandV2,
   selectRecruitmentThroughputV2,
   selectTotalManpowerV2,
-  selectTrainedReserveCapacityV2,
   selectWeeklyFinanceBreakdownV2,
 } from './selectors';
 import {
@@ -89,18 +88,8 @@ function capacityAtOneXHumanOpeningV2(
   return selectTotalManpowerV2(oneXState, playerId).capacity;
 }
 
-function reserveCapacityAtOneXHumanOpeningV2(
-  state: WorldStateV2,
-  playerId: PlayerId,
-): number {
-  const oneXState = structuredClone(state);
-  oneXState.tick = OPENING_ARMY_BONUS_DURATION_TICKS_V2;
-  synchronizeArmyCapacityV2(oneXState, WORLD_CONTENT_V2);
-  return selectTrainedReserveCapacityV2(oneXState, playerId);
-}
-
 describe('temporary human opening-army bonus', () => {
-  it('scales only a sub-1x tick-zero reserve cadre and reverses lobby switches exactly once', () => {
+  it('keeps the retired reserve field neutral across lobby switches', () => {
     const engine = new WorldEngineV2(86_010, WORLD_CONTENT_V2);
     const ordinaryUsReserves = engine.state.players[usa]!.trainedReserves;
     const ordinaryGreenlandReserves = engine.state.players[grl]!.trainedReserves;
@@ -111,19 +100,15 @@ describe('temporary human opening-army bonus', () => {
 
     expect(engine.configureHumanPlayers([usa], usa)).toEqual({ accepted: true });
     const discountedUsReserves = engine.state.players[usa]!.trainedReserves;
-    expect(discountedUsReserves).toBeCloseTo(
-      ordinaryUsReserves * strongMultiplier,
-      9,
-    );
+    expect(discountedUsReserves).toBe(0);
 
-    // Replaying the same lobby state is a no-op, while changing country first
-    // restores the old cadre and then applies the new country's own rule.
+    // Replaying or changing the lobby can never recreate a legacy pool.
     expect(engine.configureHumanPlayers([usa], usa)).toEqual({ accepted: true });
     expect(engine.state.players[usa]!.trainedReserves).toBe(discountedUsReserves);
     expect(engine.chooseCountry(grl)).toEqual({ accepted: true });
     expect(engine.state.players[usa]!.trainedReserves).toBe(ordinaryUsReserves);
     const boostedGreenlandReserves = engine.state.players[grl]!.trainedReserves;
-    expect(boostedGreenlandReserves).toBeGreaterThan(ordinaryGreenlandReserves);
+    expect(boostedGreenlandReserves).toBe(0);
     expect(engine.chooseCountry(grl)).toEqual({ accepted: true });
     expect(engine.state.players[grl]!.trainedReserves).toBe(boostedGreenlandReserves);
 
@@ -134,29 +119,24 @@ describe('temporary human opening-army bonus', () => {
     expect(engine.state.players[grl]!.trainedReserves).toBe(boostedGreenlandReserves);
   });
 
-  it('lets reserve capacity follow the temporary army-cap curve without granting reserves', () => {
+  it('keeps reserve capacity and manpower retired throughout the opening curve', () => {
     const engine = new WorldEngineV2(86_011, WORLD_CONTENT_V2);
     const ordinaryUsReserves = engine.state.players[usa]!.trainedReserves;
     expect(engine.configureHumanPlayers([usa], usa)).toEqual({ accepted: true });
     const state = engine.state;
     const openingMultiplier = humanStartingArmyMultiplierForContentV2(WORLD_CONTENT_V2, usa);
-    const oneXReserveCapacity = reserveCapacityAtOneXHumanOpeningV2(state, usa);
     const discountedReserves = state.players[usa]!.trainedReserves;
 
-    expect(selectTrainedReserveCapacityV2(state, usa))
-      .toBeCloseTo(oneXReserveCapacity * openingMultiplier, 6);
-    expect(discountedReserves).toBeCloseTo(ordinaryUsReserves * openingMultiplier, 9);
+    expect(openingMultiplier).toBeLessThan(1);
+    expect(discountedReserves).toBe(0);
+    expect(ordinaryUsReserves).toBe(0);
 
     state.tick = OPENING_ARMY_BONUS_DURATION_TICKS_V2 / 2;
     synchronizeArmyCapacityV2(state, WORLD_CONTENT_V2);
-    const halfwayMultiplier = 1 + (openingMultiplier - 1) / 2;
-    expect(selectTrainedReserveCapacityV2(state, usa))
-      .toBeCloseTo(oneXReserveCapacity * halfwayMultiplier, 6);
     expect(state.players[usa]!.trainedReserves).toBe(discountedReserves);
 
     state.tick = OPENING_ARMY_BONUS_DURATION_TICKS_V2;
     synchronizeArmyCapacityV2(state, WORLD_CONTENT_V2);
-    expect(selectTrainedReserveCapacityV2(state, usa)).toBeCloseTo(oneXReserveCapacity, 6);
     expect(state.players[usa]!.trainedReserves).toBe(discountedReserves);
   });
 
@@ -178,7 +158,7 @@ describe('temporary human opening-army bonus', () => {
     // Per-territory capacity is rounded before national aggregation.
     expect(weakAfter.capacity).toBeCloseTo(weakOneXCapacity * weakMultiplier, 4);
     expect(weakEngine.state.players[grl]!.treasury).toBe(weakTreasuryBefore);
-    expect(weakEngine.state.players[grl]!.trainedReserves).toBeGreaterThan(weakReservesBefore);
+    expect(weakEngine.state.players[grl]!.trainedReserves).toBe(weakReservesBefore);
     expect(weakBonus).not.toBeNull();
     expect(weakBonus!.initialManpower).toBeCloseTo(
       weakAfter.deployed - weakBefore.deployed,

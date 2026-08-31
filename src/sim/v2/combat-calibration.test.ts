@@ -133,7 +133,7 @@ function simulateWar(seed: number, humanId: string, attackerId: string, defender
 }
 
 describe('V2 coherent combat and forecast calibration', () => {
-  it('caps APEX interception at half the post-DEF hit before applying its Energy budget', () => {
+  it('caps APEX interception at 75% of the post-DEF hit before applying its Energy budget', () => {
     const allocation = allocateApexFrontlineDamageV2({
       requestedDamage: 0.03,
       nationalManpower: 0.1,
@@ -144,15 +144,13 @@ describe('V2 coherent combat and forecast calibration', () => {
       },
     });
 
-    expect(APEX_FRONTLINE_SHIELD_INTERCEPT_SHARE_V2).toBe(0.50);
+    expect(APEX_FRONTLINE_SHIELD_INTERCEPT_SHARE_V2).toBe(0.75);
     expect(APEX_SHIELD_MAX_ENERGY_LOSS_SHARE_PER_HIT_V2).toBe(0.20);
-    expect(allocation.interceptedDamage).toBeCloseTo(
-      0.03 * APEX_FRONTLINE_SHIELD_INTERCEPT_SHARE_V2,
-      9,
-    );
+    // The 75% share requests 0.0225, then the 20% Energy budget binds at 0.02.
+    expect(allocation.interceptedDamage).toBeCloseTo(0.02, 9);
     expect(allocation.durabilityMultiplier).toBe(1);
-    expect(allocation.apexLosses).toBeCloseTo(0.015, 9);
-    expect(allocation.nationalLosses).toBeCloseTo(0.015, 9);
+    expect(allocation.apexLosses).toBeCloseTo(0.02, 9);
+    expect(allocation.nationalLosses).toBeCloseTo(0.01, 9);
     expect(allocation.nationalLosses + allocation.interceptedDamage)
       .toBeCloseTo(0.03, 9);
   });
@@ -216,12 +214,12 @@ describe('V2 coherent combat and forecast calibration', () => {
     });
   });
 
-  it('uses the finite trained-reserve pool for strategic forecast readiness', () => {
-    expect(strategicReserveReadinessMultiplierV2(0, 10)).toBeCloseTo(0.95, 9);
-    expect(strategicReserveReadinessMultiplierV2(5, 10)).toBeCloseTo(0.975, 9);
+  it('keeps the retired reserve pool neutral in strategic forecasts', () => {
+    expect(strategicReserveReadinessMultiplierV2(0, 10)).toBeCloseTo(1, 9);
+    expect(strategicReserveReadinessMultiplierV2(5, 10)).toBeCloseTo(1, 9);
     expect(strategicReserveReadinessMultiplierV2(10, 10)).toBeCloseTo(1, 9);
     expect(strategicReserveReadinessMultiplierV2(50, 10)).toBeCloseTo(1, 9);
-    expect(strategicReserveReadinessMultiplierV2(10, 0)).toBeCloseTo(0.95, 9);
+    expect(strategicReserveReadinessMultiplierV2(10, 0)).toBeCloseTo(1, 9);
   });
 
   it('rolls wider battle damage and escalates bounded intensity over the first war year', () => {
@@ -641,7 +639,8 @@ describe('V2 coherent combat and forecast calibration', () => {
     expect(result.defenderAlive).toBe(true);
     expect(result.engine.activeWarBetween('chn', 'ind')).toBeUndefined();
     expect(indiaManpowerAtResolution).toBeGreaterThan(0);
-    expect(indiaReservesAtResolution).toBeLessThan(result.defenderReservesStart);
+    expect(result.defenderReservesStart).toBe(0);
+    expect(indiaReservesAtResolution).toBe(0);
     expect(indiaManpowerAtResolution + indiaReservesAtResolution).toBeLessThan(
       result.defenderManpowerStart + result.defenderReservesStart,
     );

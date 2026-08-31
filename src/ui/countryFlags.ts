@@ -1,4 +1,8 @@
 import rogueAiFlagUrl from '../assets/rogue-ai-flag.png?url&no-inline';
+import dawnlineAccordFlagUrl from '../assets/dawnline-accord-flag.svg?url&no-inline';
+
+/** Renderer-only identity shared by every Arctic Dawnline holding in Survival. */
+export const DAWNLINE_ACCORD_FLAG_NATION_ID = 'dawnline-accord';
 
 /** ISO-3 game ids to ISO-2 flag assets. Kept static so selection never performs lookup work. */
 const ISO2_BY_NATION: Readonly<Record<string, string>> = {
@@ -34,6 +38,7 @@ export interface CountryFlagAsset {
 
 const CUSTOM_FLAG_ASSET_BY_NATION: Readonly<Record<string, CountryFlagAsset>> = {
   rai: { url: rogueAiFlagUrl, loader: 'image' },
+  [DAWNLINE_ACCORD_FLAG_NATION_ID]: { url: dawnlineAccordFlagUrl, loader: 'svg' },
 };
 
 /** Non-ISO nations that the Phaser fallback must preload even before content is mounted. */

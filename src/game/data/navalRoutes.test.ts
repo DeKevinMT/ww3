@@ -38,11 +38,15 @@ describe('canonical naval routes', () => {
       ['grl', 'isl'],
       ['grl', 'gnb'],
       ['grl', 'mrt'],
+      ['dom', 'guy'],
+      ['gmb', 'guy'],
+      ['grl', 'guy'],
       ['sle', 'sur'],
       ['mdg', 'tls'],
+      ['pan', 'png'],
       ['slv', 'png'],
     ]);
-    expect(AUTHORED_INTERCONTINENTAL_SEA_GATEWAYS.length).toBeLessThanOrEqual(8);
+    expect(AUTHORED_INTERCONTINENTAL_SEA_GATEWAYS.length).toBeLessThanOrEqual(10);
     const state = createWorldStateV2(5_713);
     for (const [leftId, rightId] of AUTHORED_INTERCONTINENTAL_SEA_GATEWAYS) {
       const left = COUNTRIES.find((country) => country.id === leftId)!;
@@ -80,6 +84,48 @@ describe('canonical naval routes', () => {
     expect(countrySeaRouteDistanceKm('grl', 'mrt')).toBeGreaterThan(5_000);
     expect(TERRITORY_BY_ID.grl!.seaNeighbors).toEqual(expect.arrayContaining(['can', 'isl', 'gnb', 'mrt']));
     expect(TERRITORY_BY_ID.can!.seaNeighbors).toContain('grl');
+  });
+
+  it('gives Guyana three bounded weak-country sea routes without creating a major-power hub', () => {
+    expect(TERRITORY_BY_ID.guy!.seaNeighbors).toEqual(['dom', 'gmb', 'grl']);
+    expect(TERRITORY_BY_ID.dom!.seaNeighbors).toContain('guy');
+    expect(TERRITORY_BY_ID.gmb!.seaNeighbors).toContain('guy');
+    expect(TERRITORY_BY_ID.grl!.seaNeighbors).toContain('guy');
+
+    expect(countrySeaRouteDistanceKm('guy', 'dom')).toBeGreaterThan(1_300);
+    expect(countrySeaRouteDistanceKm('guy', 'dom')).toBeLessThan(3_500);
+    const atlanticRouteDistances = ['gmb', 'grl'].map((neighborId) => (
+      countrySeaRouteDistanceKm('guy', neighborId)!
+    ));
+    expect(Math.min(...atlanticRouteDistances)).toBeGreaterThan(3_000);
+    expect(Math.max(...atlanticRouteDistances)).toBeLessThan(6_500);
+
+    const weakOceanPath = ['guy', 'grl', 'gnb'] as const;
+    expect(weakOceanPath.map((countryId) => (
+      COUNTRIES.find((country) => country.id === countryId)!.continent
+    ))).toEqual(['South America', 'North America', 'Africa']);
+    expect(weakOceanPath.every((countryId) => (
+      COUNTRIES.find((country) => country.id === countryId)!.powerIndex
+        <= AUTHORED_INTERCONTINENTAL_GATEWAY_POWER_CEILING
+    ))).toBe(true);
+    for (let index = 1; index < weakOceanPath.length; index += 1) {
+      expect(isSeaConnection(weakOceanPath[index - 1]!, weakOceanPath[index]!)).toBe(true);
+    }
+
+    expect(TERRITORY_BY_ID.guy!.seaNeighbors).not.toContain('usa');
+    expect(TERRITORY_BY_ID.usa!.seaNeighbors).not.toContain('guy');
+
+    const caribbeanPacificPath = ['guy', 'dom', 'pan', 'png'] as const;
+    expect(caribbeanPacificPath.every((countryId) => (
+      COUNTRIES.find((country) => country.id === countryId)!.powerIndex
+        <= AUTHORED_INTERCONTINENTAL_GATEWAY_POWER_CEILING
+    ))).toBe(true);
+    for (let index = 1; index < caribbeanPacificPath.length; index += 1) {
+      expect(isSeaConnection(
+        caribbeanPacificPath[index - 1]!,
+        caribbeanPacificPath[index]!,
+      )).toBe(true);
+    }
   });
 
   it('keeps credible Belgian sea access without cutting across Europe', () => {

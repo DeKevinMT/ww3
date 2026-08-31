@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import { createWorldStateV2 } from './bootstrap';
 import { synchronizeArmyCapacityV2 } from './capacity';
 import {
-  APEX_AEGIS_COUNTERPULSE_SHARE_V2,
   APEX_LANCER_PULSE_ATTACK_MULTIPLIER_V2,
   allocateApexFrontlineDamageV2,
   applyCommanderCasualtiesV2,
@@ -139,7 +138,7 @@ describe('APEX doctrine capstones', () => {
       .toThrow(/Commander force .* invalid canonical state/i);
   });
 
-  it('charges only APEX Pulse on resolved assaults and Overdrives exactly every third', () => {
+  it('charges attack-side shield efficiency on resolved assaults and Overdrives exactly every third', () => {
     const state = createWorldStateV2(95_001, WORLD_CONTENT_V2);
     const playerId = installApex(state, { assaultSpecialist: true });
     const sourceId = state.players[playerId]!.capitalId;
@@ -160,7 +159,8 @@ describe('APEX doctrine capstones', () => {
       state, activeWar, activeOperation, WORLD_CONTENT_V2,
     ).attacker!;
     expect(firstPreview.attackMultiplier).toBe(1.10);
-    expect(firstPreview.pulseAttack).toBe(0.001);
+    expect(firstPreview.pulseAttack).toBe(0);
+    expect(firstPreview.interceptEfficiency).toBeCloseTo(1.001, 9);
     expect(firstPreview.singularityPulseCharged).toBe(false);
     expect(selectApexLancerPulseStatusV2(state, playerId).supportedAssaultCount).toBe(0);
     // Repeated previews are pure and cannot arm the pulse.
@@ -181,7 +181,8 @@ describe('APEX doctrine capstones', () => {
       state, activeWar, activeOperation, WORLD_CONTENT_V2,
     ).attacker!;
     expect(secondPreview.attackMultiplier).toBe(1.10);
-    expect(secondPreview.pulseAttack).toBeCloseTo(0.0011, 9);
+    expect(secondPreview.pulseAttack).toBe(0);
+    expect(secondPreview.interceptEfficiency).toBeCloseTo(1.001 * 1.1, 9);
     expect(registerApexSupportedAssaultBattleV2(state, secondPreview)).toMatchObject({
       recorded: true,
       singularityPulse: false,
@@ -211,8 +212,10 @@ describe('APEX doctrine capstones', () => {
       loaded, loadedWar, loadedOperation, WORLD_CONTENT_V2,
     ).attacker!;
     expect(pulsePreview.attackMultiplier).toBe(apexProfile.attackMultiplier);
-    expect(pulsePreview.pulseAttack).toBeCloseTo(
-      apexProfile.shield.pulseAttack * 1.2 * APEX_LANCER_PULSE_ATTACK_MULTIPLIER_V2,
+    expect(pulsePreview.pulseAttack).toBe(0);
+    expect(pulsePreview.interceptEfficiency).toBeCloseTo(
+      (1 + apexProfile.shield.pulseAttack)
+        * 1.2 * APEX_LANCER_PULSE_ATTACK_MULTIPLIER_V2,
       9,
     );
     expect(pulsePreview.singularityPulseCharged).toBe(true);
@@ -223,15 +226,13 @@ describe('APEX doctrine capstones', () => {
       supportedAssaultCount: 0,
       nextPulseCharged: false,
     });
-    expect(loaded.commanderForces[playerId]!.shield.integrity).toBeCloseTo(
-      energyBeforeOverdrive - loaded.commanderForces[playerId]!.shield.maxIntegrity * 0.02,
-      9,
-    );
+    expect(loaded.commanderForces[playerId]!.shield.integrity)
+      .toBeCloseTo(energyBeforeOverdrive, 9);
     expect(selectCommanderBattleSupportV2(
       loaded, loadedWar, loadedOperation, WORLD_CONTENT_V2,
     ).attacker).toMatchObject({
       attackMultiplier: apexProfile.attackMultiplier,
-      pulseAttack: apexProfile.shield.pulseAttack,
+      pulseAttack: 0,
     });
   });
 
@@ -264,7 +265,7 @@ describe('APEX doctrine capstones', () => {
     expect(efficient.nationalLosses).toBeCloseTo(0.71, 12);
   });
 
-  it('banks Impact Recovery as offline Reserve Energy without repairing the live shield', () => {
+  it('banks Impact Recovery as offline Backup Energy without repairing the live shield', () => {
     const state = createWorldStateV2(95_007, WORLD_CONTENT_V2);
     const playerId = installApex(state, {});
     const force = state.commanderForces[playerId]!;
@@ -277,7 +278,7 @@ describe('APEX doctrine capstones', () => {
     expect(force.shield.rechargeBuffer).toBeCloseTo(0.00005, 12);
   });
 
-  it('reflects exactly 15% of intercepted damage without a second hidden hostile cap', () => {
+  it('never reflects intercepted damage from the human APEX shield', () => {
     const baseInput = {
       requestedDamage: 0.1,
       nationalManpower: 1,
@@ -292,19 +293,12 @@ describe('APEX doctrine capstones', () => {
       ...baseInput,
       hostileManpower: 1,
     });
-    expect(reflected.counterpulseDamage).toBeCloseTo(
-      reflected.interceptedDamage * APEX_AEGIS_COUNTERPULSE_SHARE_V2,
-      12,
-    );
+    expect(reflected.counterpulseDamage).toBe(0);
     const smallHostile = allocateApexFrontlineDamageV2({
       ...baseInput,
       hostileManpower: 0.001,
     });
-    expect(smallHostile.counterpulseDamage).toBeCloseTo(
-      smallHostile.interceptedDamage * APEX_AEGIS_COUNTERPULSE_SHARE_V2,
-      12,
-    );
-    expect(smallHostile.counterpulseDamage).toBeGreaterThan(0.001 * 0.01);
+    expect(smallHostile.counterpulseDamage).toBe(0);
     expect(allocateApexFrontlineDamageV2({
       ...baseInput,
       hostileManpower: 1,

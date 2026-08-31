@@ -2,10 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import worldUiSource from './WorldUIV2.ts?raw';
 import { WorldEngineV2 } from '../sim/v2/WorldEngineV2';
 import { isHumanSelectableNationV2, WORLD_CONTENT_V2 } from '../sim/v2/content';
-import {
-  humanOpeningTrainedReserveTermsForContentV2,
-  humanStartingArmyMultiplierForContentV2,
-} from '../sim/v2/traits';
+import { humanStartingArmyMultiplierForContentV2 } from '../sim/v2/traits';
 import { nationIdV2 } from '../sim/v2/types';
 import {
   compareIntroNationMetricsV2,
@@ -28,48 +25,31 @@ describe('intro opening metrics cache', () => {
     expect(introMetricColorV2(1)).toBe('rgb(110 211 155)');
   });
 
-  it('colors displayed Army, Reserve and Treasury from neutral raw sources only', () => {
+  it('colors displayed Army and Treasury from neutral raw sources only', () => {
     const previewStats = worldUiSource.slice(
       worldUiSource.indexOf('  const renderPreviewStats ='),
       worldUiSource.indexOf('  const query =', worldUiSource.indexOf('  const renderPreviewStats =')),
     );
     expect(worldUiSource).toContain('army: metrics.army.deployed');
-    expect(worldUiSource).toContain('reserve: metrics.player.trainedReserves');
     expect(worldUiSource).toContain('treasury: metrics.player.treasury');
     expect(previewStats).toContain("relativeStat('army'");
-    expect(previewStats).toContain("relativeStat('reserve'");
     expect(previewStats).toContain("relativeStat('treasury'");
     expect(previewStats).toContain('people(startingArmy)');
-    expect(previewStats).toContain('people(startingTrainedReserve)');
+    expect(previewStats).not.toContain('startingTrainedReserve');
     expect(previewStats).not.toContain("relativeStat('aggressiveness'");
     expect(previewStats).not.toContain('AGGRESSIVENESS');
     expect(worldUiSource).toContain('data-intro-source="neutral-opening"');
-    expect(worldUiSource).toContain('humanOpeningTrainedReserveTermsForContentV2(');
+    expect(worldUiSource).not.toContain('humanOpeningTrainedReserveTermsForContentV2(');
   });
 
-  it('shows the canonical underdog reserve floor while its percentile source stays raw', () => {
+  it('keeps the retired reserve field out of picker stats', () => {
     const engine = new WorldEngineV2(12_006);
     const opening = new IntroOpeningMetricsCacheV2().read(engine);
     const weakest = opening.ranking.at(-1);
     const candidate = weakest ? opening.byNation.get(weakest.player.id) : undefined;
     expect(candidate).toBeDefined();
-    const zeroReserveCandidate = {
-      ...candidate!,
-      player: { ...candidate!.player, trainedReserves: 0 },
-    };
-    expect(introRelativeStatSourcesV2(zeroReserveCandidate).reserve).toBe(0);
-    const neutralCapacity = candidate!.finance.trainedReserveCapacity;
-    const displayed = humanOpeningTrainedReserveTermsForContentV2(
-      WORLD_CONTENT_V2,
-      candidate!.player.id,
-      0,
-      neutralCapacity,
-      neutralCapacity * Math.min(1, humanStartingArmyMultiplierForContentV2(
-        WORLD_CONTENT_V2,
-        candidate!.player.id,
-      )),
-    ).trainedReserves;
-    expect(displayed).toBeGreaterThan(0);
+    expect(candidate!.player.trainedReserves).toBe(0);
+    expect(introRelativeStatSourcesV2(candidate!)).not.toHaveProperty('reserve');
   });
   it('builds one bounded hypothetical-human batch and reuses it', () => {
     const engine = new WorldEngineV2(12_001);
@@ -178,7 +158,7 @@ describe('intro opening metrics cache', () => {
     );
     const neutralRelative = introRelativeStatSourcesV2(preview!);
     expect(neutralRelative.army).toBe(preview!.army.deployed);
-    expect(neutralRelative.reserve).toBe(preview!.player.trainedReserves);
+    expect(neutralRelative).not.toHaveProperty('reserve');
     expect(neutralRelative.treasury).toBe(preview!.player.treasury);
 
     expect(engine.chooseCountry(greenland)).toEqual({ accepted: true });

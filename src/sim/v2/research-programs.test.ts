@@ -57,7 +57,7 @@ describe('V2 integrated research programs and army economy', () => {
       'logistics-medicine': ['recovery', 'supply'],
       'economy-science': ['economy-growth', 'research-speed', 'research-efficiency'],
       'food-systems': ['supply', 'recovery'],
-      'reserve-doctrine': ['reserve-training', 'reserve-mobilization'],
+      'reserve-doctrine': ['training', 'force-capacity'],
       'public-administration': ['tax-efficiency', 'operating-efficiency'],
       'education-intelligence': ['iq-increase'],
     });
@@ -260,7 +260,7 @@ describe('V2 integrated research programs and army economy', () => {
     }
   });
 
-  it('fills an active-army shortage while passively training the reserve pool', () => {
+  it('fills an active-army shortage directly without creating a reserve pool', () => {
     const state = createWorldStateV2(410);
     const target = selectArmyCapacityTargetV2(state, WORLD_CONTENT_V2, bel);
     state.territories[belTerritory].army.capacity = target;
@@ -273,12 +273,12 @@ describe('V2 integrated research programs and army economy', () => {
     expect(plans.get(bel)!.passiveRecruitment).toBeGreaterThan(0);
     expect(plans.get(bel)!.acceleratedRecruitment).toBe(0);
     expect(plans.get(bel)!.recruitment).toBe(0);
-    expect(plans.get(bel)!.reserveTraining).toBeGreaterThan(0);
+    expect(plans.get(bel)!.reserveTraining).toBe(0);
     processFinanceMilitaryV2(state, WORLD_CONTENT_V2, plans);
     expect(state.territories[belTerritory].army.capacity).toBe(before.capacity);
     expect(state.territories[belTerritory].army.manpower).toBeGreaterThan(before.manpower);
     expect(state.players[bel]).not.toHaveProperty('manpower');
-    expect(state.players[bel].trainedReserves).toBeGreaterThan(reservesBefore);
+    expect(state.players[bel].trainedReserves).toBe(reservesBefore);
   });
 
   it('exposes one canonical finance projection including operating and reserve flows', () => {

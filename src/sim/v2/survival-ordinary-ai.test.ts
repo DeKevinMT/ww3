@@ -32,8 +32,8 @@ function createUnformedSurvival(seed = 70_081): {
   return { engine, content: resolved.content };
 }
 
-describe('ordinary Survival AI weakening', () => {
-  it('keeps Dawnline pristine while every ordinary world country becomes machine transit', () => {
+describe('ordinary Survival AI parity', () => {
+  it('keeps ordinary sovereigns full-strength beside the explicit Arctic Dawnline', () => {
     const seed = 70_080;
     const resolved = resolveScenarioV2({ mode: 'survival', seed });
     const engine = new WorldEngineV2(seed, resolved.content);
@@ -54,17 +54,18 @@ describe('ordinary Survival AI weakening', () => {
     ))!;
     const dawnlineBefore = structuredClone(engine.state.territories[dawnlineTerritoryId]!);
     const unlockedMemberManpower = engine.state.territories[netherlandsTerritory]!.army.manpower;
-    const rogueManpowerBefore = ANTARCTIC_TERRITORY_IDS_V2.reduce((sum, territoryId) => (
-      sum + engine.state.territories[territoryId]!.army.manpower
-    ), 0);
     const germanConnectionsBefore = resolved.content.territories[germanyTerritory]!.connections;
 
     expect(engine.formSurvivalEmpire(greenland, ['nld'])).toEqual({ accepted: true });
 
-    const damaged = engine.state.territories[germanyTerritory]!;
+    const ordinary = engine.state.territories[germanyTerritory]!;
     const dawnlineLeader = selectSurvivalDawnlineLeaderIdV2(engine.state)!;
-    expect(engine.state.players[germany]).toBeUndefined();
-    expect(damaged.owner).toBe(ROGUE_AI_NATION_ID_V2);
+    expect(engine.state.players[germany]).toBeDefined();
+    expect(ordinary.owner).toBe(germany);
+    expect(ordinary.coreOwner).toBe(germany);
+    expect(ordinary.integration).toBe(1);
+    expect(ordinary.army.manpower).toBeCloseTo(ordinary.army.capacity, 9);
+    expect(isSurvivalOrdinaryAiNationV2(engine.state, resolved.content, germany)).toBe(true);
     expect(isSurvivalOrdinaryAiNationV2(engine.state, resolved.content, dawnlineLeader)).toBe(false);
     expect(isSurvivalOrdinaryAiNationV2(engine.state, resolved.content, greenland)).toBe(false);
     expect(isSurvivalOrdinaryAiNationV2(
@@ -104,14 +105,15 @@ describe('ordinary Survival AI weakening', () => {
       .toBeGreaterThan(dawnlineBefore.army.capacity / SURVIVAL_ORDINARY_AI_CAPACITY_FACTOR_V2 * 0.90);
     expect(engine.state.territories[dawnlineTerritoryId]!.army.manpower)
       .toBeCloseTo(engine.state.territories[dawnlineTerritoryId]!.army.capacity, 9);
-    expect(ANTARCTIC_TERRITORY_IDS_V2.reduce((sum, territoryId) => (
-      sum + engine.state.territories[territoryId]!.army.manpower
-    ), 0)).toBeCloseTo(rogueManpowerBefore, 8);
+    expect(resolved.content.territoryIds.filter((territoryId) => (
+      engine.state.territories[territoryId]?.owner === ROGUE_AI_NATION_ID_V2
+        && !ANTARCTIC_TERRITORY_IDS_V2.includes(territoryId)
+    ))).toEqual([]);
     expect(resolved.content.territories[germanyTerritory]!.connections)
       .toBe(germanConnectionsBefore);
   });
 
-  it('keeps active rebuilding symmetric while ordinary reserve training stays weak', () => {
+  it('keeps active rebuilding symmetric while reserve compatibility stays neutral', () => {
     const { engine, content } = createUnformedSurvival();
     const germany = nationIdV2('can');
     const germanyTerritory = territoryIdV2('can');
@@ -155,10 +157,11 @@ describe('ordinary Survival AI weakening', () => {
     )).toBe(1);
     expect(ordinaryActiveRecovery).toBeGreaterThan(0);
     expect(normalActiveRecovery).toBeCloseTo(ordinaryActiveRecovery, 9);
-    expect(ordinaryPlan.reserveTraining).toBeLessThanOrEqual(normalPlan.reserveTraining * 0.11);
+    expect(ordinaryPlan.reserveTraining).toBe(0);
+    expect(normalPlan.reserveTraining).toBe(0);
   });
 
-  it('applies the same limit to wartime reserve mobilisation', () => {
+  it('never mobilises a retired reserve pool during Survival wars', () => {
     const { engine, content } = createUnformedSurvival(70_082);
     const germany = nationIdV2('can');
     const france = nationIdV2('grl');
@@ -200,9 +203,9 @@ describe('ordinary Survival AI weakening', () => {
     };
     const normalPlan = selectWeeklyFinanceBreakdownV2(engine.state, controlContent, germany);
 
-    expect(ordinaryPlan.reserveDeployment).toBeGreaterThan(0);
-    expect(normalPlan.reserveDeployment).toBeGreaterThan(ordinaryPlan.reserveDeployment);
-    expect(ordinaryPlan.reserveDeployment / normalPlan.reserveDeployment)
-      .toBeLessThanOrEqual(SURVIVAL_ORDINARY_AI_REINFORCEMENT_FACTOR_V2 + 0.01);
+    expect(ordinaryPlan.reserveDeployment).toBe(0);
+    expect(normalPlan.reserveDeployment).toBe(0);
+    expect(ordinaryPlan.trainedReservesAfter).toBe(0);
+    expect(normalPlan.trainedReservesAfter).toBe(0);
   });
 });

@@ -9,11 +9,11 @@ import {
   SURVIVAL_DEPLOYMENT_CREDIT_COST_V1,
   commanderTalentAllocationQuoteV1,
   commanderMaxIntegrityV1,
-  commanderPulseAttackV1,
   commanderTalentPointsAvailableV1,
   commanderTalentRankLevelRequirementV1,
   commanderXpForLevelV1,
   countryMasteryV1,
+  countryMasteryCapacityBonusV1,
   countryMasteryXpDifficultyMultiplierV1,
   countryMasteryXpForLevelV1,
   resolveCommanderForceInitializationV1,
@@ -127,25 +127,25 @@ const TALENT_BRANCH_PRESENTATION: Readonly<Record<CommanderTalentBranchV1, {
   description: string;
 }>> = {
   offensive: {
-    label: 'Pulse Warfare',
-    kicker: 'APEX OFFENCE',
+    label: 'Assault Shield',
+    kicker: 'APEX FORWARD DEFENCE',
     icon: '△',
     color: '#ff8f67',
-    description: 'Build Pulse damage, multi-front reach and charge-powered Overdrive.',
+    description: 'Spend less Energy protecting attacks, retain efficiency across fronts and charge Overdrive.',
   },
   defensive: {
     label: 'Reactive Matrix',
     kicker: 'APEX INTERCEPTION',
     icon: '⬡',
     color: '#59dcff',
-    description: 'Block more damage per Energy, recover impact charge and strengthen defensive Pulse.',
+    description: 'Block more damage per Energy, recover impact charge and strengthen defensive shielding.',
   },
   'shield-core': {
     label: 'Energy Core',
     kicker: 'APEX ENDURANCE',
     icon: '◎',
     color: '#b58cff',
-    description: 'Expand Max Energy, recharge speed, Reserve Energy and one emergency reboot.',
+    description: 'Expand Max Energy, recharge speed, Backup Energy and one emergency reboot.',
   },
   'military-command': {
     label: 'Empire Warfare',
@@ -203,15 +203,11 @@ const COUNTRY_MASTERY_PRESENTATION: Readonly<Record<CountryMasteryTrackV1, {
   'field-medicine': { label: 'Field Medicine', icon: '✚' },
 };
 
-function upgradePercent(value: number): string {
-  return Number.isInteger(value) ? String(value) : value.toFixed(1);
-}
-
 /** Exact campaign effects produced by one legacy country-upgrade total. */
 export function countryUpgradeEffectCopyV1(track: CountryUpgradeTrack, level: number): string {
   const rank = Math.max(0, Math.min(MAX_COUNTRY_UPGRADE_LEVEL, Math.floor(level)));
   if (track === 'mobilization') {
-    return `Opening army +${rank * 4}% · trained reserves +${upgradePercent(rank * 2.5)}% · Training, Force Capacity and Reserve Training +${rank} effect levels`;
+    return `Opening Army +${rank * 4}% · Training and Force Capacity +${rank} effect levels`;
   }
   if (track === 'logistics') {
     return `Supply +${rank} effect levels · Operating Efficiency +${rank} effect levels`;
@@ -399,14 +395,17 @@ export function commanderTalentEffectCopyV1(
       commanderTalentOnlyEffectsV1(talentId, safeRank + 1),
     );
   const attack = talentPositive(100 * effects.armyAttackBonus, '% Army Attack');
-  const pulse = talentPositive(100 * effects.pulseAttackBonus, '% Pulse Attack');
+  const assaultEfficiency = talentPositive(
+    100 * effects.pulseAttackBonus,
+    '% Attack Energy Efficiency',
+  );
   const pulseProjection = talentPositive(
     100 * effects.pulseProjectionRetention,
-    '% Split Pulse Retained',
+    '% Split-Front Efficiency Retained',
   );
   const pulseCharge = talentPositive(
     100 * effects.pulseChargeBonusPerStep,
-    '% Pulse per Charge',
+    '% Energy Efficiency per Charge',
   );
   const interceptEfficiency = talentPositive(
     100 * effects.interceptEfficiencyBonus,
@@ -414,24 +413,24 @@ export function commanderTalentEffectCopyV1(
   );
   const impactRecovery = talentPositive(
     100 * effects.impactRecoveryShare,
-    '% Impact Energy to Reserve',
+    '% Impact Energy to Backup',
   );
-  const defensivePulse = talentPositive(
+  const defensiveEfficiency = talentPositive(
     100 * effects.defensivePulseBonus,
-    '% Defensive Pulse',
+    '% Defensive Energy Efficiency',
   );
   const defense = talentPositive(100 * effects.armyDefenseBonus, '% Army Defense');
   const maxIntegrity = talentPositive(100 * effects.maxIntegrityBonus, '% Max Energy');
-  const rechargeBuffer = talentPositive(100 * effects.rechargeBufferBonus, '% Reserve Energy');
+  const rechargeBuffer = talentPositive(100 * effects.rechargeBufferBonus, '% Backup Energy');
   const recharge = talentPositive(100 * effects.rechargeRateBonus, '% Energy Recharge');
   const recovery = talentPositive(100 * effects.armyPeaceRecoveryBonus, '% Peace Recovery');
 
-  if (talentId === 'science-corps') return pulse;
+  if (talentId === 'science-corps') return assaultEfficiency;
   if (talentId === 'treasury-reserve') return pulseProjection;
   if (talentId === 'elite-vanguard') return pulseCharge;
   if (talentId === 'volunteer-brigade') return interceptEfficiency;
   if (talentId === 'civil-defense') return impactRecovery;
-  if (talentId === 'doctrine-command') return defensivePulse;
+  if (talentId === 'doctrine-command') return defensiveEfficiency;
   if (talentId === 'reserve-cadre') return maxIntegrity;
   if (talentId === 'drill-instructors') return recharge;
   if (talentId === 'frugal-quartermaster') return rechargeBuffer;
@@ -461,8 +460,12 @@ export function countryMasteryTrackEffectCopyV1(
     MAX_COUNTRY_MASTERY_LEVEL,
     allocations,
   );
+  const passive = resolveCountryMasteryMilitaryEffectsV1(
+    MAX_COUNTRY_MASTERY_LEVEL,
+    {},
+  );
   if (track === 'force') {
-    return `+${masteryPercent((effects.armyCapacityMultiplier - 1) * 100)}% Army Capacity`;
+    return `+${masteryPercent((effects.armyCapacityMultiplier / passive.armyCapacityMultiplier - 1) * 100)}% Army Capacity`;
   }
   if (track === 'firepower') {
     return `+${masteryPercent((effects.attackMultiplier - 1) * 100)}% ATK`;
@@ -471,7 +474,7 @@ export function countryMasteryTrackEffectCopyV1(
     return `+${masteryPercent((effects.defenseMultiplier - 1) * 100)}% DEF`;
   }
   if (track === 'mobilization') {
-    return `+${masteryPercent((effects.recruitmentMultiplier - 1) * 100)}% Recruitment · +${masteryPercent((effects.reserveTrainingMultiplier - 1) * 100)}% Reserve Training`;
+    return `+${masteryPercent((effects.recruitmentMultiplier - 1) * 100)}% Peace Recruitment`;
   }
   if (track === 'land-logistics') {
     return `+${masteryPercent((effects.landSupplyMultiplier - 1) * 100)}% Land Supply · +${masteryPercent((effects.landTransferThroughputMultiplier - 1) * 100)}% Land Transfer`;
@@ -487,7 +490,7 @@ export function countryMasteryTrackEffectCopyV1(
 
 /**
  * Projects the visible national combat rating from the exact mastery loadout.
- * Capacity and opening-force growth increase mass; ATK/DEF preserve the
+ * Capacity growth increases mass; ATK/DEF preserve the
  * simulation's 55/45 combat-quality weighting.
  */
 export function countryMasteredMilitaryPowerV1(
@@ -500,7 +503,6 @@ export function countryMasteredMilitaryPowerV1(
     + 0.45 * country.opening.defense * effects.defenseMultiplier;
   const qualityMultiplier = baseQuality > 0 ? masteredQuality / baseQuality : 1;
   return Math.max(0, country.militaryPower
-    * effects.openingArmyMultiplier
     * effects.armyCapacityMultiplier
     * qualityMultiplier);
 }
@@ -618,14 +620,6 @@ export function renderCommanderTalentBranchesV1(
     profile.commanderLevel + 1,
     profile.commanderTalents,
   );
-  const currentPulseAttack = commanderPulseAttackV1(
-    profile.commanderLevel,
-    profile.commanderTalents,
-  );
-  const nextLevelPulseAttack = commanderPulseAttackV1(
-    profile.commanderLevel + 1,
-    profile.commanderTalents,
-  );
   const nextRankTalents = {
     ...profile.commanderTalents,
     [selectedTalent.id]: selectedQuote.targetRank,
@@ -634,12 +628,7 @@ export function renderCommanderTalentBranchesV1(
     profile.commanderLevel,
     nextRankTalents,
   );
-  const nextRankPulseAttack = commanderPulseAttackV1(
-    profile.commanderLevel,
-    nextRankTalents,
-  );
   const selectedChangesMaxIntegrity = nextRankMaxIntegrity > currentMaxIntegrity;
-  const selectedChangesPulseAttack = nextRankPulseAttack > currentPulseAttack;
   const selectedBranch = TALENT_BRANCH_PRESENTATION[selectedTalent.branch];
   const selectedPips = Array.from({ length: selectedTalent.coreRank }, (_, index) => (
     `<i class="${index < selectedRank ? 'is-filled' : ''}"></i>`
@@ -663,7 +652,7 @@ export function renderCommanderTalentBranchesV1(
         ? `APEX LEVEL ${selectedQuote.requiredLevel}` : 'NO FREE POINT';
   const inspector = `<section class="commander-talent-inspector commander-talent-inspector--${selectedTalent.branch}" style="--branch:${selectedBranch.color}">
     <header><div><span>${selectedBranch.label.toUpperCase()} · TIER ${selectedTalent.tier}</span><h2>${escapeHtml(selectedTalent.label)}</h2><p>${escapeHtml(selectedTalent.description)}</p></div><b>${inspectorState}</b></header>
-    <div class="commander-talent-inspector__stats"><article><small>CURRENT · RANK ${selectedRank}</small><strong>${escapeHtml(commanderTalentEffectCopyV1(selectedTalent.id, selectedRank, 'current'))}</strong>${selectedChangesMaxIntegrity ? `<em>APEX TOTAL · ${shieldHp(currentMaxIntegrity)} MAX ENERGY</em>` : ''}${selectedChangesPulseAttack ? `<em>APEX TOTAL · PULSE ATTACK ${shieldHp(currentPulseAttack)}</em>` : ''}</article><article class="is-next"><small>NEXT RANK · ${selectedQuote.targetRank} · LV ${selectedQuote.requiredLevel}</small><strong>${escapeHtml(commanderTalentEffectCopyV1(selectedTalent.id, selectedRank, 'next'))}</strong>${selectedChangesMaxIntegrity ? `<em>TALENT GAIN · +${scaledDelta(nextRankMaxIntegrity - currentMaxIntegrity)} MAX ENERGY</em>` : ''}${selectedChangesPulseAttack ? `<em>TALENT GAIN · +${scaledDelta(nextRankPulseAttack - currentPulseAttack)} PULSE ATTACK</em>` : ''}</article></div>
+    <div class="commander-talent-inspector__stats"><article><small>CURRENT · RANK ${selectedRank}</small><strong>${escapeHtml(commanderTalentEffectCopyV1(selectedTalent.id, selectedRank, 'current'))}</strong>${selectedChangesMaxIntegrity ? `<em>APEX TOTAL · ${shieldHp(currentMaxIntegrity)} MAX ENERGY</em>` : ''}</article><article class="is-next"><small>NEXT RANK · ${selectedQuote.targetRank} · LV ${selectedQuote.requiredLevel}</small><strong>${escapeHtml(commanderTalentEffectCopyV1(selectedTalent.id, selectedRank, 'next'))}</strong>${selectedChangesMaxIntegrity ? `<em>TALENT GAIN · +${scaledDelta(nextRankMaxIntegrity - currentMaxIntegrity)} MAX ENERGY</em>` : ''}</article></div>
     <div class="commander-talent-inspector__path"><span>PATH REQUIREMENT</span><strong>${escapeHtml(pathRequirement)}</strong><small>${escapeHtml(selectedQuote.reason ?? selectedTalent.perRank)}</small></div>
     <ol class="commander-talent-inspector__milestones">${selectedMilestones}</ol>
     <footer><em>${selectedPips}</em><button data-action="allocate-commander-talent" data-talent="${selectedTalent.id}" ${selectedQuote.available ? '' : 'disabled'}>${selectedQuote.available ? 'ADD TALENT POINT · 1 PT' : inspectorState}</button></footer>
@@ -705,7 +694,7 @@ export function renderCommanderTalentBranchesV1(
   }).join('');
 
   return `<section class="commander-shield-tree" aria-label="APEX specialization tree with three APEX paths and one Army path">
-    <header class="commander-shield-core"><i aria-hidden="true"><b>AX</b></i><div><span>EMPIRE ENERGY SHIELD</span><strong>APEX CORE</strong><small>ENERGY ${shieldHp(currentMaxIntegrity)} / ${shieldHp(currentMaxIntegrity)} · PULSE ATTACK ${shieldHp(currentPulseAttack)} · NEXT LEVEL +${scaledDelta(nextLevelMaxIntegrity - currentMaxIntegrity)} ENERGY / +${scaledDelta(nextLevelPulseAttack - currentPulseAttack)} PULSE</small></div><b>${commanderTalentPointsAvailableV1(profile)} <small>TALENT POINT${commanderTalentPointsAvailableV1(profile) === 1 ? '' : 'S'}</small></b></header>
+    <header class="commander-shield-core"><i aria-hidden="true"><b>AX</b></i><div><span>EMPIRE ENERGY SHIELD</span><strong>APEX CORE</strong><small>ENERGY ${shieldHp(currentMaxIntegrity)} / ${shieldHp(currentMaxIntegrity)} · NEXT LEVEL +${scaledDelta(nextLevelMaxIntegrity - currentMaxIntegrity)} ENERGY</small></div><b>${commanderTalentPointsAvailableV1(profile)} <small>TALENT POINT${commanderTalentPointsAvailableV1(profile) === 1 ? '' : 'S'}</small></b></header>
     ${inspector}
     <div class="commander-talent-lanes">${lanes}</div>
   </section>`;
@@ -1351,7 +1340,7 @@ export class CommanderMenuV1 {
           <article class="${hasActionableApexTalent ? 'has-unspent' : ''}"><div><span>APEX TALENT POINTS</span><strong>${apexTalentPoints > 0 ? `${apexTalentPoints} UNSPENT` : 'BUILD READY'}</strong><p>Account-wide upgrades for APEX and its support of every national Army.</p></div><button data-action="tutorial-open-talents">${talentAction} →</button></article>
           <article class="${nationMasteryPoints > 0 ? 'has-unspent' : ''}"><div><span>NATION MASTERY POINTS</span><strong>${masteryStatus}</strong><p>Nation-specific Army upgrades. Spend each point in the Nation Arsenal.</p></div><button data-action="tutorial-open-arsenal">${masteryAction} →</button></article>
         </div>
-        <aside><b>KEEP THEM SEPARATE</b><span>Credits only pay for Survival entry. Nations unlock by defeating and integrating Campaign targets; neither uses upgrade points.</span></aside>
+        <aside><b>KEEP THEM SEPARATE</b><span>Credits only pay for Survival entry. Defeating a nation in Campaign unlocks it; neither system uses upgrade points.</span></aside>
         <footer><button class="ghost-button" data-action="dismiss-progression-tutorial">GOT IT · RETURN HOME</button></footer>
       </section>
     </div>`;
@@ -1396,7 +1385,6 @@ export class CommanderMenuV1 {
     const forceDefenseBonus = force ? 100 * ((force.defenseMultiplier ?? 1) - 1) : 0;
     const forceRechargeBonus = force
       ? 100 * ((force.shield.rechargeMultiplier ?? 1) - 1) : 0;
-    const forcePulseAttack = force?.shield.pulseAttack ?? 0;
     const forceShieldIntegrity = campaignIntel?.shieldIntegrity ?? force?.shield.integrity ?? 0;
     const forceMaxShieldIntegrity = campaignIntel?.maxShieldIntegrity
       || force?.shield.maxIntegrity || forceShieldIntegrity;
@@ -1455,7 +1443,7 @@ export class CommanderMenuV1 {
       : '<div class="commander-strategy-strip__progression"><div><small>ROSTER STATUS</small><strong>World roster complete</strong><span>Every nation is under your command.</span></div></div>';
     const apexMetaCard = force ? `<section class="commander-meta-card commander-meta-card--apex ${hasActionableTalentPoint ? 'has-unspent' : ''}" data-loadout-country="${summaryCountry?.id ?? ''}" data-army-attack-bonus="${forceAttackBonus}" data-army-defense-bonus="${forceDefenseBonus}">
       <header><span>APEX TALENTS</span><strong>EMPIRE SHIELD</strong>${hasActionableTalentPoint ? `<mark>${commanderProgress.availableTalentPoints} UNSPENT</mark>` : commanderProgress.availableTalentPoints > 0 ? `<small>${commanderProgress.availableTalentPoints} SAVED · LEVEL GATED</small>` : '<small>ALL POINTS SPENT</small>'}</header>
-      <div class="commander-meta-card__stats commander-meta-card__stats--apex"><span class="is-power"><small>ENERGY</small><b>${shieldHp(forceShieldIntegrity)} / ${shieldHp(forceMaxShieldIntegrity)}</b></span><span><small>PULSE ATTACK</small><b>${shieldHp(forcePulseAttack)}</b></span><span><small>ARMY BUFF</small><b>+${talentStatNumber(forceAttackBonus)}% ATK · +${talentStatNumber(forceDefenseBonus)}% DEF</b></span><span><small>ENERGY RECHARGE</small><b>+${talentStatNumber(forceRechargeBonus)}%</b></span></div>
+      <div class="commander-meta-card__stats commander-meta-card__stats--apex"><span class="is-power"><small>ENERGY</small><b>${shieldHp(forceShieldIntegrity)} / ${shieldHp(forceMaxShieldIntegrity)}</b></span><span><small>ARMY ATTACK</small><b>+${talentStatNumber(forceAttackBonus)}%</b></span><span><small>ARMY DEFENSE</small><b>+${talentStatNumber(forceDefenseBonus)}%</b></span><span><small>ENERGY RECHARGE</small><b>+${talentStatNumber(forceRechargeBonus)}%</b></span></div>
       <button class="commander-meta-card__cta ${hasActionableTalentPoint ? 'is-actionable' : ''}" data-action="open-talents">${hasActionableTalentPoint ? `SPEND ${commanderProgress.availableTalentPoints} APEX TALENT POINT${commanderProgress.availableTalentPoints === 1 ? '' : 'S'}` : 'VIEW APEX TALENTS'} →</button>
     </section>` : '';
     const arsenalMetaCard = `<section class="commander-meta-card commander-meta-card--arsenal ${totalUnspentMasteryPoints > 0 ? 'has-unspent' : ''}">
@@ -1519,27 +1507,27 @@ export class CommanderMenuV1 {
     const defenseBonus = 100 * ((force.defenseMultiplier ?? 1) - 1);
     const rechargeBonus = 100 * ((force.shield.rechargeMultiplier ?? 1) - 1);
     const peaceRecoveryBonus = 100 * ((force.armyPeaceRecoveryMultiplier ?? 1) - 1);
+    const masteryMilitary = loadout.masteryMilitary;
     const capabilities = [
       force.capabilities?.assaultSpecialist ? 'OVERDRIVE' : undefined,
-      force.capabilities?.defenseSpecialist ? 'COUNTERMEASURE' : undefined,
+      force.capabilities?.defenseSpecialist ? 'ADAPTIVE BARRIER' : undefined,
       force.capabilities?.fieldHospital ? 'EMERGENCY REBOOT' : undefined,
       force.capabilities?.forceMultiplier ? 'THEATER MESH' : undefined,
     ].filter((entry): entry is string => Boolean(entry));
-    const reserveMultiplier = 1 + loadout.upgrades.mobilization * 0.025;
     return `<section class="commander-deployment-loadout" data-loadout-country="${country.id}" data-shield-integrity="100" data-army-attack-bonus="${attackBonus}" data-army-defense-bonus="${defenseBonus}">
       <header><div><span>${frozenLoadout ? 'ACTIVE SAVE · FROZEN LOADOUT' : 'DEPLOYMENT LOADOUT PREVIEW'}</span><strong>APEX DOME + ${escapeHtml(country.shortName)}</strong></div><b>APEX LV ${loadout.commanderLevel}</b></header>
       <div class="commander-deployment-loadout__corps">
         <article class="is-power"><span>ENERGY</span><strong>${shieldHp(force.shield.integrity)} / ${shieldHp(force.shield.maxIntegrity)}</strong><small>Fully charged at deployment</small></article>
-        <article class="is-attack"><span>PULSE ATTACK</span><strong>${shieldHp(force.shield.pulseAttack)}</strong><small>Extra hit · shares the 10% Empire cap</small></article>
+        <article class="is-defense"><span>SHIELD ABSORPTION</span><strong>75%</strong><small>Incoming Army damage · Energy limited</small></article>
         <article class="is-attack"><span>ARMY ATTACK</span><strong>+${talentStatNumber(attackBonus)}%</strong><small>Only while shield online</small></article>
         <article class="is-defense"><span>ARMY DEFENSE</span><strong>+${talentStatNumber(defenseBonus)}%</strong><small>Only while shield online</small></article>
         <article><span>CAPSTONE PROTOCOL</span><strong>${escapeHtml(doctrine?.label ?? 'NO PROTOCOL')}</strong><small>${escapeHtml(doctrine?.role ?? 'UNASSIGNED')}</small></article>
         <article><span>ENERGY CORE</span><strong>×${(force.shield.maxIntegrity / BASE_COMMANDER_FORCE_V1.maxIntegrity).toFixed(2)} MAX</strong><small>+${talentStatNumber(rechargeBonus)}% recharge</small></article>
       </div>
       <div class="commander-deployment-loadout__nation">
-        <span><small>NATION ARMY</small><b>×${loadout.openingArmyMultiplier.toFixed(4)}</b></span>
+        <span><small>ARMY CAPACITY</small><b>×${masteryMilitary.armyCapacityMultiplier.toFixed(4)}</b></span>
         <span><small>NATION ECONOMY</small><b>×${loadout.openingEconomyMultiplier.toFixed(4)}</b></span>
-        <span><small>TRAINED RESERVE</small><b>×${reserveMultiplier.toFixed(3)}</b></span>
+        <span><small>PEACE RECRUITMENT</small><b>+${talentStatNumber((masteryMilitary.recruitmentMultiplier - 1) * 100)}%</b></span>
         <span><small>EMPIRE WARFARE</small><b>+${talentStatNumber(peaceRecoveryBonus)}% PEACE RECOVERY</b></span>
         <span><small>MASTERY POINTS</small><b>${loadout.masteryPointsSpent} / ${loadout.masteryPointsEarned}</b></span>
         <span><small>MASTERY</small><b>LV ${loadout.masteryLevel}</b></span>
@@ -1587,8 +1575,7 @@ export class CommanderMenuV1 {
       ${metric('armyManpower', 'DEPLOYED ARMY', peopleFromMillions(stats.armyManpower))}
       ${metric('economy', 'ECONOMY', moneyFromBillions(stats.economy), 'is-economy')}
       ${metric('treasury', 'STARTING TREASURY', moneyFromBillions(stats.treasury))}
-    </div><details class="commander-country-intel__extended"><summary><span>FULL STRATEGIC INTELLIGENCE</span><b>6 MORE METRICS</b></summary><div>
-      ${metric('trainedReserves', 'TRAINED RESERVE', peopleFromMillions(stats.trainedReserves))}
+    </div><details class="commander-country-intel__extended"><summary><span>FULL STRATEGIC INTELLIGENCE</span><b>5 MORE METRICS</b></summary><div>
       ${metric('population', 'POPULATION', peopleFromMillions(stats.population))}
       ${metric('gdpPerCapita', 'GDP / CAPITA', moneyFromBillions(stats.gdpPerCapita))}
       ${metric('economicGrowth', 'ECONOMIC GROWTH', `${signedPercent(stats.economicGrowth)}/YR`)}
@@ -1749,7 +1736,7 @@ export class CommanderMenuV1 {
     const masteredPower = countryMasteredMilitaryPowerV1(this.profile, country);
     const masteryPowerDelta = country.militaryPower > 0
       ? (masteredPower / country.militaryPower - 1) * 100 : 0;
-    const masteryOpeningBonus = (loadout.masteryMilitary.openingArmyMultiplier - 1) * 100;
+    const masteryLevelCapacityBonus = countryMasteryCapacityBonusV1(mastery.level) * 100;
     const masteryXpCost = countryMasteryXpDifficultyMultiplierV1(
       country.quote.strengthRank,
       country.quote.countryCount,
@@ -1770,11 +1757,11 @@ export class CommanderMenuV1 {
       <header><i class="country-flag country-flag--large">${countryFlagHtml(country.id, country.sigil, true)}</i><div><span>${unlocked ? country.quote.starterEligible ? 'STARTER NATION · OWNED' : 'OWNED NATION' : 'CAMPAIGN TARGET'}</span><h2>${escapeHtml(country.name)}</h2><p><b>${compact(unlocked ? masteredPower : country.militaryPower)} POWER</b><span>${unlocked ? `Base ${compact(country.militaryPower)} · ` : ''}#${country.quote.strengthRank} · ${escapeHtml(country.subregion)}</span></p></div></header>
       ${unlocked ? `<section class="commander-mastery-card">
         <header><div><span>COUNTRY MASTERY</span><strong>LEVEL ${mastery.level}</strong><small>${mastery.campaigns} campaigns · ${mastery.victories} victories</small></div><aside><strong>${loadout.masteryPointsAvailable}</strong><span>POINT${loadout.masteryPointsAvailable === 1 ? '' : 'S'} AVAILABLE</span></aside></header>
-        <div class="commander-mastery-progress"><b style="--progress:${masteryProgress}%"><i></i></b><small>${mastery.level >= MAX_COUNTRY_MASTERY_LEVEL ? 'MAXIMUM MASTERY' : `${compact(mastery.xp - currentLevelXp)} / ${compact(nextLevelXp - currentLevelXp)} XP · NEXT: +0.25% OPENING ARMY + 1 POINT`} <em>MASTERY XP COST ×${masteryXpCostLabel}</em></small></div>
+        <div class="commander-mastery-progress"><b style="--progress:${masteryProgress}%"><i></i></b><small>${mastery.level >= MAX_COUNTRY_MASTERY_LEVEL ? 'MAXIMUM MASTERY' : `${compact(mastery.xp - currentLevelXp)} / ${compact(nextLevelXp - currentLevelXp)} XP · NEXT: +0.25% ARMY CAPACITY + 1 POINT`} <em>MASTERY XP COST ×${masteryXpCostLabel}</em></small></div>
         <section class="commander-mastery-power" data-base-power="${country.militaryPower}" data-mastered-power="${masteredPower}"><div><span>BASE POWER</span><strong>${compact(country.militaryPower)}</strong></div><i>→</i><div><span>MASTERED POWER</span><strong>${compact(masteredPower)}</strong><em>+${masteryPowerDelta.toFixed(1)}%</em></div></section>
         <div class="commander-mastery-scope"><b>CAMPAIGN · SURVIVAL EMPIRE</b><span>Every owned nation brings its mastery build into Survival.</span></div>
         <div class="commander-mastery-tracks">${masteryTrackCards}</div>
-        <footer><span><b>LEVEL BONUS</b> +${masteryPercent(masteryOpeningBonus)}% opening army</span><button class="ghost-button" data-action="respec-country-mastery" data-country="${country.id}" ${loadout.masteryPointsSpent > 0 ? '' : 'disabled'}>FREE RESPEC</button></footer>
+        <footer><span><b>LEVEL BONUS</b> +${masteryPercent(masteryLevelCapacityBonus)}% Army Capacity</span><button class="ghost-button" data-action="respec-country-mastery" data-country="${country.id}" ${loadout.masteryPointsSpent > 0 ? '' : 'disabled'}>FREE RESPEC</button></footer>
       </section>`
         : `<div class="commander-unlock-panel is-campaign-locked"><span>LOCKED NATION</span><strong>DEFEAT IN CAMPAIGN</strong><p>Defeat ${escapeHtml(country.name)} in a standard Campaign war to unlock it permanently. Alternative Universe and Survival do not unlock nations.</p></div>`}
     </section>`;

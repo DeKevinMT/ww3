@@ -252,8 +252,8 @@ describe('one symmetric frontline hit ceiling', () => {
     })).toBe(10);
   });
 
-  it('intercepts at most half a hit while spending at most twenty percent of Max Energy', () => {
-    expect(APEX_FRONTLINE_SHIELD_INTERCEPT_SHARE_V2).toBe(0.50);
+  it('intercepts at most 75% of a hit while spending at most twenty percent of Max Energy', () => {
+    expect(APEX_FRONTLINE_SHIELD_INTERCEPT_SHARE_V2).toBe(0.75);
     expect(APEX_SHIELD_MAX_ENERGY_LOSS_SHARE_PER_HIT_V2).toBe(0.20);
     const healthy = allocateApexFrontlineDamageV2({
       requestedDamage: 0.50,
@@ -289,12 +289,12 @@ describe('one symmetric frontline hit ceiling', () => {
         maxIntegrity: 1,
       },
     });
-    expect(smallHit.interceptedDamage).toBeCloseTo(0.015, 9);
-    expect(smallHit.apexLosses).toBeCloseTo(0.015, 9);
-    expect(smallHit.nationalLosses).toBeCloseTo(0.015, 9);
+    expect(smallHit.interceptedDamage).toBeCloseTo(0.0225, 9);
+    expect(smallHit.apexLosses).toBeCloseTo(0.0225, 9);
+    expect(smallHit.nationalLosses).toBeCloseTo(0.0075, 9);
   });
 
-  it('applies the 50% shield share after DEF and the existing Empire hit cap', () => {
+  it('applies the 75% shield share after DEF and the existing Empire hit cap', () => {
     const postDefenseHit = resolveFrontlineHitV2({
       requestedBaseDamage: 1,
       receivingDamageMultiplier: 0.75,
@@ -313,9 +313,9 @@ describe('one symmetric frontline hit ceiling', () => {
         interceptEfficiency: 1.45,
       },
     });
-    expect(allocation.interceptedDamage).toBeCloseTo(0.05, 9);
-    expect(allocation.nationalLosses).toBeCloseTo(0.05, 9);
-    expect(allocation.apexLosses).toBeCloseTo(0.05 / 1.45, 9);
+    expect(allocation.interceptedDamage).toBeCloseTo(0.075, 9);
+    expect(allocation.nationalLosses).toBeCloseTo(0.025, 9);
+    expect(allocation.apexLosses).toBeCloseTo(0.075 / 1.45, 9);
   });
 
   it('keeps cap-binding forecast, projection and first live pulse aligned', () => {

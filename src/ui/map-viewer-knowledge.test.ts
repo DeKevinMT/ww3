@@ -3,6 +3,9 @@ import { WorldEngineV2 } from '../sim/v2/WorldEngineV2';
 import { territoryIdV2 } from '../sim/v2/types';
 import { enterPostBlackoutCampaignForTestV2 } from '../sim/v2/testSupport';
 import { serializeSaveV2 } from '../sim/v2/persistence';
+import { resolveScenarioV2 } from '../sim/v2/scenarios';
+import { SURVIVAL_DAWNLINE_ACCORD_NAME_V2 } from '../sim/v2/survivalOrdinaryAi';
+import { DAWNLINE_ACCORD_FLAG_NATION_ID } from './countryFlags';
 import {
   createMapEngineAdapter,
   mapPolarEndgameSnapshotV2,
@@ -23,6 +26,22 @@ describe('viewer-local map knowledge', () => {
     adapter.refreshSnapshot?.();
     expect(adapter.player(playerId)?.flagCountryId).toBe('jpn');
     expect(engine.state.players[playerId]).not.toHaveProperty('flagCountryId');
+  });
+
+  it('projects one custom Dawnline flag across its non-human Survival realm', () => {
+    const resolved = resolveScenarioV2({ mode: 'survival', seed: 96_416 });
+    const engine = new WorldEngineV2(96_416, resolved.content);
+    const dawnlineId = resolved.content.nationIds.find((playerId) => (
+      playerId !== engine.state.humanPlayerId
+        && resolved.content.nations[playerId]?.kind !== 'rogue-ai'
+    ))!;
+    engine.state.players[dawnlineId]!.empireName = SURVIVAL_DAWNLINE_ACCORD_NAME_V2;
+    const adapter = createMapEngineAdapter(engine, () => engine.globalRanking());
+    adapter.refreshSnapshot?.();
+
+    expect(adapter.player(dawnlineId)?.flagCountryId)
+      .toBe(DAWNLINE_ACCORD_FLAG_NATION_ID);
+    expect(engine.state.players[dawnlineId]).not.toHaveProperty('flagCountryId');
   });
 
   it('projects only scenario identity and strategic connection targets', () => {

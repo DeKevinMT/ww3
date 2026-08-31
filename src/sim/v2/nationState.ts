@@ -4,25 +4,16 @@ import {
   EMPTY_RESEARCH_BREAKTHROUGHS,
   EMPTY_RESEARCH_EFFECT_LEVELS,
   EMPTY_RESEARCH_PROGRESS,
-  TRAINED_RESERVE_CAPACITY_MULTIPLIER,
   clamp,
   round,
 } from './balance';
-import {
-  initialNationArmyCapacityBenchmarkV2,
-  nationalArmyCapacityAtOneXOpeningV2,
-} from './capacity';
 import type { WorldContentV2 } from './content';
 import { calculateBlendedFiscalCapacityV2 } from './fiscal';
-import { initialTrainedReserveManpowerV2 } from './reserveForces';
 import { OPENING_ARMY_BONUS_DURATION_TICKS_V2 } from './openingArmyBonus';
 import {
   countryTraitFactorV2,
   humanCountryTraitMultiplierForContentV2,
-  humanOpeningReserveMultiplierForContentV2,
-  humanOpeningTrainedReserveTermsForContentV2,
   humanStartingArmyMultiplierForContentV2,
-  isExtremeOpeningUnderdogForContentV2,
   legacyV261HumanStartingArmyMultiplierForContentV2,
 } from './traits';
 import type { NationStateV2, PlayerId, WorldStateV2 } from './types';
@@ -101,16 +92,10 @@ export function synchronizeOpeningTreasuryHumanRosterV2(
  * The old controller multiplier is removed before the new one is applied, so
  * repeated lobby updates and country switches cannot stack the bonus. Deployed
  * manpower changes here; capacity is synchronized by the caller onto the same
- * temporary curve. A sub-1x opening also scales the tick-zero reserve cadre by
- * the same factor; removing that human seat restores the exact 1x cadre. A
- * positive opening boost normally never creates free reserves. The bottom
- * quartile receives bounded rank-based reserves, the weakest ten continue to
- * 2x with a five-percent neutral-cap floor. Belgium is the
- * one explicit scenario exception: its 35% opening reserve must remain 35% of
- * its temporary player capacity as well as its ordinary AI capacity. Extra
- * deployed soldiers are free and non-replenishable, and the fading capacity
- * entitlement gates future recruitment without deleting paid soldiers that
- * already exist.
+ * temporary curve. Extra deployed soldiers are free and non-replenishable,
+ * and the fading capacity entitlement gates future recruitment without
+ * deleting paid soldiers that already exist. The retired compatibility field
+ * is always reset to zero.
  */
 export function synchronizeOpeningArmyHumanRosterV2(
   state: WorldStateV2,
@@ -124,32 +109,11 @@ export function synchronizeOpeningArmyHumanRosterV2(
   const changed = new Set([...previous, ...next]);
   for (const id of [...changed].sort((left, right) => left.localeCompare(right))) {
     if (previous.has(id) === next.has(id) || !content.nations[id] || !state.players[id]) continue;
+    state.players[id]!.trainedReserves = 0;
     const before = previous.has(id) ? humanStartingArmyMultiplierForContentV2(content, id) : 1;
     const after = next.has(id) ? humanStartingArmyMultiplierForContentV2(content, id) : 1;
     if (Math.abs(before - after) <= 0.000000001) continue;
     state.players[id]!.openingArmyBonus = null;
-    const canonicalReserves = initialTrainedReserveManpowerV2(
-      String(id),
-      initialNationArmyCapacityBenchmarkV2(content, id),
-      content,
-    );
-    const neutralReserveCapacity = nationalArmyCapacityAtOneXOpeningV2(state, content, id)
-      * TRAINED_RESERVE_CAPACITY_MULTIPLIER
-      * countryTraitFactorV2(id, 'reserve-capacity', {
-        humanControlled: next.has(id),
-        humanTraitMultiplier: next.has(id)
-          ? humanCountryTraitMultiplierForContentV2(content, id)
-          : undefined,
-      });
-    const reserveTerms = humanOpeningTrainedReserveTermsForContentV2(
-      content,
-      id,
-      canonicalReserves,
-      neutralReserveCapacity,
-      neutralReserveCapacity * after,
-      next.has(id),
-    );
-    state.players[id]!.trainedReserves = round(reserveTerms.trainedReserves, 9);
     for (const territory of Object.values(state.territories)) {
       if (territory.owner !== id) continue;
       territory.army.manpower = round(territory.army.manpower / before * after, 9);
@@ -206,7 +170,6 @@ export function createNationStateV2(
 ): NationStateV2 {
   const definition = content.nations[id];
   if (!definition) throw new Error(`Missing V2 nation content for ${id}.`);
-  const initialArmyCapacity = initialNationArmyCapacityBenchmarkV2(content, id);
   return {
     empireName: '',
     treasury: openingStartingTreasuryV2(id, content, humanControlled),
@@ -214,7 +177,8 @@ export function createNationStateV2(
     foodStock: 0,
     domesticFoodCapacity: 0,
     foodSecurity: 1,
-    trainedReserves: initialTrainedReserveManpowerV2(String(id), initialArmyCapacity, content),
+    // Persisted only so old saves and reconnect snapshots retain their shape.
+    trainedReserves: 0,
     budget: { ...DEFAULT_BUDGET_V2 },
     research: {
       allocations: { ...DEFAULT_RESEARCH_ALLOCATIONS_V2 },

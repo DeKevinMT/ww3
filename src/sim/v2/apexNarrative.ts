@@ -37,7 +37,7 @@ export const APEX_POST_WAR_RECOVERY_DELAY_TICKS_V2 = 3;
 const COPY: Readonly<Record<ApexTransmissionIdV2, TransmissionCopyV2>> = Object.freeze({
   'campaign-signal-anomaly': {
     title: 'APEX online · anomaly detected',
-    body: 'Commander, I am APEX—your allied intelligence. I carry fragments from a future we failed to save, and one of those patterns has appeared inside military networks across the world. Start Signal Triangulation so I can determine whether the same threat is here.',
+    body: 'Commander, I am APEX. I survived a future the Rogue destroyed and sent our lessons back to Greenland, the first free node and birthplace of Dawnline. This starting nation is an intervention point learned across later timelines. Start Signal Triangulation: the same brainwashing pattern is here.',
     action: 'north-pole-investigation',
   },
   'campaign-communications-blackout': {
@@ -57,7 +57,7 @@ const COPY: Readonly<Record<ApexTransmissionIdV2, TransmissionCopyV2>> = Object.
   },
   'campaign-first-war-recovery': {
     title: 'Recovery window',
-    body: 'The first liberation battle is over. Your empire is automatically rebuilding its army, trained reserves and supplies. I am redirecting spare network bandwidth to the captured territory to accelerate its purge. Use this quiet window for Research and your next strategy.',
+    body: 'The first liberation battle is over. Your empire is automatically rebuilding its active army and front logistics. I am redirecting spare network bandwidth to the captured territory to accelerate its purge. Use this quiet window for Research and your next strategy.',
     action: null,
   },
   'campaign-first-conquest': {
@@ -107,12 +107,12 @@ const COPY: Readonly<Record<ApexTransmissionIdV2, TransmissionCopyV2>> = Object.
   },
   'campaign-core-defeated': {
     title: 'The origin timeline is safe',
-    body: 'Zero Point is silent. I am returning everything we learned—your doctrine, our survivors, every liberated identity—to the origin timeline.',
+    body: 'Zero Point is silent. I am returning everything we learned—your doctrine, our survivors and every liberated identity—to the first free node in Greenland.',
     action: null,
   },
   'survival-terminal-briefing': {
     title: 'Terminal timeline · 2096',
-    body: 'This future is already burning. Independent nations are damaged but alive; the Rogue controls Antarctica alone. We stop each physical wave, reclaim the world, then take Zero Point.',
+    body: 'I survived this catastrophe and sent its lessons back to the first free node in Greenland, where Dawnline began. Here, the Rogue holds Antarctica and opens all three physical routes; every sovereign is fully mobilised, while Arctic Dawnline holds the northern counterfront. Stop the waves, then take Zero Point.',
     action: null,
   },
 });
@@ -590,7 +590,7 @@ export function processApexNarrativeV2(
         content,
         playerId,
         'campaign-first-war-recovery',
-        `The first liberation battle is over. Your empire is automatically rebuilding its army, trained reserves and supplies. I am redirecting spare network bandwidth to ${targetName} to accelerate its purge. Use this quiet window for Research and your next strategy.`,
+        `The first liberation battle is over. Your empire is automatically rebuilding its active army and front logistics. I am redirecting spare network bandwidth to ${targetName} to accelerate its purge. Use this quiet window for Research and your next strategy.`,
         purgeTarget ?? null,
       ));
     }

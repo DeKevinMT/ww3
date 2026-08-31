@@ -228,9 +228,12 @@ describe('V2 legacy save migration', () => {
       supply: 3,
       'casualty-reduction': 3,
       'research-efficiency': 4,
-      'force-capacity': 4,
-      'reserve-training': 6,
-      'reserve-mobilization': 7,
+      // The authenticated legacy payouts first step down by two, then migrate
+      // once into their direct active-army replacements.
+      'force-capacity': 11,
+      training: 6,
+      'reserve-training': 0,
+      'reserve-mobilization': 0,
       attack: 3,
       defense: 4,
       'research-speed': 9,
@@ -665,21 +668,21 @@ describe('V2 legacy save migration', () => {
       .toThrow(/non-canonical keys/i);
   });
 
-  it('requires trained reserves in current saves and round-trips them through the canonical hash', () => {
+  it('requires the zeroed reserve compatibility key in current saves and canonical hashes', () => {
     const state = createWorldStateV2(8_602);
     const belgium = nationIdV2('bel');
-    state.players[belgium].trainedReserves = 1.234567;
+    state.players[belgium].trainedReserves = 0;
     const save = createSaveV2(state, WORLD_CONTENT_V2);
     const loaded = loadSaveV2(save, WORLD_CONTENT_V2);
-    expect(loaded.players[belgium].trainedReserves).toBe(1.234567);
+    expect(loaded.players[belgium].trainedReserves).toBe(0);
     expect(createSaveV2(loaded, WORLD_CONTENT_V2).canonicalStateHash)
       .toBe(save.canonicalStateHash);
 
     const missing = structuredClone(save) as Record<string, any>;
     delete missing.players[belgium].trainedReserves;
     missing.canonicalStateHash = canonicalStateHashV2(missing);
-    expect(() => loadSaveV2(missing as never, WORLD_CONTENT_V2))
-      .toThrow(/non-canonical keys|invalid scalar/i);
+    expect(loadSaveV2(missing as never, WORLD_CONTENT_V2)
+      .players[belgium].trainedReserves).toBe(0);
 
     const leakedLegacy = legacySaveV19(8_603);
     leakedLegacy.players[belgium].trainedReserves = 1;

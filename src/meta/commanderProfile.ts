@@ -8,16 +8,20 @@ import {
 export const COMMANDER_PROFILE_SCHEMA_VERSION = 1 as const;
 export const STARTER_COUNTRY_ID = 'grl' as const;
 export const STARTER_COUNTRY_POOL_SIZE = 1;
-/** Campaign seed money; a fresh account must earn the remainder of its first Survival entry. */
+/** A fresh account can enter one Survival run; later entries must be earned through Campaign play. */
 export const STARTING_COMMAND_CREDITS_V1 = 50;
 /** Charged once per local commander seat when a new Survival timeline actually launches. */
-export const SURVIVAL_DEPLOYMENT_CREDIT_COST_V1 = 100;
+export const SURVIVAL_DEPLOYMENT_CREDIT_COST_V1 = 50;
 export const MAX_COUNTRY_UPGRADE_LEVEL = 5;
 export const MAX_COUNTRY_MASTERY_LEVEL = 150;
 /** Authored milestones end here; every talent remains repeatable afterwards. */
 export const COMMANDER_TALENT_CORE_RANK = 15;
 export const COUNTRY_LOADOUT_CATALOG_VERSION = 1 as const;
-export const COUNTRY_MASTERY_OPENING_BONUS_PER_LEVEL = 0.0025;
+/** Every country-mastery level adds durable live Army Capacity. */
+export const COUNTRY_MASTERY_CAPACITY_BONUS_PER_LEVEL_V1 = 0.0025;
+/** @deprecated Compatibility alias for old imports and frozen profile tooling. */
+export const COUNTRY_MASTERY_OPENING_BONUS_PER_LEVEL
+  = COUNTRY_MASTERY_CAPACITY_BONUS_PER_LEVEL_V1;
 /**
  * Capacity eventually becomes real combat mass, so it cannot be priced like a
  * narrow support stat. One point is deliberately close to the weighted Power
@@ -27,8 +31,9 @@ export const COUNTRY_MASTERY_OPENING_BONUS_PER_LEVEL = 0.0025;
 export const COUNTRY_MASTERY_FORCE_CAPACITY_PER_POINT_V1 = 0.01;
 export const COUNTRY_MASTERY_FIREPOWER_PER_POINT_V1 = 0.015;
 export const COUNTRY_MASTERY_DEFENSE_PER_POINT_V1 = 0.015;
-export const COUNTRY_MASTERY_RECRUITMENT_PER_POINT_V1 = 0.02;
-export const COUNTRY_MASTERY_RESERVE_TRAINING_PER_POINT_V1 = 0.025;
+export const COUNTRY_MASTERY_RECRUITMENT_PER_POINT_V1 = 0.025;
+/** Retired save/runtime field: Mobilization now feeds active recruitment only. */
+export const COUNTRY_MASTERY_RESERVE_TRAINING_PER_POINT_V1 = 0;
 export const COUNTRY_MASTERY_LAND_SUPPLY_PER_POINT_V1 = 0.02;
 export const COUNTRY_MASTERY_LAND_TRANSFER_PER_POINT_V1 = 0.015;
 export const COUNTRY_MASTERY_NAVAL_SUPPLY_PER_POINT_V1 = 0.015;
@@ -37,6 +42,14 @@ export const COUNTRY_MASTERY_NAVAL_COST_FACTOR_PER_POINT_V1 = 0.995;
 export const COUNTRY_MASTERY_RECRUITMENT_COST_FACTOR_PER_POINT_V1 = 0.99;
 export const COUNTRY_MASTERY_OPERATING_COST_FACTOR_PER_POINT_V1 = 0.9925;
 export const COUNTRY_MASTERY_CASUALTY_FACTOR_PER_POINT_V1 = 0.99;
+/**
+ * Greenland's hidden curve whispers early but remains a long-term project.
+ * It begins after ten genuinely committed points, is visibly unusual around
+ * rank twenty, then accelerates smoothly toward a bounded rank-150 renaissance.
+ */
+export const GREENLAND_DEEP_MASTERY_START_LEVEL_V1 = 10;
+export const GREENLAND_DEEP_MASTERY_MAX_CAPACITY_MULTIPLIER_V1 = 14;
+export const GREENLAND_DEEP_MASTERY_MAX_QUALITY_MULTIPLIER_V1 = 10;
 /** Legacy save field. Country traits are retired; mastery owns national identity. */
 export const BASE_COUNTRY_TRAIT_SCALE_V1 = 0;
 
@@ -95,7 +108,7 @@ export interface CountryMasteryAllocationsV1 {
 
 /** Exact linear military effects frozen into every new campaign loadout. */
 export interface ResolvedCountryMasteryMilitaryEffectsV1 {
-  /** Free baseline from country experience; never affects GDP or treasury. */
+  /** Retired compatibility field. Mastery levels now raise live Army Capacity. */
   openingArmyMultiplier: number;
   armyCapacityMultiplier: number;
   attackMultiplier: number;
@@ -207,23 +220,23 @@ export interface CommanderTalentAllocationQuoteV1 {
 export interface ResolvedCommanderTalentEffectsV1 {
   /** Fraction added to the shield's maximum Energy pool. */
   maxIntegrityBonus: number;
-  /** Fraction of Max Energy available as protected Reserve Energy. */
+  /** Fraction of Max Energy available as protected Backup Energy. */
   rechargeBufferBonus: number;
   /** Fraction added to peacetime shield recharge speed. */
   rechargeRateBonus: number;
   /** Fraction added to the existing national army's Attack while the shield is online. */
   armyAttackBonus: number;
-  /** Fraction added to APEX's bounded, non-personnel Pulse Attack. */
+  /** Compatibility carrier for attack-side shield Energy efficiency. */
   pulseAttackBonus: number;
-  /** Share of Pulse power retained instead of being lost when the network splits across fronts. */
+  /** Attack-side shield efficiency retained when the network splits across fronts. */
   pulseProjectionRetention: number;
-  /** Extra Pulse multiplier for each stored offensive charge (zero, one or two). */
+  /** Extra attack-side shield efficiency per stored charge (zero, one or two). */
   pulseChargeBonusPerStep: number;
   /** Extra damage blocked by each point of APEX Energy. */
   interceptEfficiencyBonus: number;
-  /** Share of Energy spent intercepting a hit that is banked as offline Reserve Energy. */
+  /** Share of Energy spent intercepting a hit that is banked as offline Backup Energy. */
   impactRecoveryShare: number;
-  /** Extra Pulse Attack applied only while APEX supports the defending side. */
+  /** Extra shield Energy efficiency applied only on a defending front. */
   defensivePulseBonus: number;
   /** Fraction added to the existing national army's Defense while the shield is online. */
   armyDefenseBonus: number;
@@ -236,12 +249,12 @@ export interface ResolvedCommanderTalentEffectsV1 {
 /** One account-wide APEX neural shield. */
 export const BASE_COMMANDER_FORCE_V1 = Object.freeze({
   /** Empire-wide shield Energy; every fresh campaign starts fully charged. */
-  integrity: 0.001,
-  maxIntegrity: 0.001,
+  integrity: 0.002,
+  maxIntegrity: 0.002,
   /** Protected energy that can refill the same shield. */
   rechargeBuffer: 0.00004,
-  /** Bounded battle pulse; it never becomes personnel or survives without a national Army. */
-  pulseAttack: 0.001,
+  /** Retired compatibility field. APEX no longer deals direct damage. */
+  pulseAttack: 0,
   attackMultiplier: 1.12,
   defenseMultiplier: 1.07,
   treasury: 0,
@@ -334,6 +347,11 @@ export interface CampaignRewardInputV1 {
   highestSurvivalWave: number;
   /** Millions of verified post-launch Rogue-wave personnel destroyed. */
   verifiedRogueWaveLosses?: number;
+  /**
+   * Unique Antarctic territory IDs currently held and absent from the campaign
+   * baseline, reduced to a count. Survival ignores ordinary territory.
+   */
+  antarcticTerritoriesCaptured?: number;
   militaryLosses: number;
 }
 
@@ -409,16 +427,16 @@ export const COMMANDER_DOCTRINES_V1: readonly CommanderDoctrineDefinitionV1[] = 
   {
     id: 'vanguard',
     label: 'Overdrive',
-    role: 'PULSE WARFARE CAPSTONE',
+    role: 'ASSAULT SHIELD CAPSTONE',
     requirement: { talentId: 'elite-vanguard', rank: 5, label: 'Overdrive Core Rank 5' },
-    description: 'Every third supported attack doubles APEX Pulse Attack only, then spends 2% Max Energy. Army Attack never changes.',
+    description: 'Every third supported attack makes the shield block the same damage for twice as little Energy.',
   },
   {
     id: 'bastion',
-    label: 'Countermeasure',
-    role: 'REACTIVE MATRIX CAPSTONE',
-    requirement: { talentId: 'doctrine-command', rank: 5, label: 'Countermeasure Core Rank 5' },
-    description: 'Returns 15% of damage actually intercepted by APEX, within the hostile Army’s remaining 10% hit budget.',
+    label: 'Adaptive Barrier',
+    role: 'DEFENSIVE SHIELD CAPSTONE',
+    requirement: { talentId: 'doctrine-command', rank: 5, label: 'Adaptive Barrier Core Rank 5' },
+    description: 'Raises shield Energy efficiency by another 15% while defending.',
   },
   {
     id: 'rapid-response',
@@ -449,38 +467,38 @@ export function commanderDoctrineRequirementMetV1(
 
 export const COMMANDER_TALENTS_V1: readonly CommanderTalentDefinitionV1[] = [
   {
-    id: 'science-corps', branch: 'offensive', tier: 1, label: 'Pulse Output',
-    description: 'Raises APEX’s own Pulse Attack.',
-    perRank: '+2% Pulse Attack per effective rank. Shared Pulse ceiling: +200%.',
+    id: 'science-corps', branch: 'offensive', tier: 1, label: 'Forward Shield',
+    description: 'Makes APEX spend less Energy while shielding an attacking army.',
+    perRank: '+0.40% attack-side Energy efficiency per effective rank.',
     prerequisites: [], outsideBranchPoints: 0,
     milestones: [
-      { rank: 5, label: 'Pulse I', description: '+3.72% Pulse Attack.' },
-      { rank: 10, label: 'Pulse II', description: '+12.97% Pulse Attack.' },
-      { rank: 15, label: 'Pulse III', description: '+36% Pulse Attack.' },
+      { rank: 5, label: 'Forward Shield I', description: '+0.74% attack-side Energy efficiency.' },
+      { rank: 10, label: 'Forward Shield II', description: '+2.59% attack-side Energy efficiency.' },
+      { rank: 15, label: 'Forward Shield III', description: '+7.20% attack-side Energy efficiency.' },
     ],
     synergy: 'Opens Front Projection.', coreRank: COMMANDER_TALENT_CORE_RANK,
   },
   {
     id: 'treasury-reserve', branch: 'offensive', tier: 2, label: 'Front Projection',
-    description: 'Preserves more Pulse power when APEX supports several fronts at once.',
-    perRank: '+0.35% of otherwise-lost multi-front Pulse power retained per effective rank.',
+    description: 'Preserves attack-side shield efficiency when APEX covers several fronts.',
+    perRank: '+0.35% of otherwise-lost multi-front shield efficiency retained per effective rank.',
     prerequisites: [{ talentId: 'science-corps', rank: 3 }], outsideBranchPoints: 2,
     milestones: [
-      { rank: 5, label: 'Projection I', description: 'Retains 0.65% of split Pulse power.' },
-      { rank: 10, label: 'Projection II', description: 'Retains 2.27% of split Pulse power.' },
-      { rank: 15, label: 'Projection III', description: 'Retains 6.30% of split Pulse power.' },
+      { rank: 5, label: 'Projection I', description: 'Retains 0.65% of split shield efficiency.' },
+      { rank: 10, label: 'Projection II', description: 'Retains 2.27% of split shield efficiency.' },
+      { rank: 15, label: 'Projection III', description: 'Retains 6.30% of split shield efficiency.' },
     ],
-    synergy: 'Requires Pulse Output Rank 3 and 2 points outside Pulse Warfare.', coreRank: COMMANDER_TALENT_CORE_RANK,
+    synergy: 'Requires Forward Shield Rank 3 and 2 points outside Assault Shield.', coreRank: COMMANDER_TALENT_CORE_RANK,
   },
   {
-    id: 'elite-vanguard', branch: 'offensive', tier: 3, label: 'Pulse Charge',
-    description: 'Builds stronger Pulse charge across consecutive supported attacks, then unlocks Overdrive.',
-    perRank: '+0.50% Pulse Attack per stored charge and effective rank. APEX stores up to two charges.',
+    id: 'elite-vanguard', branch: 'offensive', tier: 3, label: 'Shield Charge',
+    description: 'Builds attack-side Energy efficiency across consecutive supported attacks, then unlocks Overdrive.',
+    perRank: '+0.50% attack-side Energy efficiency per stored charge and effective rank. APEX stores up to two charges.',
     prerequisites: [{ talentId: 'treasury-reserve', rank: 3 }], outsideBranchPoints: 4,
     milestones: [
-      { rank: 5, label: 'Overdrive', description: '+0.93% Pulse per stored charge · unlock: every third supported attack doubles Pulse only and spends 2% Max Energy.' },
-      { rank: 10, label: 'Charge II', description: '+3.24% Pulse per stored charge.' },
-      { rank: 15, label: 'Charge III', description: '+9% Pulse per stored charge.' },
+      { rank: 5, label: 'Overdrive', description: '+0.93% efficiency per charge · unlock: every third supported attack uses half Energy.' },
+      { rank: 10, label: 'Charge II', description: '+3.24% efficiency per charge.' },
+      { rank: 15, label: 'Charge III', description: '+9% efficiency per charge.' },
     ],
     synergy: 'Unlocks Overdrive at Rank 5.', coreRank: COMMANDER_TALENT_CORE_RANK,
   },
@@ -498,27 +516,27 @@ export const COMMANDER_TALENTS_V1: readonly CommanderTalentDefinitionV1[] = [
   },
   {
     id: 'civil-defense', branch: 'defensive', tier: 2, label: 'Impact Recovery',
-    description: 'Banks part of the Energy spent blocking a hit as offline Reserve Energy for later recovery.',
-    perRank: '+0.35% of spent Energy recovered to Reserve per effective rank.',
+    description: 'Banks part of the Energy spent blocking a hit as offline Backup Energy for later recovery.',
+    perRank: '+0.35% of spent Energy recovered to Backup per effective rank.',
     prerequisites: [{ talentId: 'volunteer-brigade', rank: 3 }], outsideBranchPoints: 2,
     milestones: [
-      { rank: 5, label: 'Recovery I', description: 'Recovers 0.65% of spent Energy to Reserve.' },
-      { rank: 10, label: 'Recovery II', description: 'Recovers 2.27% of spent Energy to Reserve.' },
-      { rank: 15, label: 'Recovery III', description: 'Recovers 6.30% of spent Energy to Reserve.' },
+      { rank: 5, label: 'Recovery I', description: 'Recovers 0.65% of spent Energy to Backup.' },
+      { rank: 10, label: 'Recovery II', description: 'Recovers 2.27% of spent Energy to Backup.' },
+      { rank: 15, label: 'Recovery III', description: 'Recovers 6.30% of spent Energy to Backup.' },
     ],
     synergy: 'Requires Energy Efficiency Rank 3 and 2 points outside Reactive Matrix.', coreRank: COMMANDER_TALENT_CORE_RANK,
   },
   {
-    id: 'doctrine-command', branch: 'defensive', tier: 3, label: 'Defense Pulse',
-    description: 'Raises APEX Pulse only while defending, then unlocks bounded Countermeasure reflection.',
-    perRank: '+1% defensive Pulse Attack per effective rank.',
+    id: 'doctrine-command', branch: 'defensive', tier: 3, label: 'Adaptive Shield',
+    description: 'Makes APEX spend less Energy while shielding a defending army.',
+    perRank: '+1% defensive Energy efficiency per effective rank.',
     prerequisites: [{ talentId: 'civil-defense', rank: 3 }], outsideBranchPoints: 4,
     milestones: [
-      { rank: 5, label: 'Countermeasure', description: '+1.86% defensive Pulse · unlock: return 15% of intercepted damage inside the hostile 10% hit budget.' },
-      { rank: 10, label: 'Defense Pulse II', description: '+6.49% defensive Pulse.' },
-      { rank: 15, label: 'Defense Pulse III', description: '+18% defensive Pulse.' },
+      { rank: 5, label: 'Adaptive Barrier', description: '+1.86% defensive efficiency · unlock: another +15% defensive Energy efficiency.' },
+      { rank: 10, label: 'Adaptive Shield II', description: '+6.49% defensive Energy efficiency.' },
+      { rank: 15, label: 'Adaptive Shield III', description: '+18% defensive Energy efficiency.' },
     ],
-    synergy: 'Unlocks Countermeasure at Rank 5.', coreRank: COMMANDER_TALENT_CORE_RANK,
+    synergy: 'Unlocks Adaptive Barrier at Rank 5.', coreRank: COMMANDER_TALENT_CORE_RANK,
   },
   {
     id: 'reserve-cadre', branch: 'shield-core', tier: 1, label: 'Max Energy',
@@ -545,14 +563,14 @@ export const COMMANDER_TALENTS_V1: readonly CommanderTalentDefinitionV1[] = [
     synergy: 'Requires Max Energy Rank 3 and 2 points outside Energy Core.', coreRank: COMMANDER_TALENT_CORE_RANK,
   },
   {
-    id: 'frugal-quartermaster', branch: 'shield-core', tier: 3, label: 'Reserve Energy',
-    description: 'Expands protected Reserve Energy, then unlocks one emergency restart.',
-    perRank: '+1% Reserve Energy per effective rank; capped at +60%.',
+    id: 'frugal-quartermaster', branch: 'shield-core', tier: 3, label: 'Backup Energy',
+    description: 'Expands protected Backup Energy, then unlocks one emergency restart.',
+    perRank: '+1% Backup Energy per effective rank; capped at +60%.',
     prerequisites: [{ talentId: 'drill-instructors', rank: 3 }], outsideBranchPoints: 4,
     milestones: [
-      { rank: 5, label: 'Emergency Reboot', description: '+1.86% Reserve Energy · unlock: once per campaign, 0% Energy immediately restores to 20% after battle.' },
-      { rank: 10, label: 'Reserve II', description: '+6.49% Reserve Energy.' },
-      { rank: 15, label: 'Reserve III', description: '+18% Reserve Energy.' },
+      { rank: 5, label: 'Emergency Reboot', description: '+1.86% Backup Energy · unlock: once per campaign, 0% Energy immediately restores to 20% after battle.' },
+      { rank: 10, label: 'Backup II', description: '+6.49% Backup Energy.' },
+      { rank: 15, label: 'Backup III', description: '+18% Backup Energy.' },
     ],
     synergy: 'Unlocks Emergency Reboot at Rank 5.', coreRank: COMMANDER_TALENT_CORE_RANK,
   },
@@ -794,8 +812,6 @@ const commanderLevelEffectiveGrowthV1 = (level: number): number => {
 const COMMANDER_SHIELD_CORE_LEVEL_V1 = 50;
 const COMMANDER_SHIELD_CORE_MULTIPLIER_V1 = 12;
 const COMMANDER_SHIELD_TAIL_LIMIT_MULTIPLIER_V1 = 120;
-const COMMANDER_PULSE_CORE_MULTIPLIER_V1 = 18;
-const COMMANDER_PULSE_TAIL_LIMIT_MULTIPLIER_V1 = 180;
 
 function commanderLevelConvexMultiplierV1(
   level: number,
@@ -844,18 +860,12 @@ export function commanderMaxIntegrityV1(
   );
 }
 
-/** Exact bounded battle pulse; it never creates manpower or holds territory. */
+/** Retired compatibility selector. APEX no longer deals direct damage. */
 export function commanderPulseAttackV1(
-  level: number,
-  talents: Readonly<Partial<Record<CommanderTalentId, number>>>,
+  _level: number,
+  _talents: Readonly<Partial<Record<CommanderTalentId, number>>>,
 ): number {
-  const levelMultiplier = commanderLevelConvexMultiplierV1(
-    level,
-    COMMANDER_PULSE_CORE_MULTIPLIER_V1,
-    COMMANDER_PULSE_TAIL_LIMIT_MULTIPLIER_V1,
-  );
-  const talentMultiplier = 1 + resolveCommanderTalentEffectsV1(talents).pulseAttackBonus;
-  return roundForceValueV1(BASE_COMMANDER_FORCE_V1.pulseAttack * levelMultiplier * talentMultiplier);
+  return 0;
 }
 
 export function commanderTalentPointsSpentV1(profile: CommanderProfileV1): number {
@@ -1020,10 +1030,15 @@ export function countryMasteryXpDifficultyMultiplierV1(
   return Math.round((1 + 11 * strongestShare ** 2) * 1_000) / 1_000;
 }
 
-/** Level 1 is neutral; experience now strengthens only the country's opening army. */
-export function countryMasteryOpeningBonusV1(level: number): number {
+/** Level 1 is neutral; every later level adds a small permanent capacity bonus. */
+export function countryMasteryCapacityBonusV1(level: number): number {
   const bounded = integerInRange(level, 1, MAX_COUNTRY_MASTERY_LEVEL);
-  return (bounded - 1) * COUNTRY_MASTERY_OPENING_BONUS_PER_LEVEL;
+  return (bounded - 1) * COUNTRY_MASTERY_CAPACITY_BONUS_PER_LEVEL_V1;
+}
+
+/** @deprecated Use countryMasteryCapacityBonusV1. */
+export function countryMasteryOpeningBonusV1(level: number): number {
+  return countryMasteryCapacityBonusV1(level);
 }
 
 /** One military mastery point is earned for every country level above one. */
@@ -1082,20 +1097,45 @@ const roundMasteryMultiplierV1 = (value: number): number => (
 export function resolveCountryMasteryMilitaryEffectsV1(
   level: number,
   allocations: Readonly<Partial<CountryMasteryAllocationsV1>>,
+  countryId?: string,
 ): ResolvedCountryMasteryMilitaryEffectsV1 {
   const normalized = normalizeCountryMasteryAllocationsV1(allocations, level);
+  const pointsSpent = COUNTRY_MASTERY_TRACK_IDS_V1.reduce(
+    (sum, track) => sum + normalized[track],
+    0,
+  );
+  const deepestCommittedLevel = Math.min(
+    integerInRange(level, 1, MAX_COUNTRY_MASTERY_LEVEL),
+    pointsSpent + 1,
+  );
+  const greenlandLinearProgress = countryId?.trim().toLocaleLowerCase('en') === STARTER_COUNTRY_ID
+    ? Math.max(0, Math.min(1,
+      (deepestCommittedLevel - GREENLAND_DEEP_MASTERY_START_LEVEL_V1)
+        / (MAX_COUNTRY_MASTERY_LEVEL - GREENLAND_DEEP_MASTERY_START_LEVEL_V1),
+    ))
+    : 0;
+  // A quadratic rise makes the secret visible around rank twenty without
+  // turning early Greenland into an optimal shortcut. Most strength remains
+  // in the long climb, and no single point creates an abrupt Power jump.
+  const greenlandDeepProgress = greenlandLinearProgress * greenlandLinearProgress;
+  const greenlandCapacityMultiplier = 1 + greenlandDeepProgress
+    * (GREENLAND_DEEP_MASTERY_MAX_CAPACITY_MULTIPLIER_V1 - 1);
+  const greenlandQualityMultiplier = 1 + greenlandDeepProgress
+    * (GREENLAND_DEEP_MASTERY_MAX_QUALITY_MULTIPLIER_V1 - 1);
   return {
-    openingArmyMultiplier: roundMasteryMultiplierV1(
-      1 + countryMasteryOpeningBonusV1(level),
-    ),
+    openingArmyMultiplier: 1,
     armyCapacityMultiplier: roundMasteryMultiplierV1(
-      1 + normalized.force * COUNTRY_MASTERY_FORCE_CAPACITY_PER_POINT_V1,
+      (1 + countryMasteryCapacityBonusV1(level))
+        * (1 + normalized.force * COUNTRY_MASTERY_FORCE_CAPACITY_PER_POINT_V1)
+        * greenlandCapacityMultiplier,
     ),
     attackMultiplier: roundMasteryMultiplierV1(
-      1 + normalized.firepower * COUNTRY_MASTERY_FIREPOWER_PER_POINT_V1,
+      (1 + normalized.firepower * COUNTRY_MASTERY_FIREPOWER_PER_POINT_V1)
+        * greenlandQualityMultiplier,
     ),
     defenseMultiplier: roundMasteryMultiplierV1(
-      1 + normalized.defense * COUNTRY_MASTERY_DEFENSE_PER_POINT_V1,
+      (1 + normalized.defense * COUNTRY_MASTERY_DEFENSE_PER_POINT_V1)
+        * greenlandQualityMultiplier,
     ),
     recruitmentMultiplier: roundMasteryMultiplierV1(
       1 + normalized.mobilization * COUNTRY_MASTERY_RECRUITMENT_PER_POINT_V1,
@@ -1540,7 +1580,6 @@ export function resolveCommanderTalentEffectsV1(
 
   // The other three branches modify different parts of APEX. No node is a
   // disguised bundle of Max Energy, Recharge and Army power anymore.
-  const pulseAttack = effective('science-corps') * 0.02;
   const pulseProjectionRetention = effective('treasury-reserve') * 0.0035;
   const pulseChargeBonusPerStep = effective('elite-vanguard') * 0.005;
   const interceptEfficiency = effective('volunteer-brigade') * 0.005;
@@ -1555,7 +1594,7 @@ export function resolveCommanderTalentEffectsV1(
     rechargeBufferBonus: roundForceValueV1(Math.min(0.75, rechargeBuffer)),
     rechargeRateBonus: roundForceValueV1(Math.min(2.5, rechargeRate)),
     armyAttackBonus: roundForceValueV1(Math.min(0.35, armyAttack)),
-    pulseAttackBonus: roundForceValueV1(Math.min(2, pulseAttack)),
+    pulseAttackBonus: roundForceValueV1(Math.min(0.20, effective('science-corps') * 0.004)),
     pulseProjectionRetention: roundForceValueV1(Math.min(0.35, pulseProjectionRetention)),
     pulseChargeBonusPerStep: roundForceValueV1(Math.min(0.45, pulseChargeBonusPerStep)),
     interceptEfficiencyBonus: roundForceValueV1(Math.min(0.45, interceptEfficiency)),
@@ -1592,6 +1631,7 @@ export function resolveCountryLoadoutV1(
   const masteryMilitary = resolveCountryMasteryMilitaryEffectsV1(
     masteryLevel,
     masteryAllocations,
+    countryId,
   );
   return {
     catalogVersion: COUNTRY_LOADOUT_CATALOG_VERSION,
@@ -1603,10 +1643,10 @@ export function resolveCountryLoadoutV1(
     masteryMilitary,
     upgrades: { ...upgrades },
     openingArmyMultiplier: roundMasteryMultiplierV1(
-      (1 + upgrades.mobilization * 0.04) * masteryMilitary.openingArmyMultiplier,
+      1 + upgrades.mobilization * 0.04,
     ),
     openingEconomyMultiplier: roundMasteryMultiplierV1(1 + upgrades.economy * 0.04),
-    masteryOpeningArmyMultiplier: masteryMilitary.openingArmyMultiplier,
+    masteryOpeningArmyMultiplier: 1,
     masteryOpeningEconomyMultiplier: 1,
     traitScale: 0,
     commanderLevel: profile.commanderLevel,
@@ -1637,7 +1677,6 @@ export function resolveCommanderForceInitializationV1(
     ? loadout.activeDoctrine : null;
   const levelGrowth = commanderLevelEffectiveGrowthV1(loadout.commanderLevel);
   const maxIntegrity = commanderMaxIntegrityV1(loadout.commanderLevel, talents);
-  const pulseAttack = commanderPulseAttackV1(loadout.commanderLevel, talents);
   const rechargeBuffer = roundForceValueV1(
     Math.min(
       maxIntegrity,
@@ -1651,7 +1690,9 @@ export function resolveCommanderForceInitializationV1(
       maxIntegrity,
       rechargeBuffer,
       rechargeMultiplier: 1 + effects.rechargeRateBonus,
-      pulseAttack,
+      // Serialized compatibility carrier: attack-side Energy efficiency only.
+      // Human battle formations always expose zero direct Pulse damage.
+      pulseAttack: effects.pulseAttackBonus,
       pulseProjectionRetention: effects.pulseProjectionRetention,
       pulseChargeBonusPerStep: effects.pulseChargeBonusPerStep,
       interceptEfficiency: 1 + effects.interceptEfficiencyBonus,
@@ -2211,23 +2252,34 @@ export function calculateCampaignRewardV1(input: CampaignRewardInputV1): Campaig
   const verifiedRogueWaveLosses = input.mode === 'survival'
     ? finiteNonNegative(input.verifiedRogueWaveLosses ?? 0)
     : 0;
+  const antarcticTerritoriesCaptured = input.mode === 'survival'
+    ? Math.floor(finiteNonNegative(input.antarcticTerritoriesCaptured ?? 0))
+    : 0;
   const losses = finiteNonNegative(input.militaryLosses);
-  const rewardEligible = input.mode !== 'random-world';
-  // Time alone is never progress. This keeps End Campaign outcome-neutral while
-  // closing the open -> idle -> surrender reward loop completely.
-  const meaningfulRun = rewardEligible && (territories > 0 || territoriesLost > 0 || warsFought > 0
-    || wave > 0 || verifiedRogueWaveLosses > 0);
+  // Time alone is never Campaign progress. This keeps End Campaign
+  // outcome-neutral while closing the open -> idle -> surrender reward loop.
+  const meaningfulStandardRun = input.mode === 'standard-2026'
+    && (territories > 0 || territoriesLost > 0 || warsFought > 0);
   const warsWithoutVictory = Math.max(0, warsFought - warsWon);
   const modeMultiplier = MODE_XP_MULTIPLIER[input.mode];
   const outcomeMultiplier = OUTCOME_XP_MULTIPLIER[input.outcome];
-  const rawMasteryXp = meaningfulRun ? (
+  const standardRawMasteryXp = meaningfulStandardRun ? (
     8 + Math.min(90, Math.round(3 * Math.sqrt(weeks)))
       + Math.min(120, territories * 8)
       + Math.min(120, warsWon * 12)
       + Math.min(40, warsWithoutVictory * 4)
-      + Math.min(120, wave * 10)
-      + Math.min(10, Math.round(verifiedRogueWaveLosses * 4))
   ) * Math.min(1.1, modeMultiplier) * MASTERY_OUTCOME_MULTIPLIER[input.outcome] : 0;
+  // Survival progression has exactly two physical sources: authenticated
+  // post-launch Rogue casualties and Antarctic territory captured since the
+  // campaign baseline. Time, waves, ordinary wars and the occupied world are
+  // report statistics only and cannot influence this value.
+  const survivalSourceXp = antarcticTerritoriesCaptured * 40
+    + (verifiedRogueWaveLosses > 0
+      ? Math.min(120, Math.max(1, Math.ceil(verifiedRogueWaveLosses * 4)))
+      : 0);
+  const rawMasteryXp = input.mode === 'survival'
+    ? survivalSourceXp * modeMultiplier * MASTERY_OUTCOME_MULTIPLIER[input.outcome]
+    : standardRawMasteryXp;
   const masteryXp = Math.max(0, Math.round(rawMasteryXp));
   const commanderXp = Math.max(0, Math.round(rawMasteryXp * 0.6));
   // Credits reward demonstrated Campaign activity, never the selected outcome
@@ -2246,11 +2298,15 @@ export function calculateCampaignRewardV1(input: CampaignRewardInputV1): Campaig
         + Math.min(6, warsWithoutVictory * 2),
     )))
     : 0;
-  const score = Math.max(0, Math.round(
-    weeks + territories * 125 + warsWon * 90 + warsWithoutVictory * 25 + wave * 160
-      + Math.min(500, verifiedRogueWaveLosses * 1_000)
-      - Math.min(2_000, losses * 8),
-  ));
+  const score = input.mode === 'survival'
+    ? Math.max(0, Math.round(
+      antarcticTerritoriesCaptured * 250
+        + Math.min(500, verifiedRogueWaveLosses * 1_000),
+    ))
+    : Math.max(0, Math.round(
+      weeks + territories * 125 + warsWon * 90 + warsWithoutVictory * 25
+        - Math.min(2_000, losses * 8),
+    ));
   return {
     ...input,
     weeksSurvived: weeks,
@@ -2260,6 +2316,7 @@ export function calculateCampaignRewardV1(input: CampaignRewardInputV1): Campaig
     warsFought,
     highestSurvivalWave: wave,
     verifiedRogueWaveLosses,
+    antarcticTerritoriesCaptured,
     militaryLosses: losses,
     modeMultiplier,
     outcomeMultiplier,

@@ -442,36 +442,12 @@ export function humanStartingArmyBaseCurveMultiplierForContentV2(
   return humanStartingArmyMultiplierFromRankFactorV2(smoothRank);
 }
 
-/**
- * Human-only opening reserve help for the bottom quartile. The immutable
- * scenario opening rank is the sole input; the top three quartiles stay 1x.
- */
+/** Retired compatibility quote: no opening seat receives a second personnel pool. */
 export function humanOpeningReserveMultiplierForContentV2(
-  content: WorldContentV2,
-  playerId: PlayerId | string,
+  _content: WorldContentV2,
+  _playerId: PlayerId | string,
 ): number {
-  const order = openingMilitaryOrderForContentV2(content);
-  const rank = openingMilitaryRankForContentV2(content, playerId);
-  if (!rank) return HUMAN_OPENING_RESERVE_MULTIPLIER_STRONGEST_V2;
-  const rankShare = (rank - 1) / Math.max(1, order.length - 1);
-  if (rankShare <= HUMAN_OPENING_RESERVE_BONUS_START_SHARE_V2) {
-    return HUMAN_OPENING_RESERVE_MULTIPLIER_STRONGEST_V2;
-  }
-  const progress = Math.min(1, Math.max(0,
-    (rankShare - HUMAN_OPENING_RESERVE_BONUS_START_SHARE_V2)
-      / (1 - HUMAN_OPENING_RESERVE_BONUS_START_SHARE_V2),
-  ));
-  const smoothProgress = progress * progress * (3 - 2 * progress);
-  const baseMultiplier = HUMAN_OPENING_RESERVE_MULTIPLIER_STRONGEST_V2
-    + (HUMAN_OPENING_RESERVE_BASE_CURVE_WEAKEST_MULTIPLIER_V2
-      - HUMAN_OPENING_RESERVE_MULTIPLIER_STRONGEST_V2) * smoothProgress;
-  if (rank <= order.length - HUMAN_EXTREME_UNDERDOG_COUNT_V2) return baseMultiplier;
-  const tailProgress = (
-    rank - (order.length - HUMAN_EXTREME_UNDERDOG_COUNT_V2)
-  ) / HUMAN_EXTREME_UNDERDOG_COUNT_V2;
-  const smoothTail = tailProgress * tailProgress * (3 - 2 * tailProgress);
-  return baseMultiplier
-    + (HUMAN_OPENING_RESERVE_MULTIPLIER_WEAKEST_V2 - baseMultiplier) * smoothTail;
+  return 1;
 }
 
 export function isExtremeOpeningUnderdogForContentV2(
@@ -494,9 +470,7 @@ export interface HumanOpeningTrainedReserveTermsV2 {
 }
 
 /**
- * Pure canonical quote used by simulation and country-choice presentation.
- * The weakest-ten floor is five percent before their final reserve multiplier,
- * and every result is capped by the live reserve capacity supplied by caller.
+ * Pure zero quote retained for save-compatible callers and old previews.
  */
 export function humanOpeningTrainedReserveTermsForContentV2(
   content: WorldContentV2,
@@ -506,30 +480,20 @@ export function humanOpeningTrainedReserveTermsForContentV2(
   liveReserveCapacityInput: number,
   humanControlled = true,
 ): HumanOpeningTrainedReserveTermsV2 {
-  const canonicalReserves = Number.isFinite(canonicalReservesInput)
-    ? Math.max(0, canonicalReservesInput) : 0;
-  const neutralReserveCapacity = Number.isFinite(neutralReserveCapacityInput)
-    ? Math.max(0, neutralReserveCapacityInput) : 0;
-  const liveReserveCapacity = Number.isFinite(liveReserveCapacityInput)
-    ? Math.max(0, liveReserveCapacityInput) : 0;
-  const armyMultiplier = humanStartingArmyMultiplierForContentV2(content, playerId);
-  const reserveMultiplier = !humanControlled ? 1
-    : String(playerId) === 'bel' ? armyMultiplier
-      : armyMultiplier < 1 ? armyMultiplier
-        : humanOpeningReserveMultiplierForContentV2(content, playerId);
-  const minimumBaseReserves = humanControlled
-    && isExtremeOpeningUnderdogForContentV2(content, playerId)
-    ? neutralReserveCapacity * 0.05
-    : 0;
-  const effectiveBaseReserves = Math.max(canonicalReserves, minimumBaseReserves);
+  void content;
+  void playerId;
+  void canonicalReservesInput;
+  void neutralReserveCapacityInput;
+  void liveReserveCapacityInput;
+  void humanControlled;
   return {
-    canonicalReserves,
-    neutralReserveCapacity,
-    liveReserveCapacity,
-    reserveMultiplier,
-    minimumBaseReserves,
-    effectiveBaseReserves,
-    trainedReserves: Math.min(liveReserveCapacity, effectiveBaseReserves * reserveMultiplier),
+    canonicalReserves: 0,
+    neutralReserveCapacity: 0,
+    liveReserveCapacity: 0,
+    reserveMultiplier: 1,
+    minimumBaseReserves: 0,
+    effectiveBaseReserves: 0,
+    trainedReserves: 0,
   };
 }
 
@@ -605,9 +569,9 @@ const TRAIT_MODIFIER_LABELS_V2: Readonly<Record<TraitModifierKeyV2, string>> = O
   'recruitment-throughput': 'recruitment throughput',
   'recruitment-cost': 'recruitment cost',
   'rapid-recruitment-cost': 'rapid recruitment cost',
-  'reserve-training': 'reserve training',
-  'reserve-capacity': 'trained reserve capacity',
-  'reserve-deployment-throughput': 'reserve deployment throughput',
+  'reserve-training': 'peacetime recruitment speed',
+  'reserve-capacity': 'active force capacity',
+  'reserve-deployment-throughput': 'reinforcement throughput',
   'military-casualties': 'military casualties',
   'army-upkeep': 'army upkeep',
   'tax-efficiency': 'tax revenue',

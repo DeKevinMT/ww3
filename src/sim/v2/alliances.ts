@@ -1,5 +1,6 @@
 import { ALLIANCE_OFFER_DURATION_TICKS } from './balance';
 import { isHumanPlayerV2 } from './humanPlayers';
+import { isSurvivalDawnlineNationV2 } from './survivalOrdinaryAi';
 import {
   relationKeyV2,
   selectActiveWarBetweenV2,
@@ -30,6 +31,14 @@ function compareAllianceOfferV2(left: AllianceOfferV2, right: AllianceOfferV2): 
 
 function livingHumanCountryV2(state: WorldStateV2, playerId: PlayerId): boolean {
   return isHumanPlayerV2(state, playerId)
+    && Boolean(state.players[playerId])
+    && !selectIsEliminatedV2(state, playerId);
+}
+
+function livingStrategicAllyV2(state: WorldStateV2, playerId: PlayerId): boolean {
+  return (isHumanPlayerV2(state, playerId)
+    || (state.contentVersion.startsWith('survival-v')
+      && isSurvivalDawnlineNationV2(state, playerId)))
     && Boolean(state.players[playerId])
     && !selectIsEliminatedV2(state, playerId);
 }
@@ -90,8 +99,10 @@ export function pruneAllianceStateV2(state: WorldStateV2): void {
   state.alliances ??= [];
   state.allianceOffers ??= [];
   state.alliances = state.alliances
-    .filter((alliance) => livingHumanCountryV2(state, alliance.leftId)
-      && livingHumanCountryV2(state, alliance.rightId))
+    .filter((alliance) => livingStrategicAllyV2(state, alliance.leftId)
+      && livingStrategicAllyV2(state, alliance.rightId)
+      && (isHumanPlayerV2(state, alliance.leftId)
+        || isHumanPlayerV2(state, alliance.rightId)))
     .sort(compareAllianceV2);
   state.allianceOffers = state.allianceOffers
     .filter((offer) => offer.expiresTick > state.tick

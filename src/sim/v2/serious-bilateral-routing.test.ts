@@ -23,7 +23,7 @@ describe('serious-mode bilateral wars and expedition routing', () => {
     expect(engine.state.aiEscalation.coalitionMembers).toEqual([]);
     expect(engine.allianceProposalStatus('bel', 'can')).toEqual({
       allowed: false,
-      reason: 'The Rogue Signal has shattered alliances; every country fights independently.',
+      reason: 'New alliances are unavailable in this Campaign.',
     });
   });
 

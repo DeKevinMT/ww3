@@ -37,7 +37,6 @@ describe('power-first War Report', () => {
       'apexSupplyDelivered',
       'apexSupplySpent',
       'apexSingularityPulses',
-      'apexMirrorCounterpulseDamage',
       'apexTwinProjectionBattles',
     ]) expect(report).toContain(`outcome.${field}`);
     expect(report).toContain('PEAK +${compactNumber(outcome.apexPeakPower)} APEX SUPPORT');
@@ -46,8 +45,7 @@ describe('power-first War Report', () => {
     expect(report).toContain('ENERGY DEPLETED');
     expect(report).toContain('APEX SHIELD');
     expect(report).toContain('SUPPLY ${format(apexSupplyCoverage, 0)}%');
-    expect(report).toContain('OVERDRIVE PULSE ×${outcome.apexSingularityPulses}');
-    expect(report).toContain('COUNTERMEASURE −${people(outcome.apexMirrorCounterpulseDamage ?? 0)} HOSTILE');
+    expect(report).toContain('OVERDRIVE SHIELD ×${outcome.apexSingularityPulses}');
     expect(report).toContain('THEATER MESH · ${outcome.apexTwinProjectionBattles} MULTI-FRONT BATTLES');
     expect(report).not.toContain('60% + 60% SHARED SHIELD');
     expect(report).toContain('SHIELD NOT PRESENT ON THIS FRONT');

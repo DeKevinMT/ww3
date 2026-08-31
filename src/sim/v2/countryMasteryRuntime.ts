@@ -81,12 +81,19 @@ export function registerCountryMasteryRuntimeV2(
   if (!content.nations[canonicalCountryId]) {
     throw new Error(`Cannot register Country Mastery for unknown nation ${countryId}.`);
   }
+  // Older profiles used a separate reserve-training track. Fold that paid
+  // progression into direct active-army recruitment at the runtime boundary,
+  // then keep the serialized field neutral for reconnect compatibility.
+  const directRecruitmentMultiplier = Math.max(
+    canonicalMultiplierV2(modifiers.recruitmentMultiplier),
+    canonicalMultiplierV2(modifiers.reserveTrainingMultiplier),
+  );
   const canonical = Object.freeze({
     armyCapacityMultiplier: canonicalMultiplierV2(modifiers.armyCapacityMultiplier),
     attackMultiplier: canonicalMultiplierV2(modifiers.attackMultiplier),
     defenseMultiplier: canonicalMultiplierV2(modifiers.defenseMultiplier),
-    recruitmentMultiplier: canonicalMultiplierV2(modifiers.recruitmentMultiplier),
-    reserveTrainingMultiplier: canonicalMultiplierV2(modifiers.reserveTrainingMultiplier),
+    recruitmentMultiplier: directRecruitmentMultiplier,
+    reserveTrainingMultiplier: 1,
     landSupplyMultiplier: canonicalMultiplierV2(modifiers.landSupplyMultiplier),
     landTransferThroughputMultiplier: canonicalMultiplierV2(
       modifiers.landTransferThroughputMultiplier,

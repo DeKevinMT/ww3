@@ -33,7 +33,8 @@ function reportSnapshot(): CampaignLifecycleSnapshotV1 {
     reward: {
       campaignId: 'campaign-report', countryId: 'zzz', mode: 'survival', outcome: 'victory',
       weeksSurvived: 160, territoriesGained: 2, warsWon: 3,
-      highestSurvivalWave: 7, militaryLosses: 0.042,
+      highestSurvivalWave: 7, verifiedRogueWaveLosses: 0.25,
+      antarcticTerritoriesCaptured: 2, militaryLosses: 0.042,
       modeMultiplier: 1.35,
       outcomeMultiplier: 1.25, masteryXp: 640,
       commanderXp: 480, creditsEarned: 0, score: 2_000,
@@ -99,7 +100,9 @@ describe('campaign report', () => {
     expect(html).toContain('&lt;script&gt;Bad&lt;/script&gt;');
     expect(html).not.toContain('<script>Bad</script>');
     expect(html).toContain('COMMAND CREDITS');
-    expect(html).toContain('Survival awards XP and Mastery, but no Credits');
+    expect(html).toContain('XP: verified Rogue losses + Antarctic captures only');
+    expect(html).toContain('ROGUE LOSSES + ANTARCTIC CAPTURES ONLY');
+    expect(html).toContain('Only verified Rogue losses and Antarctic captures became XP.');
     expect(html).not.toMatch(/purchase|price/i);
   });
 
@@ -148,7 +151,7 @@ describe('campaign report', () => {
 
     expect(html).toContain('Timeline complete.');
     expect(html).toContain('APEX · TEMPORAL RETURN');
-    expect(html).toContain('everything we learned');
+    expect(html).toContain('return its lessons to the first free node in Greenland');
     expect(html).not.toContain('TIMELINE INTELLIGENCE SAVED');
   });
 

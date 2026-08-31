@@ -211,7 +211,7 @@ describe('APEX distributed Empire Shield Network', () => {
     )?.integrityPercent).toBe(75);
   });
 
-  it('retains split Pulse through Front Projection and boosts Pulse only on defense', () => {
+  it('retains attack-side Energy efficiency across split fronts and boosts defensive efficiency', () => {
     const {
       state, humanId, assaultWar, defenseWar, assault, defense,
     } = empireAtTwoFronts();
@@ -223,8 +223,10 @@ describe('APEX distributed Empire Shield Network', () => {
     const baselineDefense = selectCommanderBattleSupportV2(
       state, defenseWar, defense, WORLD_CONTENT_V2,
     ).defender!;
-    expect(baselineAssault.pulseAttack).toBeCloseTo(0.0005, 12);
-    expect(baselineDefense.pulseAttack).toBeCloseTo(0.0005, 12);
+    expect(baselineAssault.pulseAttack).toBe(0);
+    expect(baselineDefense.pulseAttack).toBe(0);
+    expect(baselineAssault.interceptEfficiency).toBeCloseTo(1.001, 12);
+    expect(baselineDefense.interceptEfficiency).toBeCloseTo(1, 12);
 
     force.shield.pulseProjectionRetention = 0.35;
     force.shield.defensivePulseMultiplier = 1.50;
@@ -235,9 +237,12 @@ describe('APEX distributed Empire Shield Network', () => {
       state, defenseWar, defense, WORLD_CONTENT_V2,
     ).defender!;
 
-    // A 50% split retains 35% of the lost half: 0.50 + 0.50 × 0.35 = 0.675.
-    expect(projectedAssault.pulseAttack).toBeCloseTo(0.000675, 12);
-    expect(projectedDefense.pulseAttack).toBeCloseTo(0.000675 * 1.5, 12);
+    // A 50% split adds 35% retention on the missing half to attack-side
+    // Energy efficiency. Human APEX still emits no standalone damage.
+    expect(projectedAssault.pulseAttack).toBe(0);
+    expect(projectedDefense.pulseAttack).toBe(0);
+    expect(projectedAssault.interceptEfficiency).toBeCloseTo(1.001 * 1.175, 12);
+    expect(projectedDefense.interceptEfficiency).toBeCloseTo(1.5, 12);
     expect(projectedAssault.attackMultiplier).toBe(baselineAssault.attackMultiplier);
     expect(projectedDefense.attackMultiplier).toBe(baselineDefense.attackMultiplier);
     expect(projectedDefense.defenseMultiplier).toBe(baselineDefense.defenseMultiplier);

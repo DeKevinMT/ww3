@@ -85,7 +85,7 @@ describe('V2 canonical architecture', () => {
       'logistics-medicine': ['recovery', 'supply'],
       'economy-science': ['economy-growth', 'research-speed', 'research-efficiency'],
       'food-systems': ['supply', 'recovery'],
-      'reserve-doctrine': ['reserve-training', 'reserve-mobilization'],
+      'reserve-doctrine': ['training', 'force-capacity'],
       'public-administration': ['tax-efficiency', 'operating-efficiency'],
       'education-intelligence': ['iq-increase'],
     });

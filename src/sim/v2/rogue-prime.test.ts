@@ -138,6 +138,11 @@ describe('ROGUE PRIME', () => {
     const route = ANTARCTIC_GATEWAY_COUNTRY_ROUTES_V2.find(
       (candidate) => candidate.gatewayId === gatewayId,
     )!;
+    const breach = engine.state.polarEndgame.gatewayBreaches[gatewayId]!;
+    breach.status = 'sealed';
+    breach.breachStartedTick = null;
+    breach.opensTick = null;
+    breach.openedTick = null;
     const targetOwner = engine.state.territories[route.countryId]!.owner;
     const front = operation(ROGUE_AI_NATION_ID_V2, territoryIdV2(gatewayId), route.countryId);
     war(engine, ROGUE_AI_NATION_ID_V2, targetOwner, [front]);
@@ -145,7 +150,6 @@ describe('ROGUE PRIME', () => {
     processRoguePrimeV2(engine.state, engine.content);
     expect(engine.state.polarEndgame.roguePrime.status).toBe('guarding');
 
-    const breach = engine.state.polarEndgame.gatewayBreaches[gatewayId]!;
     breach.status = 'open';
     breach.breachStartedTick = 0;
     breach.opensTick = 0;

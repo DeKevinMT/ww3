@@ -3,7 +3,7 @@ import type { SaveGameV2 } from '../sim/v2/persistence';
 import { V2_RULES_VERSION } from '../sim/v2/balance';
 import { ARCTIC_PROJECT_IDS_V2 } from '../sim/v2/polarEndgame';
 import { normalizeScenarioConfigV2 } from '../sim/v2/scenarios';
-import { nationIdV2, type ResearchAllocationsV2 } from '../sim/v2/types';
+import { nationIdV2, territoryIdV2, type ResearchAllocationsV2 } from '../sim/v2/types';
 import { createNeutralMultiplayerDeploymentSnapshotV1 } from './deployment';
 import {
   MULTIPLAYER_PROTOCOL_VERSION,
@@ -62,6 +62,19 @@ describe('multiplayer protocol', () => {
     expect(MULTIPLAYER_PROTOCOL_VERSION).toBe(6);
   });
 
+  it('replicates the bounded Survival contact speed', () => {
+    expect(validateProtocolMessage({
+      type: 'speed',
+      speed: 3,
+      effectiveTick: 18,
+    })).toEqual({ type: 'speed', speed: 3, effectiveTick: 18 });
+    expect(() => validateProtocolMessage({
+      type: 'speed',
+      speed: 4,
+      effectiveTick: 18,
+    })).toThrow(/0 through 3/i);
+  });
+
   it('requires the host-owned next client sequence in every authoritative snapshot', () => {
     const snapshot = snapshotWithExtraPayload('reconnect-sequence');
     expect(validateProtocolMessage(snapshot)).toMatchObject({
@@ -116,7 +129,7 @@ describe('multiplayer protocol', () => {
           },
         },
       },
-    })).toThrow(/energy and reserve energy must fit inside max energy/i);
+    })).toThrow(/energy and backup energy must fit inside max energy/i);
     expect(() => validateProtocolMessage({
       ...action,
       action: { ...action.action, deployment: { ...deployment, activeDoctrine: 'forged' } },
@@ -325,6 +338,25 @@ describe('multiplayer protocol', () => {
       ...message,
       command: { ...message.command, memberIds: [] },
     })).toThrow(/1 through 256/i);
+  });
+
+  it('round-trips only an exact physical Survival counteroffensive target', () => {
+    const message: MultiplayerProtocolMessage = {
+      type: 'command',
+      requestId: 'survival_front_1',
+      clientSequence: 8,
+      baseTick: 12,
+      command: {
+        type: 'select-survival-counteroffensive',
+        playerId: nationIdV2('bel'),
+        targetId: territoryIdV2('sen'),
+      },
+    };
+    expect(decodeProtocolMessage(encodeProtocolMessage(message))).toEqual(message);
+    expect(() => validateProtocolMessage({
+      ...message,
+      command: { ...message.command, autoTarget: true },
+    })).toThrow(/exactly playerId and targetId/i);
   });
 
   it('validates all research branches inside a client command', () => {

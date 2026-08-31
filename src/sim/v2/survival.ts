@@ -1,25 +1,28 @@
 import { clamp, round } from './balance';
 import {
+  ANTARCTIC_TERRITORY_IDS_V2,
   ROGUE_AI_NATION_ID_V2,
   isRogueAiNationV2,
   type WorldContentV2,
 } from './content';
 import { addWorldEventV2 } from './events';
 import {
+  ANTARCTIC_GATEWAY_IDS_V2,
   CAMPAIGN_FIRST_GATEWAY_BREACH_TICKS_V2,
   LATER_GATEWAY_BREACH_TICKS_V2,
-  SURVIVAL_FIRST_GATEWAY_BREACH_TICKS_V2,
   antarcticGatewayTerritoryIdV2,
   initializeAntarcticGatewayBreachesV2,
   isWorldConnectionOpenV2,
   processAntarcticGatewayBreachesV2,
   scheduleAntarcticGatewayBreachV2,
+  isAntarcticGatewayOpenV2,
 } from './antarcticGateways';
 import {
   addRogueWaveManpowerV2,
   rogueWaveManpowerAtV2,
+  transferRogueWaveManpowerV2,
 } from './survivalProvenance';
-import { selectSurvivalDawnlineLeaderIdV2 } from './survivalEmpire';
+import { isSurvivalDawnlineNationV2 } from './survivalOrdinaryAi';
 import { activateRoguePrimeV2 } from './roguePrime';
 import type {
   PlayerId,
@@ -30,13 +33,14 @@ import type {
 } from './types';
 import { territoryIdV2 } from './types';
 
-export const SURVIVAL_FIRST_WAVE_DELAY_TICKS_V2 = 10;
-export const SURVIVAL_BASE_WAVE_INTERVAL_TICKS_V2 = 44;
-export const SURVIVAL_MIN_WAVE_INTERVAL_TICKS_V2 = 24;
-const CAMPAIGN_BASE_WAVE_INTERVAL_TICKS_V2 = 52;
-const CAMPAIGN_MIN_WAVE_INTERVAL_TICKS_V2 = 26;
+/** One authored Rogue mobilisation every simulation year, in every mode. */
+export const ROGUE_ANNUAL_WAVE_INTERVAL_TICKS_V2 = 52;
+/** Survival manufactures this extra share from wave one; Campaign retains its transfer ramp. */
+export const ROGUE_ANNUAL_WAVE_ACTIVE_ARMY_SHARE_V2 = 0.05;
+/** Campaign compatibility step; Survival ignores the wave-number ramp. */
+export const ROGUE_ANNUAL_WAVE_ACTIVE_ARMY_SHARE_STEP_V2 = 0.01;
 /** Hard readability/performance ceiling after the first world foothold. */
-export const SURVIVAL_MAX_CONCURRENT_ROGUE_FRONTS_V2 = 6;
+export const SURVIVAL_MAX_CONCURRENT_ROGUE_FRONTS_V2 = 3;
 export const ROGUE_AI_CORE_TERRITORY_ID_V2 = territoryIdV2('zero-point-core');
 export const SURVIVAL_WAR_PRESSURE_BASELINE_V2 = 4;
 export const SURVIVAL_WAR_PRESSURE_CAP_V2 = 45;
@@ -45,13 +49,6 @@ export const SURVIVAL_WAVE_PRESSURE_RELIEF_V2 = 1.50;
 export const SURVIVAL_RECAPTURE_PRESSURE_RELIEF_V2 = 2;
 /** Weakened Survival states capitulate once a real Antarctic column has
  * destroyed most of the force they actually started the timeline with. */
-export const SURVIVAL_ROGUE_DECISIVE_SURRENDER_LOSS_SHARE_V2 = 0.65;
-/**
- * Six thousand machines in wave one: a visible but still trackable convoy.
- * Later waves retain the same super-linear escalation curve.
- */
-export const SURVIVAL_WAVE_STAGING_BASE_MANPOWER_V2 = 0.006;
-export const SURVIVAL_WAVE_STAGING_EXPONENT_V2 = 1.32;
 /** Real machine columns apply steady pressure once they physically reach a front. */
 export const SURVIVAL_ROGUE_ASSAULT_MULTIPLIER_V2 = 1.5;
 export const SURVIVAL_ROGUE_FRONT_PROTECTION_MULTIPLIER_V2 = 1.25;
@@ -65,15 +62,13 @@ const ROGUE_AI_MINIMUM_RESEARCH_V2: Readonly<Partial<Record<ResearchEffectV2, nu
   'casualty-reduction': 5,
   recovery: 8,
   supply: 10,
-  'force-capacity': 7,
-  'reserve-training': 10,
-  'reserve-mobilization': 9,
+  'force-capacity': 9,
   'research-speed': 8,
   'research-efficiency': 8,
   'economy-growth': 5,
   'tax-efficiency': 6,
   'operating-efficiency': 10,
-  training: 8,
+  training: 10,
 });
 
 export interface SurvivalWaveResultV2 {
@@ -194,14 +189,17 @@ export function isNationOperationalV2(
 /**
  * Gives the machine state its authored operating doctrine without inventing a
  * second combat/economy system. Every bonus is represented by the same budget,
- * treasury, reserve and research fields consumed for ordinary nations.
+ * treasury and research fields consumed for ordinary nations; authored waves
+ * remain the explicit external wartime-personnel exception.
  */
 export function primeRogueAiNationV2(state: WorldStateV2, content: WorldContentV2): void {
   const rogue = state.players[ROGUE_AI_NATION_ID_V2];
   if (!rogue || !isRogueAiNationV2(content, ROGUE_AI_NATION_ID_V2)) return;
   rogue.budget = { military: 65, research: 20, development: 15 };
-  rogue.treasury = round(Math.max(rogue.treasury, 8_000), 3);
-  rogue.trainedReserves = round(Math.max(rogue.trainedReserves, 0.85), 9);
+  // Final Survival deployment derives a finite multi-year war chest from the
+  // calibrated live army and actual operating budget; no arbitrary cash floor.
+  rogue.treasury = round(Math.max(0, rogue.treasury), 3);
+  rogue.trainedReserves = 0;
   for (const [effect, minimum] of Object.entries(ROGUE_AI_MINIMUM_RESEARCH_V2) as Array<[
     ResearchEffectV2,
     number,
@@ -232,7 +230,7 @@ export function activateRogueAiSurvivalV2(
   state.polarEndgame.victoryCommanderId = null;
   state.polarEndgame.globalWave = 1;
   state.polarEndgame.nextCounteroffensiveTick = state.tick
-    + (immediate ? SURVIVAL_FIRST_WAVE_DELAY_TICKS_V2 : CAMPAIGN_BASE_WAVE_INTERVAL_TICKS_V2);
+    + ROGUE_ANNUAL_WAVE_INTERVAL_TICKS_V2;
   state.polarEndgame.earthDefenseMembers = (Object.keys(state.players) as PlayerId[])
     .filter((playerId) => rogueAiIsHostileToV2(content, playerId))
     .sort((left, right) => left.localeCompare(right));
@@ -247,9 +245,22 @@ export function activateRogueAiSurvivalV2(
   initializeAntarcticGatewayBreachesV2(
     state,
     immediate
-      ? SURVIVAL_FIRST_GATEWAY_BREACH_TICKS_V2
+      ? 1
       : CAMPAIGN_FIRST_GATEWAY_BREACH_TICKS_V2,
   );
+  // Survival is already the terminal invasion timeline: its three physical
+  // exits are operational from the opening. Campaign still reveals them one
+  // by one, preserving the slower awakening arc there.
+  if (immediate && isSurvivalStateV2(state)) {
+    for (const gatewayId of ANTARCTIC_GATEWAY_IDS_V2) {
+      const breach = state.polarEndgame.gatewayBreaches[gatewayId];
+      if (!breach) continue;
+      breach.status = 'open';
+      breach.breachStartedTick ??= state.tick;
+      breach.opensTick = state.tick;
+      breach.openedTick = state.tick;
+    }
+  }
   activateRoguePrimeV2(state);
   state.polarEndgame.visualRevision += 1;
   addWorldEventV2(
@@ -257,7 +268,7 @@ export function activateRogueAiSurvivalV2(
     'polar',
     'critical',
     immediate
-      ? 'SURVIVAL PROTOCOL: APEX detects the Codex Ascendancy beneath Antarctica. All three gateways are sealed; the first breach is being prepared.'
+      ? 'SURVIVAL PROTOCOL: APEX detects the Codex Ascendancy beneath Antarctica. All three machine gateways are already active.'
       : 'APEX ORIGIN LOCK: the Codex Ascendancy is active beneath Antarctica. All three gateways are sealed; one breach is forming.',
     undefined,
     revealedBy ?? undefined,
@@ -308,9 +319,8 @@ export function accessibleRogueTargetsV2(
 ): RogueTargetAccessV2[] {
   const targets = new Map<PlayerId, 'land' | 'naval'>();
   for (const sourceId of rogueOwnedTerritoryIdsV2(state)) {
-    // Opening occupation garrisons may begin the visible assault immediately,
-    // but remain outside the provenance/reward ledger. Real replacements must
-    // still travel from Antarctica through the ordinary logistics graph.
+    // Every opening source is a real Antarctic territory. Later captured world
+    // countries join this same physical graph; no remote occupation is spawned.
     if ((state.territories[sourceId]?.army.manpower ?? 0) <= 1e-9) continue;
     for (const connection of content.territories[sourceId]?.connections ?? []) {
       if (!isWorldConnectionOpenV2(state, sourceId, connection.targetId)) continue;
@@ -322,13 +332,13 @@ export function accessibleRogueTargetsV2(
     }
   }
   const candidates = [...targets].map(([targetId, access]) => ({ targetId, access }));
-  const dawnlineLeaderId = selectSurvivalDawnlineLeaderIdV2(state);
-  // Humans and Dawnline own separate, readable theatres. Ordinary remnants
-  // can only enter the queue after those two persistent conflicts exist.
+  // Prefer a human seat, then the Arctic Dawnline if either actually borders
+  // the machine; otherwise a sovereign gateway country is the physical target.
   return candidates.sort((left, right) => (
     Number(state.humanPlayerIds.includes(right.targetId))
       - Number(state.humanPlayerIds.includes(left.targetId))
-      || Number(right.targetId === dawnlineLeaderId) - Number(left.targetId === dawnlineLeaderId)
+      || Number(isSurvivalDawnlineNationV2(state, right.targetId))
+        - Number(isSurvivalDawnlineNationV2(state, left.targetId))
       || Number(left.access === 'naval') - Number(right.access === 'naval')
       || left.targetId.localeCompare(right.targetId)
   ));
@@ -366,39 +376,41 @@ function openRogueWarV2(state: WorldStateV2, targetId: PlayerId): WarStateV2 {
   return war;
 }
 
-function strengthenRogueForWaveV2(state: WorldStateV2, wave: number): void {
-  const rogue = state.players[ROGUE_AI_NATION_ID_V2];
-  if (!rogue) return;
-  const evolution = Math.max(0, wave - 1);
-  const halfWave = Math.floor(evolution / 2);
-  rogue.research.effectLevels.attack = Math.max(
-    rogue.research.effectLevels.attack,
-    ROGUE_AI_MINIMUM_RESEARCH_V2.attack! + halfWave,
-  );
-  rogue.research.effectLevels.defense = Math.max(
-    rogue.research.effectLevels.defense,
-    ROGUE_AI_MINIMUM_RESEARCH_V2.defense! + Math.floor(evolution / 3),
-  );
-  rogue.research.effectLevels.supply = Math.max(
-    rogue.research.effectLevels.supply,
-    ROGUE_AI_MINIMUM_RESEARCH_V2.supply! + evolution,
-  );
-  rogue.research.effectLevels['reserve-training'] = Math.max(
-    rogue.research.effectLevels['reserve-training'],
-    ROGUE_AI_MINIMUM_RESEARCH_V2['reserve-training']! + halfWave,
-  );
-  rogue.research.effectLevels['reserve-mobilization'] = Math.max(
-    rogue.research.effectLevels['reserve-mobilization'],
-    ROGUE_AI_MINIMUM_RESEARCH_V2['reserve-mobilization']! + halfWave,
+/** Live deployed Rogue manpower, including manufactured Survival wave survivors. */
+export function rogueActiveArmyManpowerV2(state: WorldStateV2): number {
+  return round(Object.values(state.territories).reduce((sum, territory) => (
+    territory.owner === ROGUE_AI_NATION_ID_V2
+      ? sum + Math.max(0, territory.army.manpower)
+      : sum
+  ), 0), 9);
+}
+
+/** Campaign compatibility curve: 1%, 2%, then up to the permanent 5% cap. */
+export function rogueAnnualWaveActiveArmyShareV2(wave: number): number {
+  const canonicalWave = Math.max(1, Math.floor(Number.isFinite(wave) ? wave : 1));
+  return Math.min(
+    ROGUE_ANNUAL_WAVE_ACTIVE_ARMY_SHARE_V2,
+    canonicalWave * ROGUE_ANNUAL_WAVE_ACTIVE_ARMY_SHARE_STEP_V2,
   );
 }
 
-/** Requested millions mobilised at Zero Point before ordinary one-hop logistics moves them. */
-export function survivalWaveStagingManpowerV2(wave: number): number {
-  const canonicalWave = Math.max(1, Math.floor(Number.isFinite(wave) ? wave : 1));
+/** Survival manufactures the full bounded 5% reinforcement from its first annual wave. */
+export function rogueAnnualWaveActiveArmyShareForStateV2(
+  state: Pick<WorldStateV2, 'contentVersion'>,
+  wave: number,
+): number {
+  return isSurvivalStateV2(state)
+    ? ROGUE_ANNUAL_WAVE_ACTIVE_ARMY_SHARE_V2
+    : rogueAnnualWaveActiveArmyShareV2(wave);
+}
+
+export function rogueAnnualWaveManpowerV2(state: WorldStateV2): number {
   return round(
-    SURVIVAL_WAVE_STAGING_BASE_MANPOWER_V2
-      * Math.pow(canonicalWave, SURVIVAL_WAVE_STAGING_EXPONENT_V2),
+    rogueActiveArmyManpowerV2(state)
+      * rogueAnnualWaveActiveArmyShareForStateV2(
+        state,
+        state.polarEndgame.globalWave,
+      ),
     9,
   );
 }
@@ -442,64 +454,108 @@ function openReachableRogueFrontsV2(
   );
   if (activeTargets.length >= capacity) return [];
   const humanIds = new Set(state.humanPlayerIds);
-  const dawnlineLeaderId = selectSurvivalDawnlineLeaderIdV2(state);
   const candidates = accessibleRogueTargetsV2(state, content)
     .sort((left, right) => Number(humanIds.has(right.targetId))
       - Number(humanIds.has(left.targetId))
+      || Number(isSurvivalDawnlineNationV2(state, right.targetId))
+        - Number(isSurvivalDawnlineNationV2(state, left.targetId))
       || waveHashV2(state.seed, wave, left.targetId)
         - waveHashV2(state.seed, wave, right.targetId)
       || left.targetId.localeCompare(right.targetId));
-  // One host conflict plus one geographically separate Dawnline conflict fit
-  // inside the wave-one cap. Every human conflict can own two operations, but
-  // Dawnline AI remains an ordinary one-front bilateral war.
-  const critical = candidates.filter((candidate) => (
-    humanIds.has(candidate.targetId) || candidate.targetId === dawnlineLeaderId
-  ));
-  const ordinary = candidates.filter((candidate) => !critical.includes(candidate));
-  const newTargets = [...critical, ...ordinary]
+  const newTargets = candidates
     .slice(0, Math.max(0, capacity - activeTargets.length));
   for (const target of newTargets) openRogueWarV2(state, target.targetId);
   return newTargets.map((target) => target.targetId);
 }
 
 /**
- * Zero Point explicitly manufactures every authored wave. This is deliberately
- * outside ordinary national recruitment, which stays frozen during war. The
- * machines materialise only at the core; from the following week the normal
- * paid, capacity-limited logistics pass must carry them core -> inner -> outer
- * -> gateway -> world one hop at a time.
- *
- * A full core may retire only its unverified static garrison to make room. That
- * placeholder manpower is removed before the new wave is provenance-tagged, so
- * it can never become reward-eligible by conversion.
+ * Launches one annual reinforcement. Survival manufactures new, verified
+ * Antarctic-origin personnel equal to 5% of the live army at launch and
+ * stages them evenly at the three physical gateways. Existing formations are
+ * never deducted. The provenance ledger itself is the dedicated expedition
+ * allowance: ordinary capacity recalculation preserves trained over-cap
+ * personnel, while weekly logistics still has to route them into the world.
+ * Campaign keeps its older transfer-only compatibility behaviour.
  */
-function stageRogueWaveAtCoreV2(state: WorldStateV2, wave: number): number {
+function mobilizeAnnualRogueWaveV2(state: WorldStateV2): number {
   const rogue = state.players[ROGUE_AI_NATION_ID_V2];
-  const core = state.territories[ROGUE_AI_CORE_TERRITORY_ID_V2];
-  if (!rogue || !core || core.owner !== ROGUE_AI_NATION_ID_V2) return 0;
-  const manufactured = survivalWaveStagingManpowerV2(wave);
-  rogue.trainedReserves = round(rogue.trainedReserves + manufactured, 9);
-  const verifiedAtCore = rogueWaveManpowerAtV2(state, ROGUE_AI_CORE_TERRITORY_ID_V2);
-  const unverifiedGarrison = Math.max(0, core.army.manpower - verifiedAtCore);
-  const initialCapacityRoom = Math.max(0, core.army.capacity - core.army.manpower);
-  const displacedPlaceholder = Math.min(
-    unverifiedGarrison,
-    Math.max(0, manufactured - initialCapacityRoom),
-  );
-  if (displacedPlaceholder > 0) {
-    core.army.manpower = round(core.army.manpower - displacedPlaceholder, 9);
+  if (!rogue) return 0;
+  const waveManpower = rogueAnnualWaveManpowerV2(state);
+  if (waveManpower <= 0) return 0;
+  rogue.trainedReserves = 0;
+  const openGatewayIds = state.polarEndgame.gatewayBreachOrder
+    .filter((gatewayId) => isAntarcticGatewayOpenV2(state, gatewayId))
+    .map(antarcticGatewayTerritoryIdV2);
+  const destinations = openGatewayIds.length > 0
+    ? openGatewayIds
+    : [ROGUE_AI_CORE_TERRITORY_ID_V2];
+  if (isSurvivalStateV2(state)) {
+    let manufactured = 0;
+    for (let index = 0; index < destinations.length; index += 1) {
+      const destinationId = destinations[index]!;
+      const destination = state.territories[destinationId];
+      if (!destination || destination.owner !== ROGUE_AI_NATION_ID_V2) continue;
+      const added = index === destinations.length - 1
+        ? round(waveManpower - manufactured, 9)
+        : round(waveManpower / destinations.length, 9);
+      if (added <= 0) continue;
+      destination.army.manpower = round(destination.army.manpower + added, 9);
+      addRogueWaveManpowerV2(state, destinationId, added);
+      manufactured = round(manufactured + added, 9);
+    }
+    return manufactured;
   }
-  const capacityRoom = Math.max(0, core.army.capacity - core.army.manpower);
-  const staged = round(Math.min(
-    manufactured,
-    Math.max(0, rogue.trainedReserves),
-    capacityRoom,
-  ), 9);
-  if (staged <= 0) return 0;
-  rogue.trainedReserves = round(Math.max(0, rogue.trainedReserves - staged), 9);
-  core.army.manpower = round(core.army.manpower + staged, 9);
-  addRogueWaveManpowerV2(state, ROGUE_AI_CORE_TERRITORY_ID_V2, staged);
-  return staged;
+  const sourceIds = [...ANTARCTIC_TERRITORY_IDS_V2]
+    .filter((territoryId) => !destinations.includes(territoryId))
+    .sort((left, right) => {
+      const kindRank = (territoryId: TerritoryId): number => {
+        if (territoryId === ROGUE_AI_CORE_TERRITORY_ID_V2) return 0;
+        const kind = territoryId.includes('sentinel') || territoryId.includes('vault')
+          ? 'inner' : territoryId.includes('entry') ? 'perimeter' : 'outer';
+        return kind === 'inner' ? 1 : kind === 'outer' ? 2 : 3;
+      };
+      return kindRank(left) - kindRank(right) || left.localeCompare(right);
+    });
+  let committed = 0;
+  for (let index = 0; index < destinations.length; index += 1) {
+    const destinationId = destinations[index]!;
+    const destination = state.territories[destinationId];
+    if (!destination || destination.owner !== ROGUE_AI_NATION_ID_V2) continue;
+    const equalShare = index === destinations.length - 1
+      ? waveManpower - committed
+      : round(waveManpower / destinations.length, 9);
+    let remainingShare = equalShare;
+    for (const sourceId of sourceIds) {
+      if (remainingShare <= 1e-9) break;
+      const source = state.territories[sourceId];
+      if (!source || source.owner !== ROGUE_AI_NATION_ID_V2) continue;
+      const sourceBefore = Math.max(0, source.army.manpower);
+      const moved = Math.min(remainingShare, sourceBefore);
+      if (moved <= 0) continue;
+      source.army.manpower = round(source.army.manpower - moved, 9);
+      destination.army.manpower = round(destination.army.manpower + moved, 9);
+      const alreadyVerified = transferRogueWaveManpowerV2(
+        state,
+        sourceId,
+        destinationId,
+        moved,
+        sourceBefore,
+      );
+      addRogueWaveManpowerV2(state, destinationId, moved - alreadyVerified);
+      committed = round(committed + moved, 9);
+      remainingShare = Math.max(0, remainingShare - moved);
+    }
+  }
+  return committed;
+}
+
+function rogueWaveCommitmentLabelV2(state: WorldStateV2, committed: number): string {
+  const liveArmy = rogueActiveArmyManpowerV2(state);
+  const launchArmy = isSurvivalStateV2(state)
+    ? Math.max(0, liveArmy - committed) : liveArmy;
+  const actualShare = launchArmy > 0 ? committed / launchArmy : 0;
+  const sharePercent = Math.round(actualShare * 1_000) / 10;
+  return `${sharePercent}% of the live machine army (${Math.round(committed * 1_000_000)} newly manufactured units)`;
 }
 
 function finishSurvivalVictoryV2(state: WorldStateV2): boolean {
@@ -571,7 +627,7 @@ export function processRogueAiSurvivalV2(
         state,
         'polar',
         'critical',
-        `MACHINE OFFENSIVE: occupation garrisons opened ${opened.length} front${opened.length === 1 ? '' : 's'} against ${opened.map((targetId) => content.nations[targetId]?.shortName ?? targetId).join(', ')} while Antarctic reinforcements advance.`,
+        `MACHINE OFFENSIVE: Antarctic forces opened ${opened.length} physical front${opened.length === 1 ? '' : 's'} against ${opened.map((targetId) => content.nations[targetId]?.shortName ?? targetId).join(', ')} through the active gateways.`,
         undefined,
         ROGUE_AI_NATION_ID_V2,
         { polarRegion: 'antarctica' },
@@ -580,7 +636,8 @@ export function processRogueAiSurvivalV2(
     return { activated: true, waveStarted: null, targets: opened, victory: false };
   }
   const wave = Math.max(1, Math.floor(state.polarEndgame.globalWave));
-  const breachIndex = wave === 3 ? 1 : wave === 5 ? 2 : -1;
+  const breachIndex = !isSurvivalStateV2(state) && wave === 3 ? 1
+    : !isSurvivalStateV2(state) && wave === 5 ? 2 : -1;
   if (breachIndex >= 0) {
     const gatewayId = scheduleAntarcticGatewayBreachV2(
       state,
@@ -600,12 +657,13 @@ export function processRogueAiSurvivalV2(
       );
     }
   }
-  strengthenRogueForWaveV2(state, wave);
-  const stagedManpower = stageRogueWaveAtCoreV2(state, wave);
+  const stagedManpower = mobilizeAnnualRogueWaveV2(state);
   const humanIds = new Set(state.humanPlayerIds);
   const activeTargets = activeRogueWarOpponentsV2(state);
   const candidates = accessibleRogueTargetsV2(state, content)
     .sort((left, right) => Number(humanIds.has(right.targetId)) - Number(humanIds.has(left.targetId))
+      || Number(isSurvivalDawnlineNationV2(state, right.targetId))
+        - Number(isSurvivalDawnlineNationV2(state, left.targetId))
       || waveHashV2(state.seed, wave, left.targetId) - waveHashV2(state.seed, wave, right.targetId)
       || left.targetId.localeCompare(right.targetId));
   const hasWorldFoothold = rogueHasWorldFootholdV2(state, content);
@@ -619,18 +677,7 @@ export function processRogueAiSurvivalV2(
   const targets = [...activeTargets, ...newTargets]
     .filter((targetId, index, all) => all.indexOf(targetId) === index)
     .sort((left, right) => left.localeCompare(right));
-  const survivalTimeline = isSurvivalStateV2(state);
-  const baseInterval = survivalTimeline
-    ? SURVIVAL_BASE_WAVE_INTERVAL_TICKS_V2
-    : CAMPAIGN_BASE_WAVE_INTERVAL_TICKS_V2;
-  const minimumInterval = survivalTimeline
-    ? SURVIVAL_MIN_WAVE_INTERVAL_TICKS_V2
-    : CAMPAIGN_MIN_WAVE_INTERVAL_TICKS_V2;
-  const maximumAcceleration = baseInterval - minimumInterval;
-  const interval = Math.max(
-    minimumInterval,
-    baseInterval - Math.min(maximumAcceleration, wave * 2),
-  );
+  const interval = ROGUE_ANNUAL_WAVE_INTERVAL_TICKS_V2;
   if (targets.length === 0) {
     // The convoy is still a real wave and must not be restaged every four
     // weeks. It leaves Zero Point now; its first war is declared only after
@@ -642,7 +689,7 @@ export function processRogueAiSurvivalV2(
       state,
       'polar',
       'action',
-      `ROGUE WAVE ${wave}: Zero Point mobilised ${Math.round(stagedManpower * 1_000_000)} machines. The convoy is moving through Antarctica; no world front is in range yet.`,
+      `ROGUE WAVE ${wave}: ${rogueWaveCommitmentLabelV2(state, stagedManpower)} staged through the open Antarctic gateways. No world front is in range yet.`,
       undefined,
       ROGUE_AI_NATION_ID_V2,
       { polarRegion: 'antarctica' },
@@ -662,7 +709,7 @@ export function processRogueAiSurvivalV2(
     state,
     'polar',
     wave >= 4 ? 'critical' : 'action',
-    `ROGUE WAVE ${wave}: Zero Point mobilised ${Math.round(stagedManpower * 1_000_000)} machines into the visible Antarctic supply chain toward ${targets.length} permanent front${targets.length === 1 ? '' : 's'} against ${targets.map((id) => content.nations[id]?.shortName ?? id).join(', ')}${newTargets.length > 0 ? `, opening ${newTargets.length} new theatre${newTargets.length === 1 ? '' : 's'}` : ''}.`,
+    `ROGUE WAVE ${wave}: ${rogueWaveCommitmentLabelV2(state, stagedManpower)} staged through the open Antarctic gateways toward ${targets.length} permanent front${targets.length === 1 ? '' : 's'} against ${targets.map((id) => content.nations[id]?.shortName ?? id).join(', ')}${newTargets.length > 0 ? `, opening ${newTargets.length} new theatre${newTargets.length === 1 ? '' : 's'}` : ''}.`,
     undefined,
     ROGUE_AI_NATION_ID_V2,
     { polarRegion: 'antarctica' },

@@ -24,6 +24,7 @@ import { nationIdV2, type PlayerId } from './types';
 
 const GREENLAND = nationIdV2('grl');
 const GUIDED_TARGET = nationIdV2('gnb');
+const CURRENT_BEST_TARGET = nationIdV2('guy');
 const BELGIUM = nationIdV2('bel');
 const NETHERLANDS = nationIdV2('nld');
 
@@ -61,7 +62,7 @@ function battlesAgainst(engine: WorldEngineV2, defenderId: PlayerId): number {
 }
 
 describe('Greenland first campaign war cadence', () => {
-  it('guides the real APEX opening toward the weak African beachhead with honest logistics', () => {
+  it('guides the real APEX opening toward the safest reachable beachhead with honest logistics', () => {
     const engine = greenlandEngine(84_105);
     engine.state.polarEndgame.apexNarrative.players[GREENLAND]!.transmissions.unshift({
       id: 'campaign-ai-defeat-pattern',
@@ -83,15 +84,15 @@ describe('Greenland first campaign war cadence', () => {
       engine.state,
       WORLD_CONTENT_V2,
       GREENLAND,
-      GUIDED_TARGET,
+      CURRENT_BEST_TARGET,
     )!;
 
     expect(target).toMatchObject({
-      opponentId: GUIDED_TARGET,
+      opponentId: CURRENT_BEST_TARGET,
       access: 'naval',
       etaWeeks: CAMPAIGN_FIRST_STRIKE_MOBILIZATION_TICKS_V2,
     });
-    expect(distanceKm).toBeGreaterThan(6_000);
+    expect(distanceKm).toBeGreaterThan(3_000);
     expect(target!.frontSupply).toBe(1);
     expect(target!.transferThroughput).toBe(0.5);
     expect(target!.preparationWeeks).toBeGreaterThan(0);

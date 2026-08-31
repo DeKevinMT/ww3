@@ -36,10 +36,10 @@ describe('multiplayer command authorization', () => {
   it('reserves shared speed for the room host and rejects AI escalation spoofing', () => {
     const state = createWorldStateV2(52, WORLD_CONTENT_V2);
     expect(authorizeMultiplayerCommandV2(state, belgium, {
-      type: 'set-speed', speed: 2,
+      type: 'set-speed', speed: 3,
     }, false).accepted).toBe(false);
     expect(authorizeMultiplayerCommandV2(state, belgium, {
-      type: 'set-speed', speed: 2,
+      type: 'set-speed', speed: 3,
     }, true).accepted).toBe(true);
     expect(authorizeMultiplayerCommandV2(state, belgium, {
       type: 'declare-war', attackerId: belgium, defenderId: canada, escalatedFromWarId: 'war-ai',
@@ -114,6 +114,21 @@ describe('multiplayer command authorization', () => {
       playerId: belgium,
       transmissionId: 'campaign-signal-anomaly' as const,
       choice: 'accept' as const,
+    };
+
+    expect(authorizeMultiplayerCommandV2(state, belgium, command, false).accepted).toBe(true);
+    expect(authorizeMultiplayerCommandV2(state, canada, command, true)).toEqual({
+      accepted: false,
+      reason: 'You can only manage your own country.',
+    });
+  });
+
+  it('binds a physical Survival counteroffensive to its owning seat', () => {
+    const state = createWorldStateV2(553, WORLD_CONTENT_V2);
+    const command = {
+      type: 'select-survival-counteroffensive' as const,
+      playerId: belgium,
+      targetId: nationIdV2('sen') as never,
     };
 
     expect(authorizeMultiplayerCommandV2(state, belgium, command, false).accepted).toBe(true);

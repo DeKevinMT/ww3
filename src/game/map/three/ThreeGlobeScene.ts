@@ -2946,6 +2946,10 @@ export class ThreeGlobeScene implements MapSceneAdapter {
           assignedFront,
         );
         if (!candidateResolution || !coverage.has(candidateResolution.fieldTerritoryId)) continue;
+        // Human APEX never fires an outgoing projectile. The national battle
+        // effect already shows its boosted army attack; the dome reacts only
+        // when it intercepts incoming fire.
+        if (!candidateResolution.interceptsIncoming) continue;
         resolution = candidateResolution;
         fieldIntensity = this.apexEmpireField.integrity;
         break;

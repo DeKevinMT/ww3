@@ -36,6 +36,7 @@ import {
 } from './nationState';
 import { OPENING_ARMY_BONUS_DURATION_TICKS_V2 } from './openingArmyBonus';
 import { normalizeRetiredFoodCompatibilityV2 } from './retiredFood';
+import { normalizeRetiredReserveCompatibilityV2 } from './retiredReserves';
 import {
   clonePolarEndgameV2,
   createInitialPolarEndgameV2,
@@ -1534,7 +1535,7 @@ function hydrateNewContentAfterAuthenticationV2(
   // subsystem. The migration creates no soldiers and loses no stored reserve.
   for (const expedition of legacyPolar.expeditions) {
     const nation = state.players[expedition.playerId];
-    if (nation) nation.trainedReserves += Math.max(0, expedition.manpower);
+    if (nation) nation.trainedReserves = 0;
   }
   if (legacyPolar.phase !== 'victory') {
     const freshPolar = createInitialPolarEndgameV2();
@@ -1962,6 +1963,7 @@ export function loadSaveV2(
   state.ceasefireObligations = [];
   for (const nation of Object.values(state.players)) nation.ceasefiresRequested = 0;
   normalizeRetiredFoodCompatibilityV2(state);
+  normalizeRetiredReserveCompatibilityV2(state);
   synchronizeRunProgressionRosterV2(state);
   enforceSurvivalScorchedWorldV2(state, content);
   synchronizeArmyCapacityV2(state, content);

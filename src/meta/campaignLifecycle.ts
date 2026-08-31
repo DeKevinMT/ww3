@@ -14,6 +14,7 @@ import type {
   WorldEventV2,
   WorldStateV2,
 } from '../sim/v2/types';
+import { ANTARCTIC_TERRITORY_IDS_V2 } from '../sim/v2/content';
 import { rogueWaveLossCreditV2 } from '../sim/v2/survivalProvenance';
 
 export const CAMPAIGN_LIFECYCLE_SCHEMA_VERSION = 1 as const;
@@ -228,6 +229,10 @@ export function createCampaignLifecycleSnapshotV1(
   const currentTerritoryIds = ownedTerritoryIdsV1(state, campaign.countryId);
   const currentTerritories = new Set(currentTerritoryIds);
   const territoriesGainedIds = currentTerritoryIds.filter((id) => !startingTerritories.has(id));
+  const antarcticTerritoryIds = new Set<string>(ANTARCTIC_TERRITORY_IDS_V2);
+  const antarcticTerritoriesCaptured = campaign.scenario.mode === 'survival'
+    ? territoriesGainedIds.filter((id) => antarcticTerritoryIds.has(id)).length
+    : 0;
   const territoriesLostIds = startingTerritoryIds.filter((id) => !currentTerritories.has(id));
   const weeksSurvived = Math.max(0, Math.floor(state.tick) - campaign.baseline.startingTick);
   const retainedOutcomes = input.warOutcomes ?? campaign.warOutcomes ?? [];
@@ -290,6 +295,7 @@ export function createCampaignLifecycleSnapshotV1(
     warsFought,
     highestSurvivalWave,
     verifiedRogueWaveLosses,
+    antarcticTerritoriesCaptured,
     militaryLosses,
   });
   const masteryDifficulty = Number.isFinite(input.countryMasteryXpDifficultyMultiplier)

@@ -30,12 +30,6 @@ import {
   OPERATING_EFFICIENCY_RESEARCH_EFFECTIVE_CEILING,
   OPERATING_EFFICIENCY_RESEARCH_HALF_SATURATION,
   OPERATING_EFFICIENCY_RESEARCH_REDUCTION_PER_EFFECTIVE_LEVEL,
-  RESERVE_MOBILIZATION_RESEARCH_BONUS_PER_EFFECTIVE_LEVEL,
-  RESERVE_MOBILIZATION_RESEARCH_EFFECTIVE_CEILING,
-  RESERVE_MOBILIZATION_RESEARCH_HALF_SATURATION,
-  RESERVE_TRAINING_RESEARCH_BONUS_PER_EFFECTIVE_LEVEL,
-  RESERVE_TRAINING_RESEARCH_EFFECTIVE_CEILING,
-  RESERVE_TRAINING_RESEARCH_HALF_SATURATION,
   TAX_EFFICIENCY_RESEARCH_BONUS_PER_EFFECTIVE_LEVEL,
   TAX_EFFICIENCY_RESEARCH_EFFECTIVE_CEILING,
   TAX_EFFICIENCY_RESEARCH_HALF_SATURATION,
@@ -44,6 +38,7 @@ import {
 import {
   territoryTerrainEffectsV2,
   territoryTerrainProfileV2,
+  ROGUE_AI_NATION_ID_V2,
   WORLD_CONTENT_V2,
   type TerritoryTerrainEffectsV2,
   type WorldContentV2,
@@ -55,7 +50,6 @@ import {
   selectCommanderFrontPrioritiesV2,
 } from '../sim/v2/commanderForce';
 import {
-  initialNationArmyCapacityBenchmarkV2,
   openingArmyCapacityMultiplierV2,
   stateTerritoryArmyCapacityTargetV2,
   stateTerritoryArmySupportCeilingV2,
@@ -75,7 +69,6 @@ import {
 } from '../sim/v2/logisticsReadiness';
 import { armyCapacitySupplyLabelV2 } from '../sim/v2/logistics';
 import { OPENING_ARMY_BONUS_DURATION_TICKS_V2 } from '../sim/v2/openingArmyBonus';
-import { initialTrainedReserveManpowerV2 } from '../sim/v2/reserveForces';
 import {
   ANTARCTIC_SECTORS_V2,
   ARCTIC_PROJECTS_V2,
@@ -107,11 +100,11 @@ import {
 } from '../sim/v2/selectors';
 import type { OpeningCandidatePreviewSnapshotV2 } from '../sim/v2/WorldEngineV2';
 import { territoryIdV2 } from '../sim/v2/types';
+import { humanStartingArmyMultiplierForContentV2 } from '../sim/v2/traits';
 import {
-  humanOpeningTrainedReserveTermsForContentV2,
-  humanStartingArmyMultiplierForContentV2,
-} from '../sim/v2/traits';
-import { countryFlagHtml } from './countryFlags';
+  countryFlagHtml,
+  DAWNLINE_ACCORD_FLAG_NATION_ID,
+} from './countryFlags';
 import { selectRogueLogisticsTelemetryV2 } from './antarcticaLogistics';
 import { projectMapArmyV2 } from './mapArmyProjection';
 import {
@@ -120,10 +113,22 @@ import {
   finishWarOutcomePauseV2,
 } from './warOutcomeQueue';
 import {
+  SURVIVAL_CONTACT_FAST_FORWARD_RETURN_SPEED_V2,
+  SURVIVAL_CONTACT_FAST_FORWARD_SPEED_V2,
+  hasRealSurvivalRogueHumanContactV2,
+  shouldStopSurvivalContactFastForwardV2,
+  survivalContactFastForwardPresentationV2,
+} from './survivalContactFastForward';
+import {
   previewWarLogisticsV2,
   type WarLogisticsPreviewV2,
 } from '../sim/v2/warLogisticsPreview';
-import { selectCoopAllySupportPreviewV2 } from '../sim/v2/war';
+import {
+  selectCoopAllySupportPreviewV2,
+  type SurvivalCounteroffensiveTargetV2,
+} from '../sim/v2/war';
+import { isSurvivalStateV2 } from '../sim/v2/survival';
+import { isSurvivalDawnlineNationV2 } from '../sim/v2/survivalOrdinaryAi';
 import {
   captureDisclosureSessions,
   captureScrollSessions,
@@ -230,6 +235,8 @@ interface ArcticProjectTermsUIV2 {
 export interface WorldEngineV2UIContract {
   readonly content: WorldContentV2;
   readonly state: WorldStateV2;
+  /** False on replicated multiplayer clients; the host owns shared time. */
+  readonly clockAuthority?: boolean;
   /** The local country being viewed. Differs from the canonical primary player in multiplayer. */
   readonly viewerPlayerId?: PlayerId;
   player(playerId: string): NationViewV2 | undefined;
@@ -275,6 +282,10 @@ export interface WorldEngineV2UIContract {
   warForecast(attackerId: string, defenderId: string): WarForecastV2;
   liveWarEstimate(warId: string, viewerId: string): LiveWarEstimateV2 | undefined;
   declareWar(attackerId: string, defenderId: string): CommandOutcome;
+  selectSurvivalCounteroffensive(playerId: string, targetId: string): CommandOutcome;
+  survivalCounteroffensiveTargets(
+    playerId: string,
+  ): readonly SurvivalCounteroffensiveTargetV2[];
   areAllied(leftId: string, rightId: string): boolean;
   allianceProposalStatus(fromId: string, targetId: string): AllianceProposalStatusV2;
   proposeAlliance(fromId: string, targetId: string): CommandOutcome;
@@ -380,8 +391,8 @@ const RESEARCH_META: Record<ResearchBranchV2, {
     effect: 'Raises military supply readiness and field recovery.',
   },
   'reserve-doctrine': {
-    label: 'Reserve Doctrine', shortLabel: 'Reserves',
-    effect: 'Trains reservists faster and mobilises existing reserves more quickly during war.',
+    label: 'Force Development', shortLabel: 'Force',
+    effect: 'Improves peacetime Army training and raises Army Capacity.',
   },
   'public-administration': {
     label: 'Public Administration', shortLabel: 'Administration',
@@ -413,7 +424,7 @@ function researchEffectLabel(effect: string): string {
     defense: 'DEF', 'casualty-reduction': 'PROTECTION', recovery: 'RECOVERY', supply: 'SUPPLY',
     'economy-growth': 'ECONOMY', 'research-speed': 'R&D SPEED', 'research-efficiency': 'R&D COST',
     'food-production': 'SUPPLY', 'food-storage': 'RECOVERY',
-    'reserve-training': 'RESERVE TRAIN', 'reserve-mobilization': 'MOBILIZATION',
+    'reserve-training': 'TRAINING', 'reserve-mobilization': 'CAPACITY',
     'tax-efficiency': 'TAX YIELD', 'operating-efficiency': 'BASE COSTS',
     'iq-increase': 'IQ',
   } as Record<string, string>)[effect] ?? effect.toUpperCase();
@@ -460,18 +471,10 @@ function researchEffectTotal(
   );
   if (effect === 'supply') return percent(level, ' supply');
   if (effect === 'research-speed') return percent(level, ' R&D speed');
-  if (effect === 'reserve-training') return percent(
-    100 * RESERVE_TRAINING_RESEARCH_BONUS_PER_EFFECTIVE_LEVEL
-      * diminishingResearchLevelV2(level, RESERVE_TRAINING_RESEARCH_EFFECTIVE_CEILING,
-        RESERVE_TRAINING_RESEARCH_HALF_SATURATION),
-    ' training',
-  );
-  if (effect === 'reserve-mobilization') return percent(
-    100 * RESERVE_MOBILIZATION_RESEARCH_BONUS_PER_EFFECTIVE_LEVEL
-      * diminishingResearchLevelV2(level, RESERVE_MOBILIZATION_RESEARCH_EFFECTIVE_CEILING,
-        RESERVE_MOBILIZATION_RESEARCH_HALF_SATURATION),
-    ' mobilisation',
-  );
+  // Legacy save keys are migrated into Training and Force Capacity. Keeping a
+  // readable fallback here prevents old snapshots from surfacing reserve UI.
+  if (effect === 'reserve-training') return percent(2 * diminishingResearchLevelV2(level, 30, 20), ' speed');
+  if (effect === 'reserve-mobilization') return percent(level, ' capacity');
   if (effect === 'tax-efficiency') return percent(
     100 * TAX_EFFICIENCY_RESEARCH_BONUS_PER_EFFECTIVE_LEVEL
       * diminishingResearchLevelV2(level, TAX_EFFICIENCY_RESEARCH_EFFECTIVE_CEILING,
@@ -612,6 +615,7 @@ export interface ApexShieldTopbarPresentationV2 {
   readonly supportBonusPercent: number;
   readonly armyPowerMultiplier: number;
   readonly integrityPercent: number;
+  /** Retired compatibility field; human APEX has no direct attack. */
   readonly pulseAttack: number;
   readonly recovering: boolean;
 }
@@ -622,7 +626,7 @@ export function apexShieldTopbarPresentationV2(
   integrity: number,
   maxIntegrity: number,
   mission: string,
-  pulseAttack = 0,
+  _pulseAttack = 0,
 ): ApexShieldTopbarPresentationV2 {
   const safeSupportBonus = Math.max(
     0,
@@ -640,10 +644,7 @@ export function apexShieldTopbarPresentationV2(
     supportBonusPercent: recovering ? 0 : safeSupportBonus,
     armyPowerMultiplier: recovering ? 1 : 1 + safeSupportBonus / 100,
     integrityPercent,
-    pulseAttack: recovering ? 0 : Math.max(
-      0,
-      Number.isFinite(pulseAttack) ? pulseAttack : 0,
-    ),
+    pulseAttack: 0,
     recovering,
   });
 }
@@ -1020,7 +1021,6 @@ export interface IntroRelativeStatSourcesV2 {
   defense: number;
   iq: number;
   army: number;
-  reserve: number;
   population: number;
   economy: number;
   treasury: number;
@@ -1039,7 +1039,6 @@ export function introRelativeStatSourcesV2(
     defense: metrics.defense,
     iq: metrics.iqView.score,
     army: metrics.army.deployed,
-    reserve: metrics.player.trainedReserves,
     population: metrics.economyView.population,
     economy: metrics.economyView.output,
     treasury: metrics.player.treasury,
@@ -1327,41 +1326,20 @@ export function renderNationPickerV2(
   const startingArmyBonus = Math.max(0, startingArmy - army.deployed);
   const openingForceIsBoosted = startingArmyMultiplier > 1.000000001;
   const openingForceIsLimited = startingArmyMultiplier < 0.999999999;
-  // The shared opening snapshot is deliberately neutral AI state. A human
-  // seat below 1x scales its tick-zero trained cadre by the same opening
-  // factor; positive Army multipliers use a separate bounded reserve curve,
-  // never the full temporary Army multiplier.
-  const neutralReserveCapacity = finance.trainedReserveCapacity;
-  const playerNeutralReserveCapacity = neutralReserveCapacity;
-  const playerReserveTerms = accountManagedSolo ? undefined
-    : humanOpeningTrainedReserveTermsForContentV2(
-      content,
-      preview.id,
-      previewState.trainedReserves,
-      playerNeutralReserveCapacity,
-      playerNeutralReserveCapacity * Math.min(1, startingArmyMultiplier),
-    );
-  const accountReserve = initialTrainedReserveManpowerV2(
-    preview.id,
-    initialNationArmyCapacityBenchmarkV2(content, preview.id),
-    content,
-  ) * (accountLoadout?.trainedReserveMultiplier ?? 1);
-  const startingTrainedReserve = Math.round((accountManagedSolo
-    ? accountReserve : playerReserveTerms!.trainedReserves) * 1e9) / 1e9;
   const startingArmyAdjustmentNote = openingForceIsBoosted
     ? accountManagedSolo
-      ? `<small>+${people(startingArmyBonus)} FROM COUNTRY MASTERY</small>`
+      ? `<small>+${people(startingArmyBonus)} FROM HIGHER ARMY CAPACITY</small>`
       : `<small>+${people(startingArmyBonus)} FULLY FREE · FADES OVER 30 YEARS</small>`
     : openingForceIsLimited
       ? '<small>OPENING LIMIT · FORCE CAPS UNLOCK TO 1× OVER 30 YEARS</small>'
       : '';
   const startingArmyTitle = openingForceIsBoosted
     ? accountManagedSolo
-      ? 'Permanent military progression earned with this country.'
-      : 'The player-only deployed surplus has no upkeep. It fades over thirty years and never refills; trained reserves use their separate bounded country curve, never the full Army multiplier.'
+        ? 'Deploys full at its mastery-raised Army Capacity and never starts above that cap.'
+      : 'The player-only deployed surplus has no upkeep. It fades over thirty years and never refills.'
     : openingForceIsLimited
-      ? `Opening limit: deployed Army and trained Reserve start at ×${format(startingArmyMultiplier, 2)}. Their Army and Reserve capacity limits unlock gradually to 1× over thirty years; new troops still require normal recruitment and training.`
-      : 'Normal 1× opening Army and trained Reserve, with no player-only opening boost or limit.';
+      ? `Opening limit: the deployed Army starts at ×${format(startingArmyMultiplier, 2)} and its capacity unlocks gradually to 1× over thirty years; new troops still require normal recruitment and training.`
+      : 'Normal 1× opening Army with no player-only opening boost or limit.';
   const startingArmyClass = openingForceIsBoosted
     ? 'stat-player-army--boost'
     : openingForceIsLimited ? 'stat-player-army--limit' : 'stat-player-army--neutral';
@@ -1386,12 +1364,11 @@ export function renderNationPickerV2(
     const explanation = `Neutral opening percentile ${percentileOfHundred} of 100; player and underdog bonuses excluded.`;
     return `<div class="country-preview__relative-stat ${className}" data-intro-source="neutral-opening" data-intro-percentile="${format(percentile * 100, 1)}" style="--intro-stat-color:${introMetricColorV2(percentile)}" title="${escapeHtml([extraTitle, explanation].filter(Boolean).join(' '))}" aria-label="${escapeHtml(`${label} ${value}. ${explanation}`)}"><span>${escapeHtml(label)}</span><strong>${value}</strong>${note}</div>`;
   };
-  const renderPreviewStats = (): string => `<div class="country-preview__stats" data-player-opening-reserve="${startingTrainedReserve}" data-scroll-session="${isLobby ? 'lobby' : 'intro'}:country-preview:${preview.id}">
+  const renderPreviewStats = (): string => `<div class="country-preview__stats" data-scroll-session="${isLobby ? 'lobby' : 'intro'}:country-preview:${preview.id}">
     ${relativeStat('attack', 'ATK', format(previewAttack, 2), 'stat-atk')}
     ${relativeStat('defense', 'DEF', format(previewDefense, 2), 'stat-def')}
     ${relativeStat('iq', 'IQ', format(previewMetrics.iqView.score, 1), 'stat-iq', '', iqTitle)}
     ${relativeStat('army', `PLAYER START ARMY · ×${format(startingArmyMultiplier, 2)}`, people(startingArmy), `stat-player-army ${startingArmyClass}`, startingArmyAdjustmentNote, startingArmyTitle)}
-    ${relativeStat('reserve', 'TRAINED RESERVE', people(startingTrainedReserve), 'stat-trained-reserve')}
     ${relativeStat('population', 'POPULATION', population(economy.population))}
     ${relativeStat('economy', 'ECONOMY', cash(economy.output), 'stat-economy')}
     ${relativeStat('treasury', 'STARTING TREASURY', cash(startingTreasury), 'stat-treasury')}
@@ -1951,9 +1928,12 @@ export function createMapEngineAdapter(
         ...player,
         isHuman: player.isHuman,
         controllerName: player.isHuman ? controllerNames.get(player.id) : undefined,
-        flagCountryId: player.isHuman
-          ? empireFlagCountryIds.get(player.id) ?? player.id
-          : player.id,
+        flagCountryId: engine.content.metadata?.scenarioId === 'survival'
+          && isSurvivalDawnlineNationV2(engine.state, player.id)
+          ? DAWNLINE_ACCORD_FLAG_NATION_ID
+          : player.isHuman
+            ? empireFlagCountryIds.get(player.id) ?? player.id
+            : player.id,
       } : undefined;
     },
     territoriesOf: (playerId) => {
@@ -2129,6 +2109,11 @@ export class WorldUIV2 {
   private apexTransmissionResumeSpeed?: WorldSpeedV2;
   private readonly warOutcomeQueue: WarOutcomeV2[] = [];
   private warOutcomeResumeSpeed?: WorldSpeedV2;
+  private survivalContactFastForwardDismissed = false;
+  private survivalContactFastForwardStopInProgress = false;
+  private survivalRealContactEstablished = false;
+  private survivalContactEstablishedUntil = 0;
+  private survivalContactEstablishedTimer?: number;
   private suppressMapUntil = 0;
   private readonly uiPointerIds = new Set<number>();
   private readonly locallyReadEventIds = new Set<number>();
@@ -2153,6 +2138,8 @@ export class WorldUIV2 {
       : undefined;
     this.introPreviewCountryId = preferredPreviewId ?? defaultPreviewId;
     this.introOpen = options.introOpen ?? true;
+    this.survivalRealContactEstablished = engine.content.metadata?.scenarioId === 'survival'
+      && hasRealSurvivalRogueHumanContactV2(engine.state);
     this.hud = document.querySelector<HTMLElement>('#hud')!;
     this.tooltip = document.querySelector<HTMLElement>('#tooltip')!;
     this.toastLayer = document.querySelector<HTMLElement>('#toast-layer')!;
@@ -2232,7 +2219,10 @@ export class WorldUIV2 {
     player: Pick<NationViewV2, 'id' | 'sigil'>,
     eager = false,
   ): string {
-    const countryId = this.options.empireFlagCountryIds?.get(player.id) ?? player.id;
+    const countryId = this.engine.content.metadata?.scenarioId === 'survival'
+      && isSurvivalDawnlineNationV2(this.engine.state, player.id)
+      ? DAWNLINE_ACCORD_FLAG_NATION_ID
+      : this.options.empireFlagCountryIds?.get(player.id) ?? player.id;
     return countryFlagHtml(countryId, player.sigil, eager);
   }
 
@@ -2243,7 +2233,12 @@ export class WorldUIV2 {
   }
 
   destroy(): void {
+    const restoreContactSpeed = this.engine.state.speed === SURVIVAL_CONTACT_FAST_FORWARD_SPEED_V2
+      && this.engine.clockAuthority !== false;
     this.unsubscribe?.();
+    if (restoreContactSpeed) {
+      this.engine.setSpeed(SURVIVAL_CONTACT_FAST_FORWARD_RETURN_SPEED_V2);
+    }
     this.empireDefenceGlowAnimation?.cancel();
     this.empireDefenceGlowAnimation = undefined;
     if (this.renderTimer !== undefined) window.clearTimeout(this.renderTimer);
@@ -2251,6 +2246,9 @@ export class WorldUIV2 {
     if (this.introSearchTimer !== undefined) window.clearTimeout(this.introSearchTimer);
     if (this.apexTransmissionRevealTimer !== undefined) {
       window.clearTimeout(this.apexTransmissionRevealTimer);
+    }
+    if (this.survivalContactEstablishedTimer !== undefined) {
+      window.clearTimeout(this.survivalContactEstablishedTimer);
     }
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('pointerup', this.onWindowPointerRelease, true);
@@ -2343,8 +2341,38 @@ export class WorldUIV2 {
     }
   };
 
+  private stopSurvivalContactFastForwardWhenResolved(): void {
+    if (this.survivalContactFastForwardStopInProgress
+      || !shouldStopSurvivalContactFastForwardV2(this.engine.state, this.engine.content)) return;
+    this.survivalContactFastForwardDismissed = true;
+    if (this.engine.content.metadata?.scenarioId === 'survival'
+      && hasRealSurvivalRogueHumanContactV2(this.engine.state)) {
+      this.survivalContactEstablishedUntil = performance.now() + 3_600;
+      if (this.survivalContactEstablishedTimer !== undefined) {
+        window.clearTimeout(this.survivalContactEstablishedTimer);
+      }
+      this.survivalContactEstablishedTimer = window.setTimeout(() => {
+        this.survivalContactEstablishedTimer = undefined;
+        this.survivalContactEstablishedUntil = 0;
+        this.render();
+      }, 3_650);
+    }
+    if (this.engine.clockAuthority === false) return;
+    this.survivalContactFastForwardStopInProgress = true;
+    try {
+      this.engine.setSpeed(SURVIVAL_CONTACT_FAST_FORWARD_RETURN_SPEED_V2);
+    } finally {
+      this.survivalContactFastForwardStopInProgress = false;
+    }
+  }
+
   private onStateChange(change: WorldChangeV2): void {
     this.tooltipContentCache.invalidate();
+    if (!this.survivalRealContactEstablished
+      && this.engine.content.metadata?.scenarioId === 'survival'
+      && hasRealSurvivalRogueHumanContactV2(this.engine.state)) {
+      this.survivalRealContactEstablished = true;
+    }
     const audioBasePresentation = {
       viewerPlayerId: this.viewerPlayerId(),
       humanPlayerIds: [...this.engine.state.humanPlayerIds],
@@ -2401,6 +2429,7 @@ export class WorldUIV2 {
     if (change.reason === 'conquest' || change.reason === 'nation-defeated'
       || change.reason === 'integration-complete') this.rankingCache = undefined;
     this.syncApexTransmissionPause();
+    this.stopSurvivalContactFastForwardWhenResolved();
     const highFrequency = change.reason === 'tick' || change.reason === 'battle' || change.reason === 'conquest';
     if (!highFrequency || change.reason === 'conquest') this.warTargetCache = undefined;
     if (!highFrequency) {
@@ -2619,8 +2648,11 @@ export class WorldUIV2 {
         owner.id,
       ).find((status) => status.territoryId === territoryId)
       : undefined;
+    const rogueRapidAssimilation = integrating
+      && owner.id === ROGUE_AI_NATION_ID_V2
+      && isSurvivalStateV2(this.engine.state);
     const integrationStatus = integrating
-      ? `${owner.isHuman ? 'APEX ' : ''}SIGNAL PURGE ${format(territory.integration * 100)}%${apexPurge ? ` · ${apexPurge.label}` : ''}`
+      ? `${rogueRapidAssimilation ? 'RAPID ASSIMILATION' : `${owner.isHuman ? 'APEX ' : ''}SIGNAL PURGE`} ${format(territory.integration * 100)}%${apexPurge ? ` · ${apexPurge.label}` : ''}`
       : 'LIBERATED CORE';
     const localHuman = owner.id === this.viewerPlayerId();
     const openingMobilisation = definition.initialOwnerId === owner.id
@@ -2890,7 +2922,7 @@ export class WorldUIV2 {
         <nav class="strategic-metrics v2-metrics simple-metrics topbar-status" aria-label="Command status">
           <button type="button" class="top-metric top-metric--economy" data-action="panel" data-panel="economy" title="Empire output, shared cash and annual growth; APEX income is included" aria-label="Open Economy. Empire output ${cash(economy.controlledOutput)}; shared treasury ${cash(human.treasury)}; projected net cashflow ${signedCash(annual(displayedNet))} per year including APEX income; annual growth ${signed(finance.annualEconomyGrowthRate * 100, 2)} percent"><span>ECONOMY</span><strong>${cash(economy.controlledOutput)}<i class="${finance.annualEconomyGrowthRate >= 0 ? 'is-positive' : 'is-negative'}">${signed(finance.annualEconomyGrowthRate * 100, 2)}%</i></strong><small><span>CASH ${cash(human.treasury)}</span><b class="${displayedNet >= 0 ? 'is-positive' : 'is-negative'}">${signedCash(annual(displayedNet))}/YR</b></small></button>
           <button type="button" class="top-metric top-metric--population" data-action="panel" data-panel="nation" title="Integrated population and annual change" aria-label="Open Nation. Integrated population ${format(integratedPopulation, 2)} million; annual change ${signed(populationDynamics.annualNetRate * 100, 2)} percent"><span>POPULATION</span><strong>${population(integratedPopulation)}<i class="${populationDynamics.annualNetRate >= 0 ? 'is-positive' : 'is-negative'}">${signed(populationDynamics.annualNetRate * 100, 2)}%</i></strong></button>
-          <button type="button" class="top-metric top-metric--combined-power top-metric--defence-stack ${wars.length ? 'has-war' : ''}" data-action="panel" data-panel="war" title="Empire Army with APEX Energy projected over it" aria-label="Open War. Shield-supported army power ${compactNumber(combinedPower)}. Base Empire Army power ${compactNumber(combatPower)}, ${armyReadiness.percent} percent ready, ${armyReadiness.status.toLowerCase()}, with ${people(human.trainedReserves)} trained reserves. ${apexPowerState.recovering ? `APEX Energy recharging at ${apexPowerState.integrityPercent} percent and currently unavailable` : `APEX Energy ${apexPowerState.integrityPercent} percent; Pulse Attack ${people(apexPowerState.pulseAttack)} inside the shared Empire hit cap`}"><span>EMPIRE DEFENCE</span><strong>${compactNumber(combinedPower)}<i class="topbar-army-ready ${armyReadiness.className}">${armyReadiness.value} ARMY</i></strong><i class="topbar-defence-stack" role="img" aria-label="Army readiness ${armyReadiness.percent} percent with APEX Energy ${apexPowerState.integrityPercent} percent overlaid"><b style="--army-ready:${armyReadiness.percent}%"></b><em class="${apexPowerState.recovering ? 'is-recharging' : 'is-active'}" style="--shield-integrity:${apexPowerState.integrityPercent}%"><i data-empire-defence-glow></i></em></i><small><span>ARMY ${compactNumber(combatPower)} · ${people(human.trainedReserves)} RES</span><b class="${apexPowerState.recovering ? 'is-warn' : 'is-positive'}">ENERGY ${apexPowerState.integrityPercent}% · PULSE ${people(apexPowerState.pulseAttack)}</b></small></button>
+          <button type="button" class="top-metric top-metric--combined-power top-metric--defence-stack ${wars.length ? 'has-war' : ''}" data-action="panel" data-panel="war" title="Empire Army with APEX Energy projected over it" aria-label="Open War. Shield-supported army power ${compactNumber(combinedPower)}. Base Empire Army power ${compactNumber(combatPower)}, ${armyReadiness.percent} percent ready, ${armyReadiness.status.toLowerCase()}. ${apexPowerState.recovering ? `APEX Energy recharging at ${apexPowerState.integrityPercent} percent and currently unavailable` : `APEX Energy ${apexPowerState.integrityPercent} percent; Army support plus ${format(apexPowerState.supportBonusPercent, 1)} percent`}"><span>EMPIRE DEFENCE</span><strong>${compactNumber(combinedPower)}<i class="topbar-army-ready ${armyReadiness.className}">${armyReadiness.value} ARMY</i></strong><i class="topbar-defence-stack" role="img" aria-label="Army readiness ${armyReadiness.percent} percent with APEX Energy ${apexPowerState.integrityPercent} percent overlaid"><b style="--army-ready:${armyReadiness.percent}%"></b><em class="${apexPowerState.recovering ? 'is-recharging' : 'is-active'}" style="--shield-integrity:${apexPowerState.integrityPercent}%"><i data-empire-defence-glow></i></em></i><small><span>ARMY ${compactNumber(combatPower)}</span><b class="${apexPowerState.recovering ? 'is-warn' : 'is-positive'}">ENERGY ${apexPowerState.integrityPercent}% · +${format(apexPowerState.supportBonusPercent, 1)}% SUPPORT</b></small></button>
           <button type="button" class="top-metric top-metric--logistics is-${logisticsReadiness.status}" data-action="panel" data-panel="war" title="Actual supply delivered to active war fronts" aria-label="Open War. War Supply ${logisticsReadiness.percent} percent. ${escapeHtml(logisticsDetail)}"><span>WAR SUPPLY</span><strong>${logisticsReadiness.percent}%<i>${logisticsReadiness.frontCount === 0 ? 'NO WAR' : logisticsReadiness.statusLabel}</i></strong><i class="topbar-progress-bar" role="progressbar" aria-label="War supply delivered" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${logisticsReadiness.percent}"><b style="width:${logisticsReadiness.percent}%"></b></i></button>
           <button type="button" class="top-metric top-metric--research" data-action="panel" data-panel="research" title="Active research and progress" aria-label="Open Research. ${escapeHtml(topbarResearchLabel)}, ${topbarResearchProgress} percent complete"><span>RESEARCH</span><strong>${topbarResearchProgress}%</strong><i class="topbar-progress-bar" role="progressbar" aria-label="Research progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${topbarResearchProgress}"><b style="width:${topbarResearchProgress}%"></b></i><small>${escapeHtml(topbarResearchLabel)}</small></button>
         </nav>
@@ -2906,6 +2938,9 @@ export class WorldUIV2 {
       </header>
 
       ${this.soundOptionsOpen ? this.renderSoundOptions() : ''}
+      ${!warOutcome && !apexTransmission && !this.introOpen && !spectating
+        && !this.confirmSurrenderOpen && !this.helpOpen && !this.inboxOpen
+        ? this.renderSurvivalContactFastForward() : ''}
 
       ${!spectating ? `<nav class="command-dock glass-panel" aria-label="Command center">
         <button class="${commandOpen && this.panelMode === 'war' ? 'is-active' : ''} ${wars.length ? 'has-war' : ''}" data-action="panel" data-panel="war"><i>⚔</i><span><b>WAR</b><small>${wars.length ? `${wars.length} active` : 'Choose target'}</small></span></button>
@@ -3003,10 +3038,10 @@ export class WorldUIV2 {
     const lancer = selectApexLancerPulseStatusV2(state, human.id);
     const capstoneLabels: string[] = [];
     if (force.capabilities.assaultSpecialist) {
-      capstoneLabels.push(`OVERDRIVE ${lancer.supportedAssaultCount}/3${lancer.nextPulseCharged ? ' · NEXT BATTLE CHARGED' : ''}`);
+      capstoneLabels.push(`OVERDRIVE ${lancer.supportedAssaultCount}/3${lancer.nextPulseCharged ? ' · NEXT ATTACK USES HALF ENERGY' : ''}`);
     }
     if (force.capabilities.defenseSpecialist) {
-      capstoneLabels.push('COUNTERMEASURE · 15% INTERCEPT RETURN');
+      capstoneLabels.push('ADAPTIVE BARRIER · +15% DEFENSIVE ENERGY EFFICIENCY');
     }
     if (force.capabilities.fieldHospital) {
       capstoneLabels.push('EMERGENCY REBOOT · 20% ONE-TIME RESTORE');
@@ -3029,7 +3064,7 @@ export class WorldUIV2 {
       <button class="panel-close" data-action="close-panel" aria-label="Close APEX status">×</button>
       <div class="drawer-heading drawer-heading--single"><div><h2>APEX</h2></div><strong class="${recovering ? 'is-warning' : 'is-positive'}">AUTO · ${escapeHtml(networkStatus)}</strong></div>
       <section class="commander-control__hero ${recovering ? 'is-recovering' : ''}"><div class="commander-control__crest" aria-hidden="true">⌁<i></i></div><div><span>EMPIRE-WIDE SHIELD NETWORK</span><strong>${format(activeFill, 0)}% ENERGY</strong><small>${protectedTerritoryCount} PROTECTED · ${escapeHtml(autonomy.headline.replace(/^APEX\s+/, ''))}${capstoneSummary ? ` · ${escapeHtml(capstoneSummary)}` : ''}</small></div></section>
-      <section class="commander-control__metrics commander-control__metrics--decision" aria-label="APEX neural shield status"><article><span>ENERGY</span><b>${format(activeFill, 0)}%</b><small>${compactNumber(force.shield.integrity)} / ${compactNumber(force.shield.maxIntegrity)} MAX · ${recovering ? 'Offline until fully charged' : 'Active neural dome'}</small></article><article class="is-elite"><span>ARMY MULTIPLIER</span><b>+${format(((network?.attackMultiplier ?? 1) - 1) * 100, 1)}% ATK</b><small>+${format(((network?.defenseMultiplier ?? 1) - 1) * 100, 1)}% DEF · PULSE ${people(network?.pulseAttack ?? 0)}</small></article><article><span>RESERVE ENERGY</span><b>${compactNumber(force.shield.rechargeBuffer)}</b><small>Stored for safe recharge</small></article><article class="is-good"><span>EMPIRE CONTRIBUTION</span><b>+${cash(annual(finance.apexContribution))}/YR</b><small>Autonomous network output</small></article><article class="${activeFrontCount > 0 && !recovering ? 'is-power' : ''}"><span>NETWORK SUPPORT</span><b>${escapeHtml(networkStatus)}</b><small>${escapeHtml(networkDetail)}</small></article></section>
+      <section class="commander-control__metrics commander-control__metrics--decision" aria-label="APEX neural shield status"><article><span>ENERGY</span><b>${format(activeFill, 0)}%</b><small>${compactNumber(force.shield.integrity)} / ${compactNumber(force.shield.maxIntegrity)} MAX · ${recovering ? 'Offline until fully charged' : 'Active neural dome'}</small></article><article class="is-elite"><span>ARMY SUPPORT</span><b>+${format(((network?.attackMultiplier ?? 1) - 1) * 100, 1)}% ATK</b><small>+${format(((network?.defenseMultiplier ?? 1) - 1) * 100, 1)}% DEF · only while Energy is online</small></article><article><span>BACKUP ENERGY</span><b>${compactNumber(force.shield.rechargeBuffer)}</b><small>Stored for safe recharge</small></article><article class="is-good"><span>EMPIRE CONTRIBUTION</span><b>+${cash(annual(finance.apexContribution))}/YR</b><small>Autonomous network output</small></article><article class="${activeFrontCount > 0 && !recovering ? 'is-power' : ''}"><span>NETWORK SUPPORT</span><b>${escapeHtml(networkStatus)}</b><small>${escapeHtml(networkDetail)}</small></article></section>
     </aside>`;
   }
 
@@ -3382,11 +3417,11 @@ export class WorldUIV2 {
     return `<aside class="world-panel command-drawer glass-panel command-drawer--clean command-drawer--unified polar-command polar-command--antarctica" data-scroll-session="${drawerScrollSessionId('polar:antarctica')}">
       <button class="panel-close" data-action="close-panel" aria-label="Close Rogue Empire intelligence">×</button>
       <div class="drawer-heading drawer-heading--compact drawer-heading--single"><div><h2>Codex Ascendancy</h2></div><strong class="${coreHeld ? 'is-negative' : 'is-positive'}">${escapeHtml(phaseLabel)}</strong></div>
-      <section class="rogue-empire-hero"><div class="country-flag">${rogue ? countryFlagHtml(rogue.id, rogue.sigil, true) : '◆'}</div><div><span>ROGUE AI · EMPIRE</span><strong>${escapeHtml(rogue?.name ?? 'Codex Ascendancy')}</strong><small>Weak outer states protect a massively fortified core.</small></div></section>
-      <section class="polar-campaign-overview" aria-label="Rogue empire status"><article><span>ROGUE ATTENTION</span><strong>${escapeHtml(attention.stage.replace('-', ' ').toUpperCase())}</strong><small>${format(attention.liberatedWorldShare * 100, 1)}% liberated · next stage ${attentionEta}</small></article><article><span>ANTARCTIC CONTROL</span><strong>${machineAntarctica}/${ANTARCTIC_SECTORS_V2.length}</strong><small>Sectors still held</small></article><article><span>NEXT WAVE</span><strong>${nextWave}</strong><small>Wave ${polar.globalWave} grows stronger</small></article><article><span>ACTIVE FRONTS</span><strong>${activeWars.length}</strong><small>${attention.stage === 'active' ? 'Permanent machine war' : 'Buildup only'}</small></article></section>
+      <section class="rogue-empire-hero"><div class="country-flag">${rogue ? countryFlagHtml(rogue.id, rogue.sigil, true) : '◆'}</div><div><span>ROGUE AI · ANTARCTIC EMPIRE</span><strong>${escapeHtml(rogue?.name ?? 'Codex Ascendancy')}</strong><small>Its real opening army is roughly 20% stronger than the full Arctic Dawnline bloc.</small></div></section>
+      <section class="polar-campaign-overview" aria-label="Rogue empire status"><article><span>ROGUE ATTENTION</span><strong>${escapeHtml(attention.stage.replace('-', ' ').toUpperCase())}</strong><small>${format(attention.liberatedWorldShare * 100, 1)}% liberated · next stage ${attentionEta}</small></article><article><span>ANTARCTIC CONTROL</span><strong>${machineAntarctica}/${ANTARCTIC_SECTORS_V2.length}</strong><small>Sectors still held</small></article><article><span>NEXT WAVE</span><strong>${nextWave}</strong><small>+5% verified Antarctic reinforcements each year</small></article><article><span>ACTIVE FRONTS</span><strong>${activeWars.length}</strong><small>${attention.stage === 'active' ? 'Permanent machine war' : 'Buildup only'}</small></article></section>
       <section class="polar-gateway-grid" aria-label="Antarctic gateway breach status">${gatewayRows}</section>
       <section class="polar-logistics-overview" aria-label="Live Rogue AI logistics"><article><span>TROOP MOVEMENTS · THIS WEEK</span><strong>${rogueLogistics?.movementCount ?? 0} MOVES · ${people(rogueLogistics?.movedManpower ?? 0)}</strong><small>Machine troops transferred</small></article><article><span>FROM ANTARCTICA</span><strong>${rogueLogistics?.antarcticMovementCount ?? 0} MOVES · ${people(rogueLogistics?.antarcticMovedManpower ?? 0)}</strong><small>Routes entering or crossing the ice</small></article><article><span>NAVAL ROUTES</span><strong>${rogueLogistics?.navalMovementCount ?? 0} MOVES · ${format(rogueLogistics?.navalMeanDistanceKm ?? 0, 0)} KM AVG</strong><small>${cash(rogueLogistics?.navalCost ?? 0)} paid · ${people(rogueLogistics?.navalMovedManpower ?? 0)} moved</small></article><article><span>FRONT SUPPLY</span><strong>${(rogueLogistics?.frontOperationCount ?? 0) > 0 ? `${format((rogueLogistics?.averageFrontSupply ?? 0) * 100, 1)}% AVG` : 'MOBILISING'}</strong><small>${(rogueLogistics?.frontOperationCount ?? 0) > 0 ? `${format((rogueLogistics?.weakestFrontSupply ?? 0) * 100, 1)}% weakest · ${rogueLogistics?.frontOperationCount ?? 0} routes` : 'No active machine route'}</small></article></section>
-      <section class="polar-earth-grid"><article><span>MACHINE SPREAD</span><strong>${occupiedWorld} WORLD TERRITORIES</strong><small>Only countries physically captured by Antarctic-origin waves become zero-production transit nodes.</small></article><article><span>INDEPENDENT RESISTANCE</span><strong>${independentWorldNations} DAMAGED NATIONS</strong><small>They retain roughly 10% strength, keep national quality and fight until conquered.</small></article></section>
+      <section class="polar-earth-grid"><article><span>PHYSICAL EXPANSION</span><strong>${occupiedWorld} WORLD CAPTURES</strong><small>Every conquest advances from Antarctica through an open gateway and enters rapid assimilation.</small></article><article><span>SOVEREIGN WORLD</span><strong>${independentWorldNations} INDEPENDENT COMMANDS</strong><small>Every country opens fully mobilised with normal resources; Greenland-founded Dawnline remains separate.</small></article></section>
       <section class="polar-boss-card ${coreHeld ? 'is-sealed' : 'is-exposed'}"><div><span>ZERO-POINT CORE · SOVEREIGN CAPITAL</span><strong>${coreHeld ? 'THE STRONGEST MACHINE STATE' : 'CORE TAKEN · SURVIVAL WON'}</strong><small>${coreHeld ? `${compactNumber(core ? this.engine.territoryPower(coreId) : 0)} power · ${people(core?.army.manpower ?? 0)} active · capture this territory to end the invasion.` : 'The Codex Ascendancy can no longer generate invasion waves.'}</small></div></section>
       ${sectorGroups}
     </aside>`;
@@ -3544,7 +3579,7 @@ export class WorldUIV2 {
 
         <section class="decision-stat-grid decision-stat-grid--economy" aria-label="Economy status">
           <article class="${human.treasury >= 0 ? 'is-primary' : 'is-danger'}"><span>TREASURY</span><strong>${cash(human.treasury)}</strong><small>${human.treasury >= 0 ? 'Available cash' : 'Deficit'}</small></article>
-          <article class="${reserveCoverage >= 1 ? 'is-good' : 'is-warn'}"><span>RESERVE</span><strong>${format(Math.max(0, reserveCoverage) * 100, 1)}%</strong><small>${cash(finance.reserveTarget)} target</small></article>
+          <article class="${reserveCoverage >= 1 ? 'is-good' : 'is-warn'}"><span>CASH BUFFER</span><strong>${format(Math.max(0, reserveCoverage) * 100, 1)}%</strong><small>${cash(finance.reserveTarget)} target</small></article>
           <article><span>ECONOMY</span><strong>${cash(economy.controlledOutput)}</strong><small class="${growth >= 0 ? 'is-positive' : 'is-negative'}">${signed(growth * 100, 2)}% / year</small></article>
           <article><span>TAX</span><strong>${format(economy.taxRate * 100, 1)}%</strong><small>${cash(annual(finance.revenue))} / year</small></article>
         </section>
@@ -3671,9 +3706,6 @@ export class WorldUIV2 {
     const defenseResultMultiplier = defense
       / Math.max(0.000001, baseRatings.defense * combinedQuality);
     const armyReady = clamp(army.fillRatio, 0, 1);
-    const reserveReady = finance.trainedReserveCapacity > 0
-      ? clamp(human.trainedReserves / finance.trainedReserveCapacity, 0, 1)
-      : 0;
     const upkeepReady = clamp(finance.mandatoryFundingRatio, 0, 1.25);
     const openingMultiplier = openingArmyCapacityMultiplierV2(
       this.engine.state,
@@ -3709,7 +3741,6 @@ export class WorldUIV2 {
       <div class="military-readiness-head"><span>FORCE READINESS</span><strong class="${armyReady >= 0.55 && upkeepReady >= 0.95 ? 'is-positive' : 'is-warn'}">${armyReady >= 0.55 && upkeepReady >= 0.95 ? 'OPERATIONAL' : 'RECOVERING'}</strong></div>
       <div class="military-readiness-grid">
         ${readinessRow('ACTIVE FORCE', `${people(army.deployed)} / ${people(army.capacity)}`, 'deployed / capacity', armyReady, armyReady >= 0.55 ? 'is-good' : 'is-warn')}
-        ${readinessRow('TRAINED RESERVE', `${people(human.trainedReserves)} / ${people(finance.trainedReserveCapacity)}`, `${finance.reserveDeployment > 0 ? `−${people(finance.reserveDeployment)} deployed` : `+${people(finance.reserveTraining)} trained`} this week`, reserveReady, reserveReady >= 0.5 ? 'is-good' : 'is-neutral')}
         ${readinessRow('UPKEEP FUNDED', `${cash(annual(finance.fundedArmyUpkeep))} / ${cash(annual(finance.armyUpkeep))}`, 'funded / required each year', upkeepReady, upkeepReady >= 0.999 ? 'is-good' : 'is-warn', 1.25)}
       </div>
       ${openingStatus}
@@ -3737,7 +3768,13 @@ export class WorldUIV2 {
       this.engine.content,
       human.id,
     );
+    const survivalScenario = isSurvivalStateV2(this.engine.state)
+      || this.engine.content.metadata?.scenarioId === 'survival';
+    const survivalCounteroffensiveTargets = survivalScenario
+      ? this.engine.survivalCounteroffensiveTargets(human.id)
+      : [];
     const recommendations = humanWarsUnlocked
+      && !survivalScenario
       ? this.warTargetRecommendations(human.id)
       : [];
     const apexOpeningBriefingKnown = this.engine.content.metadata?.scenarioId !== 'standard-2026'
@@ -3800,12 +3837,16 @@ export class WorldUIV2 {
         return `<article class="war-primary-front${apexAssigned ? ' is-assigned' : ''}" style="--enemy:${enemy?.cssColor ?? '#ff8179'}"><div><span>${candidate.mission === 'assault-support' ? 'ATTACK' : 'DEFEND'} · ${escapeHtml(warAccessLabel(candidate.access))}</span><strong>${escapeHtml(sourceName)} → ${escapeHtml(targetName)}</strong><small>POWER ${compactNumber(ownLocalPower)} / ${compactNumber(enemyLocalPower)} · ${escapeHtml(apexDetail)}</small></div></article>`;
       }).join('');
     const targetIntel = humanWarsUnlocked
-      ? `<section class="war-primary-targets"><header><strong>${primaryFrontRows ? 'New campaigns' : 'Best targets'}</strong><small>Power · chance · route · recurring cost</small></header><div class="war-intel-list war-intel-list--compact">${recommendations.length ? recommendations.map((candidate, index) => this.renderTargetRecommendation(
-        candidate,
-        index,
-        candidate.declaration.access !== 'none'
-          ? this.cachedWarLogisticsPreview(human.id, candidate.targetId) : undefined,
-      )).join('') : '<div class="empty-state">No legal target is currently in land or naval range.</div>'}</div></section>`
+      ? survivalScenario
+        ? `<section class="war-primary-targets war-primary-targets--counteroffensive"><header><strong>Counteroffensive fronts</strong><small>Choose the exact Rogue territory to reclaim</small></header><div class="war-intel-list war-intel-list--compact">${survivalCounteroffensiveTargets.length ? survivalCounteroffensiveTargets.map((target, index) => (
+          this.renderSurvivalCounteroffensiveTarget(target, index)
+        )).join('') : '<div class="empty-state">No adjacent Rogue territory can be pushed from a combat-ready territory.</div>'}</div></section>`
+        : `<section class="war-primary-targets"><header><strong>${primaryFrontRows ? 'New campaigns' : 'Best targets'}</strong><small>Power · chance · route · recurring cost</small></header><div class="war-intel-list war-intel-list--compact">${recommendations.length ? recommendations.map((candidate, index) => this.renderTargetRecommendation(
+          candidate,
+          index,
+          candidate.declaration.access !== 'none'
+            ? this.cachedWarLogisticsPreview(human.id, candidate.targetId) : undefined,
+        )).join('') : '<div class="empty-state">No legal target is currently in land or naval range.</div>'}</div></section>`
       : warsUnlocked
         ? '<section class="war-command-lock war-command-lock--compact" aria-label="APEX is preparing your first target"><strong>APEX IS PREPARING YOUR FIRST TARGET</strong></section>'
         : apexOpeningBriefingKnown
@@ -3815,14 +3856,25 @@ export class WorldUIV2 {
       <aside class="world-panel command-drawer glass-panel war-command command-drawer--clean command-drawer--unified command-drawer--decision" data-scroll-session="${drawerScrollSessionId('war')}">
         <button class="panel-close" data-action="close-panel" aria-label="Close war command">×</button>
         <div class="drawer-heading drawer-heading--compact drawer-heading--single"><div><h2>War</h2></div><strong class="${wars.length ? 'is-negative' : army.fillRatio >= 0.55 ? 'is-positive' : 'is-warn'}">${wars.length ? 'AT WAR' : army.fillRatio >= 0.55 ? 'READY' : 'REBUILDING'}</strong></div>
-        <section class="decision-stat-grid decision-stat-grid--war" aria-label="Military status"><article class="is-primary"><span>TOTAL POWER</span><strong>${compactNumber(combinedPower)}</strong><small>${apexShield.supportBonusPercent > 0 ? `Army ${compactNumber(currentPower)} · Pulse ${people(apexShield.pulseAttack)}` : 'Empire combat power'}</small></article><article class="${army.fillRatio >= 0.55 ? 'is-good' : 'is-warn'}"><span>ARMY READY</span><strong>${format(army.fillRatio * 100, 0)}%</strong><small>${people(army.deployed)} active</small></article><article class="logistics-${logisticsReadiness.status}${logisticsReadiness.status === 'critical' ? ' is-danger' : logisticsReadiness.status === 'strained' ? ' is-warn' : logisticsReadiness.status === 'ready' ? ' is-good' : ''}"><span>WAR SUPPLY</span><strong>${logisticsReadiness.percent}% ${logisticsReadiness.frontCount === 0 ? 'NO WAR' : logisticsReadiness.statusLabel}</strong><small>${escapeHtml(logisticsSummary)}</small></article><article class="${finance.warOperations > 0 ? 'is-warn' : ''}"><span>WAR COST</span><strong>${cash(annual(finance.warOperations))}</strong><small>/ year</small></article></section>
+        <section class="decision-stat-grid decision-stat-grid--war" aria-label="Military status"><article class="is-primary"><span>TOTAL POWER</span><strong>${compactNumber(combinedPower)}</strong><small>${apexShield.supportBonusPercent > 0 ? `Army ${compactNumber(currentPower)} · APEX +${format(apexShield.supportBonusPercent, 1)}%` : 'Empire combat power'}</small></article><article class="${army.fillRatio >= 0.55 ? 'is-good' : 'is-warn'}"><span>ARMY READY</span><strong>${format(army.fillRatio * 100, 0)}%</strong><small>${people(army.deployed)} active</small></article><article class="logistics-${logisticsReadiness.status}${logisticsReadiness.status === 'critical' ? ' is-danger' : logisticsReadiness.status === 'strained' ? ' is-warn' : logisticsReadiness.status === 'ready' ? ' is-good' : ''}"><span>WAR SUPPLY</span><strong>${logisticsReadiness.percent}% ${logisticsReadiness.frontCount === 0 ? 'NO WAR' : logisticsReadiness.statusLabel}</strong><small>${escapeHtml(logisticsSummary)}</small></article><article class="${finance.warOperations > 0 ? 'is-warn' : ''}"><span>WAR COST</span><strong>${cash(annual(finance.warOperations))}</strong><small>/ year</small></article></section>
         ${primaryFrontRows ? `<section class="war-primary-fronts" aria-label="Priority active fronts"><header><strong>Priority fronts</strong><small>APEX allocates the shared shield automatically</small></header>${primaryFrontRows}</section>` : ''}
         ${targetIntel}
-        <details class="decision-details" data-disclosure-session="drawer:war:army"><summary>Army, ATK, DEF &amp; reserves</summary><div class="decision-details__body">${this.renderMilitaryCommandOverview(human, economy, finance)}</div></details>
+        <details class="decision-details" data-disclosure-session="drawer:war:army"><summary>Army, ATK &amp; DEF</summary><div class="decision-details__body">${this.renderMilitaryCommandOverview(human, economy, finance)}</div></details>
         ${wars.length ? `<details class="decision-details" data-disclosure-session="drawer:war:campaigns"><summary>Active campaigns <b>${wars.length}</b></summary><div class="decision-details__body"><div class="war-cards">${wars.map((war) => this.renderWarCard(war, human.id, finance, logisticsReadiness, warEstimates.get(war.id), wars.length)).join('')}</div></div></details>` : ''}
         <details class="decision-details" data-disclosure-session="drawer:war:antarctic-access"><summary>Antarctic access</summary><div class="decision-details__body">${this.renderAntarcticaGatewayCard()}</div></details>
       </aside>
     `;
+  }
+  private renderSurvivalCounteroffensiveTarget(
+    target: SurvivalCounteroffensiveTargetV2,
+    index: number,
+  ): string {
+    const rogue = this.engine.player(ROGUE_AI_NATION_ID_V2)!;
+    const sourceName = this.engine.content.territories[target.sourceId]?.name ?? target.sourceId;
+    const targetName = this.engine.content.territories[target.targetId]?.name ?? target.targetId;
+    const targetPower = this.engine.territoryPower(target.targetId);
+    const stateLabel = target.active ? 'ACTIVE' : index === 0 ? 'RECOMMENDED FRONT' : 'AVAILABLE FRONT';
+    return `<article class="war-intel-card war-intel-card--compact war-intel-card--counteroffensive${target.active ? ' is-active-front' : ''}" style="--enemy:${rogue.cssColor}"><i class="country-flag">${this.playerFlagHtml(rogue)}</i><div><span>${stateLabel} · ${escapeHtml(warAccessLabel(target.access))}</span><strong>${escapeHtml(targetName)}</strong><small class="war-intel-card__decision"><b>${escapeHtml(sourceName)} → ${escapeHtml(targetName)}</b><span>ENEMY POWER ${compactNumber(targetPower)}</span></small></div><button class="${target.active ? 'secondary-button' : 'danger-button'}" data-action="push-survival-front" data-territory="${target.targetId}" data-map-target="${target.targetId}" ${target.active ? 'disabled aria-label="Counteroffensive front active"' : `aria-label="Push counteroffensive into ${escapeHtml(targetName)}"`}><span>${target.active ? 'ACTIVE' : 'PUSH FRONT'}</span></button></article>`;
   }
   private warTargetRecommendations(humanId: PlayerId): WarTargetCandidate[] {
     const tickBucket = Math.floor(this.engine.state.tick / 6);
@@ -3840,10 +3892,11 @@ export class WorldUIV2 {
       const declaration = this.engine.warDeclarationStatus(humanId, targetId);
       if (!declaration.allowed || declaration.access === 'none') return [];
       const forecast = this.engine.warForecast(humanId, targetId);
+      if (forecast.access === 'none') return [];
       const chance = forecast.winChance;
       const economy = this.engine.nationalEconomy(targetId);
       const iq = selectNationalIqViewV2(this.engine.state, this.engine.content, targetId);
-      const distanceKm = selectWarRouteDistanceKmV2(
+      const distanceKm = forecast.routeDistanceKm ?? selectWarRouteDistanceKmV2(
         this.engine.state,
         this.engine.content,
         humanId,
@@ -3862,7 +3915,7 @@ export class WorldUIV2 {
       const sourceArmy = sourceId ? this.engine.state.territories[sourceId]?.army : undefined;
       const stagingReadiness = sourceArmy && sourceArmy.capacity > 0
         ? clamp(sourceArmy.manpower / sourceArmy.capacity, 0, 1) : 0;
-      const preparationWeeks = declaration.access === 'naval'
+      const preparationWeeks = forecast.access === 'naval'
         ? Math.max(4, Math.ceil((distanceKm ?? 2_500) / 1_200)) : 0;
       const mobilizationWeeks = campaignProspectiveWarMobilizationTicksV2(
         this.engine.state,
@@ -3875,16 +3928,17 @@ export class WorldUIV2 {
         target,
         declaration,
         chance,
-        access: declaration.access,
+        access: forecast.access,
         gdpPerCapitaThousands: economy.wealthPerPerson,
         nationalIq: iq.score,
         distanceKm,
         sameRegion,
         existingBeachhead,
         frontSupply: forecast.attackerSupply,
-        transferThroughput: declaration.access === 'land'
-          ? clamp(forecast.attackerSupply, 0, 1)
-          : clamp(forecast.attackerSupply * 0.5, 0, 0.5),
+        transferThroughput: clamp(Math.min(
+          forecast.attackerSupply,
+          forecast.routeThroughputMultiplier ?? (forecast.access === 'naval' ? 0.5 : 1),
+        ), 0, 1),
         stagingReadiness,
         preparationWeeks,
         etaWeeks: mobilizationWeeks < WAR_MOBILIZATION_TICKS
@@ -3958,7 +4012,6 @@ export class WorldUIV2 {
     const score = war.attackerId === humanId ? war.warScore : -war.warScore;
     const ownArmy = this.totalCombatStrength(humanId);
     const enemyArmy = this.totalCombatStrength(enemyId);
-    const ownReserve = this.engine.state.players[humanId]?.trainedReserves ?? 0;
     const operations = allWarOperations(war);
     const accessKinds = new Set(operations.map((front) => front.access));
     const accessLabel = operations.length === 0 ? 'assigning fronts'
@@ -3983,7 +4036,7 @@ export class WorldUIV2 {
     const logisticsDetail = frontLogistics
       ? `${frontLogistics.percent}% SUPPLIED`
       : 'MOBILISING';
-    return `<article class="war-card-compact ${weakestLogistics ? 'is-logistics-weakest' : ''}" style="--enemy:${enemy.cssColor}"><div class="war-card-compact__head"><i class="country-flag">${this.playerFlagHtml(enemy)}</i><div><strong>${escapeHtml(enemy.name)}</strong><small>Week ${warAge} · ${war.battles} battles · ${accessLabel}</small></div><b class="${score < 0 ? 'danger-text' : 'is-positive'}">${signed(score)}</b></div><div class="war-card-compact__state"><span>${escapeHtml(status)}</span><small>${cash(perWarCost)}/year</small></div><div class="war-card-compact__metrics"><span><small>ARMIES</small><b>${people(ownArmy.deployed)} / ${people(enemyArmy.deployed)}</b><small>RESERVE ${people(ownReserve)} / ${people(enemy.trainedReserves)}</small></span><span class="logistics-${frontLogistics?.status ?? 'ready'}"><small>WAR SUPPLY</small><b>${escapeHtml(logisticsDetail)}</b><small>${escapeHtml(logisticsRoute)}${frontLogistics ? ` · NEXT BATTLE ${frontLogistics.nextBattleWeeks}W` : ''}</small></span><span><small>MILITARY LOST</small><b>−${people(estimate?.totalOwnLosses ?? 0)} / −${people(estimate?.totalEnemyLosses ?? 0)}</b></span><span><small>EST. END</small><b>${escapeHtml(eta)}</b></span></div></article>`;
+    return `<article class="war-card-compact ${weakestLogistics ? 'is-logistics-weakest' : ''}" style="--enemy:${enemy.cssColor}"><div class="war-card-compact__head"><i class="country-flag">${this.playerFlagHtml(enemy)}</i><div><strong>${escapeHtml(enemy.name)}</strong><small>Week ${warAge} · ${war.battles} battles · ${accessLabel}</small></div><b class="${score < 0 ? 'danger-text' : 'is-positive'}">${signed(score)}</b></div><div class="war-card-compact__state"><span>${escapeHtml(status)}</span><small>${cash(perWarCost)}/year</small></div><div class="war-card-compact__metrics"><span><small>ACTIVE ARMIES</small><b>${people(ownArmy.deployed)} / ${people(enemyArmy.deployed)}</b><small>All available troops feed active fronts</small></span><span class="logistics-${frontLogistics?.status ?? 'ready'}"><small>WAR SUPPLY</small><b>${escapeHtml(logisticsDetail)}</b><small>${escapeHtml(logisticsRoute)}${frontLogistics ? ` · NEXT BATTLE ${frontLogistics.nextBattleWeeks}W` : ''}</small></span><span><small>MILITARY LOST</small><b>−${people(estimate?.totalOwnLosses ?? 0)} / −${people(estimate?.totalEnemyLosses ?? 0)}</b></span><span><small>EST. END</small><b>${escapeHtml(eta)}</b></span></div></article>`;
   }
 
   private renderTerritoryPanel(
@@ -4047,15 +4100,19 @@ export class WorldUIV2 {
       ? territory.army.manpower / deploymentCeiling : 0;
     const unlockedPopulation = territory.population * territory.integration;
     const unlockedOutput = territory.economy * territory.integration;
+    const rogueRapidAssimilation = owner.id === ROGUE_AI_NATION_ID_V2
+      && isSurvivalStateV2(this.engine.state)
+      && Boolean(territory.integrationProgram);
     const panelStatus = survivalTransitOnly ? 'SUPPLY CORRIDOR'
       : activeWar ? 'WAR LIVE'
-      : territory.integrationProgram ? `${owner.isHuman ? 'APEX ' : ''}SIGNAL PURGE`
+      : territory.integrationProgram
+        ? rogueRapidAssimilation ? 'RAPID ASSIMILATION' : `${owner.isHuman ? 'APEX ' : ''}SIGNAL PURGE`
       : isOwnTerritory ? 'YOUR CORE' : 'FOREIGN TARGET';
     const integrationPayer = isOwnTerritory ? 'YOU PAY' : `${owner.shortName.toUpperCase()} PAYS`;
     const integrationPanel = survivalTransitOnly
       ? '<section class="territory-integration-card territory-integration-card--corridor" aria-label="Supply corridor, transit only"><div class="territory-integration-card__head"><span>SUPPLY CORRIDOR</span><strong>TRANSIT ONLY</strong></div><small>Transit control only · no local production or recruits.</small></section>'
       : territory.integrationProgram
-      ? `<section class="territory-integration-card"><div class="territory-integration-card__head"><span>${owner.isHuman ? 'APEX ' : ''}SIGNAL PURGE · ${escapeHtml(integratingCore?.shortName ?? definition.name).toUpperCase()}</span><strong>${escapeHtml(apexPurgeStatus?.label ?? 'INTEGRATING')} · ${format(integrationPercent, 1)}%</strong></div><i role="progressbar" aria-label="Signal purge progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${format(integrationPercent, 1)}"><b style="width:${integrationPercent}%"></b></i><div class="territory-integration-card__metrics"><div><span>ETA</span><strong>${integrationWeeks === undefined ? 'WAITING FOR SUPPLY' : compactWarTime(integrationWeeks)}</strong></div><div><span>${escapeHtml(integrationPayer)}</span><strong class="is-negative">−${cash(territoryIntegrationAnnualCost)} / YEAR</strong></div></div><small>${cash(unlockedOutput)} active output · permanent ${escapeHtml(owner.shortName)} core at completion${guardWeeks > 0 ? ` · guard ${guardWeeks}w` : ''}</small></section>`
+      ? `<section class="territory-integration-card"><div class="territory-integration-card__head"><span>${rogueRapidAssimilation ? 'RAPID ASSIMILATION' : `${owner.isHuman ? 'APEX ' : ''}SIGNAL PURGE`} · ${escapeHtml(integratingCore?.shortName ?? definition.name).toUpperCase()}</span><strong>${escapeHtml(rogueRapidAssimilation ? '4× INTEGRATION' : apexPurgeStatus?.label ?? 'INTEGRATING')} · ${format(integrationPercent, 1)}%</strong></div><i role="progressbar" aria-label="${rogueRapidAssimilation ? 'Rapid assimilation' : 'Signal purge'} progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${format(integrationPercent, 1)}"><b style="width:${integrationPercent}%"></b></i><div class="territory-integration-card__metrics"><div><span>ETA</span><strong>${integrationWeeks === undefined ? 'WAITING FOR SUPPLY' : compactWarTime(integrationWeeks)}</strong></div><div><span>${escapeHtml(integrationPayer)}</span><strong class="is-negative">−${cash(territoryIntegrationAnnualCost)} / YEAR</strong></div></div><small>${cash(unlockedOutput)} active output · permanent ${escapeHtml(owner.shortName)} core at completion${guardWeeks > 0 ? ` · guard ${guardWeeks}w` : ''}</small></section>`
       : '';
     const blockedWarNote = !activeWar && declaration && !declaration.allowed
       ? `<div class="war-rule-note is-blocked"><b>WAR UNAVAILABLE</b><span>${escapeHtml(declaration.reason ?? 'Requirements are not met.')}</span></div>`
@@ -4070,7 +4127,59 @@ export class WorldUIV2 {
       return sourceOwner === humanId && operation.targetId === territoryId
         || targetOwner === humanId && operation.sourceId === territoryId;
     }) : undefined;
-    const primaryWarAction = owner.id === humanId ? '' : `<section class="territory-target-command ${activeWar ? territoryFront ? 'is-active-front' : 'is-blocked' : !declaration?.allowed ? 'is-blocked' : ''}"><div class="territory-target-power"><span>COMBAT POWER</span><strong>${compactNumber(power)}</strong><small>#${ownerRank} GLOBAL MILITARY</small></div><div class="territory-target-systems"><span><small>ATTACK</small><b>${format(attack, 2)}</b></span><span><small>DEFENCE</small><b>${format(defense, 2)}</b></span><span><small>READY</small><b>${format(manpowerRatio * 100)}%</b></span></div><div class="territory-target-decision"><span>${activeWar ? territoryFront ? 'ACTIVE FRONT · APEX AUTO-SHIELD' : 'WAR ACTIVE · NO FRONT HERE' : declaration?.allowed ? `${warAccessLabel(access)} ATTACK ROUTE` : 'ATTACK UNAVAILABLE'}</span>${activeWar ? '' : `<button class="danger-button" data-action="quick-war" data-player="${owner.id}" ${declaration?.allowed ? '' : 'disabled'}>${declaration?.allowed ? 'REVIEW ATTACK' : 'WAR UNAVAILABLE'}</button>`}</div></section>${declaration?.warning ? `<div class="war-rule-note is-warning"><b>WEAK-ARMY WARNING</b><span>${escapeHtml(declaration.warning)}</span></div>` : ''}${blockedWarNote}`;
+    // Loaded/migrated Survival saves can carry stale run metadata. Scenario
+    // identity plus Rogue ownership keeps every captured sovereign target on
+    // the dedicated physical counteroffensive path.
+    const isSurvivalRogueTarget = owner.id === ROGUE_AI_NATION_ID_V2
+      && (isSurvivalStateV2(this.engine.state)
+        || this.engine.content.metadata?.scenarioId === 'survival'
+        || survivalTransitOnly);
+    const survivalCounteroffensiveTarget = isSurvivalRogueTarget
+      ? this.engine.survivalCounteroffensiveTargets(humanId).find((target) => (
+        target.targetId === territoryId
+      ))
+      : undefined;
+    const activePlayerCounteroffensive = survivalCounteroffensiveTarget?.active === true;
+    const adjacentPlayerStep = [...definition.connections]
+      .filter((connection) => this.engine.state.territories[connection.targetId]?.owner === humanId)
+      .sort((left, right) => Number(left.kind === 'sea') - Number(right.kind === 'sea')
+        || left.targetId.localeCompare(right.targetId))[0];
+    const adjacentRouteStep = [...definition.connections]
+      .filter((connection) => (
+        (this.engine.content.territories[connection.targetId]?.kind ?? 'sovereign') === 'sovereign'
+      ))
+      .sort((left, right) => Number(left.kind === 'sea') - Number(right.kind === 'sea')
+        || left.targetId.localeCompare(right.targetId))[0];
+    const routeBlocker = adjacentPlayerStep
+      ? `REINFORCE ${this.engine.content.territories[adjacentPlayerStep.targetId]?.name ?? adjacentPlayerStep.targetId} BEFORE PUSHING`
+      : adjacentRouteStep
+        ? `CAPTURE ${this.engine.content.territories[adjacentRouteStep.targetId]?.name ?? adjacentRouteStep.targetId} FIRST`
+        : 'NO ADJACENT EMPIRE ROUTE';
+    const targetState = isSurvivalRogueTarget && activeWar
+      ? activePlayerCounteroffensive ? 'ACTIVE COUNTEROFFENSIVE'
+        : survivalCounteroffensiveTarget ? 'ROGUE FRONT · COUNTERATTACK'
+        : `ROUTE BLOCKED · ${routeBlocker}`
+      : activeWar
+      ? territoryFront ? 'ACTIVE FRONT · APEX SHIELD ONLINE'
+        : 'WAR ACTIVE · NO DIRECT CONTACT'
+      : declaration?.allowed ? `${warAccessLabel(access)} ATTACK ROUTE`
+        : 'ATTACK UNAVAILABLE';
+    const targetButton = isSurvivalRogueTarget && activeWar
+      ? activePlayerCounteroffensive
+        ? '<button class="secondary-button" disabled aria-label="Counteroffensive front active">ACTIVE</button>'
+        : survivalCounteroffensiveTarget
+          ? `<button class="danger-button" data-action="push-survival-front" data-territory="${territoryId}" data-map-target="${territoryId}">PUSH FRONT</button>`
+          : ''
+      : activeWar ? ''
+      : `<button class="danger-button" data-action="quick-war" data-player="${owner.id}" data-map-target="${territoryId}" ${declaration?.allowed ? '' : 'disabled'}>${declaration?.allowed ? 'REVIEW ATTACK' : 'WAR UNAVAILABLE'}</button>`;
+    const targetBlocked = isSurvivalRogueTarget && activeWar
+      ? !survivalCounteroffensiveTarget
+      : activeWar
+      ? !territoryFront
+      : !declaration?.allowed;
+    const targetIsActive = isSurvivalRogueTarget
+      ? activePlayerCounteroffensive : Boolean(territoryFront);
+    const primaryWarAction = owner.id === humanId ? '' : `<section class="territory-target-command ${targetIsActive ? 'is-active-front' : targetBlocked ? 'is-blocked' : ''}"><div class="territory-target-power"><span>COMBAT POWER</span><strong>${compactNumber(power)}</strong><small>#${ownerRank} GLOBAL MILITARY</small></div><div class="territory-target-systems"><span><small>ATTACK</small><b>${format(attack, 2)}</b></span><span><small>DEFENCE</small><b>${format(defense, 2)}</b></span><span><small>READY</small><b>${format(manpowerRatio * 100)}%</b></span></div><div class="territory-target-decision"><span>${targetState}</span>${targetButton}</div></section>${declaration?.warning ? `<div class="war-rule-note is-warning"><b>WEAK-ARMY WARNING</b><span>${escapeHtml(declaration.warning)}</span></div>` : ''}${blockedWarNote}`;
     const otherHumanPlayer = owner.id !== humanId && ownerHumanControlled;
     const allied = otherHumanPlayer && this.engine.areAllied(humanId, owner.id);
     const allianceOffer = otherHumanPlayer ? this.engine.state.allianceOffers.find((offer) => (
@@ -4092,7 +4201,7 @@ export class WorldUIV2 {
     const ownerIntel = isOwnTerritory ? '' : `
       <span class="section-label territory-section-label">OWNER INTEL</span>
       <section class="territory-owner-intel unified-stat-grid" aria-label="${escapeHtml(owner.name)} national intelligence">
-        <article class="${manpowerRatio < 0.55 ? 'is-warn' : 'is-good'}"><span>ARMY</span><strong>${armyCapacityLabel(army.deployed, army.capacity)}</strong><small>${format(manpowerRatio * 100)}% · reserve ${people(owner.trainedReserves)}</small></article>
+        <article class="${manpowerRatio < 0.55 ? 'is-warn' : 'is-good'}"><span>ARMY</span><strong>${armyCapacityLabel(army.deployed, army.capacity)}</strong><small>${format(manpowerRatio * 100)}% ready</small></article>
         <article><span>POWER</span><strong>${compactNumber(power)}</strong><small>Current combat power</small></article>
         <article><span>IQ</span><strong>${format(iq.score, 1)}</strong><small>National systems score</small></article>
         <article><span>ECONOMY</span><strong>${cash(economy.controlledOutput)}</strong><small>${cash(economy.wealthPerPerson / 1e6)} GDP / capita</small></article>
@@ -4265,7 +4374,7 @@ export class WorldUIV2 {
       <article><i aria-hidden="true">◎</i><div><h3>Win and survive</h3><p>Become the final sovereign power, or unite Earth and destroy Antarctica's Zero-Point Core.</p></div></article>
       <article><i aria-hidden="true">HUD</i><div><h3>Core loop and HUD</h3><p>Read five top metrics, choose a target and let time, logistics and APEX execute.</p></div></article>
       <article><i aria-hidden="true">$</i><div><h3>Economy and treasury</h3><p>Output creates tax income; the shared treasury pays weekly commitments and APEX adds its own contribution.</p></div></article>
-      <article><i aria-hidden="true">MIL</i><div><h3>Military, reserves and APEX</h3><p>APEX projects one autonomous shield across the Empire and concentrates it where the fighting matters most.</p></div></article>
+      <article><i aria-hidden="true">MIL</i><div><h3>Army and APEX</h3><p>APEX projects one autonomous shield across the Empire and concentrates it where the fighting matters most.</p></div></article>
       <article><i aria-hidden="true">⚔</i><div><h3>War Supply</h3><p>100% means every active front receives its full Army Capacity allocation. Naval routes deliver half the land amount.</p></div></article>
       <article><i aria-hidden="true">AI</i><div><h3>APEX autonomy</h3><p>Energy powers the dome. At 0% it collapses, recharges safely and returns only at 100%.</p></div></article>
       <article><i aria-hidden="true">R&amp;D</i><div><h3>Research</h3><p>Ten programmes advance automatically, while Active Effects shows the real totals applied to your empire.</p></div></article>
@@ -4341,14 +4450,15 @@ export class WorldUIV2 {
     const terrainLabel = forecast.terrain
       ? terrainPresentation(forecast.terrain).label.toUpperCase()
       : 'UNKNOWN';
-    const navalLogistics = logisticsPreview?.access === 'naval';
+    const navalLogistics = forecast.access === 'naval';
     const addedWeeklyWarCost = logisticsPreview?.additionalWeeklyWarOperations ?? 0;
     const projectedAnnualCashflow = annual(humanFinance.net - addedWeeklyWarCost);
     const treasuryCoverWeeks = addedWeeklyWarCost > 0
       ? Math.floor(Math.max(0, human.treasury) / addedWeeklyWarCost)
       : 0;
+    const forecastDistanceKm = forecast.routeDistanceKm ?? logisticsPreview?.distanceKm;
     const routeDistance = navalLogistics
-      ? logisticsPreview?.distanceKm === undefined ? 'DISTANCE UNKNOWN' : `${format(logisticsPreview.distanceKm)} KM`
+      ? forecastDistanceKm === undefined ? 'DISTANCE UNKNOWN' : `${format(forecastDistanceKm)} KM`
       : forecast.access === 'land' ? 'DIRECT BORDER' : 'NO LEGAL ROUTE';
     const supplyRule = armyCapacitySupplyLabelV2(
       forecast.access === 'naval' ? 'naval' : 'land',
@@ -4359,7 +4469,7 @@ export class WorldUIV2 {
     const reviewLogistics = presentLogisticsReadinessV2(
       forecast.attackerSupply,
       forecast.access === 'naval' ? 'naval' : 'land',
-      logisticsPreview?.distanceKm ?? 0,
+      forecastDistanceKm ?? 0,
       forecast.attackerStrength > 0.000000001,
     );
     const costDetail = logisticsPreview
@@ -4421,8 +4531,8 @@ export class WorldUIV2 {
       </section>
 
       <section class="review-combat-detail" aria-label="Exact combat detail">
-        <article class="is-own"><span>YOUR FRONT SOLDIERS</span><strong>${people(forecast.attackerStrength)}</strong><small>ATK ${format(forecast.attackerAttack, 2)} · DEF ${format(forecast.attackerDefense, 2)} · reserve ${people(human.trainedReserves)}</small></article>
-        <article class="is-enemy"><span>ENEMY FRONT SOLDIERS</span><strong>${people(forecast.defenderStrength)}</strong><small>ATK ${format(forecast.defenderAttack, 2)} · DEF ${format(forecast.defenderDefense, 2)} · reserve ${people(target.trainedReserves)}</small></article>
+        <article class="is-own"><span>YOUR FRONT SOLDIERS</span><strong>${people(forecast.attackerStrength)}</strong><small>ATK ${format(forecast.attackerAttack, 2)} · DEF ${format(forecast.attackerDefense, 2)}</small></article>
+        <article class="is-enemy"><span>ENEMY FRONT SOLDIERS</span><strong>${people(forecast.defenderStrength)}</strong><small>ATK ${format(forecast.defenderAttack, 2)} · DEF ${format(forecast.defenderDefense, 2)}</small></article>
         <article class="is-exchange"><span>FIRST BATTLE ESTIMATE</span><strong><i>YOU −${people(forecast.projectedAttackerLosses)}</i><b>ENEMY −${people(forecast.projectedDefenderLosses)}</b></strong><small>Live forecast · terrain and position included</small></article>
       </section>
 
@@ -4521,9 +4631,7 @@ export class WorldUIV2 {
       : `<span>ENERGY LOSS −${format(apexIntegrityDamage, 1)}%</span>`;
     const apexCapstoneDetail = [
       (outcome.apexSingularityPulses ?? 0) > 0
-        ? `<span>OVERDRIVE PULSE ×${outcome.apexSingularityPulses}</span>` : '',
-      (outcome.apexMirrorCounterpulseDamage ?? 0) > 0
-        ? `<span>COUNTERMEASURE −${people(outcome.apexMirrorCounterpulseDamage ?? 0)} HOSTILE</span>` : '',
+        ? `<span>OVERDRIVE SHIELD ×${outcome.apexSingularityPulses}</span>` : '',
       (outcome.apexTwinProjectionBattles ?? 0) > 0
         ? `<span>THEATER MESH · ${outcome.apexTwinProjectionBattles} MULTI-FRONT BATTLES</span>` : '',
     ].filter(Boolean).join('');
@@ -4612,6 +4720,63 @@ export class WorldUIV2 {
     return `<aside class="multiplayer-spectator glass-panel" role="status"><b>SPECTATOR</b><span>${escapeHtml(formerName)} has been liberated. The shared campaign continues; you are watching ${escapeHtml(watched.shortName)}.</span></aside>`;
   }
 
+  private renderSurvivalContactFastForward(): string {
+    if (this.survivalContactEstablishedUntil > performance.now()) {
+      const humans = new Set(this.engine.state.humanPlayerIds);
+      const contactWar = this.engine.state.wars.find((war) => (
+        (war.attackerId === ROGUE_AI_NATION_ID_V2 && humans.has(war.defenderId))
+        || (war.defenderId === ROGUE_AI_NATION_ID_V2 && humans.has(war.attackerId))
+      ));
+      const operation = contactWar
+        ? [...contactWar.attackerOperations, ...contactWar.defenderOperations][0]
+        : undefined;
+      const contactName = operation
+        ? this.engine.content.territories[operation.targetId]?.name
+          ?? this.engine.content.territories[operation.sourceId]?.name
+        : undefined;
+      return `<aside class="survival-contact-fast-forward glass-panel is-contact" role="status" aria-live="assertive"><i aria-hidden="true">◆</i><div><strong>CONTACT ESTABLISHED</strong><small>${contactName ? `Rogue forces reached ${escapeHtml(contactName)}.` : 'A live Rogue front reached the human command.'} Normal speed restored.</small></div><b class="survival-contact-fast-forward__speed">1×</b></aside>`;
+    }
+    const presentation = survivalContactFastForwardPresentationV2(
+      this.engine.state,
+      this.engine.content,
+      {
+        dismissed: this.survivalContactFastForwardDismissed,
+        clockAuthority: this.engine.clockAuthority !== false,
+      },
+    );
+    if (!presentation.visible) {
+      if (!this.survivalRealContactEstablished
+        || this.engine.content.metadata?.scenarioId !== 'survival'
+        || this.engine.state.gameOver) return '';
+      const activeFronts = this.engine.state.wars.reduce((total, war) => (
+        war.attackerId === ROGUE_AI_NATION_ID_V2 || war.defenderId === ROGUE_AI_NATION_ID_V2
+          ? total + selectCanonicalWarFrontsV2(war).length
+          : total
+      ), 0);
+      const nextWaveTick = this.engine.state.polarEndgame.nextCounteroffensiveTick;
+      const nextWaveWeeks = nextWaveTick === null
+        ? 'STAGING'
+        : `${Math.max(0, nextWaveTick - this.engine.state.tick)}W`;
+      const wave = Math.max(1, Math.floor(this.engine.state.polarEndgame.globalWave));
+      return `<button type="button" class="survival-contact-fast-forward survival-front-status glass-panel is-front-status" data-action="open-polar-region" data-polar-region="antarctica" aria-label="Open Antarctica intelligence. Rogue wave ${wave}, next wave ${nextWaveWeeks}, ${activeFronts} active fronts"><i aria-hidden="true">◈</i><div><strong>MACHINE OFFENSIVE · WAVE ${wave}</strong><small>NEXT ${nextWaveWeeks} · ${activeFronts} ACTIVE ${activeFronts === 1 ? 'FRONT' : 'FRONTS'}</small></div><b class="survival-contact-fast-forward__speed">INTEL</b></button>`;
+    }
+    const latestRogueMovement = [...this.engine.recentLogisticsMovements()].reverse().find((movement) => (
+      movement.playerId === ROGUE_AI_NATION_ID_V2
+    ));
+    const latestTargetName = latestRogueMovement
+      ? this.engine.content.territories[latestRogueMovement.targetId]?.name
+      : undefined;
+    const detail = presentation.active && latestTargetName
+      ? `Rogue columns advancing toward ${latestTargetName}. Normal speed returns at first contact.`
+      : presentation.detail;
+    const control = presentation.active
+      ? presentation.authorized
+        ? '<button type="button" class="survival-contact-fast-forward__cancel" data-action="cancel-contact-fast-forward" aria-label="Return to normal speed">NORMAL SPEED</button>'
+        : '<b class="survival-contact-fast-forward__speed" aria-label="Host simulation speed">3×</b>'
+      : `<button type="button" class="survival-contact-fast-forward__start" data-action="start-contact-fast-forward" ${presentation.authorized ? '' : 'disabled aria-disabled="true"'}>${escapeHtml(presentation.label)}</button>`;
+    return `<aside class="survival-contact-fast-forward glass-panel ${presentation.active ? 'is-active' : 'is-idle'} ${presentation.authorized ? 'is-authorized' : 'is-client'}" role="status" aria-live="polite"><i aria-hidden="true">»</i><div><strong>${escapeHtml(presentation.active ? presentation.label : 'ROGUE APPROACH')}</strong><small>${escapeHtml(detail)}</small></div>${control}</aside>`;
+  }
+
   private bindActions(): void {
     this.hud.querySelectorAll<HTMLElement>('[data-action]').forEach((element) => {
       element.addEventListener('pointerdown', (event) => {
@@ -4630,6 +4795,31 @@ export class WorldUIV2 {
         event.stopPropagation();
         const action = element.dataset.action;
         switch (action) {
+          case 'start-contact-fast-forward': {
+            const presentation = survivalContactFastForwardPresentationV2(
+              this.engine.state,
+              this.engine.content,
+              {
+                dismissed: this.survivalContactFastForwardDismissed,
+                clockAuthority: this.engine.clockAuthority !== false,
+              },
+            );
+            if (!presentation.visible || presentation.active || !presentation.authorized) {
+              if (!presentation.authorized) this.toast('Only the room host can accelerate shared time.');
+              break;
+            }
+            this.engine.setSpeed(SURVIVAL_CONTACT_FAST_FORWARD_SPEED_V2);
+            this.render();
+            break;
+          }
+          case 'cancel-contact-fast-forward':
+            this.survivalContactFastForwardDismissed = true;
+            if (this.engine.clockAuthority !== false
+              && this.engine.state.speed === SURVIVAL_CONTACT_FAST_FORWARD_SPEED_V2) {
+              this.engine.setSpeed(SURVIVAL_CONTACT_FAST_FORWARD_RETURN_SPEED_V2);
+            }
+            this.render();
+            break;
           case 'continent-filter': {
             this.introContinent = element.dataset.continent ?? 'ALL';
             this.introGridScrollTop = 0;
@@ -4874,6 +5064,24 @@ export class WorldUIV2 {
             this.render();
             break;
           }
+          case 'push-survival-front': {
+            const territoryId = element.dataset.territory as TerritoryId | undefined;
+            if (!territoryId) break;
+            const result = this.engine.selectSurvivalCounteroffensive(
+              this.viewerPlayerId(),
+              territoryId,
+            );
+            if (!commandAccepted(result)) {
+              this.toast(commandReason(result) ?? 'That front cannot receive the counteroffensive.');
+            } else {
+              const territoryName = this.engine.content.territories[territoryId]?.name ?? 'selected corridor';
+              this.toast(`Counteroffensive redirected to ${territoryName}.`);
+            }
+            this.selectedTerritoryId = territoryId;
+            this.updateMapSelection();
+            this.render();
+            break;
+          }
           case 'cancel-war':
             this.confirmWarTargetId = undefined;
             this.updateMapSelection();
@@ -4955,7 +5163,9 @@ export class WorldUIV2 {
       // the fullscreen picker DOM. This keeps pointer and keyboard sorting stable.
       window.setTimeout(() => this.render(), 0);
     });
-    this.hud.querySelectorAll<HTMLElement>('[data-action="quick-war"][data-map-target]').forEach((element) => {
+    this.hud.querySelectorAll<HTMLElement>(
+      '[data-action="quick-war"][data-map-target], [data-action="push-survival-front"][data-map-target]',
+    ).forEach((element) => {
       const preview = () => this.previewWarTarget(element.dataset.mapTarget as TerritoryId | undefined);
       const restore = () => {
         if (!this.confirmWarTargetId) this.updateMapSelection();

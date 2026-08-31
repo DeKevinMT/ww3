@@ -181,11 +181,15 @@ export const AUTHORED_INTERCONTINENTAL_SEA_GATEWAYS: readonly (
   ['grl', 'isl'],
   ['grl', 'gnb'],
   ['grl', 'mrt'],
+  ['dom', 'guy'],
+  ['gmb', 'guy'],
+  ['grl', 'guy'],
   ['sle', 'sur'],
   ['mdg', 'tls'],
+  ['pan', 'png'],
   ['slv', 'png'],
 ];
-export const AUTHORED_INTERCONTINENTAL_GATEWAY_POWER_CEILING = 24;
+export const AUTHORED_INTERCONTINENTAL_GATEWAY_POWER_CEILING = 30;
 
 interface AuthoredSeaRouteGeometry {
   readonly leftCoast: readonly [number, number];

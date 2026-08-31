@@ -16,7 +16,6 @@ import {
   HUMAN_BROAD_UNDERDOG_COUNT_V2,
   HUMAN_EXTREME_UNDERDOG_COUNT_V2,
   HUMAN_MILITARY_RANK_CURVE_EXPONENT_V2,
-  HUMAN_OPENING_RESERVE_MULTIPLIER_WEAKEST_V2,
   HUMAN_STARTING_ARMY_BASE_CURVE_WEAKEST_MULTIPLIER_V2,
   HUMAN_STARTING_ARMY_MULTIPLIER_STRONGEST_V2,
   HUMAN_STARTING_ARMY_MULTIPLIER_WEAKEST_V2,
@@ -154,7 +153,7 @@ describe('scenario-aware retired trait and opening-force curve', () => {
   it.each([
     ['Standard', WORLD_CONTENT_V2],
     ['Alternative', resolveScenarioV2({ mode: 'random-world', seed: 84_103 }).content],
-  ] as const)('quotes bounded opening trained reserves from immutable %s rank', (_name, content) => {
+  ] as const)('keeps opening reserve compatibility neutral for immutable %s rank', (_name, content) => {
     const order = openingMilitaryOrderForContentV2(content);
     const strongest = order[0]!;
     const weakest = order.at(-1)!;
@@ -162,26 +161,25 @@ describe('scenario-aware retired trait and opening-force curve', () => {
     const tenthWeakest = order.at(-10)!;
 
     expect(humanOpeningReserveMultiplierForContentV2(content, strongest)).toBe(1);
-    expect(humanOpeningReserveMultiplierForContentV2(content, tenthWeakest))
-      .toBeGreaterThan(humanOpeningReserveMultiplierForContentV2(content, eleventhWeakest));
-    expect(humanOpeningReserveMultiplierForContentV2(content, weakest))
-      .toBe(HUMAN_OPENING_RESERVE_MULTIPLIER_WEAKEST_V2);
+    expect(humanOpeningReserveMultiplierForContentV2(content, tenthWeakest)).toBe(1);
+    expect(humanOpeningReserveMultiplierForContentV2(content, eleventhWeakest)).toBe(1);
+    expect(humanOpeningReserveMultiplierForContentV2(content, weakest)).toBe(1);
 
     const weakestTerms = humanOpeningTrainedReserveTermsForContentV2(
       content, weakest, 0, 100, 100,
     );
     expect(weakestTerms).toMatchObject({
       canonicalReserves: 0,
-      neutralReserveCapacity: 100,
-      liveReserveCapacity: 100,
-      reserveMultiplier: 2,
-      minimumBaseReserves: 5,
-      effectiveBaseReserves: 5,
-      trainedReserves: 10,
+      neutralReserveCapacity: 0,
+      liveReserveCapacity: 0,
+      reserveMultiplier: 1,
+      minimumBaseReserves: 0,
+      effectiveBaseReserves: 0,
+      trainedReserves: 0,
     });
     expect(humanOpeningTrainedReserveTermsForContentV2(
       content, weakest, 0, 100, 8,
-    ).trainedReserves).toBe(8);
+    ).trainedReserves).toBe(0);
     expect(humanOpeningTrainedReserveTermsForContentV2(
       content, weakest, 0, 100, 100, false,
     )).toMatchObject({
@@ -214,7 +212,7 @@ describe('scenario-aware retired trait and opening-force curve', () => {
     expect(after.capacity / HUMAN_STARTING_ARMY_MULTIPLIER_WEAKEST_V2)
       .toBeCloseTo(oneXCapacity, 6);
     expect(state.players[weakest]!.treasury).toBe(treasuryBefore);
-    expect(state.players[weakest]!.trainedReserves).toBeGreaterThan(reservesBefore);
+    expect(state.players[weakest]!.trainedReserves).toBe(reservesBefore);
   });
 
   it('uses generated power ranking with deterministic country-id tie breaks', () => {

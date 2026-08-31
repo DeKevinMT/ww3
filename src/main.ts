@@ -187,7 +187,7 @@ function buildCommanderCountryCatalog(): readonly CommanderCountryCatalogEntryV1
         iq: metrics.iq,
         armyManpower: metrics.army.deployed,
         armyCapacity: metrics.army.capacity,
-        trainedReserves: metrics.player.trainedReserves,
+        trainedReserves: 0,
         population: metrics.economyView.population,
         economy: metrics.economyView.output,
         treasury: metrics.player.treasury,
@@ -680,7 +680,7 @@ function applyCountryLoadoutAtCampaignStart(
   const effects = nation.research.effectLevels;
   effects.training += levels.mobilization;
   effects['force-capacity'] += levels.mobilization;
-  effects['reserve-training'] += levels.mobilization;
+  effects['reinforcement-efficiency'] += levels.mobilization;
   effects.supply += levels.logistics;
   effects['operating-efficiency'] += levels.logistics;
   effects['research-speed'] += levels.research;
@@ -688,8 +688,7 @@ function applyCountryLoadoutAtCampaignStart(
   effects['economy-growth'] += levels.economy;
   effects['tax-efficiency'] += levels.economy;
   nation.treasury *= loadout.openingEconomyMultiplier;
-  nation.trainedReserves *= (1 + levels.mobilization * 0.025)
-    * loadout.masteryMilitary.armyCapacityMultiplier;
+  nation.trainedReserves = 0;
   for (const territory of Object.values(engine.state.territories)) {
     if (territory.owner !== countryId) continue;
     territory.army.manpower *= loadout.openingArmyMultiplier
@@ -824,8 +823,7 @@ function countryLoadoutPresentation() {
     return [country.id, {
       openingArmyMultiplier: deployedArmyMultiplier,
       openingEconomyMultiplier: loadout.openingEconomyMultiplier,
-      trainedReserveMultiplier: (1 + loadout.upgrades.mobilization * 0.025)
-        * loadout.masteryMilitary.armyCapacityMultiplier,
+      trainedReserveMultiplier: 1,
       traitScale: loadout.traitScale,
       attackMultiplier: loadout.masteryMilitary.attackMultiplier,
       defenseMultiplier: loadout.masteryMilitary.defenseMultiplier,

@@ -28,9 +28,7 @@ export function selectApexSignalPurgeQueueV2(
   return content.territoryIds.filter((territoryId) => {
     const territory = state.territories[territoryId];
     return territory?.owner === ownerId
-      && territory.integrationProgram?.toOwnerId === ownerId
-      && !(content.metadata?.scenarioId === 'survival'
-        && state.runProgression.scorchedWorldTerritoryIds.includes(territoryId));
+      && territory.integrationProgram?.toOwnerId === ownerId;
   }).sort((leftId, rightId) => {
     const left = state.territories[leftId]!;
     const right = state.territories[rightId]!;

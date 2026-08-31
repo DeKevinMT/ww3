@@ -12,8 +12,8 @@ import { processRogueAiSurvivalV2 } from '../sim/v2/survival';
 import {
   prepareMultiplayerSurvivalRosterV2,
   selectSurvivalDawnlineLeaderIdV2,
+  fundSurvivalRogueWarChestV2,
 } from '../sim/v2/survivalEmpire';
-import { SURVIVAL_DAWNLINE_ACCORD_NAME_V2 } from '../sim/v2/survivalOrdinaryAi';
 import {
   nationIdV2,
   type CommandResultV2,
@@ -145,46 +145,24 @@ export function registerMultiplayerDeploymentRuntimeV1(
 }
 
 export interface SurvivalCoopSeatRolesV1 {
-  readonly empireLeaderId: PlayerId;
-  readonly dawnlineLeaderId: PlayerId;
+  readonly hostCommanderId: PlayerId;
+  readonly alliedCommanderId: PlayerId;
 }
 
-/**
- * The canonical primary country is selected by the room host before seats are
- * configured. The only other Survival seat therefore becomes Dawnline's
- * sovereign human command, independent of peer sorting and reconnect order.
- */
+/** Human co-op seats are equal sovereign commands beside the NPC Dawnline. */
 export function resolveSurvivalCoopSeatRolesV1(
   state: Pick<WorldStateV2, 'humanPlayerId' | 'humanPlayerIds' | 'players'>,
 ): SurvivalCoopSeatRolesV1 | undefined {
   const humanIds = [...new Set(state.humanPlayerIds)]
     .sort((left, right) => left.localeCompare(right));
   if (humanIds.length !== 2 || !humanIds.includes(state.humanPlayerId)) return undefined;
-  const dawnlineLeaderId = humanIds.find((playerId) => playerId !== state.humanPlayerId);
-  if (!dawnlineLeaderId || !state.players[state.humanPlayerId]
-    || !state.players[dawnlineLeaderId]) return undefined;
+  const alliedCommanderId = humanIds.find((playerId) => playerId !== state.humanPlayerId);
+  if (!alliedCommanderId || !state.players[state.humanPlayerId]
+    || !state.players[alliedCommanderId]) return undefined;
   return {
-    empireLeaderId: state.humanPlayerId,
-    dawnlineLeaderId,
+    hostCommanderId: state.humanPlayerId,
+    alliedCommanderId,
   };
-}
-
-function establishSurvivalCoopAllianceV1(
-  state: WorldStateV2,
-  roles: SurvivalCoopSeatRolesV1,
-): void {
-  const [leftId, rightId] = [roles.empireLeaderId, roles.dawnlineLeaderId]
-    .sort((left, right) => left.localeCompare(right)) as [PlayerId, PlayerId];
-  state.players[roles.dawnlineLeaderId]!.empireName = SURVIVAL_DAWNLINE_ACCORD_NAME_V2;
-  state.allianceOffers = state.allianceOffers.filter((offer) => (
-    offer.fromId !== roles.empireLeaderId && offer.fromId !== roles.dawnlineLeaderId
-      && offer.toId !== roles.empireLeaderId && offer.toId !== roles.dawnlineLeaderId
-  ));
-  if (!state.alliances.some((alliance) => (
-    alliance.leftId === leftId && alliance.rightId === rightId
-  ))) state.alliances.push({ leftId, rightId, formedTick: state.tick });
-  state.alliances.sort((left, right) => left.leftId.localeCompare(right.leftId)
-    || left.rightId.localeCompare(right.rightId));
 }
 
 /**
@@ -214,28 +192,26 @@ export function applyMultiplayerDeploymentsV1(
   }
 
   if (engine.content.metadata?.scenarioId === 'survival') {
-    const roles = resolveSurvivalCoopSeatRolesV1(engine.state);
-    if (!roles) {
-      return { accepted: false, reason: 'Survival co-op requires one Empire seat and one Dawnline seat.' };
-    }
     const prepared = prepareMultiplayerSurvivalRosterV2(
       engine.state,
       engine.content,
       humanIds,
     );
     if (!prepared.accepted) return prepared;
-    if (prepared.dawnlineLeaderId !== roles.dawnlineLeaderId
-      || selectSurvivalDawnlineLeaderIdV2(engine.state) !== roles.dawnlineLeaderId) {
-      return { accepted: false, reason: 'The Dawnline command could not be assigned deterministically.' };
+    if (!prepared.dawnlineLeaderId
+      || humanIds.includes(prepared.dawnlineLeaderId)
+      || selectSurvivalDawnlineLeaderIdV2(engine.state) !== prepared.dawnlineLeaderId) {
+      return { accepted: false, reason: 'The Arctic Dawnline NPC could not be formed deterministically.' };
     }
-    establishSurvivalCoopAllianceV1(engine.state, roles);
   }
 
   for (const countryId of humanIds) {
     const deployment = deployments.get(countryId)!;
     const nation = engine.state.players[countryId];
     if (!nation) return { accepted: false, reason: `${countryId} is no longer an active co-op nation.` };
-    nation.trainedReserves *= deployment.countryMastery.armyCapacityMultiplier;
+    // Compatibility field only; deployment strength now lives entirely in
+    // territorial active formations and their capacity.
+    nation.trainedReserves = 0;
     for (const territory of Object.values(engine.state.territories)) {
       if (territory.owner !== countryId) continue;
       territory.army.manpower *= deployment.countryMastery.openingArmyMultiplier
@@ -251,6 +227,7 @@ export function applyMultiplayerDeploymentsV1(
   if (engine.content.metadata?.scenarioId === 'survival') {
     processRogueAiSurvivalV2(engine.state, engine.content);
     synchronizeWarFrontsV2(engine.state, engine.content);
+    fundSurvivalRogueWarChestV2(engine.state, engine.content);
   }
   return { accepted: true };
 }

@@ -87,7 +87,7 @@ function prepareRogueFront(
   invalidateTerritoryIndexV2(engine.state);
 }
 
-function resolveReadyApexPulse(
+function resolveReadyApexSupportedBattle(
   engine: WorldEngineV2,
   playerId: ReturnType<typeof nationIdV2>,
   sourceId: TerritoryId,
@@ -147,7 +147,7 @@ describe('APEX-aware canonical war forecast', () => {
     expect(supported.apexContribution.defenseMultiplier).toBeGreaterThan(1);
     expect(supported.apexContribution.supportBonusPercent).toBeGreaterThan(0);
     expect(base.apexContribution.projectedPulseDamage).toBe(0);
-    expect(supported.apexContribution.projectedPulseDamage).toBeGreaterThan(0);
+    expect(supported.apexContribution.projectedPulseDamage).toBe(0);
     expect(supported.apexContribution.chanceDelta).toBeCloseTo(
       supported.winChance - base.winChance,
       8,
@@ -308,7 +308,7 @@ describe('APEX-aware canonical war forecast', () => {
     expect(stageFour.winChance).toBe(stageThree.winChance);
   });
 
-  it('uses the full Rogue countermeasure sequence in both preview and the exact live APEX pulse', () => {
+  it('uses the full Rogue countermeasure sequence in preview and live Army support', () => {
     const { engine, playerId } = campaignWithApex(31_006);
     const sourceId = territoryIdV2('lux');
     const targetId = territoryIdV2('bel');
@@ -342,12 +342,13 @@ describe('APEX-aware canonical war forecast', () => {
       stageTwo.projectedDefenderLossRate,
     );
 
-    const event = resolveReadyApexPulse(engine, playerId, sourceId, targetId);
+    const event = resolveReadyApexSupportedBattle(engine, playerId, sourceId, targetId);
     expect(event).toBeDefined();
     expect(event!.commanderAttackerPower)
       .toBeCloseTo(stageThree.apexContribution.projectedAttackPressure, 6);
     expect(event!.commanderAttackerPulseDamage)
       .toBeCloseTo(stageThree.apexContribution.projectedPulseDamage, 9);
+    expect(event!.commanderAttackerPulseDamage).toBe(0);
   });
 
   it('uses the same final Antarctic operation multiplier in preview and battle', () => {
@@ -371,11 +372,12 @@ describe('APEX-aware canonical war forecast', () => {
     expect(stageFour.apexContribution.projectedDefenseShield
       / stageThree.apexContribution.projectedDefenseShield).toBeCloseTo(1.05, 3);
 
-    const event = resolveReadyApexPulse(engine, playerId, sourceId, targetId);
+    const event = resolveReadyApexSupportedBattle(engine, playerId, sourceId, targetId);
     expect(event).toBeDefined();
     expect(event!.commanderAttackerPower)
       .toBeCloseTo(stageFour.apexContribution.projectedAttackPressure, 6);
     expect(event!.commanderAttackerPulseDamage)
       .toBeCloseTo(stageFour.apexContribution.projectedPulseDamage, 9);
+    expect(event!.commanderAttackerPulseDamage).toBe(0);
   });
 });

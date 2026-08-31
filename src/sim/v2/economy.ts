@@ -2,10 +2,7 @@ import {
   PEACE_FATIGUE_RECOVERY_PER_WEEK,
   round,
 } from './balance';
-import {
-  ROGUE_AI_NATION_ID_V2,
-  type WorldContentV2,
-} from './content';
+import type { WorldContentV2 } from './content';
 import { synchronizeArmyCapacityV2 } from './capacity';
 import { consumeOpeningArmyBonusLossV2 } from './openingArmyBonus';
 import {
@@ -16,7 +13,6 @@ import {
   createPowerSnapshotV2,
   projectFinanceManpowerPhaseV2,
   isSurvivalScorchedTransitTerritoryV2,
-  isSurvivalRogueTransitTerritoryV2,
   selectIsEliminatedV2,
   selectPopulationDynamicsV2,
   selectTerritoriesOfV2,
@@ -26,12 +22,12 @@ import {
   type PowerSnapshotV2,
 } from './selectors';
 import { normalizeRetiredFoodCompatibilityV2 } from './retiredFood';
+import { normalizeRetiredReserveCompatibilityV2 } from './retiredReserves';
 import { traitNationContextV2 } from './traitContext';
 import { countryTraitFactorV2 } from './traits';
 import { isNationOperationalV2 } from './survival';
 import { enforceSurvivalScorchedWorldV2 } from './survivalEmpire';
 import {
-  addRogueWaveManpowerV2,
   reconcileRogueWaveManpowerAfterChangeV2,
 } from './survivalProvenance';
 import type { PlayerId, WeeklyFinanceBreakdownV2, WorldStateV2 } from './types';
@@ -60,7 +56,7 @@ function processMilitary(
 ): void {
   const territories = selectTerritoriesOfV2(state, playerId);
   const projectedArmy = projectFinanceManpowerPhaseV2(state, content, playerId, finance);
-  state.players[playerId]!.trainedReserves = projectedArmy.trainedReservesAfter;
+  state.players[playerId]!.trainedReserves = 0;
   const projectedByTerritory = new Map(projectedArmy.territories.map((army) => [army.id, army]));
   for (const view of territories) {
     const territory = state.territories[view.id]!;
@@ -72,19 +68,15 @@ function processMilitary(
       territory.army.baseAttack = projected.baseAttack;
       territory.army.baseDefense = projected.baseDefense;
     }
-    const recruitedInAntarctica = playerId === ROGUE_AI_NATION_ID_V2
-      && !isSurvivalRogueTransitTerritoryV2(state, view.id)
-      ? Math.max(0, territory.army.manpower - manpowerBeforeFinance)
-      : 0;
-    if (recruitedInAntarctica > 0) {
-      addRogueWaveManpowerV2(state, view.id, recruitedInAntarctica);
-    } else {
-      reconcileRogueWaveManpowerAfterChangeV2(
-        state,
-        view.id,
-        manpowerBeforeFinance,
-      );
-    }
+    // Ordinary Antarctic recruitment rebuilds the defensive empire only. New
+    // reward-eligible/offensive provenance is committed exclusively by the
+    // annual five-percent wave scheduler; finance may preserve or shrink an
+    // existing formation, never create one silently every week.
+    reconcileRogueWaveManpowerAfterChangeV2(
+      state,
+      view.id,
+      manpowerBeforeFinance,
+    );
   }
   consumeOpeningArmyBonusLossV2(state, playerId, projectedArmy.demobilized);
 }
@@ -129,6 +121,7 @@ export function processFinanceMilitaryV2(
   financePlans: FinancePlansV2,
 ): IntegrationCompletionV2[] {
   normalizeRetiredFoodCompatibilityV2(state);
+  normalizeRetiredReserveCompatibilityV2(state);
   synchronizeArmyCapacityV2(state, content);
   const playerIds = sortedNationIdsV2(state);
   for (const playerId of playerIds) {
@@ -157,6 +150,7 @@ export function processFinanceMilitaryV2(
   // have just transferred from the retired country.
   const integrationCompletions = advanceTerritoryIntegrationProgramsV2(state, content);
   normalizeRetiredFoodCompatibilityV2(state);
+  normalizeRetiredReserveCompatibilityV2(state);
   synchronizeArmyCapacityV2(state, content);
   return integrationCompletions;
 }

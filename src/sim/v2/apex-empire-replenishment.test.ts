@@ -15,7 +15,6 @@ import {
   projectFinanceManpowerPhaseV2,
   selectRecruitmentBaseManpowerV2,
   selectRecruitmentTrainingPipelineV2,
-  selectTrainedReserveCapacityV2,
   selectWeeklyFinanceBreakdownV2,
 } from './selectors';
 import type {
@@ -95,7 +94,7 @@ describe('APEX Empire replenishment network', () => {
     expect(progressed.empireSupport).toEqual(base.empireSupport);
   });
 
-  it('fills ordinary active forces and trained reserves faster under identical funding', () => {
+  it('fills ordinary active forces faster under identical funding', () => {
     const { withApex, withoutApex, playerId } = fullyFundedPair(84_101);
     const activeWithApex = selectWeeklyFinanceBreakdownV2(
       withApex, WORLD_CONTENT_V2, playerId,
@@ -116,24 +115,19 @@ describe('APEX Empire replenishment network', () => {
     expect(activeWithApex.recruitmentAccelerationCost).toBe(0);
     expect(activeWithoutApex.recruitmentAccelerationCost).toBe(0);
 
+    // The compatibility ledger remains present for old saves and reconnects,
+    // but it can never create a second manpower pool.
     setActiveFill(withApex, playerId, 1);
-    setActiveFill(withoutApex, playerId, 1);
-    const reserveWithApex = selectWeeklyFinanceBreakdownV2(
+    const compatibilityLedger = selectWeeklyFinanceBreakdownV2(
       withApex, WORLD_CONTENT_V2, playerId,
     );
-    const reserveWithoutApex = selectWeeklyFinanceBreakdownV2(
-      withoutApex, WORLD_CONTENT_V2, playerId,
-    );
-    expect(reserveWithApex.reserveTraining).toBeGreaterThan(reserveWithoutApex.reserveTraining);
-    expect(reserveWithApex.reserveTraining / reserveWithoutApex.reserveTraining)
-      // Weekly manpower is stored to nine decimals; Belgium's tiny pipeline
-      // therefore has visible final-digit quantization around the exact 1.15.
-      .toBeCloseTo(1.15, 2);
-    expect(reserveWithApex.reserveTrainingCost)
-      .toBeGreaterThan(reserveWithoutApex.reserveTrainingCost);
+    expect(compatibilityLedger.reserveTraining).toBe(0);
+    expect(compatibilityLedger.reserveTrainingCost).toBe(0);
+    expect(compatibilityLedger.trainedReservesBefore).toBe(0);
+    expect(compatibilityLedger.trainedReservesAfter).toBe(0);
   });
 
-  it('still obeys active capacity, reserve capacity and the funded military envelope', () => {
+  it('still obeys active capacity and the funded military envelope', () => {
     const { withApex, playerId } = fullyFundedPair(84_102, {
       recruitmentMultiplier: 1.15,
       reserveTrainingMultiplier: 1.30,
@@ -150,21 +144,15 @@ describe('APEX Empire replenishment network', () => {
       .toBeLessThanOrEqual(activeBefore.capacity + 0.000000001);
 
     setActiveFill(withApex, playerId, 1);
-    const reserveCapacity = selectTrainedReserveCapacityV2(withApex, playerId);
-    const reserveRoom = selectRecruitmentTrainingPipelineV2(
-      withApex, WORLD_CONTENT_V2, playerId,
-    ) / 4;
-    withApex.players[playerId]!.trainedReserves = reserveCapacity - reserveRoom;
-    const reserveFinance = selectWeeklyFinanceBreakdownV2(
+    withApex.players[playerId]!.trainedReserves = 1;
+    const compatibilityFinance = selectWeeklyFinanceBreakdownV2(
       withApex, WORLD_CONTENT_V2, playerId,
     );
-    // The public finance ledger stores whole soldiers (six decimals in
-    // millions). Compare on that same canonical scale; the committed reserve
-    // total below remains hard-clamped to capacity.
-    expect(reserveFinance.reserveTraining).toBeLessThanOrEqual(
-      Math.round(reserveRoom * 1_000_000) / 1_000_000,
-    );
-    expect(reserveFinance.trainedReservesAfter).toBeLessThanOrEqual(reserveCapacity);
+    expect(compatibilityFinance.reserveTraining).toBe(0);
+    expect(compatibilityFinance.reserveTrainingCost).toBe(0);
+    expect(compatibilityFinance.trainedReserveCapacity).toBe(0);
+    expect(compatibilityFinance.trainedReservesBefore).toBe(0);
+    expect(compatibilityFinance.trainedReservesAfter).toBe(0);
 
     const legacyFoodSentinel = structuredClone(withApex);
     legacyFoodSentinel.players[playerId]!.foodSecurity = 0;

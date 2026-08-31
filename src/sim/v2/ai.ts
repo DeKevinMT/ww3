@@ -52,7 +52,6 @@ import {
   selectNuclearPowerV2,
   selectPopulationDynamicsV2,
   selectTerritoriesOfV2,
-  selectTrainedReserveCapacityV2,
   selectTotalManpowerV2,
   selectWarAccessTypeV2,
   selectWarMobilizationCostV2,
@@ -1013,8 +1012,6 @@ export function selectAiResearchAllocationsV2(
   const elitePotential = clamp((nation.real.researchCapacity - 8) / 22, 0, 1);
   const ambition = clamp(nation.ambition, 0, 1);
   const fatigue = clamp(player.warFatigue / 70, 0, 1);
-  const reserveCapacity = Math.max(0.000001, selectTrainedReserveCapacityV2(state, playerId));
-  const reserveGap = clamp(1 - player.trainedReserves / reserveCapacity, 0, 1);
   const treasuryWeeks = player.treasury / Math.max(0.01, economy.weeklyRevenue);
   const debtStress = clamp(-treasuryWeeks / 8, 0, 1);
   const empireScale = clamp(Math.log2(Math.max(1, territories.length)) / 4, 0, 1);
@@ -1049,8 +1046,9 @@ export function selectAiResearchAllocationsV2(
     // Stable legacy branch id; this is now military sustainment research.
     'food-systems': 0.65 + 1.35 * activeWars.length + 1.25 * multipleFronts
       + 1.15 * overseasFronts + 0.60 * fillGap,
-    'reserve-doctrine': 0.55 + 2.2 * reserveGap + 1.4 * fillGap + 0.90 * warPressure
-      + 0.75 * activeWars.length + 0.35 * ambition,
+    // Stable legacy branch id; now direct force regeneration and capacity.
+    'reserve-doctrine': 0.55 + 2.8 * fillGap + 0.90 * warPressure
+      + 0.55 * activeWars.length + 0.45 * smallPopulation + 0.35 * ambition,
     'public-administration': 0.70 + 1.2 * empireScale + 1.5 * integrationLoad
       + 0.85 * debtStress + 0.45 * poverty + (activeWars.length === 0 ? 0.25 : 0),
     'education-intelligence': iqScore >= NATIONAL_IQ_EFFECTIVE_SCORE_MAX - 0.01
@@ -1349,7 +1347,7 @@ export function planAiCommandsV2(
     // the normal national AI for budgets/research and the normal war engine
     // for fronts, but it never enters ordinary diplomacy or random expansion.
     if (isRogueAiNationV2(content, playerId)) continue;
-    // Recurring budgets, research and the reserve-training pipeline are the
+    // Recurring budgets, research and direct peacetime recruitment are the
     // complete AI spending path. Manual one-off purchase commands stay
     // player-facing, so neither selected-country APEX nor rivals can turn a
     // cash windfall into a sudden army or research spike.

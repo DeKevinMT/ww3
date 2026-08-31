@@ -126,7 +126,10 @@ function canonicalScenario(input: unknown): ScenarioConfigV2 | undefined {
   return { mode: source.mode, version: Number(source.version), seed: Number(source.seed) };
 }
 
-function canonicalLoadout(input: unknown): ResolvedCountryLoadoutV1 | undefined {
+function canonicalLoadout(
+  input: unknown,
+  countryId?: string,
+): ResolvedCountryLoadoutV1 | undefined {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return undefined;
   const source = input as Partial<ResolvedCountryLoadoutV1>;
   const upgrades = source.upgrades;
@@ -173,6 +176,7 @@ function canonicalLoadout(input: unknown): ResolvedCountryLoadoutV1 | undefined 
   const masteryMilitary = resolveCountryMasteryMilitaryEffectsV1(
     masteryLevel,
     masteryAllocations,
+    countryId,
   );
   const mobilizationLevel = level(upgrades.mobilization);
   const economyLevel = level(upgrades.economy);
@@ -192,10 +196,10 @@ function canonicalLoadout(input: unknown): ResolvedCountryLoadoutV1 | undefined 
       trait: level(upgrades.trait),
     },
     openingArmyMultiplier: exactMultiplier(
-      (1 + mobilizationLevel * 0.04) * masteryMilitary.openingArmyMultiplier,
+      1 + mobilizationLevel * 0.04,
     ),
     openingEconomyMultiplier: exactMultiplier(1 + economyLevel * 0.04),
-    masteryOpeningArmyMultiplier: masteryMilitary.openingArmyMultiplier,
+    masteryOpeningArmyMultiplier: 1,
     masteryOpeningEconomyMultiplier: 1,
     // Legacy campaigns remain loadable, but retired country traits are inert.
     traitScale: 0,
@@ -278,7 +282,8 @@ export function loadCampaignSlotV1(storage: KeyValueStorage): StoredCampaignV1 |
   if (!input || typeof input !== 'object' || Array.isArray(input)) return undefined;
   const source = input as Partial<StoredCampaignV1>;
   const scenario = canonicalScenario(source.scenario);
-  const loadout = canonicalLoadout(source.loadout);
+  const countryId = typeof source.countryId === 'string' ? source.countryId : undefined;
+  const loadout = canonicalLoadout(source.loadout, countryId);
   if (source.schemaVersion !== CAMPAIGN_SLOT_SCHEMA_VERSION
     || !scenario
     || !loadout

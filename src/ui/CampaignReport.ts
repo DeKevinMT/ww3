@@ -223,11 +223,11 @@ export function renderCampaignReportHtmlV1(input: CampaignReportRenderInputV1): 
     ? ''
     : '<p class="campaign-report__eligibility">Alternative Universe grants no Nation Mastery XP, APEX XP, Credits or nation unlocks.</p>';
   const accountFooter = snapshot.outcome === 'defeat' || snapshot.outcome === 'surrender'
-    ? '<div class="campaign-report__apex-return"><span>APEX · TEMPORAL RETURN</span><small>“This timeline is lost—not our war. I will take us back with everything we learned. Next time, we arrive stronger.”</small></div>'
+    ? '<div class="campaign-report__apex-return"><span>APEX · TEMPORAL RETURN</span><small>“This timeline is lost—not our war. I will return its lessons to the first free node in Greenland. Next time, we arrive stronger.”</small></div>'
     : snapshot.rewardEligible
       ? `<div><span>TIMELINE INTELLIGENCE SAVED</span><small>${snapshot.mode === 'standard-2026'
-        ? 'APEX returned earned APEX XP, Nation Mastery XP and Credits to the origin point.'
-        : 'APEX returned earned APEX XP and Nation Mastery XP to the origin point.'}</small></div>`
+        ? 'APEX returned earned APEX XP, Nation Mastery XP and Credits to the Greenland origin node.'
+        : 'Only verified Rogue losses and Antarctic captures became XP.'}</small></div>`
       : '';
   const creditLabel = snapshot.mode === 'standard-2026'
     ? `+${whole(snapshot.reward.creditsEarned)}` : '0';
@@ -236,8 +236,11 @@ export function renderCampaignReportHtmlV1(input: CampaignReportRenderInputV1): 
       ? 'Earned from meaningful Campaign activity'
       : 'No qualifying Campaign activity recorded'
     : snapshot.mode === 'survival'
-      ? 'Survival awards XP and Mastery, but no Credits'
+      ? 'XP: verified Rogue losses + Antarctic captures only'
       : 'Alternative Universe has no account rewards';
+  const scoreNote = snapshot.mode === 'survival'
+    ? '<small>ROGUE LOSSES + ANTARCTIC CAPTURES ONLY</small>'
+    : '';
   const unlockedAccess = snapshot.mode === 'standard-2026'
     && (input.unlockedCountries?.length ?? 0) > 0
     ? `<section class="campaign-report__signal-purges" aria-label="New nations unlocked"><div><span>CAMPAIGN VICTORY UNLOCKS</span><strong>${input.unlockedCountries!.length} ${input.unlockedCountries!.length === 1 ? 'NATION' : 'NATIONS'} ADDED</strong></div><ul>${input.unlockedCountries!.map((country) => `<li><b>${escapeHtml(country.name)}</b><span>UNLOCKED · READY IN ALL MODES</span></li>`).join('')}</ul></section>`
@@ -291,7 +294,7 @@ export function renderCampaignReportHtmlV1(input: CampaignReportRenderInputV1): 
         <article><span>WAR RECORD</span><strong>${whole(snapshot.warsWon)}–${whole(snapshot.warsLost)}</strong><small>${warRecordNote}</small></article>
         <article><span>ROGUE WAVE</span><strong>${whole(snapshot.highestSurvivalWave)}</strong></article>
         <article><span>MILITARY LOSSES</span><strong>${personnel(snapshot.militaryLosses)}</strong><small>${lossesNote}</small></article>
-        <article><span>CAMPAIGN SCORE</span><strong>${whole(snapshot.reward.score)}</strong></article>
+        <article><span>CAMPAIGN SCORE</span><strong>${whole(snapshot.reward.score)}</strong>${scoreNote}</article>
       </section>
 
       <footer class="campaign-report__footer">

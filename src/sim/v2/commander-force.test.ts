@@ -27,7 +27,6 @@ import { assertInvariantsV2 } from './invariants';
 import { openingStartingTreasuryV2 } from './nationState';
 import { canonicalStateHashV2, createSaveV2, loadSaveV2 } from './persistence';
 import { resolveScenarioV2 } from './scenarios';
-import { markSurvivalScorchedTerritoryV2 } from './survivalEmpire';
 import { traitNationContextV2 } from './traitContext';
 import {
   nationIdV2,
@@ -321,9 +320,12 @@ describe('APEX neural dome', () => {
     const preCollapseSave = structuredClone(
       createSaveV2(engine.state, engine.content),
     ) as Record<string, any>;
-    engine.state.territories[fallenCorridorId]!.owner = ROGUE_AI_NATION_ID_V2;
-    markSurvivalScorchedTerritoryV2(engine.state, engine.content, fallenCorridorId);
-    synchronizeArmyCapacityV2(engine.state, engine.content);
+    beginTerritoryIntegrationV2(
+      engine.state,
+      engine.content,
+      fallenCorridorId,
+      ROGUE_AI_NATION_ID_V2,
+    );
 
     preCollapseSave.territories = structuredClone(engine.state.territories);
     preCollapseSave.runProgression = structuredClone(engine.state.runProgression);
@@ -372,7 +374,6 @@ describe('APEX neural dome', () => {
     engine.state.territories[exposedStationId]!.coreOwner = ROGUE_AI_NATION_ID_V2;
     engine.state.territories[exposedStationId]!.integration = 1;
     engine.state.territories[exposedStationId]!.integrationProgram = null;
-    markSurvivalScorchedTerritoryV2(engine.state, engine.content, exposedStationId);
     synchronizeArmyCapacityV2(engine.state, engine.content);
 
     expect(reconcileCommanderTerritorialAccessV2(
@@ -899,7 +900,10 @@ describe('APEX neural dome', () => {
     ).defender!;
     expect(defenseSupport.attackMultiplier).toBe(commanderProfile.attackMultiplier);
     expect(defenseSupport.defenseMultiplier).toBe(commanderProfile.defenseMultiplier);
-    expect(defenseSupport.mirrorMatrixEligible).toBe(true);
+    // Adaptive Barrier improves defensive Energy efficiency. The retired
+    // Mirror Matrix never reflects personnel damage from a human APEX dome.
+    expect(defenseSupport.interceptEfficiency).toBeCloseTo(1.15, 9);
+    expect(defenseSupport.mirrorMatrixEligible).toBe(false);
     expect(selectApexShieldPresentationV2(state, belgium)).toMatchObject({
       attackMultiplier: commanderProfile.attackMultiplier,
       defenseMultiplier: commanderProfile.defenseMultiplier,

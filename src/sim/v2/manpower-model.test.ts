@@ -261,6 +261,9 @@ describe('V2 one-source manpower combat', () => {
     engine.stopClock();
     enterPostBlackoutCampaignForTestV2(engine.state);
     for (const territory of engine.territoriesOf(isl)) territory.army.manpower = territory.army.capacity * 0.10;
+    // This test creates the underfill directly rather than through casualties,
+    // so retire the temporary opening-force bookkeeping it deliberately bypasses.
+    engine.state.players[isl].openingArmyBonus = null;
     engine.state.players[isl].treasury = 100;
     const status = engine.warDeclarationStatus(isl, gbr);
     expect(status.allowed).toBe(true);
@@ -307,7 +310,7 @@ describe('V2 one-source manpower combat', () => {
     const war = engine.rapidRecruitmentTerms(bel);
     expect(war.atWar).toBe(true);
     expect(war.allowed).toBe(false);
-    expect(war.reason).toMatch(/war.*reserve/i);
+    expect(war.reason).toMatch(/unavailable during war/i);
     expect(war.cost).toBe(peace.cost);
     const treasuryBeforeRejectedAction = engine.state.players[bel].treasury;
     expect(engine.rapidRecruitment(bel).accepted).toBe(false);

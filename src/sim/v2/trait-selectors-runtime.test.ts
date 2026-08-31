@@ -215,7 +215,7 @@ describe('retired country-trait selector runtime', () => {
     expect(selectTaxEfficiencyMultiplierV2(fusionState, netherlands)).toBe(1);
   });
 
-  it('keeps recruitment cost, throughput and reserve capacity neutral', () => {
+  it('keeps recruitment cost and throughput neutral while reserve capacity stays retired', () => {
     const china = identityFixtureV2('chn', 82_010);
     expect(selectRecruitmentUnitCostV2(china.traitState, china.traitId, china.traitContent)
       / selectRecruitmentUnitCostV2(china.neutralState, china.neutralId, china.neutralContent))
@@ -229,9 +229,9 @@ describe('retired country-trait selector runtime', () => {
     )).toBeCloseTo(countryTraitFactorV2(venezuela.traitId, 'recruitment-throughput'), 2);
 
     const guatemala = identityFixtureV2('gtm', 82_013);
-    expect(selectTrainedReserveCapacityV2(guatemala.traitState, guatemala.traitId)
-      / selectTrainedReserveCapacityV2(guatemala.neutralState, guatemala.neutralId))
-      .toBeCloseTo(countryTraitFactorV2(guatemala.traitId, 'reserve-capacity'), 5);
+    expect(selectTrainedReserveCapacityV2(guatemala.traitState, guatemala.traitId)).toBe(0);
+    expect(selectTrainedReserveCapacityV2(guatemala.neutralState, guatemala.neutralId)).toBe(0);
+    expect(countryTraitFactorV2(guatemala.traitId, 'reserve-capacity')).toBe(1);
 
     const india = identityFixtureV2('ind', 82_014);
     configureBothV2(india, (state, playerId) => setArmyFillV2(state, playerId, 0));
@@ -252,7 +252,7 @@ describe('retired country-trait selector runtime', () => {
     ), 5);
   });
 
-  it('keeps reserve training, deployment and accelerated recruitment neutral', () => {
+  it('keeps reserve compatibility zero and accelerated recruitment neutral', () => {
     const guatemala = identityFixtureV2('gtm', 82_020);
     configureBothV2(guatemala, (state, playerId) => {
       state.players[playerId]!.treasury = 1_000_000;
@@ -267,16 +267,9 @@ describe('retired country-trait selector runtime', () => {
     const gtmNeutral = selectWeeklyFinanceBreakdownV2(
       guatemala.neutralState, guatemala.neutralContent, guatemala.neutralId,
     );
-    const gtmPipelineRatio = selectRecruitmentTrainingPipelineV2(
-      guatemala.traitState, guatemala.traitContent, guatemala.traitId,
-    ) / selectRecruitmentTrainingPipelineV2(
-      guatemala.neutralState, guatemala.neutralContent, guatemala.neutralId,
-    );
-    expect(gtmTrait.reserveTraining / gtmNeutral.reserveTraining)
-      .toBeCloseTo(
-        gtmPipelineRatio * countryTraitFactorV2(guatemala.traitId, 'reserve-training'),
-        2,
-      );
+    expect(gtmTrait.reserveTraining).toBe(0);
+    expect(gtmNeutral.reserveTraining).toBe(0);
+    expect(countryTraitFactorV2(guatemala.traitId, 'reserve-training')).toBe(1);
 
     const korea = identityFixtureV2('kor', 82_021);
     configureBothV2(korea, (state, playerId) => {
@@ -308,8 +301,9 @@ describe('retired country-trait selector runtime', () => {
     const cubNeutral = selectWeeklyFinanceBreakdownV2(
       cuba.neutralState, cuba.neutralContent, cuba.neutralId,
     );
-    expect(cubTrait.reserveDeployment / cubNeutral.reserveDeployment)
-      .toBeCloseTo(countryTraitFactorV2(cuba.traitId, 'reserve-deployment-throughput'), 3);
+    expect(cubTrait.reserveDeployment).toBe(0);
+    expect(cubNeutral.reserveDeployment).toBe(0);
+    expect(countryTraitFactorV2(cuba.traitId, 'reserve-deployment-throughput')).toBe(1);
   });
 
   it('keeps development and demographic selectors neutral', () => {

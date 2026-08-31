@@ -85,7 +85,7 @@ describe('responsive strategic topbar', () => {
     expect(worldUiSource).toContain('private syncEmpireDefenceGlow(): void');
     expect(worldUiSource).toContain('animation.currentTime = phase;');
     expect(worldUiSource).not.toContain('shieldScanDelaySeconds');
-    expect(worldUiSource).toContain('ENERGY ${apexPowerState.integrityPercent}% · PULSE ${people(apexPowerState.pulseAttack)}');
+    expect(worldUiSource).toContain('ENERGY ${apexPowerState.integrityPercent}% · +${format(apexPowerState.supportBonusPercent, 1)}% SUPPORT');
     expect(worldUiSource).toContain('<span>POPULATION</span>');
     expect(worldUiSource).toContain('<span>WAR SUPPLY</span>');
     expect(worldUiSource).toContain('data-panel="research"');
@@ -99,7 +99,8 @@ describe('responsive strategic topbar', () => {
     expect(worldUiSource).not.toContain('class="top-metric top-metric--food"');
     expect(worldUiSource).toContain('including APEX income');
     expect(worldUiSource).toContain('${armyReadiness.value} ARMY');
-    expect(worldUiSource).toContain('${people(human.trainedReserves)} RES</span>');
+    expect(worldUiSource).toContain('<span>ARMY ${compactNumber(combatPower)}</span>');
+    expect(worldUiSource).not.toContain('human.trainedReserves');
     expect(worldUiSource.match(/title="[^"]+" aria-label="Open (?:Economy|War|Nation|Research)/g)).toHaveLength(5);
   });
 
@@ -190,7 +191,7 @@ describe('responsive strategic topbar', () => {
     expect(worldUiSource).toContain('<span>ENERGY</span>');
     expect(worldUiSource).toContain('${compactNumber(force.shield.integrity)} / ${compactNumber(force.shield.maxIntegrity)} MAX');
     expect(worldUiSource).toContain('OVERDRIVE ${lancer.supportedAssaultCount}/3');
-    expect(worldUiSource).toContain('COUNTERMEASURE · 15% INTERCEPT RETURN');
+    expect(worldUiSource).toContain('ADAPTIVE BARRIER · +15% DEFENSIVE ENERGY EFFICIENCY');
     expect(worldUiSource).toContain('THEATER MESH · ${frontAllocationPercent}% × ${activeFrontCount} FRONTS');
     expect(worldUiSource).toContain('EMPIRE-WIDE SHIELD NETWORK');
     expect(worldUiSource).not.toContain('COMMANDER CORPS');

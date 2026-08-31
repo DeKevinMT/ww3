@@ -279,7 +279,7 @@ describe('distributed APEX Signal Purge', () => {
     )).toMatchObject({ mode: 'standard', label: 'INTEGRATING' });
   });
 
-  it('keeps Survival captures as non-integrating supply corridors', () => {
+  it('keeps Survival human captures on the normal integration path', () => {
     const resolved = resolveScenarioV2({ mode: 'survival', seed: 88_108 });
     const state = createWorldStateV2(88_108, resolved.content);
     const playerId = state.humanPlayerId;
@@ -289,13 +289,13 @@ describe('distributed APEX Signal Purge', () => {
 
     expect(state.territories[luxembourgTerritory]).toMatchObject({
       owner: playerId,
-      coreOwner: playerId,
-      integration: 0,
+      coreOwner: luxembourg,
+      integration: CONQUEST_INITIAL_INTEGRATION_SHARE,
     });
-    expect(state.territories[luxembourgTerritory]!.integrationProgram).toBeUndefined();
+    expect(state.territories[luxembourgTerritory]!.integrationProgram).toBeDefined();
     expect(selectApexSignalPurgeFocusV2(
       state, resolved.content, playerId,
-    )).toBeUndefined();
+    )).toBe(luxembourgTerritory);
   });
 
   it('completes through the existing 100% country-unlock gate and notification path', () => {

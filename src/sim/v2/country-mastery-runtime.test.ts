@@ -179,8 +179,10 @@ describe('Country Mastery simulation runtime', () => {
     const memberWeight = state.territories[memberTerritoryId]!.population
       * state.territories[memberTerritoryId]!.integration;
     const totalWeight = flagshipWeight + memberWeight;
-    const expectedRecruitment = (1.20 * flagshipWeight + 2 * memberWeight) / totalWeight;
-    const expectedReserve = (1.40 * flagshipWeight + 2.50 * memberWeight) / totalWeight;
+    // Legacy reserve-training mastery is folded into the one direct active
+    // recruitment track. The strongest authored multiplier wins per country,
+    // preventing old profiles from double-stacking the retired system.
+    const expectedRecruitment = (1.40 * flagshipWeight + 2.50 * memberWeight) / totalWeight;
     expect(selectCountryMasteryReplenishmentRuntimeV2(
       state,
       content,
@@ -188,11 +190,11 @@ describe('Country Mastery simulation runtime', () => {
       productiveTerritoryIds,
     )).toEqual({
       recruitmentMultiplier: expect.closeTo(expectedRecruitment, 10),
-      reserveTrainingMultiplier: expect.closeTo(expectedReserve, 10),
+      reserveTrainingMultiplier: 1,
     });
 
     // Capacity is a separate Force effect; reset it to 1× to isolate the exact
-    // weighted Mobilization contribution in the shared pipeline and finance.
+    // weighted direct-recruitment contribution in the shared pipeline.
     registerCountryMasteryRuntimeV2(
       content,
       flagshipId,
@@ -218,29 +220,9 @@ describe('Country Mastery simulation runtime', () => {
     expect(selectRecruitmentTrainingPipelineV2(state, content, flagshipId)
       / baselinePipeline).toBeCloseTo(liveBlend.recruitmentMultiplier, 4);
 
-    resetCountryMasteryRuntimeV2(content);
-    synchronizeArmyCapacityV2(state, content);
-    fullyFunded(state, flagshipId);
-    const baselineReserve = selectWeeklyFinanceBreakdownV2(
-      state, content, flagshipId,
-    ).reserveTraining;
-    registerCountryMasteryRuntimeV2(
-      content,
-      flagshipId,
-      modifiers(1, 1.20, 1.40),
-    );
-    registerCountryMasteryRuntimeV2(
-      content,
-      memberId,
-      modifiers(1, 2, 2.50),
-    );
-    const masteredReserve = selectWeeklyFinanceBreakdownV2(
-      state, content, flagshipId,
-    ).reserveTraining;
-    expect(masteredReserve / baselineReserve)
-      // Weekly manpower is persisted in whole-soldier units, so this final
-      // finance value carries slightly more quantization than the pure blend.
-      .toBeCloseTo(liveBlend.reserveTrainingMultiplier, 3);
+    const finance = selectWeeklyFinanceBreakdownV2(state, content, flagshipId);
+    expect(finance.reserveTraining).toBe(0);
+    expect(finance.reserveTrainingCost).toBe(0);
   });
 
   it('weights military-industry costs across original member recruiting populations', () => {
@@ -532,10 +514,15 @@ describe('Country Mastery simulation runtime', () => {
       state, content, territoryId, ownerId,
     )).toBe(capacity);
     expect(selectRecruitmentTrainingPipelineV2(state, content, ownerId)).toBe(pipeline);
+    const canonicalFrozen = {
+      ...frozen,
+      recruitmentMultiplier: 1.90,
+      reserveTrainingMultiplier: 1,
+    };
     expect(selectRegisteredCountryMasteryRuntimeV2(content, ownerId))
-      .toEqual(expect.objectContaining(frozen));
+      .toEqual(expect.objectContaining(canonicalFrozen));
     expect(selectTerritoryCountryMasteryRuntimeV2(content, territoryId, ownerId))
-      .toEqual(expect.objectContaining(frozen));
+      .toEqual(expect.objectContaining(canonicalFrozen));
 
     const serialized = serializeSaveV2(state, content);
     expect(serialized).not.toContain('countryMasteryRuntime');

@@ -934,7 +934,7 @@ export class MultiplayerLobby {
       const local = player.peerId === localId;
       const country = player.countryId ? this.resolvedScenario.content.nations[player.countryId] : undefined;
       const survivalRole = player.peerId === this.lobby!.hostPeerId
-        ? 'EMPIRE COMMAND' : 'DAWNLINE ACCORD';
+        ? 'PRIMARY COMMAND' : 'CO-OP COMMAND';
       const connection = player.connected ? player.ready ? 'READY' : 'CHOOSING' : 'DISCONNECTED';
       return `<article class="mp-player ${local ? 'is-local' : ''} ${player.connected ? '' : 'is-offline'}"><div class="mp-player__identity"><span>${country?.sigil ?? '◇'}</span><div><strong>${escapeHtml(player.displayName)}${player.peerId === this.lobby!.hostPeerId ? ' · HOST' : ''}</strong><small>${survival ? `${survivalRole} · ` : ''}${connection}</small></div></div><b>${escapeHtml(country?.name ?? (local ? 'Choose below' : 'No country'))}</b></article>`;
     }).join('')}</div>`;
@@ -950,7 +950,7 @@ export class MultiplayerLobby {
     const localPeerId = this.host?.hostPeerId ?? this.guest?.peerId;
     const survivalRole = scenario.mode === 'survival'
       ? localPeerId && this.lobby
-        ? localPeerId === this.lobby.hostPeerId ? 'YOUR EMPIRE' : 'DAWNLINE LEADER'
+        ? localPeerId === this.lobby.hostPeerId ? 'YOUR COMMAND' : 'CO-OP COMMAND'
         : 'YOUR SURVIVAL NATION'
       : 'YOUR CO-OP NATION';
     return `<section class="mp-deployment-summary" aria-label="Selected co-op deployment"><div class="mp-deployment-summary__sigil" aria-hidden="true">${country?.sigil ?? '◇'}</div><div class="mp-deployment-summary__item"><span>${survivalRole}</span><strong>${escapeHtml(country?.name ?? 'Nation pending')}</strong><small>${mastery ? `Mastery level ${mastery}` : 'Your unlocked command'}</small></div><div class="mp-deployment-summary__item is-mission"><span>SHARED MISSION</span><strong>${escapeHtml(gameModeLabel(scenario.mode))}</strong><small>${escapeHtml(gameModeBrief(scenario.mode))}</small></div></section>`;
@@ -992,7 +992,7 @@ export class MultiplayerLobby {
     }
     const connection = isHost ? 'ROOM LEADER' : connectionLabel(this.guest?.state ?? 'connecting').toUpperCase();
     const missionHelp = survival
-      ? 'Your Empire and the Dawnline Accord keep separate armies, APEX shields and logistics. Victory, defeat and reconnect are shared.'
+      ? 'Human commands keep separate armies, APEX shields and logistics. The Arctic Dawnline remains a full-strength NPC ally; victory and defeat are shared.'
       : 'Your countries stay independent; allied territory carries team supply. Victory and defeat are shared, and disconnected seats can rejoin.';
     return `<div class="mp-direct-room"><div class="mp-room__head"><div><div class="panel-kicker">CO-OP TEAM</div><h2>${isHost ? 'Confirm the deployment' : 'Prepare for deployment'}</h2></div><span>${connected}/${survival ? 2 : 8} · ${escapeHtml(connection)}</span></div>${this.renderDeploymentSummary()}<p class="mp-one-line-help">${missionHelp}</p>${this.renderPlayers()}<div class="mp-direct-room__next">${action}${block && local?.ready ? `<small>${escapeHtml(block)}</small>` : ''}</div></div>`;
   }
@@ -1004,7 +1004,7 @@ export class MultiplayerLobby {
     const block = this.hostModel?.startBlockReason();
     const survival = this.lobby?.scenario.mode === 'survival';
     const help = survival
-      ? 'You command your Empire; your friend leads the separate Dawnline Accord. Shared outcome, separate forces.'
+      ? 'You and your friend keep separate sovereign commands. The Arctic Dawnline deploys separately as an NPC ally.'
       : 'One nation each · permanent team · shared victory or defeat · reconnect enabled.';
     const rail = `<div class="mp-room__rail"><div class="mp-room__head"><div><div class="panel-kicker">CO-OP HOST · ${escapeHtml(this.host.roomId.slice(-8).toUpperCase())}</div><h2>Your team</h2></div><span>${this.lobby?.players.filter((player) => player.connected).length ?? 1}/${survival ? 2 : 8} CONNECTED</span></div><p class="mp-one-line-help">${help}</p>${this.renderPlayers()}<div class="mp-connect-grid"><section><h3>1 · Invite one friend</h3><p>Create a private code and send it to that friend.</p>${this.inviteCode ? `<textarea readonly aria-label="Host invite code">${escapeHtml(this.inviteCode)}</textarea><button class="secondary-button" data-mp-action="copy-invite">COPY INVITE</button>` : '<button class="secondary-button" data-mp-action="create-invite">CREATE FRIEND INVITE</button>'}</section><section><h3>2 · Accept their answer</h3><p>Paste the answer they send back.</p><textarea id="mp-answer-input" placeholder="Paste friend answer…">${escapeHtml(this.pastedAnswer)}</textarea><button class="secondary-button" data-mp-action="accept-answer">CONNECT FRIEND</button></section></div><div class="mp-room__actions"><button class="secondary-button ${local?.ready ? 'is-ready' : ''}" data-mp-action="toggle-ready" ${local?.countryId ? '' : 'disabled'}>${local?.ready ? '✓ READY' : 'MARK READY'}</button><button class="primary-button" data-mp-action="start" ${block ? 'disabled' : ''}>START CO-OP</button></div>${block ? `<small class="mp-start-note">${escapeHtml(block)}</small>` : ''}</div>`;
     return `<div class="mp-room mp-room--with-picker">${rail}${this.renderNationPicker()}</div>`;
@@ -1016,7 +1016,7 @@ export class MultiplayerLobby {
     const local = this.localPlayer();
     const survival = this.lobby?.scenario.mode === 'survival';
     const help = survival
-      ? 'You lead the Dawnline Accord with your own nation, Army, APEX and logistics. The final outcome is shared.'
+      ? 'You keep your own nation, Army, APEX and logistics beside the host. The Arctic Dawnline remains an NPC ally.'
       : 'Your nation stays yours. Teammates cannot fight each other; the outcome is shared.';
     const rail = `<div class="mp-room__rail"><div class="mp-room__head"><div><div class="panel-kicker">CO-OP GUEST · ${escapeHtml(this.guest.hostName.toUpperCase())}</div><h2>Your team</h2></div><span>${escapeHtml(connectionLabel(this.guest.state).toUpperCase())}</span></div><p class="mp-one-line-help">${help}</p>${this.answerCode ? `<div class="mp-answer-callout"><h3>Send this answer back to the host</h3><p>The connection completes only after the host pastes it.</p><textarea readonly aria-label="Friend answer code">${escapeHtml(this.answerCode)}</textarea><button class="secondary-button" data-mp-action="copy-answer">COPY ANSWER</button></div>` : ''}${this.renderPlayers()}${this.lobby ? `<div class="mp-room__actions"><button class="secondary-button ${local?.ready ? 'is-ready' : ''}" data-mp-action="toggle-ready" ${local?.countryId ? '' : 'disabled'}>${local?.ready ? '✓ READY' : 'MARK READY'}</button><span>Only the host starts the shared campaign.</span></div>` : ''}</div>`;
     return this.lobby

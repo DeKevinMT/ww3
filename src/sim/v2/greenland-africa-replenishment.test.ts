@@ -202,7 +202,7 @@ describe('Greenland to Africa post-conquest replenishment', () => {
 
     expect(first.recruited).toBeGreaterThan(0);
     expect(second.recruited).toBeGreaterThan(0);
-    expect(first.trained + second.trained).toBeGreaterThan(0);
+    expect(first.trained + second.trained).toBe(0);
     // The fixed one-percent peace curve remains visibly material even while
     // the integrating beachhead expands the denominator beneath it.
     expect(week13.readiness).toBeGreaterThan(opening.readiness + 0.075);
@@ -211,7 +211,7 @@ describe('Greenland to Africa post-conquest replenishment', () => {
     expect(week26.beachhead).toBeGreaterThan(opening.beachhead + 0.12);
 
     // This remains a real integration and finance simulation. Local capacity
-    // expands while recruitment and reserve training stay inside real funding.
+    // expands while direct active recruitment stays inside real funding.
     expect(week26.integration).toBeGreaterThan(opening.integration);
     expect(week26.capacity).toBeGreaterThan(opening.capacity);
     expect(week26.retiredCommodityCost).toBe(0);
@@ -282,7 +282,7 @@ describe('Greenland to Africa post-conquest replenishment', () => {
     expect(result.cost).toBeGreaterThan(0);
     expect(beachhead.army.manpower).toBeGreaterThan(beachheadBefore);
     expect(greenland.trainedReserves).toBeGreaterThanOrEqual(reservesBefore);
-    expect(result.trained).toBeGreaterThan(0);
+    expect(result.trained).toBe(0);
     expect(result.recruited).toBeGreaterThan(0);
   });
 

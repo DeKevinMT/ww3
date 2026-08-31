@@ -61,22 +61,22 @@ function campaignWithLiberatedShare(seed: number): WorldEngineV2 {
 }
 
 describe('gradual Antarctic gateway breaches', () => {
-  it('starts Survival with three closed routes in one deterministic seeded order', () => {
+  it('starts Survival with all three routes open in one deterministic seeded order', () => {
     const engine = survival(80_001);
     expect(engine.state.polarEndgame.gatewayBreachOrder)
       .toEqual(deterministicSurvivalAntarcticGatewayOrderV2(80_001));
     expect(new Set(engine.state.polarEndgame.gatewayBreachOrder))
       .toEqual(new Set(ANTARCTIC_GATEWAY_IDS_V2));
     expect(Object.values(engine.state.polarEndgame.gatewayBreaches)
-      .filter((breach) => breach?.status === 'open')).toHaveLength(0);
+      .filter((breach) => breach?.status === 'open')).toHaveLength(3);
     expect(Object.values(engine.state.polarEndgame.gatewayBreaches)
-      .filter((breach) => breach?.status === 'breaching')).toHaveLength(1);
+      .filter((breach) => breach?.status === 'breaching')).toHaveLength(0);
     for (const route of ANTARCTIC_GATEWAY_COUNTRY_ROUTES_V2) {
       expect(isWorldConnectionOpenV2(
         engine.state,
         antarcticGatewayTerritoryIdV2(route.gatewayId),
         route.countryId,
-      )).toBe(false);
+      )).toBe(true);
     }
     const reloaded = WorldEngineV2.fromSave(engine.save(), engine.content);
     expect(reloaded.state.polarEndgame.gatewayBreachOrder)
@@ -127,15 +127,16 @@ describe('gradual Antarctic gateway breaches', () => {
     assertInvariantsV2(reloaded.state, reloaded.content);
   });
 
-  it('uses more than one permutation across seeds and opens monotonically one by one', () => {
+  it('keeps Campaign permutations varied and opens its gateways monotonically one by one', () => {
     const permutations = new Set(Array.from({ length: 24 }, (_, seed) => (
       deterministicAntarcticGatewayOrderV2(seed + 1).join('|')
     )));
     expect(permutations.size).toBeGreaterThan(1);
-    const engine = survival(80_002);
+    const engine = new WorldEngineV2(80_002);
+    prepareAntarcticGatewayBreachesV2(engine.state);
     const order = engine.state.polarEndgame.gatewayBreachOrder;
-    const first = engine.state.polarEndgame.gatewayBreaches[order[0]!]!;
-    engine.state.tick = first.opensTick!;
+    expect(scheduleAntarcticGatewayBreachV2(engine.state, 0, 13)).toBe(order[0]);
+    engine.state.tick += 13;
     expect(processAntarcticGatewayBreachesV2(engine.state)).toEqual([order[0]]);
     expect(scheduleAntarcticGatewayBreachV2(engine.state, 1, 13)).toBe(order[1]);
     expect(Object.values(engine.state.polarEndgame.gatewayBreaches)

@@ -37,8 +37,8 @@ describe('scenario resolution and Alternative Universe policies', () => {
     expect(state.events.some((event) => event.kind === 'critical')).toBe(false);
     expect(strategicAlignmentScoreV2(nationIdV2('prk'), nationIdV2('rus'), content)).toBe(0);
     expect(geopoliticalTargetGuidanceV2(nationIdV2('rus'), nationIdV2('ukr'), content)).toBe(0);
-    expect(initialTrainedReserveManpowerV2('fin', 1, content))
-      .not.toBe(initialTrainedReserveManpowerV2('fin', 1));
+    expect(initialTrainedReserveManpowerV2('fin', 1, content)).toBe(0);
+    expect(initialTrainedReserveManpowerV2('fin', 1)).toBe(0);
     expect(invariantErrorsV2(state, content)).toEqual([]);
   });
 

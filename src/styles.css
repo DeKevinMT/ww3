@@ -10745,3 +10745,121 @@ button:disabled { opacity: 0.32; cursor: default; transform: none !important; }
 .world-ui-v2 .finance-flow-summary small {
   font-size: 11px !important;
 }
+
+/* Survival contact acceleration is intentionally one edge chip, never a new panel. */
+.world-ui-v2 .survival-contact-fast-forward {
+  position: absolute;
+  z-index: 24;
+  top: 88px;
+  right: 12px;
+  left: auto;
+  width: min(520px, calc(100vw - 24px));
+  min-height: 46px;
+  padding: 7px 8px;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  gap: 9px;
+  align-items: center;
+  pointer-events: auto;
+  border-color: rgba(95, 226, 242, .32);
+  background: linear-gradient(105deg, rgba(5, 25, 40, .95), rgba(8, 47, 64, .88));
+  box-shadow: 0 12px 30px rgba(0, 0, 0, .38), inset 0 0 22px rgba(86, 224, 240, .035);
+}
+.world-ui-v2 .survival-contact-fast-forward > i {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(107, 233, 244, .4);
+  border-radius: 50%;
+  color: #8cecf4;
+  background: rgba(75, 213, 232, .09);
+  font-style: normal;
+  font-size: 17px;
+  font-weight: 900;
+}
+.world-ui-v2 .survival-contact-fast-forward > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.world-ui-v2 .survival-contact-fast-forward strong {
+  color: #dffcff;
+  font-size: 11px;
+  letter-spacing: .8px;
+}
+.world-ui-v2 .survival-contact-fast-forward small {
+  overflow: hidden;
+  color: #94b9c2;
+  font-size: 10px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.world-ui-v2 .survival-contact-fast-forward button,
+.world-ui-v2 .survival-contact-fast-forward__speed {
+  min-height: 30px;
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(102, 231, 243, .36);
+  border-radius: 6px;
+  color: #dffcff;
+  background: rgba(72, 210, 230, .11);
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: .55px;
+  white-space: nowrap;
+}
+.world-ui-v2 .survival-contact-fast-forward button:not(:disabled) { cursor: pointer; }
+.world-ui-v2 .survival-contact-fast-forward button:not(:disabled):hover {
+  border-color: rgba(121, 240, 249, .7);
+  background: rgba(72, 210, 230, .2);
+}
+.world-ui-v2 .survival-contact-fast-forward button:disabled { opacity: .52; }
+.world-ui-v2 .survival-contact-fast-forward.is-active {
+  border-color: rgba(101, 235, 244, .58);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, .38), inset 3px 0 #6eeaf3;
+}
+.world-ui-v2 .survival-contact-fast-forward.is-contact {
+  border-color: rgba(255, 201, 94, .62);
+  background: linear-gradient(105deg, rgba(25, 28, 31, .96), rgba(76, 54, 17, .9));
+  box-shadow: 0 12px 30px rgba(0, 0, 0, .38), inset 3px 0 #ffd36f;
+}
+.world-ui-v2 .survival-contact-fast-forward.is-contact > i,
+.world-ui-v2 .survival-contact-fast-forward.is-contact strong {
+  border-color: rgba(255, 211, 112, .52);
+  color: #ffe1a0;
+}
+.world-ui-v2 button.survival-front-status {
+  cursor: pointer;
+  color: inherit;
+  text-align: left;
+}
+.world-ui-v2 button.survival-front-status:hover,
+.world-ui-v2 button.survival-front-status:focus-visible {
+  border-color: rgba(115, 234, 246, .58);
+  background: linear-gradient(105deg, rgba(5, 29, 45, .97), rgba(10, 58, 75, .92));
+  outline: none;
+}
+@media (max-width: 840px) {
+  .world-ui-v2 .survival-contact-fast-forward {
+    top: auto;
+    right: 8px;
+    bottom: 118px;
+    left: 8px;
+    width: auto;
+  }
+}
+@media (max-width: 560px) {
+  .world-ui-v2 .survival-contact-fast-forward {
+    grid-template-columns: 24px minmax(0, 1fr) auto;
+    min-height: 42px;
+  }
+  .world-ui-v2 .survival-contact-fast-forward > i { width: 24px; height: 24px; }
+  .world-ui-v2 .survival-contact-fast-forward small { display: none; }
+  .world-ui-v2 .survival-contact-fast-forward button,
+  .world-ui-v2 .survival-contact-fast-forward__speed { min-height: 27px; padding: 0 7px; }
+}

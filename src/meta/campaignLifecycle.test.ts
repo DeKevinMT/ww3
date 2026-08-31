@@ -100,6 +100,12 @@ describe('campaign lifecycle settlement', () => {
   it('builds an idempotent exact victory settlement from retained state and the live war ledger', () => {
     const world = state({
       polarEndgame: { phase: 'victory', globalWave: 5 },
+      territories: {
+        bel: { owner: 'bel' },
+        lux: { owner: 'bel' },
+        nld: { owner: 'nld' },
+        'drake-entry': { owner: 'bel' },
+      },
       wars: [{
         id: 'active-war', attackerId: 'bel', defenderId: 'nld',
         attackerLosses: 0.01, defenderLosses: 0.02,
@@ -125,8 +131,8 @@ describe('campaign lifecycle settlement', () => {
     expect(second).toEqual(first);
     expect(first.outcome).toBe('victory');
     expect(first.weeksSurvived).toBe(130);
-    expect(first.territoriesGainedIds).toEqual(['lux']);
-    expect(first.territoryDelta).toBe(1);
+    expect(first.territoriesGainedIds).toEqual(['drake-entry', 'lux']);
+    expect(first.territoryDelta).toBe(2);
     expect(first.warRecord).toEqual({
       wins: 1, losses: 1, complete: true, source: 'war-outcomes',
     });
@@ -135,19 +141,28 @@ describe('campaign lifecycle settlement', () => {
     expect(first.militaryLossesComplete).toBe(true);
     expect(first.reward.masteryXp).toBeGreaterThan(0);
     expect(first.reward.commanderXp).toBeGreaterThan(0);
+    expect(first.reward.antarcticTerritoriesCaptured).toBe(1);
     expect(first.reward).not.toHaveProperty('totalReward');
     expect(first.settlementId).toBe('campaign-lifecycle-test:victory');
   });
 
   it('slows country mastery for powerful nations without reducing APEX XP', () => {
+    const antarcticGain = state({
+      tick: 104,
+      territories: {
+        bel: { owner: 'bel' },
+        lux: { owner: 'bel' },
+        'drake-entry': { owner: 'bel' },
+      },
+    });
     const base = createCampaignLifecycleSnapshotV1({
-      source: state({ tick: 104 }),
+      source: antarcticGain,
       campaign: campaign({ campaignId: 'weak-country-mastery' }),
       outcome: 'surrender',
       countryMasteryXpDifficultyMultiplier: 1,
     })!;
     const superpower = createCampaignLifecycleSnapshotV1({
-      source: state({ tick: 104 }),
+      source: antarcticGain,
       campaign: campaign({ campaignId: 'superpower-mastery' }),
       outcome: 'surrender',
       countryMasteryXpDifficultyMultiplier: 12,
@@ -200,20 +215,94 @@ describe('campaign lifecycle settlement', () => {
     })!;
     expect(withoutVerifiedKills.verifiedRogueWaveLosses).toBe(0);
     expect(withVerifiedKills.verifiedRogueWaveLosses).toBe(0.004);
+    expect(withoutVerifiedKills.reward).toMatchObject({
+      masteryXp: 0,
+      commanderXp: 0,
+      creditsEarned: 0,
+      score: 0,
+    });
     expect(withVerifiedKills.reward.score).toBeGreaterThan(withoutVerifiedKills.reward.score);
-    // Four thousand verified machines are intentionally only a tiny grind gain.
-    expect(withVerifiedKills.reward.masteryXp - withoutVerifiedKills.reward.masteryXp)
-      .toBeLessThanOrEqual(1);
+    expect(withVerifiedKills.reward.masteryXp).toBeGreaterThan(0);
+  });
+
+  it('counts only newly held Antarctic territory for Survival rewards, including the core', () => {
+    const oneSector = createCampaignLifecycleSnapshotV1({
+      source: state({
+        tick: 5_200,
+        territories: {
+          bel: { owner: 'bel' },
+          lux: { owner: 'bel' },
+          nld: { owner: 'bel' },
+          'drake-entry': { owner: 'bel' },
+          'zero-point-core': { owner: 'rai' },
+        },
+        wars: [{
+          id: 'ordinary-world-war', attackerId: 'bel', defenderId: 'rai',
+          attackerLosses: 99, defenderLosses: 99,
+        }],
+        polarEndgame: { phase: 'counteroffensive', globalWave: 99 },
+      }),
+      campaign: campaign({ campaignId: 'one-antarctic-sector' }),
+      outcome: 'surrender',
+    })!;
+    const withCore = createCampaignLifecycleSnapshotV1({
+      source: state({
+        tick: 5_200,
+        territories: {
+          bel: { owner: 'bel' },
+          lux: { owner: 'bel' },
+          nld: { owner: 'bel' },
+          'drake-entry': { owner: 'bel' },
+          'zero-point-core': { owner: 'bel' },
+        },
+        polarEndgame: { phase: 'victory', globalWave: 99 },
+      }),
+      campaign: campaign({ campaignId: 'antarctic-core-captured' }),
+      outcome: 'victory',
+    })!;
+    const baselineSectorIsNotPaidAgain = createCampaignLifecycleSnapshotV1({
+      source: state({
+        territories: {
+          bel: { owner: 'bel' },
+          'drake-entry': { owner: 'bel' },
+          'zero-point-core': { owner: 'bel' },
+        },
+        polarEndgame: { phase: 'victory', globalWave: 99 },
+      }),
+      campaign: campaign({
+        campaignId: 'antarctic-baseline-deduplication',
+        baseline: {
+          startingTerritoryIds: ['bel', 'drake-entry'],
+          startingMilitaryLosses: 0,
+          startingTick: 0,
+        },
+      }),
+      outcome: 'victory',
+    })!;
+
+    expect(oneSector.territoriesGainedIds).toEqual(['drake-entry', 'lux', 'nld']);
+    expect(oneSector.reward.antarcticTerritoriesCaptured).toBe(1);
+    expect(withCore.reward.antarcticTerritoriesCaptured).toBe(2);
+    expect(baselineSectorIsNotPaidAgain.reward.antarcticTerritoriesCaptured).toBe(1);
+    expect(baselineSectorIsNotPaidAgain.territoriesGainedIds).toEqual(['zero-point-core']);
+    expect(withCore.reward.masteryXp).toBeGreaterThan(oneSector.reward.masteryXp);
+    expect(withCore.reward.commanderXp).toBeGreaterThan(oneSector.reward.commanderXp);
+    expect(withCore.reward.score).toBeGreaterThan(oneSector.reward.score);
+    expect(withCore.reward.creditsEarned).toBe(0);
   });
 
   it('requires explicit End Campaign and preserves all performance rewards without a surrender penalty', () => {
+    const antarcticGain = state({
+      tick: 52,
+      territories: { bel: { owner: 'bel' }, 'drake-entry': { owner: 'bel' } },
+    });
     const snapshot = createCampaignLifecycleSnapshotV1({
-      source: state({ tick: 52 }),
+      source: antarcticGain,
       campaign: campaign(),
       outcome: 'surrender',
     })!;
     const defeat = createCampaignLifecycleSnapshotV1({
-      source: state({ tick: 52 }),
+      source: antarcticGain,
       campaign: campaign({ campaignId: 'matching-defeat' }),
       outcome: 'defeat',
     })!;

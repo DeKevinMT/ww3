@@ -90,7 +90,7 @@ describe('human territorial defeat', () => {
     expect(loaded.commanderForces[humanId]).not.toHaveProperty('army');
   });
 
-  it('keeps the campaign alive when trained national reserves can still deploy', () => {
+  it('ignores a stale trained-reserve compatibility value for defeat', () => {
     const state = createWorldStateV2(290_005, WORLD_CONTENT_V2);
     const humanId = state.humanPlayerId;
     for (const territory of Object.values(state.territories)) {
@@ -98,7 +98,7 @@ describe('human territorial defeat', () => {
     }
     state.players[humanId]!.trainedReserves = 0.000001;
 
-    expect(selectHumanEmpireDefeatWinnerV2(state)).toBeUndefined();
+    expect(selectHumanEmpireDefeatWinnerV2(state)).toBeDefined();
   });
 
   it('reconstructs the same territorial defeat when an authenticated save is loaded', () => {

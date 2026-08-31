@@ -110,23 +110,23 @@ describe('polar command UI', () => {
     expect(panel).toContain('this.engine.effectiveDefense(owner.id, territory.army)');
     expect(panel).toContain('ECONOMY');
     expect(panel).toContain('territory.economy');
-    expect(panel).toContain('Weak outer states protect a massively fortified core.');
+    expect(panel).toContain('Its real opening army is roughly 20% stronger than the full Arctic Dawnline bloc.');
     expect(panel).toContain('PERIMETER STATES · WEAKEST');
     expect(panel).toContain('SOVEREIGN MACHINE CORE · STRONGEST');
     expect(worldUiSource).toContain("mapBridge.scene?.focusPolarSector?.(sectorId)");
   });
 
-  it('shows live occupation, logistics war, escalating waves, bounded pressure and the real core objective', () => {
+  it('shows physical expansion, manufactured waves, live logistics and the real core objective', () => {
     const panel = methodSource('  private renderAntarcticaPanel(', '  private renderNationPanel(');
     expect(panel).toContain('const occupiedWorld = rogueTerritories.filter(([id]) => !antarcticIds.has(String(id))).length;');
     expect(panel).toContain('const activeWars = rogueId ? state.wars.filter((war) =>');
     expect(panel).toContain('Permanent machine war');
-    expect(panel).toContain('MACHINE SPREAD');
-    expect(panel).toContain('Only countries physically captured by Antarctic-origin waves become zero-production transit nodes.');
-    expect(panel).toContain('INDEPENDENT RESISTANCE');
-    expect(panel).toContain('They retain roughly 10% strength');
+    expect(panel).toContain('PHYSICAL EXPANSION');
+    expect(panel).toContain('Every conquest advances from Antarctica through an open gateway and enters rapid assimilation.');
+    expect(panel).toContain('SOVEREIGN WORLD');
+    expect(panel).toContain('Every country opens fully mobilised with normal resources');
     expect(panel).toContain('polar.nextCounteroffensiveTick');
-    expect(panel).toContain('Wave ${polar.globalWave} grows stronger');
+    expect(panel).toContain('+5% verified Antarctic reinforcements each year');
     expect(panel).toContain('selectRogueLogisticsTelemetryV2(');
     expect(panel).toContain('this.engine.recentLogisticsMovements()');
     expect(panel).toContain('TROOP MOVEMENTS · THIS WEEK');

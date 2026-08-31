@@ -90,7 +90,7 @@ describe('APEX neural energy-shield platform', () => {
       attackMultiplier: 1.08,
       defenseMultiplier: 1.08,
       supportBonusPercent: 8,
-      pulseAttack: 0.001,
+      pulseAttack: 0,
     });
     expect(selectApexShieldIntegrityCurrentV2(state, playerId)).toBe(0.0005);
     expect(selectApexShieldIntegrityMaxV2(state, playerId)).toBe(0.001);
@@ -228,7 +228,7 @@ describe('APEX neural energy-shield platform', () => {
       attackMultiplier: 1.08,
       defenseMultiplier: 1.08,
       supportBonusPercent: 8,
-      pulseAttack: 0.001,
+      pulseAttack: 0,
     });
   });
 

@@ -10,7 +10,7 @@ describe('account progression wiring', () => {
   it('applies the immutable Commander and all five country upgrade tracks at campaign start', () => {
     expect(mainSource).toContain('resolveCommanderForceInitializationV1(loadout)');
     expect(mainSource).toContain('nation.empireName = commanderProfile.empireName');
-    expect(mainSource).toContain("effects['reserve-training'] += levels.mobilization");
+    expect(mainSource).toContain("effects['reinforcement-efficiency'] += levels.mobilization");
     expect(mainSource).toContain("effects['operating-efficiency'] += levels.logistics");
     expect(mainSource).toContain("effects['research-efficiency'] += levels.research");
     expect(mainSource).toContain("effects['tax-efficiency'] += levels.economy");

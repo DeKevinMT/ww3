@@ -44,6 +44,7 @@ export function authorizeMultiplayerCommandV2(
     case 'acknowledge-polar-warning':
     case 'respond-apex-transmission':
     case 'set-empire-name':
+    case 'select-survival-counteroffensive':
       return command.playerId === seatCountryId
         ? allowed() : rejected('You can only manage your own country.');
     case 'choose-run-upgrade':

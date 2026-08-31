@@ -4,7 +4,6 @@ import {
   RESEARCH_BRANCHES,
   V2_MAP_ID,
   V2_RULES_VERSION,
-  localFormationCapitulationThresholdV2,
   WAR_CAMPAIGN_MAX_TICKS,
   WAR_REVENGE_WINDOW_TICKS,
 } from './balance';
@@ -25,6 +24,7 @@ import {
 import { selectCoopMilitaryAccessRouteBetweenV2 } from './coopAccess';
 import { isHumanPlayerV2 } from './humanPlayers';
 import { OPENING_ARMY_BONUS_DURATION_TICKS_V2 } from './openingArmyBonus';
+import { isSurvivalDawnlineNationV2 } from './survivalOrdinaryAi';
 import {
   ANTARCTIC_SECTOR_IDS_V2,
   ARCTIC_PROJECT_IDS_V2,
@@ -41,6 +41,7 @@ import {
 } from './runProgression';
 import {
   finiteStateNumbersV2,
+  isSurvivalScorchedTransitTerritoryV2,
   relationKeyV2,
   selectArmyCombatManpowerV2,
   selectIsEliminatedV2,
@@ -331,7 +332,7 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
       || scorched.join('|') !== [...scorched].sort().join('|')
       || scorched.some((id) => !state.territories[id]
         || content.territories[id]?.regionId === 'antarctica')
-      || (content.metadata?.scenarioId !== 'survival' && scorched.length > 0)) {
+      || scorched.length > 0) {
       errors.push('Run progression scorched-world registry is invalid.');
     }
     for (const [rawPlayerId, progress] of Object.entries(run.players)) {
@@ -946,7 +947,7 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
     if (nation.empireName.length > 36 || /[<>\r\n]/.test(nation.empireName)) errors.push(`Nation ${id} has an invalid empire name.`);
     if (!Number.isFinite(nation.treasury)
       || !Number.isFinite(nation.domesticFoodCapacity) || nation.domesticFoodCapacity < 0
-      || !Number.isFinite(nation.trainedReserves) || nation.trainedReserves < 0
+      || !Number.isFinite(nation.trainedReserves) || nation.trainedReserves !== 0
       || nation.foodStock < 0 || nation.foodSecurity < 0 || nation.foodSecurity > 1
       || nation.ceasefiresRequested !== 0
       || !Number.isInteger(nation.rapidRecruitmentAvailableTick) || nation.rapidRecruitmentAvailableTick < 0
@@ -979,7 +980,12 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
     if (!state.players[territory.owner]) errors.push(`Territory ${id} has an unknown owner.`);
     if (!state.players[territory.coreOwner]) errors.push(`Territory ${id} has an unknown core owner.`);
     const expectedCapacity = stateTerritoryArmyCapacityTargetV2(state, content, id, territory.owner);
-    if (territory.population < 0.01 || territory.economy < 0.10
+    const destroyedSurvivalCorridor = isSurvivalScorchedTransitTerritoryV2(state, id);
+    const invalidPopulation = destroyedSurvivalCorridor
+      ? territory.population !== 0 : territory.population < 0.01;
+    const invalidEconomy = destroyedSurvivalCorridor
+      ? territory.economy !== 0 : territory.economy < 0.10;
+    if (invalidPopulation || invalidEconomy
       || territory.integration < 0 || territory.integration > 1
       || territory.army.capacity < 0 || territory.army.manpower < 0
       || !Number.isFinite(territory.army.baseAttack) || territory.army.baseAttack <= 0 || territory.army.baseAttack > 20
@@ -1003,12 +1009,7 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
         errors.push(`Territory ${id} has an invalid integration program.`);
       }
     } else {
-      const survivalSupplyCorridor = content.metadata?.scenarioId === 'survival'
-        && state.runProgression.scorchedWorldTerritoryIds.includes(id)
-        && !ANTARCTIC_TERRITORY_IDS_V2.includes(id);
-      if (survivalSupplyCorridor
-        ? territory.integration !== 0
-        : territory.coreOwner !== territory.owner || territory.integration !== 1) {
+      if (territory.coreOwner !== territory.owner || territory.integration !== 1) {
       errors.push(`Territory ${id} has unfinished integration without a program.`);
       }
     }
@@ -1254,12 +1255,7 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
           errors.push(`War ${war.id} operation has no legal route.`);
         }
         if (survivalRogueHumanWar && commanderId === war.defenderId
-          && (war.battles <= 0
-            || !state.runProgression.scorchedWorldTerritoryIds.includes(operation.targetId)
-            || !target
-            || selectArmyCombatManpowerV2(state, ROGUE_AI_NATION_ID_V2, target.army)
-              > localFormationCapitulationThresholdV2(target.army.capacity)
-            || route?.hopCount !== 1)) {
+          && route?.hopCount !== 1) {
           errors.push(`Survival Rogue war ${war.id} has an invalid human counterfront.`);
         }
       }
@@ -1294,9 +1290,17 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
   if (allianceSignature !== sortedAllianceSignature) errors.push('Alliances are not stably sorted.');
   for (const alliance of state.alliances) {
     const key = relationKeyV2(alliance.leftId, alliance.rightId);
+    const validAllianceParticipant = (playerId: PlayerId): boolean => (
+      isHumanPlayerV2(state, playerId)
+        || (content.metadata?.scenarioId === 'survival'
+          && isSurvivalDawnlineNationV2(state, playerId))
+    );
     if (!exactKeys(alliance, ALLIANCE_KEYS)
       || alliance.leftId.localeCompare(alliance.rightId) >= 0
-      || !isHumanPlayerV2(state, alliance.leftId) || !isHumanPlayerV2(state, alliance.rightId)
+      || !validAllianceParticipant(alliance.leftId)
+      || !validAllianceParticipant(alliance.rightId)
+      || (!isHumanPlayerV2(state, alliance.leftId)
+        && !isHumanPlayerV2(state, alliance.rightId))
       || !state.players[alliance.leftId] || !state.players[alliance.rightId]
       || selectIsEliminatedV2(state, alliance.leftId) || selectIsEliminatedV2(state, alliance.rightId)
       || !Number.isInteger(alliance.formedTick) || alliance.formedTick < 0 || alliance.formedTick > state.tick

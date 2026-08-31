@@ -14,10 +14,9 @@ import type {
 /**
  * Save-compatibility shell for the retired timeline card system.
  *
- * `scorchedWorldTerritoryIds` remains the canonical Survival transit-node
- * registry until the next save-schema migration. It is world state, not a
- * perk system, and therefore survives while every offer, pick and modifier is
- * intentionally neutralised.
+ * `scorchedWorldTerritoryIds` remains a schema-only empty compatibility field.
+ * Old corridor saves are repaired and cleared at load while every offer, pick
+ * and modifier remains intentionally neutralised.
  */
 
 export type RunUpgradeRarityV2 = 'common' | 'uncommon' | 'rare';

@@ -6,7 +6,6 @@ import {
   projectFinanceManpowerPhaseV2,
   selectRecruitmentTrainingPipelineV2,
   selectTotalManpowerV2,
-  selectTrainedReserveCapacityV2,
   selectWeeklyFinanceBreakdownV2,
 } from './selectors';
 import { WorldEngineV2 } from './WorldEngineV2';
@@ -66,8 +65,7 @@ function fundedState(seed: number): WorldStateV2 {
 }
 
 function combinedPersonnel(state: WorldStateV2, playerId: PlayerId): number {
-  return selectTotalManpowerV2(state, playerId).deployed
-    + state.players[playerId]!.trainedReserves;
+  return selectTotalManpowerV2(state, playerId).deployed;
 }
 
 describe('global wartime recruitment freeze', () => {
@@ -108,16 +106,13 @@ describe('global wartime recruitment freeze', () => {
       .toBeGreaterThan(0);
     expect(peaceFinance.passiveRecruitment + peaceFinance.acceleratedRecruitment)
       .toBeGreaterThan(0);
-    expect(peaceFinance.reserveTraining).toBeGreaterThan(0);
+    expect(peaceFinance.reserveTraining).toBe(0);
   });
 
-  it('mobilises only existing reserves and conserves total personnel exactly', () => {
+  it('ignores and retires a stale reserve payload instead of mobilising it', () => {
     const state = fundedState(91_002);
     setActiveFill(state, belgium, 0.50);
-    state.players[belgium]!.trainedReserves = Math.min(
-      selectTrainedReserveCapacityV2(state, belgium),
-      selectTotalManpowerV2(state, belgium).capacity * 0.25,
-    );
+    state.players[belgium]!.trainedReserves = 0.25;
     state.wars = [warBetween('reserve-transfer', belgium, netherlands)];
     const before = combinedPersonnel(state, belgium);
     const finance = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, belgium);
@@ -128,14 +123,13 @@ describe('global wartime recruitment freeze', () => {
       finance,
     );
 
-    expect(finance.reserveDeployment).toBeGreaterThan(0);
+    expect(finance.reserveDeployment).toBe(0);
     expect(finance.passiveRecruitment).toBe(0);
     expect(finance.acceleratedRecruitment).toBe(0);
     expect(finance.reserveTraining).toBe(0);
-    expect(projection.deployedAfterFinance).toBeGreaterThan(projection.deployedBefore);
-    expect(projection.trainedReservesAfter).toBeLessThan(projection.trainedReservesBefore);
-    expect(projection.deployedAfterFinance + projection.trainedReservesAfter)
-      .toBeCloseTo(before, 5);
+    expect(projection.deployedAfterFinance).toBe(projection.deployedBefore);
+    expect(projection.trainedReservesBefore).toBe(0);
+    expect(projection.trainedReservesAfter).toBe(0);
 
     processFinanceMilitaryV2(
       state,
@@ -143,6 +137,7 @@ describe('global wartime recruitment freeze', () => {
       createFinancePlansV2(state, WORLD_CONTENT_V2),
     );
     expect(combinedPersonnel(state, belgium)).toBeCloseTo(before, 5);
+    expect(state.players[belgium]!.trainedReserves).toBe(0);
   });
 
   it('spends no treasury on hidden wartime training, including an empty reserve pool', () => {
@@ -213,6 +208,6 @@ describe('global wartime recruitment freeze', () => {
 
     const final = selectTotalManpowerV2(state, belgium);
     expect(final.deployed / final.capacity).toBeGreaterThan(0.70);
-    expect(state.players[belgium]!.trainedReserves).toBeGreaterThan(0);
+    expect(state.players[belgium]!.trainedReserves).toBe(0);
   });
 });

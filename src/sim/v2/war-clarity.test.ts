@@ -105,7 +105,7 @@ describe('clear war decisions and attrition', () => {
     expect(engine.warDeclarationStatus(belgium, netherlands).allowed).toBe(true);
   });
 
-  it('drains Indian reserves before China’s disadvantaged opening ends without conquering India', () => {
+  it('drains India’s active army before China’s disadvantaged opening ends without conquest', () => {
     const engine = isolatedEngine(1_504, 'chn');
     engine.state.players[id('chn')].treasury = 100_000;
     const indiaStart = engine.totalManpower('ind').deployed;
@@ -130,11 +130,9 @@ describe('clear war decisions and attrition', () => {
     expect(engine.state.territories[territoryIdV2('ind')].owner).toBe(id('ind'));
     expect(engine.territoriesOf('ind').length).toBeGreaterThanOrEqual(1);
     expect(indiaEnd).toBeGreaterThan(0);
-    // The reserve pool must decline throughout the campaign rather than
-    // regenerate indefinitely behind the front.
-    expect(indiaReserveEnd).toBeLessThan(indiaReserveStart);
-    expect(indiaEnd + indiaReserveEnd)
-      .toBeLessThan(indiaStart + indiaReserveStart);
+    expect(indiaReserveStart).toBe(0);
+    expect(indiaReserveEnd).toBe(0);
+    expect(indiaEnd).toBeLessThan(indiaStart);
   }, 90_000);
 
   it('does not auto-surrender and requires a final territorial battle after national strength collapses', () => {

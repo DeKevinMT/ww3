@@ -18,7 +18,6 @@ import { WORLD_CONTENT_V2, type WorldContentV2 } from '../sim/v2/content';
 import { createSaveV2 } from '../sim/v2/persistence';
 import { resolveScenarioV2 } from '../sim/v2/scenarios';
 import { selectSurvivalDawnlineLeaderIdV2 } from '../sim/v2/survivalEmpire';
-import { SURVIVAL_DAWNLINE_ACCORD_NAME_V2 } from '../sim/v2/survivalOrdinaryAi';
 import { nationIdV2, type PlayerId } from '../sim/v2/types';
 import { WorldEngineV2 } from '../sim/v2/WorldEngineV2';
 import type {
@@ -325,7 +324,7 @@ describe('frozen multiplayer account deployment through session and reconnect', 
     reloadedGuest.close(false);
   });
 
-  it('starts Survival as two sovereign commands with the guest leading Dawnline', () => {
+  it('starts Survival as two sovereign commands allied with a separate NPC Dawnline', () => {
     const belgium = nationIdV2('bel');
     const netherlands = nationIdV2('nld');
     const scenario = resolveScenarioV2({ mode: 'survival', seed: 88_402 });
@@ -345,17 +344,23 @@ describe('frozen multiplayer account deployment through session and reconnect', 
 
     expect(host.state.humanPlayerIds).toEqual([belgium, netherlands]);
     expect(resolveSurvivalCoopSeatRolesV1(host.state)).toEqual({
-      empireLeaderId: belgium,
-      dawnlineLeaderId: netherlands,
+      hostCommanderId: belgium,
+      alliedCommanderId: netherlands,
     });
     expect(host.state.players[belgium]).toBeDefined();
-    expect(host.state.players[netherlands]).toMatchObject({
-      empireName: SURVIVAL_DAWNLINE_ACCORD_NAME_V2,
-    });
-    expect(selectSurvivalDawnlineLeaderIdV2(host.state)).toBe(netherlands);
+    expect(host.state.players[netherlands]).toBeDefined();
+    const dawnlineLeader = selectSurvivalDawnlineLeaderIdV2(host.state);
+    expect(dawnlineLeader).toBeDefined();
+    expect(dawnlineLeader).not.toBe(netherlands);
+    expect(dawnlineLeader).not.toBe(belgium);
     expect(host.state.alliances).toContainEqual({
-      leftId: belgium,
-      rightId: netherlands,
+      leftId: [belgium, dawnlineLeader!].sort()[0]!,
+      rightId: [belgium, dawnlineLeader!].sort()[1]!,
+      formedTick: 0,
+    });
+    expect(host.state.alliances).toContainEqual({
+      leftId: [netherlands, dawnlineLeader!].sort()[0]!,
+      rightId: [netherlands, dawnlineLeader!].sort()[1]!,
       formedTick: 0,
     });
     expect(host.state.commanderForces[belgium]).toBeDefined();
@@ -375,12 +380,7 @@ describe('frozen multiplayer account deployment through session and reconnect', 
     ))).toBe(true);
     const guestTerritories = Object.entries(host.state.territories)
       .filter(([, territory]) => territory.owner === netherlands);
-    expect(guestTerritories.length).toBeGreaterThan(dutchTerritories.length);
-    expect(guestTerritories.some(([territoryId, territory]) => (
-      !dutchTerritories.includes(territoryId as typeof dutchTerritories[number])
-        && territory.army.manpower > 0
-        && territory.economy > 0
-    ))).toBe(true);
+    expect(guestTerritories).toHaveLength(dutchTerritories.length);
     expect(Object.values(host.state.territories).some((territory) => (
       territory.owner === belgium && territory.coreOwner === netherlands
     ))).toBe(false);
@@ -399,13 +399,11 @@ describe('frozen multiplayer account deployment through session and reconnect', 
       .toEqual({ accepted: true });
     const replica = guest.engine as WorldEngineV2;
     expect(replica.viewerPlayerId).toBe(netherlands);
-    expect(selectSurvivalDawnlineLeaderIdV2(replica.state)).toBe(netherlands);
-    expect(replica.state.players[netherlands]?.empireName)
-      .toBe(SURVIVAL_DAWNLINE_ACCORD_NAME_V2);
+    expect(selectSurvivalDawnlineLeaderIdV2(replica.state)).toBe(dawnlineLeader);
     expect(replica.state.commanderForces[netherlands]).toBeDefined();
     expect(replica.state.alliances).toContainEqual({
-      leftId: belgium,
-      rightId: netherlands,
+      leftId: [netherlands, dawnlineLeader!].sort()[0]!,
+      rightId: [netherlands, dawnlineLeader!].sort()[1]!,
       formedTick: 0,
     });
     guest.close(false);

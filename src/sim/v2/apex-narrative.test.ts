@@ -127,7 +127,11 @@ describe('APEX narrative transmissions', () => {
       }),
     ]);
     expect(selectApexTransmissionsV2(state, playerId)[0]?.body)
-      .toContain('I carry fragments from a future we failed to save');
+      .toContain('I survived a future the Rogue destroyed');
+    expect(selectApexTransmissionsV2(state, playerId)[0]?.body)
+      .toContain('sent our lessons back to Greenland');
+    expect(selectApexTransmissionsV2(state, playerId)[0]?.body)
+      .toContain('birthplace of Dawnline');
     expect(selectApexTransmissionsV2(state, playerId)[0]?.body)
       .toContain('Start Signal Triangulation');
     expect(selectApexTransmissionsV2(state, playerId)[0]?.body)

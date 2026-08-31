@@ -55,7 +55,7 @@ export const TREASURY_UPGRADES: readonly TreasuryUpgradeDefinition[] = [
   },
   {
     id: 'mobilization', name: 'Industrial Mobilization', field: 'Force capacity', icon: '▦', color: '#bd91ff',
-    description: 'Reserve training and military production modestly expand force capacity and training throughput.',
+    description: 'Instructor networks and military production expand active force capacity and peacetime training throughput.',
     effect: '+4% force capacity and +8% training per level', baseCost: 74, costGrowth: 1.85, maxLevel: 5,
   },
 ];
@@ -157,7 +157,7 @@ export const MANAGEMENT_UPGRADES: readonly ManagementUpgradeDefinition[] = [
   {
     id: 'population-research', domain: 'research', branch: 'Population R&D', icon: '◉', color: '#62dfaf',
     name: 'Demographic resilience programme', description: 'Study healthcare, housing and long-term demographic stability.',
-    outcome: 'Random +1% demographic or reserve improvement', randomPool: ['population-growth', 'manpower-capacity'],
+    outcome: 'Random +1% demographic or force-capacity improvement', randomPool: ['population-growth', 'manpower-capacity'],
     baseCost: 6.0, costGrowth: 1.66, baseDuration: 96, durationGrowth: 0.12, maxLevel: 12,
   },
   {
@@ -186,7 +186,7 @@ export const MANAGEMENT_UPGRADES: readonly ManagementUpgradeDefinition[] = [
   },
   {
     id: 'defensive-command', domain: 'war', branch: 'Doctrine', icon: '⬡', color: '#70c9f4',
-    name: 'Layered defensive command', description: 'Coordinate fortifications, air defence and counterattack reserves.',
+    name: 'Layered defensive command', description: 'Coordinate fortifications, air defence and counterattack formations.',
     outcome: 'Guaranteed +1% national DEF', fixedImprovement: 'defense',
     baseCost: 6.5, costGrowth: 1.72, baseDuration: 88, durationGrowth: 0.13, maxLevel: 10,
   },
@@ -198,7 +198,7 @@ export const MANAGEMENT_UPGRADES: readonly ManagementUpgradeDefinition[] = [
   },
   {
     id: 'training-command', domain: 'war', branch: 'Mobilization', icon: '◆', color: '#bd91ff',
-    name: 'National training command', description: 'Expand instructor capacity and standardise reserve mobilisation.',
+    name: 'National training command', description: 'Expand instructor capacity and standardise active-force training.',
     outcome: 'Guaranteed +1% training speed', fixedImprovement: 'training',
     baseCost: 6.2, costGrowth: 1.7, baseDuration: 86, durationGrowth: 0.13, maxLevel: 10,
   },

@@ -46,8 +46,8 @@ export function hasLivingHumanPlayerV2(state: HumanPlayerStateV2): boolean {
 
 /**
  * Returns the deterministic victor when every human seat has either lost its
- * land or has no ordinary combat formation or trained reserve left anywhere
- * in the shared empire. A surviving APEX shield is deliberately ignored: it
+ * land or has no ordinary combat formation left anywhere in the shared
+ * empire. A surviving APEX shield is deliberately ignored: it
  * can protect and reinforce national armies, but it cannot be the sole army
  * keeping a campaign alive.
  */
@@ -61,13 +61,8 @@ export function selectHumanEmpireDefeatWinnerV2(
     (sum, territory) => sum + Math.max(0, territory.army.manpower),
     0,
   );
-  const trainedReserveManpower = [...humanIds].reduce(
-    (sum, playerId) => sum + Math.max(0, state.players[playerId]?.trainedReserves ?? 0),
-    0,
-  );
   if (humanTerritories.length > 0
-    && ordinaryCombatManpower + trainedReserveManpower
-      > ORDINARY_COMBAT_MANPOWER_EPSILON_V2) return undefined;
+    && ordinaryCombatManpower > ORDINARY_COMBAT_MANPOWER_EPSILON_V2) return undefined;
 
   const activeOpponents = new Map<PlayerId, number>();
   for (const war of state.wars) {

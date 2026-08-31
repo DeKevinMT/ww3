@@ -11,7 +11,7 @@ import {
   synchronizeArmyCapacityV2,
 } from './capacity';
 import {
-  ANTARCTIC_TERRITORY_IDS_V2,
+  ROGUE_AI_NATION_ID_V2,
   territoryTerrainTypesV2,
   type WorldContentV2,
 } from './content';
@@ -63,6 +63,8 @@ const INTEGRATION_LARGE_COUNTRY_YEARS = 1.5;
 export const INTEGRATION_DURATION_MULTIPLIER_V2 = 0.82;
 /** Voluntary defensive unions complete four times faster than conquest. */
 export const FEDERATION_INTEGRATION_DURATION_FACTOR_V2 = 0.25;
+/** Rogue-only Survival brainwashing: visible, bounded, and never instant. */
+export const SURVIVAL_ROGUE_RAPID_ASSIMILATION_DURATION_FACTOR_V2 = 0.25;
 
 /**
  * Administration price frozen from the territory's live output at conquest.
@@ -571,6 +573,11 @@ export function quoteTerritoryIntegrationV2(
   const federationFactor = options.cause === 'federation'
     ? FEDERATION_INTEGRATION_DURATION_FACTOR_V2
     : 1;
+  const rapidAssimilationFactor = options.cause === 'conquest'
+    && content.metadata?.scenarioId === 'survival'
+    && newOwnerId === ROGUE_AI_NATION_ID_V2
+    ? SURVIVAL_ROGUE_RAPID_ASSIMILATION_DURATION_FACTOR_V2
+    : 1;
   const durationFactor = countryTraitFactorV2(
     newOwnerId,
     'integration-duration',
@@ -598,6 +605,7 @@ export function quoteTerritoryIntegrationV2(
     durationWeeks: Math.max(1, Math.round(
       territoryIntegrationDurationWeeksV2(content, territoryId)
         * federationFactor
+        * rapidAssimilationFactor
         * durationFactor
         * signalPurgeDurationFactor,
     )),
@@ -625,20 +633,6 @@ function beginTerritoryIntegrationWithCauseV2(
   const territory = state.territories[territoryId];
   if (!territory) return;
   const formerOwnerId = territory.owner;
-  const survivalSupplyCorridor = cause === 'conquest'
-    && content.metadata?.scenarioId === 'survival'
-    && !ANTARCTIC_TERRITORY_IDS_V2.includes(territoryId);
-  if (survivalSupplyCorridor) {
-    // In the terminal timeline a world conquest changes route control only.
-    // No global capacity rebuild or multi-year program is needed here; the
-    // battle commit sets this one territory's new local cap after damage.
-    territory.owner = newOwnerId;
-    territory.coreOwner = newOwnerId;
-    territory.integration = 0;
-    delete territory.integrationProgram;
-    invalidateTerritoryIndexV2(state);
-    return;
-  }
   if (territory.coreOwner === newOwnerId) {
     territory.owner = newOwnerId;
     territory.integration = 1;
@@ -751,27 +745,16 @@ export function retireAbsorbedNationV2(
   ) ?? ownerId;
   const owner = state.players[canonicalSuccessorId] ?? state.players[ownerId];
   if (!former || !owner) return false;
-  const returningPolarManpower = retirePolarNationReferencesV2(state, formerNationId);
-  if (returningPolarManpower > 0) {
-    former.trainedReserves = round(former.trainedReserves + returningPolarManpower);
-  }
-  const terminalCorridorRetirement = content.metadata?.scenarioId === 'survival'
-    && content.territoryIds.filter((territoryId) => (
-      content.territories[territoryId]?.initialOwnerId === formerNationId
-    )).every((territoryId) => (
-      state.runProgression.scorchedWorldTerritoryIds.includes(territoryId)
-        && state.territories[territoryId]?.owner !== formerNationId
-    ));
-  // Ordinary absorption transfers stores exactly once. A terminal-timeline
-  // corridor country has no recoverable treasury, reserves or research cache;
-  // retiring its backend identity must never become a hidden conquest reward.
-  if (!terminalCorridorRetirement) {
-    owner.treasury = round(owner.treasury + former.treasury);
-    owner.trainedReserves = round(owner.trainedReserves + former.trainedReserves);
-  }
+  // Legacy expedition records are retired without recreating the removed
+  // national reserve pool.
+  retirePolarNationReferencesV2(state, formerNationId);
+  // Survival conquests now use the same store and knowledge transfer as every
+  // ordinary conquest; the retired zero-corridor registry grants no exception.
+  owner.treasury = round(owner.treasury + former.treasury);
   former.treasury = 0;
   former.trainedReserves = 0;
-  if (mergeKnowledge && !terminalCorridorRetirement) {
+  owner.trainedReserves = 0;
+  if (mergeKnowledge) {
     for (const branch of RESEARCH_BRANCHES) {
       owner.research.progress[branch] = round(Math.max(
         owner.research.progress[branch],
@@ -891,18 +874,6 @@ export function advanceTerritoryIntegrationProgramsV2(
   content: WorldContentV2,
 ): IntegrationCompletionV2[] {
   const completions: IntegrationCompletionV2[] = [];
-  // Terminal-timeline corridors are route ownership only. Remove any stale
-  // pre-rule program before selecting a human APEX focus so it cannot consume
-  // that empire's one autonomous purge slot for even a single week.
-  for (const territoryId of content.territoryIds) {
-    const territory = state.territories[territoryId];
-    if (territory
-      && content.metadata?.scenarioId === 'survival'
-      && state.runProgression.scorchedWorldTerritoryIds.includes(territoryId)) {
-      territory.integration = 0;
-      delete territory.integrationProgram;
-    }
-  }
   const humanFocusByOwner = new Map<PlayerId, TerritoryId>();
   for (const ownerId of selectHumanPlayerIdsV2(state)) {
     const focusId = selectApexSignalPurgeFocusV2(state, content, ownerId);
@@ -984,13 +955,17 @@ export function advanceTerritoryIntegrationProgramsV2(
       program.fromOwnerId,
       formerCoreOwnerId,
     ])) retireAbsorbedNationV2(state, content, formerNationId, ownerId);
+    const rogueRapidAssimilation = content.metadata?.scenarioId === 'survival'
+      && ownerId === ROGUE_AI_NATION_ID_V2;
     addWorldEventV2(
       state,
       'conquest',
       isHumanPlayerV2(state, ownerId) ? 'action' : 'info',
       isHumanPlayerV2(state, ownerId)
         ? `APEX completed the Signal Purge in ${formerName}; it is now permanent core territory in liberated ${ownerName}.`
-        : `${formerName} completed integration into ${ownerName} and is now permanent core territory.`,
+        : rogueRapidAssimilation
+          ? `RAPID ASSIMILATION complete: ${formerName} is now a permanent Rogue-controlled core.`
+          : `${formerName} completed integration into ${ownerName} and is now permanent core territory.`,
       territoryId,
       ownerId,
     );

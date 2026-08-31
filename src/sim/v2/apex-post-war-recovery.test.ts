@@ -125,7 +125,7 @@ describe('APEX post-war recovery transmission', () => {
       choice: null,
       sentTick: 34,
     });
-    expect(recovery.body).toContain('automatically rebuilding its army, trained reserves and supplies');
+    expect(recovery.body).toContain('automatically rebuilding its active army and front logistics');
     expect(recovery.body).toContain('Use this quiet window for Research and your next strategy');
     expect(processApexNarrativeV2(state, WORLD_CONTENT_V2)).toBe(0);
   });

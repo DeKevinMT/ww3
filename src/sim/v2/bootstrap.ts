@@ -26,7 +26,9 @@ import { createInitialPolarEndgameV2 } from './polarEndgame';
 import { createInitialRunProgressionV2 } from './runProgression';
 import { contentVersionForWorldContentV2 } from './scenarios';
 import { initializeSurvivalScenarioV2 } from './survival';
+import { applySurvivalOpeningArmyReadinessV2 } from './survivalOrdinaryAi';
 import { normalizeRetiredFoodCompatibilityV2 } from './retiredFood';
+import { normalizeRetiredReserveCompatibilityV2 } from './retiredReserves';
 import { countryTraitFactorV2, registerTraitContentV2 } from './traits';
 import { invalidateTerritoryIndexV2 } from './selectors';
 import type {
@@ -348,6 +350,7 @@ export function createWorldStateV2(
   if (content.metadata?.openingProfile === 'standard-2026') seedScenarioPressureV2(state, content);
   synchronizeOpeningArmyHumanRosterV2(state, content, [], [humanPlayerId]);
   normalizeRetiredFoodCompatibilityV2(state);
+  normalizeRetiredReserveCompatibilityV2(state);
   // Territory shells are built before the human roster exists. Bring the
   // selected opening country's capacity trait onto the same live-context path
   // used after every later lobby roster change.
@@ -360,6 +363,7 @@ export function createWorldStateV2(
       territory.army.manpower = territory.army.capacity;
     }
   }
+  applySurvivalOpeningArmyReadinessV2(state, content);
   // Storage selection builds an ephemeral ownership index. A freshly created
   // state is intentionally returned with that cache cold so callers may still
   // prepare fixtures/scenarios before the first derived selection.

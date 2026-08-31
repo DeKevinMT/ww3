@@ -8,8 +8,8 @@ Frontier Command v2.65 turns the poles into a complete late-game arc without add
 2. Click the North Pole or open **Research → North Pole**.
 3. Authorise four sequential projects. Each project freezes its quoted cost, pays it immediately and progresses alongside automatic national research.
 4. Acknowledge the persistent Antarctic signal warning after the final project.
-5. Choose one of three entry corridors and commit trained reserves.
-6. First contact reveals the machine army, ends ordinary political wars and starts Earth Defence mobilisation.
+5. Open one of three entry corridors and fight through it with the normal territorial army and logistics systems.
+6. First contact reveals the machine army, suppresses new ordinary AI wars and shifts strategic initiative toward the Antarctic front.
 7. Secure the directed sector network and destroy all three Zero Point Core phases.
 
 The three corridors are:
@@ -26,7 +26,7 @@ Only these gateways appear before first contact. Hidden sectors and their machin
 | --- | ---: | ---: | --- |
 | Polar Habitat Genome | 156 weeks | $80B | +3 Population Growth, +2 Recovery |
 | Cryogenic Logistics Grid | 260 weeks | $180B | +4 Supply, +3 Casualty Reduction, +2 Research Efficiency |
-| Strategic Mobilisation Vaults | 416 weeks | $385B | +4 Force Capacity, +3 Reserve Training, +3 Reserve Mobilisation |
+| Strategic Mobilisation Vaults | 416 weeks | $385B | +4 Force Capacity, +3 Training, +3 Reinforcement Efficiency |
 | Deep-Ice Signal Array | 780 weeks | $760B | +2 Attack, +3 Defence, +2 Research Speed; reveal Antarctica |
 
 The frozen price quote is base cost × original-country military-rank factor × Arctic affinity. The opening-rank factor is scenario-aware and decreases smoothly from ×10.00 for the strongest starter to ×0.50 for the weakest. It never changes after conquest. Greenland, Iceland, Norway, Canada, Finland, Sweden and Russia receive identity discounts of 12.5%, 35%, 30%, 25%, 22%, 18% and 12%; the United States pays a 15% affinity premium; other identities are neutral. Current empire economy has no Arctic price effect.
@@ -43,20 +43,17 @@ Maud Entry  ─┼─> 3 outer installations ─> 2 inner strongholds ─> Zero 
 Ross Entry   ─┘                                                        × 3 phases
 ```
 
-Every deployment consumes real trained reserves. One expedition per player can be active at a time. Combat resolves every four weeks with deterministic, sector-specific rolls. The expedition's remaining personnel return to the reserve pool when it ends, bounded by the current reserve capacity. Depth, campaign wave and the core phase increase opposition strength.
+The standalone expedition system is retired. Antarctica now uses normal territories, active armies, supply routes and wars. Personnel remain in territorial armies; there is no secondary manpower pool or return step. Depth and the core phase increase opposition strength. In Survival, every annual mobilization from wave one onward manufactures provenance-tagged personnel equal to exactly 5% of the pre-wave live Rogue active Army and routes them from the three gateways.
 
-## Earth Defence rules
+## Survival opening and Dawnline
 
-First contact is a global rules transition:
+Survival begins with the Rogue awake and owning only Antarctica. All three Antarctic gateways are operational immediately. Player-roster territories deploy at 100% of their post-mastery live Army Capacity. Every ordinary sovereign retains its normal population, economy, resources and capacity and opens at 100% Army readiness.
 
-- active ordinary wars and alliance offers are cleared;
-- AI countries stop planning interstate wars;
-- defence members join over time and contribute to a shared counteroffensive;
-- lagging member research receives bounded catch-up transfers;
-- the coalition can weaken and eventually secure non-core sectors;
-- high Suspicion slows trust, recruitment and coalition damage.
+The non-human Arctic states Canada, Denmark, Finland, Iceland, Norway, Russia, Sweden and the United States, plus Greenland when it is not part of a human Empire, form the full-strength **Dawnline Accord**. Human-roster members are excluded. Greenland is the lore founder, the first available priority member is the runtime controller, and all Accord territory displays one dedicated alliance flag. Dawnline is non-hostile to every human seat and launches offensive action only against the Rogue; it is not a mechanism for absorbing or controlling human territory. The Rogue opening is calibrated to about 120% of Dawnline's combined actual Combat Power.
 
-Suspicion is never simply disabled. It remains the memory of the player's earlier expansion and initially makes Earth unity harder. Direct robot damage and sector victories earn Suspicion relief, allowing a formerly feared player to rebuild legitimacy through the Antarctic war.
+Ordinary countries outside Dawnline remain independent. Their systemic wars and declarations against humans are suppressed in Survival, but humans may still declare otherwise legal ordinary wars. Rogue conquest continues to use normal ownership, population, economy, production, integration and logistics in every ordinary territory. Visible Rogue assimilation advances at 4× the ordinary integration rate, but it is never instant and creates no personnel or progression reward.
+
+Every 52 weeks, Antarctica manufactures provenance-tagged personnel equal to exactly 5% of its pre-wave live active Army and divides them across the three gateways, starting with the first wave. Existing formations are not drained. Wave launch itself grants no reward. Survival score and XP come only from defeating provenance-verified Antarctic-origin Rogue personnel and from unique currently-held Antarctic sector/core captures. Ordinary combat and captures grant zero Survival progression, and the mode always pays zero Credits after its 50-Credit-per-seat entry cost.
 
 ## Determinism, saves and multiplayer
 
@@ -77,4 +74,4 @@ Suspicion is never simply disabled. It remains the memory of the player's earlie
 
 ## Verification focus
 
-The automated suite covers project sequencing and payment, rewards, the warning transition, corridor access, reserve debits and returns, deterministic combat, Suspicion relief, the sector graph, three boss phases, save migration, multiplayer protocol and authorisation, map routing and UI accessibility. The browser smoke test additionally covers desktop and mobile top bars, the Research gateway, confirmation flow, progress display and polar camera handoff.
+The automated suite covers project sequencing and payment, the warning transition, corridor access, territorial logistics, deterministic combat, the sector graph, Survival opening ownership and Army fill, Dawnline membership and strength, yearly wave commitment, provenance-gated rewards, multiplayer protocol and authorisation, map routing and UI accessibility. The browser smoke test additionally covers desktop and mobile top bars, the Research gateway, confirmation flow, progress display and polar camera handoff.

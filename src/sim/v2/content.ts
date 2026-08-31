@@ -399,10 +399,45 @@ export const OPENING_MILITARY_ORDER_2026_V2: readonly PlayerId[] = Object.freeze
     .map((country) => country.id),
 ] as unknown as readonly PlayerId[]);
 
+/** Suriname remains a weak Atlantic stepping stone in both force volume and capacity. */
+export const SURINAME_OPENING_FORCE_MULTIPLIER_V2 = 0.80;
+
 /** Small Standard-opening roster adjustments shared by AI and human seats. */
 export function normalOpeningManpowerMultiplierV2(countryId: string): number {
-  void countryId;
-  return 1;
+  return countryId === 'sur' ? SURINAME_OPENING_FORCE_MULTIPLIER_V2 : 1;
+}
+
+export interface NormalOpeningForceQuoteV2 {
+  readonly multiplier: number;
+  readonly authoredInitialManpower: number;
+  readonly authoredOpeningCapacity: number;
+  readonly initialManpower: number;
+  readonly openingCapacity: number;
+}
+
+/**
+ * Applies one country balance factor after both neutral force quotes exist.
+ * In particular, a structural population floor cannot silently restore the
+ * capacity removed from a deliberately lighter opening army.
+ */
+export function normalOpeningForceQuoteV2(
+  countryId: string,
+  authoredInitialManpower: number,
+  population: number,
+): NormalOpeningForceQuoteV2 {
+  const multiplier = normalOpeningManpowerMultiplierV2(countryId);
+  const authoredOpeningCapacity = Math.max(
+    0.0001,
+    population * ARMY_CAPACITY_STRUCTURAL_POPULATION_SHARE,
+    authoredInitialManpower * ARMY_CAPACITY_INITIAL_FORCE_FLOOR,
+  );
+  return {
+    multiplier,
+    authoredInitialManpower,
+    authoredOpeningCapacity,
+    initialManpower: round(Math.max(0.0001, authoredInitialManpower * multiplier), 9),
+    openingCapacity: Math.max(0.0001, authoredOpeningCapacity * multiplier),
+  };
 }
 
 /**
@@ -497,7 +532,12 @@ function calibratedMilitaryPowerIndex(
     // Rank is ordinal, not a percentage of the leader's strength. A curved
     // conversion keeps the published order but restores the much larger real
     // gap between global superpowers, regional powers and the long tail.
-    return round(100 / (1 + 0.14 * (publishedRank - 1)) ** 1.35, 9);
+    const publishedPower = 100 / (1 + 0.14 * (publishedRank - 1)) ** 1.35;
+    // Iceland is an elite but deliberately lighter Atlantic bridge in the
+    // Greenland progression route. Scaling calibrated power (rather than raw
+    // manpower) keeps its high ATK/DEF identity while lowering total strength.
+    const campaignBalance = countryId === 'isl' ? 0.80 : 1;
+    return round(publishedPower * campaignBalance, 9);
   }
   const spendingScore = Math.log10(defenceSpending + 1) / Math.log10(955);
   const economyScore = Math.log10(gdp + 1) / Math.log10(31_000);
@@ -862,16 +902,19 @@ function makeNationContent(country: (typeof COUNTRIES)[number]): NationContentV2
     Math.sqrt(sourceManpower * targetManpower),
     minimumManpowerForRatingCap,
   );
-  const initialManpower = round(
-    calibratedInitialManpower * normalOpeningManpowerMultiplierV2(country.id),
-    9,
+  const authoredInitialManpower = round(calibratedInitialManpower, 9);
+  const openingForce = normalOpeningForceQuoteV2(
+    country.id,
+    authoredInitialManpower,
+    country.population,
   );
-  const openingCapacity = Math.max(
-    0.0001,
-    country.population * ARMY_CAPACITY_STRUCTURAL_POPULATION_SHARE,
-    initialManpower * ARMY_CAPACITY_INITIAL_FORCE_FLOOR,
-  );
+  const initialManpower = openingForce.initialManpower;
+  const openingCapacity = openingForce.openingCapacity;
   const openingDeployedManpower = Math.min(initialManpower, openingCapacity);
+  const authoredOpeningDeployedManpower = Math.min(
+    openingForce.authoredInitialManpower,
+    openingForce.authoredOpeningCapacity,
+  );
   const uncalibratedRatings = calibratedMilitaryRatingsV2(
     powerIndex,
     defenceSpending,
@@ -883,8 +926,12 @@ function makeNationContent(country: (typeof COUNTRIES)[number]): NationContentV2
   const uncalibratedEffective = 0.55 * uncalibratedRatings.attack
       * (1 + deterrenceAttackBonus)
     + 0.45 * uncalibratedRatings.defense;
+  // A country-specific force-volume adjustment must change real power instead
+  // of being cancelled by stronger per-soldier ATK/DEF. Calibrate against the
+  // neutral authored deployment: the smaller real army and capacity therefore
+  // carry the full reduction while soldier quality remains unchanged.
   const readinessCalibration = targetOpeningPower
-    / Math.max(0.0001, openingDeployedManpower * uncalibratedEffective);
+    / Math.max(0.0001, authoredOpeningDeployedManpower * uncalibratedEffective);
   const militaryRatings = {
     combined: round(uncalibratedRatings.combined * readinessCalibration, 9),
     attack: round(uncalibratedRatings.attack * readinessCalibration, 9),

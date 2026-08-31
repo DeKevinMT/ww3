@@ -71,7 +71,7 @@ describe('V2 human multiplayer alliances', () => {
 
     expect(host.proposeAlliance(belgium, canada)).toEqual({
       accepted: false,
-      reason: 'The Rogue Signal has shattered alliances; every country fights independently.',
+      reason: 'New alliances are unavailable in this Campaign.',
     });
     host.step();
     replica.step();

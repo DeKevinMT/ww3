@@ -17,7 +17,6 @@ import {
 } from './apexNarrative';
 import { isHumanPlayerV2, selectHumanPlayerIdsV2 } from './humanPlayers';
 import {
-  selectTrainedReserveCapacityV2,
   type PowerSnapshotV2,
 } from './selectors';
 import {
@@ -837,35 +836,6 @@ export function selectAntarcticExpeditionTermsV2(
   };
 }
 
-function activateEarthDefenseV2(state: WorldStateV2, playerId: PlayerId): void {
-  if (state.polarEndgame.contactTick !== null) return;
-  state.polarEndgame.phase = 'contact';
-  state.polarEndgame.contactTick = state.tick;
-  state.polarEndgame.nextCounteroffensiveTick = state.tick + EARTH_COUNTEROFFENSIVE_INTERVAL_TICKS;
-  state.polarEndgame.earthDefenseMembers = [...new Set([
-    ...selectHumanPlayerIdsV2(state),
-    ...state.aiEscalation.coalitionMembers,
-  ].filter((id) => Boolean(state.players[id])))]
-    .sort((left, right) => left.localeCompare(right));
-  // Contact ends terrestrial campaigns immediately. New terrestrial wars are
-  // blocked while the shared existential campaign is active.
-  state.wars = [];
-  state.offers = [];
-  state.allianceOffers = [];
-  state.aiEscalation.coalitionMembers = [];
-  state.aiEscalation.resistanceLevel = 0;
-  state.polarEndgame.visualRevision += 1;
-  addWorldEventV2(
-    state,
-    'polar',
-    'critical',
-    'FIRST CONTACT: hidden machine armies have emerged from the Antarctic interior. Earth defense protocols are active.',
-    undefined,
-    playerId,
-    { polarRegion: 'antarctica' },
-  );
-}
-
 export function deployAntarcticExpeditionV2(
   state: WorldStateV2,
   content: WorldContentV2,
@@ -873,47 +843,15 @@ export function deployAntarcticExpeditionV2(
   sectorId: AntarcticSectorIdV2,
   manpowerInput: number,
 ): CommandResultV2 {
+  void state;
+  void content;
+  void playerId;
+  void sectorId;
+  void manpowerInput;
   return {
     accepted: false,
     reason: 'Expeditions were retired. Antarctica now uses normal territories, armies, logistics and wars.',
   };
-  /* c8 ignore start -- authenticated legacy implementation retained until the schema migration is retired. */
-  if (!sectorById.has(sectorId)) return { accepted: false, reason: 'Unknown Antarctic sector.' };
-  if (!Number.isFinite(manpowerInput)) return { accepted: false, reason: 'Expedition manpower must be finite.' };
-  const terms = selectAntarcticExpeditionTermsV2(state, content, playerId, sectorId);
-  if (!terms.allowed) return { accepted: false, reason: terms.reason ?? 'Expedition is unavailable.' };
-  const manpower = round(manpowerInput, 6);
-  if (manpower < terms.minManpower - 0.000001 || manpower > terms.maxManpower + 0.000001) {
-    return { accepted: false, reason: `Deploy from ${terms.minManpower.toFixed(2)}M through ${terms.maxManpower.toFixed(2)}M trained reserves.` };
-  }
-  state.players[playerId]!.trainedReserves = round(state.players[playerId]!.trainedReserves - manpower);
-  state.polarEndgame.expeditions.push({
-    id: state.polarEndgame.nextExpeditionId++,
-    playerId,
-    sectorId,
-    manpower,
-    initialManpower: manpower,
-    startedTick: state.tick,
-    lastPulseTick: state.tick,
-    damageDealt: 0,
-  });
-  state.polarEndgame.expeditions.sort((left, right) => left.id - right.id);
-  const sector = state.polarEndgame.sectors[sectorId];
-  sector.status = 'contested';
-  if (sector.discoveredTick === null) sector.discoveredTick = state.tick;
-  activateEarthDefenseV2(state, playerId);
-  state.polarEndgame.visualRevision += 1;
-  addWorldEventV2(
-    state,
-    'polar',
-    'action',
-    `${(manpower * 1_000_000).toLocaleString('en-US', { maximumFractionDigits: 0 })} trained reserves deployed to ${terms.sector.name}.`,
-    undefined,
-    playerId,
-    { polarRegion: 'antarctica', polarSectorId: sectorId },
-  );
-  return { accepted: true };
-  /* c8 ignore stop */
 }
 
 function polarHashV2(seed: number, expeditionId: number, sectorId: AntarcticSectorIdV2, wave: number, pulse: number): number {
@@ -930,11 +868,8 @@ function polarHashV2(seed: number, expeditionId: number, sectorId: AntarcticSect
 function returnExpeditionV2(state: WorldStateV2, expedition: AntarcticExpeditionStateV2): void {
   const nation = state.players[expedition.playerId];
   if (!nation) return;
-  const capacity = selectTrainedReserveCapacityV2(state, expedition.playerId);
-  nation.trainedReserves = round(Math.min(
-    Math.max(capacity, nation.trainedReserves),
-    nation.trainedReserves + expedition.manpower,
-  ));
+  // Legacy expedition personnel no longer reconstitute a removed reserve pool.
+  nation.trainedReserves = 0;
 }
 
 function revealUnlockedSectorsV2(state: WorldStateV2): void {
@@ -1040,7 +975,7 @@ function shareEarthResearchV2(state: WorldStateV2): void {
   if (members.length < 2) return;
   const effects: ResearchEffectV2[] = [
     'attack', 'defense', 'casualty-reduction', 'recovery', 'supply', 'research-speed',
-    'force-capacity', 'reserve-training', 'reserve-mobilization',
+    'force-capacity', 'training', 'reinforcement-efficiency',
   ];
   for (const playerId of members) {
     const nation = state.players[playerId]!;

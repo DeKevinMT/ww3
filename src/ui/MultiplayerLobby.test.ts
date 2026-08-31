@@ -535,9 +535,9 @@ describe('multiplayer lobby launch recovery', () => {
 
     internals.render();
 
-    expect(internals.root.innerHTML).toContain('EMPIRE COMMAND');
-    expect(internals.root.innerHTML).toContain('DAWNLINE ACCORD');
-    expect(internals.root.innerHTML).toContain('Shared outcome, separate forces.');
+    expect(internals.root.innerHTML).toContain('PRIMARY COMMAND');
+    expect(internals.root.innerHTML).toContain('CO-OP COMMAND');
+    expect(internals.root.innerHTML).toContain('Arctic Dawnline deploys separately as an NPC ally.');
     expect(internals.root.innerHTML).toContain('/2 CONNECTED');
     expect(internals.root.innerHTML).not.toContain('allied territory carries team supply');
     ui.destroy(false);

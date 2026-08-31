@@ -1560,6 +1560,9 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
         candidate.frontTargetId,
       );
       if (!candidateResolution) continue;
+      // Human APEX has no outgoing weapon. Its army modifier is represented by
+      // the ordinary attack route; only incoming fire visibly hits the dome.
+      if (candidate.role !== 'rogue-prime' && !candidateResolution.interceptsIncoming) continue;
       if (candidateResolution.projection
         && candidateResolution.projection !== candidate.projection) continue;
       if (candidate.coverageTerritoryId !== candidateResolution.fieldTerritoryId) continue;
@@ -1867,8 +1870,9 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
     }
     for (const shape of empires.values()) {
       const { ownerId } = shape;
-      if (shape.rings.length === 0 || !this.textures.exists(flagTextureKey(ownerId))) continue;
-      const source = this.textures.get(flagTextureKey(ownerId)).getSourceImage() as CanvasImageSource;
+      const flagCountryId = this.engine?.player(ownerId)?.flagCountryId ?? ownerId;
+      if (shape.rings.length === 0 || !this.textures.exists(flagTextureKey(flagCountryId))) continue;
+      const source = this.textures.get(flagTextureKey(flagCountryId)).getSourceImage() as CanvasImageSource;
       const ringCenters = shape.rings.map((ring) => ({
         ring,
         x: ring.reduce((sum, point) => sum + point.x, 0) / ring.length,
@@ -2821,7 +2825,13 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
       const live = state.territories[territoryId];
       return `${live?.coreOwnerId ?? ''}:${Math.round((live?.integration ?? 1) * 100)}`;
     }).join(',');
-    const flagSignature = `${this.intelligenceVisibility.signature}|${ownerSignature}|${integrationSignature}`;
+    const realmFlagSignature = [...new Set(politicalTerritoryIds.map((territoryId) => (
+      state.territories[territoryId]?.ownerId
+    )).filter((ownerId): ownerId is string => Boolean(ownerId)))]
+      .sort((left, right) => left.localeCompare(right))
+      .map((ownerId) => `${ownerId}:${playerFor(ownerId)?.flagCountryId ?? ownerId}`)
+      .join(',');
+    const flagSignature = `${this.intelligenceVisibility.signature}|${ownerSignature}|flags:${realmFlagSignature}|${integrationSignature}`;
     if (flagSignature !== this.flagAtlasOwnerSignature) {
       this.flagAtlasOwnerSignature = flagSignature;
       this.redrawFlagAtlas(state);
@@ -3115,7 +3125,7 @@ export class WorldMapScene extends Phaser.Scene implements MapSceneAdapter {
         const supportAccessibleLabel = apexSupport
           ? `National power ${compactMapCombatPower(displayedArmy.power)}. APEX neural shield at ${apexShield.percent}% shared Energy.${apexFrontProjectionPercent !== null
             ? ` Theater Mesh allocates ${apexFrontProjectionPercent}% combat support to this front.` : ''}${apexProjection?.singularityCharged
-              ? ' Overdrive Pulse charged.' : ''}`
+              ? ' Overdrive shield cycle charged.' : ''}`
           : apexInbound
             ? `National power ${compactMapCombatPower(displayedArmy.power)}. ${apexShield.label} inbound; not yet protecting this territory.`
           : primeSupport

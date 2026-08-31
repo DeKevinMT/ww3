@@ -27,16 +27,11 @@ const belgiumTerritory = territoryIdV2('bel');
 const luxembourgTerritory = territoryIdV2('lux');
 
 function conservedWorldTotals(state: ReturnType<typeof createWorldStateV2>) {
-  const territoryTotals = Object.values(state.territories).reduce((totals, territory) => ({
+  return Object.values(state.territories).reduce((totals, territory) => ({
     population: totals.population + territory.population,
     economy: totals.economy + territory.economy,
     manpower: totals.manpower + territory.army.manpower,
   }), { population: 0, economy: 0, manpower: 0 });
-  return {
-    ...territoryTotals,
-    trainedReserves: Object.values(state.players)
-      .reduce((sum, nation) => sum + nation.trainedReserves, 0),
-  };
 }
 
 describe('V2 permanent territory integration lifecycle', () => {
@@ -49,8 +44,6 @@ describe('V2 permanent territory integration lifecycle', () => {
     const routesBefore = WORLD_CONTENT_V2.territories[luxembourgTerritory].connections;
     state.players[belgium].trainedReserves = 1.234567;
     state.players[luxembourg].trainedReserves = 2.345678;
-    const combinedReservesBefore = state.players[belgium].trainedReserves
-      + state.players[luxembourg].trainedReserves;
     const worldTotalsBefore = conservedWorldTotals(state);
     const durableTerritoryStatsBefore = {
       population: territory.population,
@@ -117,12 +110,8 @@ describe('V2 permanent territory integration lifecycle', () => {
       baseDefense: territory.army.baseDefense,
     }).toEqual(durableTerritoryStatsBefore);
     const worldTotalsAfter = conservedWorldTotals(state);
-    expect({
-      ...worldTotalsAfter,
-      trainedReserves: worldTotalsBefore.trainedReserves,
-    }).toEqual(worldTotalsBefore);
-    expect(worldTotalsAfter.trainedReserves).toBeCloseTo(worldTotalsBefore.trainedReserves, 6);
-    expect(state.players[belgium].trainedReserves).toBeCloseTo(combinedReservesBefore, 6);
+    expect(worldTotalsAfter).toEqual(worldTotalsBefore);
+    expect(state.players[belgium].trainedReserves).toBe(0);
     expect(state.players[luxembourg]).toBeUndefined();
     expect(state.players[belgium].research.effectLevels.attack).toBe(3);
     // The map snapshot is a direct projection of these canonical fields. Once
@@ -171,7 +160,6 @@ describe('V2 permanent territory integration lifecycle', () => {
     state.players[netherlands].research.effectLevels.attack = 1;
     state.players[luxembourg].trainedReserves = 1.25;
     state.players[netherlands].trainedReserves = 0.5;
-    const reservesAfterBothAbsorptions = 1.75 + state.players[belgium].trainedReserves;
 
     beginTerritoryIntegrationV2(state, WORLD_CONTENT_V2, luxembourgTerritory, netherlands);
     // Model a second territory that still carries the same former national
@@ -190,6 +178,8 @@ describe('V2 permanent territory integration lifecycle', () => {
     expect(luxembourgState.coreOwner).toBe(netherlands);
     expect(belgiumState.coreOwner).toBe(luxembourg);
     expect(state.players[netherlands].research.effectLevels.attack).toBe(1);
+    // No nation retires on the first core completion, so manually injected
+    // compatibility sentinels remain inert until the actual retirement.
     expect(state.players[netherlands].trainedReserves).toBe(0.5);
     expect(state.players[luxembourg].trainedReserves).toBe(1.25);
 
@@ -203,10 +193,7 @@ describe('V2 permanent territory integration lifecycle', () => {
       territory.owner === luxembourg || territory.coreOwner === luxembourg
     ))).toBe(false);
     expect(state.players[netherlands].research.effectLevels.attack).toBe(9);
-    expect(state.players[netherlands].trainedReserves).toBeCloseTo(
-      reservesAfterBothAbsorptions,
-      6,
-    );
+    expect(state.players[netherlands].trainedReserves).toBe(0);
     expect(state.players[luxembourg]).toBeUndefined();
   });
 
@@ -382,7 +369,7 @@ describe('V2 permanent territory integration lifecycle', () => {
     expect(invariantErrorsV2(reloaded, WORLD_CONTENT_V2)).toEqual([]);
   });
 
-  it('retires every live polar reference and returns expedition survivors to the successor', () => {
+  it('retires every live polar reference without reviving the retired reserve pool', () => {
     const state = createWorldStateV2(260829);
     state.humanPlayerId = luxembourg;
     state.humanPlayerIds = [belgium, luxembourg];
@@ -431,7 +418,7 @@ describe('V2 permanent territory integration lifecycle', () => {
     synchronizeArmyCapacityV2(state, WORLD_CONTENT_V2);
 
     expect(state.players[luxembourg]).toBeUndefined();
-    expect(state.players[belgium].trainedReserves).toBeCloseTo(3.75, 9);
+    expect(state.players[belgium].trainedReserves).toBe(0);
     expect(state.polarEndgame.arcticPrograms[luxembourg]).toBeUndefined();
     expect(state.polarEndgame.expeditions).toEqual([]);
     expect(state.polarEndgame.sectors['drake-entry'].status).toBe('available');

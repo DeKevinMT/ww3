@@ -94,7 +94,7 @@ export interface MultiplayerDeploymentSnapshotV1 {
   /** Account identity projected by this seat; independent of its starting nation. */
   empireFlag: EmpireFlagIdentityV1;
   countryMastery: CountryMasteryRuntimeModifiersV2 & {
-    /** Free mastery-level opening cadre, separate from Force capacity. */
+    /** Retired compatibility field; mastery-level growth now lives in Army Capacity. */
     openingArmyMultiplier: number;
   };
   /** Kept explicit for the lobby/reconnect audit; effects are resolved in apex. */
@@ -453,7 +453,7 @@ export function validateMultiplayerDeploymentSnapshotV1(
     10_000,
   );
   if (integrity > maxIntegrity || rechargeBuffer > maxIntegrity) {
-    fail(`${apexLabel} Energy and Reserve Energy must fit inside Max Energy.`);
+    fail(`${apexLabel} Energy and Backup Energy must fit inside Max Energy.`);
   }
   const assaultSpecialist = requireBoolean(
     capabilities.assaultSpecialist,
@@ -668,7 +668,8 @@ function validateWorldCommand(value: unknown): WorldCommandV2 {
       break;
     }
     case 'set-speed':
-      if (command.speed !== 0 && command.speed !== 1 && command.speed !== 2) fail('command.speed must be 0, 1 or 2.');
+      if (command.speed !== 0 && command.speed !== 1 && command.speed !== 2
+        && command.speed !== 3) fail('command.speed must be from 0 through 3.');
       break;
     case 'set-commander-priorities': {
       const commandKeys = Object.keys(command).sort();
@@ -791,6 +792,16 @@ function validateWorldCommand(value: unknown): WorldCommandV2 {
       requirePlayerId(command.playerId, 'command.playerId');
       requireString(command.name, 'command.name', 80);
       break;
+    case 'select-survival-counteroffensive': {
+      const expectedKeys = ['playerId', 'targetId', 'type'];
+      const keys = Object.keys(command).sort((left, right) => left.localeCompare(right, 'en'));
+      if (keys.length !== expectedKeys.length || keys.some((key, index) => key !== expectedKeys[index])) {
+        fail('Survival counteroffensives must contain exactly playerId and targetId.');
+      }
+      requirePlayerId(command.playerId, 'command.playerId');
+      requireString(command.targetId, 'command.targetId', MAX_ID_LENGTH);
+      break;
+    }
     case 'declare-war':
       requirePlayerId(command.attackerId, 'command.attackerId');
       requirePlayerId(command.defenderId, 'command.defenderId');
@@ -998,7 +1009,8 @@ export function validateProtocolMessage(value: unknown): MultiplayerProtocolMess
       };
     }
     case 'speed':
-      if (message.speed !== 0 && message.speed !== 1 && message.speed !== 2) fail('message.speed must be 0, 1 or 2.');
+      if (message.speed !== 0 && message.speed !== 1 && message.speed !== 2
+        && message.speed !== 3) fail('message.speed must be from 0 through 3.');
       return {
         type,
         speed: message.speed,

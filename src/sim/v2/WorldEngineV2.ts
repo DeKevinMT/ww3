@@ -73,6 +73,7 @@ import {
   type ArcticProjectTermsV2,
 } from './polarEndgame';
 import { processResearchV2 } from './research';
+import { normalizeRetiredReserveCompatibilityV2 } from './retiredReserves';
 import { processRoguePrimeV2, reconcileRoguePrimeV2 } from './roguePrime';
 import {
   chooseRunUpgradeV2,
@@ -90,7 +91,11 @@ import {
   processRogueAiSurvivalV2,
   rogueAiSurvivalActiveV2,
 } from './survival';
-import { formSurvivalEmpireV2 } from './survivalEmpire';
+import {
+  formSurvivalEmpireV2,
+  fundSurvivalRogueWarChestV2,
+} from './survivalEmpire';
+import { applySurvivalOpeningArmyReadinessV2 } from './survivalOrdinaryAi';
 import { reconcileSurvivalRogueFocusWarsV2 } from './survivalRogueFocus';
 import {
   createMilitaryBaseSnapshotV2,
@@ -142,8 +147,11 @@ import {
   estimateLiveWarV2,
   forecastWarV2,
   processWarsV2,
+  selectSurvivalCounteroffensiveTargetV2,
+  selectSurvivalCounteroffensiveTargetsV2,
   synchronizeWarFrontsV2,
   warDeclarationStatusV2,
+  type SurvivalCounteroffensiveTargetV2,
   type WarConclusionV2,
 } from './war';
 import type {
@@ -331,6 +339,7 @@ export class WorldEngineV2 {
     this.state = initialState ?? createWorldStateV2(seed, content);
     this.state.humanPlayerIds = [...selectHumanPlayerIdsV2(this.state)];
     this.state.commanderForces ??= {};
+    normalizeRetiredReserveCompatibilityV2(this.state);
     this.state.runProgression ??= createInitialRunProgressionV2(content);
     synchronizeRunProgressionRosterV2(this.state);
     this.state.alliances ??= [];
@@ -807,6 +816,7 @@ export class WorldEngineV2 {
     };
     this.state.polarEndgame = createInitialPolarEndgameV2();
     initializeSurvivalScenarioV2(this.state, this.content);
+    applySurvivalOpeningArmyReadinessV2(this.state, this.content);
     resetRunProgressionRosterV2(this.state, this.content);
     this.trackHumanWars();
     this.emit({ reason: 'human-players-configured' });
@@ -866,6 +876,7 @@ export class WorldEngineV2 {
     };
     this.state.polarEndgame = createInitialPolarEndgameV2();
     initializeSurvivalScenarioV2(this.state, this.content);
+    applySurvivalOpeningArmyReadinessV2(this.state, this.content);
     resetRunProgressionRosterV2(this.state, this.content);
     this.state.speed = 1;
     this.recordAppliedAction();
@@ -903,6 +914,7 @@ export class WorldEngineV2 {
     // seed its two direct border axes before the first clock tick.
     processRogueAiSurvivalV2(this.state, this.content);
     synchronizeWarFrontsV2(this.state, this.content);
+    fundSurvivalRogueWarChestV2(this.state, this.content);
     this.recordAppliedAction();
     if (publishAction) this.emitQueuedAction({ sequence: this.state.actionSequence, command });
     this.assertStateIntegrity(true);
@@ -937,7 +949,10 @@ export class WorldEngineV2 {
   }
 
   setSpeed(speed: WorldSpeedV2): CommandResultV2 {
-    if (![0, 1, 2].includes(speed)) return { accepted: false, reason: 'Speed must be 0, 1 or 2.' };
+    if (![0, 1, 2, 3].includes(speed)) return { accepted: false, reason: 'Speed must be from 0 through 3.' };
+    if (speed === 3 && this.content.metadata?.scenarioId !== 'survival') {
+      return { accepted: false, reason: '3× speed is reserved for Survival contact fast-forward.' };
+    }
     const forwarded = this.forwardClientCommand({ type: 'set-speed', speed });
     if (forwarded) return forwarded;
     return this.setAuthoritativeSpeed(speed);
@@ -945,7 +960,10 @@ export class WorldEngineV2 {
 
   /** Applies host-broadcast speed without feeding it back into the client sink. */
   setAuthoritativeSpeed(speed: WorldSpeedV2): CommandResultV2 {
-    if (![0, 1, 2].includes(speed)) return { accepted: false, reason: 'Speed must be 0, 1 or 2.' };
+    if (![0, 1, 2, 3].includes(speed)) return { accepted: false, reason: 'Speed must be from 0 through 3.' };
+    if (speed === 3 && this.content.metadata?.scenarioId !== 'survival') {
+      return { accepted: false, reason: '3× speed is reserved for Survival contact fast-forward.' };
+    }
     this.state.speed = speed;
     this.startClock();
     this.emit({ reason: 'speed-changed' });
@@ -1021,7 +1039,8 @@ export class WorldEngineV2 {
     const id = nationIdV2(playerId);
     const terms = this.rapidRecruitmentTerms(id);
     // Re-evaluate this rule when queued commands are applied as well as when
-    // they are requested, so a war starting in between cannot bypass reserves.
+    // they are requested, so a war starting in between cannot bypass the
+    // universal wartime recruitment freeze.
     if (terms.atWar) return { accepted: false, reason: terms.reason ?? 'Rapid Recruitment is unavailable during war.' };
     if (!terms.allowed) return { accepted: false, reason: terms.reason };
     if (!this.applyingCommand) return this.queue({ type: 'rapid-recruitment', playerId: id });
@@ -1363,7 +1382,7 @@ export class WorldEngineV2 {
     if (!terms.allowed) return { accepted: false, reason: terms.reason };
     if (!Number.isFinite(manpower) || manpower < terms.minManpower - 0.000001
       || manpower > terms.maxManpower + 0.000001) {
-      return { accepted: false, reason: `Deploy from ${terms.minManpower.toFixed(2)}M through ${terms.maxManpower.toFixed(2)}M trained reserves.` };
+      return { accepted: false, reason: 'Antarctic expeditions are retired.' };
     }
     if (!this.applyingCommand) {
       return this.queue({ type: 'deploy-antarctic-expedition', playerId: id, sectorId, manpower: round(manpower) });
@@ -1524,6 +1543,39 @@ export class WorldEngineV2 {
     return result;
   }
 
+  selectSurvivalCounteroffensive(playerId: string, targetId: string): CommandResultV2 {
+    const player = nationIdV2(playerId);
+    const territory = territoryIdV2(targetId);
+    if (!this.applyingCommand) {
+      return this.queue({
+        type: 'select-survival-counteroffensive',
+        playerId: player,
+        targetId: territory,
+      });
+    }
+    const result = selectSurvivalCounteroffensiveTargetV2(
+      this.state,
+      this.content,
+      player,
+      territory,
+    );
+    if (result.accepted) {
+      this.recordAppliedAction();
+      this.emit({ reason: 'survival-counteroffensive-selected', critical: true });
+    }
+    return result;
+  }
+
+  survivalCounteroffensiveTargets(
+    playerId: string,
+  ): readonly SurvivalCounteroffensiveTargetV2[] {
+    return selectSurvivalCounteroffensiveTargetsV2(
+      this.state,
+      this.content,
+      nationIdV2(playerId),
+    );
+  }
+
   areAllied(leftId: string, rightId: string): boolean {
     return areAlliedV2(this.state, nationIdV2(leftId), nationIdV2(rightId));
   }
@@ -1534,9 +1586,11 @@ export class WorldEngineV2 {
     if (isRogueAiNationV2(this.content, from) || isRogueAiNationV2(this.content, target)) {
       return { allowed: false, reason: 'The Rogue AI cannot join human alliances.' };
     }
-    if (this.content.metadata?.scenarioId === 'standard-2026'
-      || this.content.metadata?.scenarioId === 'survival') {
-      return { allowed: false, reason: 'The Rogue Signal has shattered alliances; every country fights independently.' };
+    if (this.content.metadata?.scenarioId === 'survival') {
+      return { allowed: false, reason: 'Survival uses fixed human commands and the Arctic Dawnline; new alliances cannot be formed.' };
+    }
+    if (this.content.metadata?.scenarioId === 'standard-2026') {
+      return { allowed: false, reason: 'New alliances are unavailable in this Campaign.' };
     }
     return allianceProposalStatusV2(this.state, from, target);
   }
@@ -1631,6 +1685,10 @@ export class WorldEngineV2 {
         command.manpower,
       );
       case 'set-empire-name': return this.setEmpireName(command.playerId, command.name);
+      case 'select-survival-counteroffensive': return this.selectSurvivalCounteroffensive(
+        command.playerId,
+        command.targetId,
+      );
       case 'declare-war': return this.declareWar(command.attackerId, command.defenderId, command.escalatedFromWarId);
       case 'propose-alliance': return this.proposeAlliance(command.fromId, command.targetId);
       case 'respond-to-alliance': return this.respondToAlliance(

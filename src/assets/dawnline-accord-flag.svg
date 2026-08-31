@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 900" role="img" aria-label="Dawnline Accord flag">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#041526"/>
+      <stop offset="0.68" stop-color="#0a3450"/>
+      <stop offset="1" stop-color="#126d82"/>
+    </linearGradient>
+    <linearGradient id="ice" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#81e9f1"/>
+      <stop offset="0.5" stop-color="#e7fbf8"/>
+      <stop offset="1" stop-color="#81e9f1"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="900" fill="url(#sky)"/>
+  <path d="M0 680 150 635l145 38 151-79 154 78 153-78 151 79 146-38 150 45v220H0Z" fill="url(#ice)"/>
+  <path d="M0 680 150 635l145 38 151-79 154 78 153-78 151 79 146-38 150 45" fill="none" stroke="#fff" stroke-width="18" stroke-linejoin="round" opacity=".9"/>
+  <path d="M600 180v250M338 268l174 205M862 268 688 473M214 460l250 82M986 460l-250 82" fill="none" stroke="#63e6f4" stroke-width="22" stroke-linecap="round" opacity=".85"/>
+  <circle cx="600" cy="605" r="188" fill="#ffcf63"/>
+  <circle cx="600" cy="605" r="146" fill="#fff3c9"/>
+  <path d="M0 680 150 635l145 38 151-79 154 78 153-78 151 79 146-38 150 45v220H0Z" fill="url(#ice)"/>
+  <path d="M0 680 150 635l145 38 151-79 154 78 153-78 151 79 146-38 150 45" fill="none" stroke="#fff" stroke-width="18" stroke-linejoin="round" opacity=".9"/>
+  <g fill="#d9fbff">
+    <circle cx="185" cy="160" r="12"/><circle cx="300" cy="115" r="12"/>
+    <circle cx="430" cy="155" r="12"/><circle cx="770" cy="155" r="12"/>
+    <circle cx="900" cy="115" r="12"/><circle cx="1015" cy="160" r="12"/>
+  </g>
+</svg>

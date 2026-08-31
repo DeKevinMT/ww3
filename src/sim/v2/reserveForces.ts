@@ -108,48 +108,29 @@ const REPORTED_TRAINED_RESERVES_MILLIONS: Readonly<Partial<Record<string, number
   zmb: 0.003,
 });
 
-/**
- * A country with no separately reported reserve still begins with a small
- * trained mobilisation cadre. This fulfils the all-country game rule without
- * treating police, untrained manpower or a missing observation as soldiers.
- */
-export const INITIAL_RESERVE_CADRE_CAPACITY_SHARE_V2 = 0.02;
+/** Retained export for save/test compatibility; active reserve pools are gone. */
+export const INITIAL_RESERVE_CADRE_CAPACITY_SHARE_V2 = 0;
 
 /**
  * Published pools often include former conscripts with very different recall
  * readiness. Only this common share enters the scenario as immediately
  * trained personnel; the rest remains outside the game's short war horizon.
  */
-export const INITIAL_REPORTED_RESERVE_READY_SHARE_V2 = 0.55;
-export const BELGIUM_OPENING_RESERVE_CAPACITY_SHARE_V2 = 0.40;
+export const INITIAL_REPORTED_RESERVE_READY_SHARE_V2 = 0;
+export const BELGIUM_OPENING_RESERVE_CAPACITY_SHARE_V2 = 0;
 
-/** Real-world anchor, fitted into the shared 1x active-cap reserve rule. */
+/**
+ * Compatibility selector for old callers. Peace recruitment now fills the
+ * territorial active army directly, so every opening reserve pool is zero.
+ */
 export function initialTrainedReserveManpowerV2(
   countryId: string,
   activeCapacity: number,
   content?: WorldContentV2,
 ): number {
-  const capacity = Math.max(0, activeCapacity);
-  if (capacity <= 0) return 0;
-  // Random/custom scenarios derive reserves from their generated military
-  // structure. They must never leak the real-country ID lookup above.
-  if (content && content.metadata?.reserveProfile !== 'reported-2026') {
-    const nation = content.nations[countryId as keyof typeof content.nations];
-    if (!nation) return round(capacity * INITIAL_RESERVE_CADRE_CAPACITY_SHARE_V2, 9);
-    const defenceBurden = nation.real.defenceSpending / Math.max(0.000001, nation.real.gdp);
-    const burdenPosition = clamp((defenceBurden - 0.008) / (0.08 - 0.008), 0, 1);
-    const reserveShare = clamp(
-      0.04 + 0.42 * burdenPosition + 0.18 * clamp(nation.ambition, 0, 1),
-      INITIAL_RESERVE_CADRE_CAPACITY_SHARE_V2,
-      0.64,
-    );
-    return round(capacity * reserveShare, 9);
-  }
-  if (countryId === 'bel') {
-    return round(capacity * BELGIUM_OPENING_RESERVE_CAPACITY_SHARE_V2, 9);
-  }
-  const reportedReady = Math.max(0, REPORTED_TRAINED_RESERVES_MILLIONS[countryId] ?? 0)
-    * INITIAL_REPORTED_RESERVE_READY_SHARE_V2;
-  const cadre = capacity * INITIAL_RESERVE_CADRE_CAPACITY_SHARE_V2;
-  return round(clamp(Math.max(reportedReady, cadre), 0, capacity), 9);
+  void countryId;
+  void activeCapacity;
+  void content;
+  void REPORTED_TRAINED_RESERVES_MILLIONS;
+  return 0;
 }

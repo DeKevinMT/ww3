@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createWorldStateV2 } from './bootstrap';
 import { initializeCommanderForceV2 } from './commanderForce';
-import { WORLD_CONTENT_V2 } from './content';
+import { ROGUE_AI_NATION_ID_V2, WORLD_CONTENT_V2 } from './content';
 import { invalidateTerritoryIndexV2 } from './selectors';
 import {
   nationIdV2,
@@ -15,8 +15,8 @@ import {
   type WorldStateV2,
 } from './types';
 import {
-  resolveApexPulseDamageV2,
   resolveBattlePulseV2,
+  resolveCommanderStandaloneDamageV2,
 } from './war';
 
 const apexProfile = (capabilities: Partial<CommanderCapabilitiesV2>) => ({
@@ -114,35 +114,36 @@ function assignApexFront(
 }
 
 describe('APEX capstones at the live war boundary', () => {
-  it('gates Pulse Attack on real armies and leaves its only cap to the shared hit resolver', () => {
-    expect(resolveApexPulseDamageV2({
+  it('keeps the standalone-damage compatibility helper available for Rogue PRIME', () => {
+    const humanId = nationIdV2('bel');
+    expect(resolveCommanderStandaloneDamageV2(humanId, {
       pulseAttack: 10,
       nationalParticipatingManpower: 10,
       hostileCurrentManpower: 2,
-    })).toBe(10);
-    expect(resolveApexPulseDamageV2({
+    })).toBe(0);
+    expect(resolveCommanderStandaloneDamageV2(ROGUE_AI_NATION_ID_V2, {
       pulseAttack: 10,
       nationalParticipatingManpower: 0.05,
       hostileCurrentManpower: 2,
     })).toBe(10);
-    expect(resolveApexPulseDamageV2({
+    expect(resolveCommanderStandaloneDamageV2(ROGUE_AI_NATION_ID_V2, {
       pulseAttack: 10,
       nationalParticipatingManpower: 10,
       hostileCurrentManpower: 0.001,
     })).toBe(10);
-    expect(resolveApexPulseDamageV2({
+    expect(resolveCommanderStandaloneDamageV2(ROGUE_AI_NATION_ID_V2, {
       pulseAttack: 10,
       nationalParticipatingManpower: 0,
       hostileCurrentManpower: 2,
     })).toBe(0);
-    expect(resolveApexPulseDamageV2({
+    expect(resolveCommanderStandaloneDamageV2(ROGUE_AI_NATION_ID_V2, {
       pulseAttack: 10,
       nationalParticipatingManpower: 2,
       hostileCurrentManpower: 0,
     })).toBe(0);
   });
 
-  it('fires Singularity on the third actually resolved supported assault', () => {
+  it('cycles attack-side shield efficiency without firing or paying for standalone damage', () => {
     const { state, humanId } = belgiumWorld(96_101, {
       assaultSpecialist: true,
     });
@@ -157,6 +158,7 @@ describe('APEX capstones at the live war boundary', () => {
     const battleWar = war('apex-lancer-live', humanId, defenderId, front);
     state.wars = [battleWar];
     assignApexFront(state, humanId, battleWar, 'assault-support');
+    const integrityBefore = state.commanderForces[humanId]!.shield.integrity;
 
     const first = resolveBattlePulseV2(
       state, WORLD_CONTENT_V2, battleWar, front,
@@ -170,21 +172,33 @@ describe('APEX capstones at the live war boundary', () => {
 
     expect(first.commanderAttackerSingularityPulse).toBe(false);
     expect(second.commanderAttackerSingularityPulse).toBe(false);
-    expect(third.commanderAttackerSingularityPulse).toBe(true);
-    // Normal combat receives the shared 10% hit budget first, so an otherwise
-    // valid Pulse can contribute zero whenever that battle already fills it.
-    expect(first.commanderAttackerPulseDamage
-      + second.commanderAttackerPulseDamage
-      + third.commanderAttackerPulseDamage).toBeGreaterThan(0);
-    // Overdrive doubles only the separate Pulse request. The army-support
-    // Power naturally falls as the real national formation takes losses.
+    expect(third.commanderAttackerSingularityPulse).toBe(false);
+    expect(first.commanderAttackerPulseDamage).toBe(0);
+    expect(second.commanderAttackerPulseDamage).toBe(0);
+    expect(third.commanderAttackerPulseDamage).toBe(0);
+    expect(first.commanderAttackerCounterpulseDamage).toBe(0);
+    // This is the supported national Army's extra pressure, not an independent
+    // APEX attack, and therefore remains part of the ordinary combat exchange.
+    expect(first.commanderAttackerPower).toBeGreaterThan(0);
     expect(battleWar.apexTelemetryByPlayer?.[humanId])
-      .toMatchObject({ singularityPulses: 1 });
+      .toMatchObject({
+        singularityPulses: 1,
+        mirrorCounterpulseDamage: 0,
+      });
     expect(state.commanderForces[humanId]!.doctrineRuntime)
       .toMatchObject({ lancerSupportedAssaultCount: 0 });
+    // Shield Energy changes only by damage it actually intercepted; the old
+    // third-hit Pulse debit is gone.
+    expect(integrityBefore - state.commanderForces[humanId]!.shield.integrity)
+      .toBeCloseTo(
+        first.commanderAttackerLosses
+          + second.commanderAttackerLosses
+          + third.commanderAttackerLosses,
+        9,
+      );
   });
 
-  it('applies Mirror counterpulse to personnel while shield loss stays out of casualty totals', () => {
+  it('intercepts as a defending shield without Pulse or reflected personnel damage', () => {
     const { state, humanId } = belgiumWorld(96_102, {
       defenseSpecialist: true,
     });
@@ -205,10 +219,9 @@ describe('APEX capstones at the live war boundary', () => {
       state, WORLD_CONTENT_V2, battleWar, front,
     )!;
 
-    expect(event.commanderDefenderCounterpulseDamage).toBeGreaterThan(0);
-    expect(event.commanderDefenderPulseDamage).toBeGreaterThan(0);
-    expect(event.commanderDefenderCounterpulseDamage)
-      .toBeLessThanOrEqual(hostileBefore);
+    expect(event.commanderDefenderInterceptedDamage).toBeGreaterThan(0);
+    expect(event.commanderDefenderCounterpulseDamage).toBe(0);
+    expect(event.commanderDefenderPulseDamage).toBe(0);
     expect(hostileBefore - state.territories[sourceId]!.army.manpower)
       .toBeCloseTo(event.regularAttackerLosses, 9);
     expect(event.attackerLosses).toBeCloseTo(event.regularAttackerLosses, 9);
@@ -222,7 +235,7 @@ describe('APEX capstones at the live war boundary', () => {
     expect(battleWar.defenderLosses).toBeCloseTo(event.defenderLosses, 9);
   });
 
-  it('returns intercepted damage when an AEGIS dome supports the attacking side', () => {
+  it('intercepts on the attacking side without returning damage', () => {
     const { state, humanId } = belgiumWorld(96_104, {
       defenseSpecialist: true,
     });
@@ -244,11 +257,8 @@ describe('APEX capstones at the live war boundary', () => {
     )!;
 
     expect(event.commanderAttackerInterceptedDamage).toBeGreaterThan(0);
-    expect(event.commanderAttackerCounterpulseDamage).toBeGreaterThan(0);
-    expect(event.commanderAttackerCounterpulseDamage).toBeCloseTo(
-      event.commanderAttackerInterceptedDamage! * 0.15,
-      9,
-    );
+    expect(event.commanderAttackerCounterpulseDamage).toBe(0);
+    expect(event.commanderAttackerPulseDamage).toBe(0);
     expect(event.commanderDefenderCounterpulseDamage).toBe(0);
     expect(hostileBefore - state.territories[targetId]!.army.manpower)
       .toBeCloseTo(event.regularDefenderLosses, 9);

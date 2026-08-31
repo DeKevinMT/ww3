@@ -22,7 +22,6 @@ import {
 } from './selectors';
 import { resolveScenarioV2 } from './scenarios';
 import { markSurvivalScorchedTerritoryV2 } from './survivalEmpire';
-import { SURVIVAL_ORDINARY_AI_CAPACITY_FACTOR_V2 } from './survivalOrdinaryAi';
 import {
   nationIdV2,
   territoryIdV2,
@@ -121,26 +120,19 @@ describe('fast symmetric army refill', () => {
     }
   });
 
-  it('starts ordinary Survival AI near 20% pristine power and full relative to its reduced cap', () => {
-    // Once the Empire is formed, Germany is deliberately consolidated into a
-    // Rogue transit corridor. Inspect the ordinary-AI opening before that
-    // scenario transition instead.
+  it('starts ordinary Survival AI at full normal capacity and pristine power', () => {
     const { engine } = unformedSurvival(93_002);
     const army = engine.state.territories[territoryIdV2('deu')]!.army;
     const standardArmy = createWorldStateV2(93_002)
       .territories[territoryIdV2('deu')]!.army;
-    expect(army.capacity / standardArmy.capacity).toBeCloseTo(
-      SURVIVAL_ORDINARY_AI_CAPACITY_FACTOR_V2,
-      5,
-    );
+    expect(army.capacity / standardArmy.capacity).toBeCloseTo(1, 9);
     expect(army.manpower).toBeCloseTo(army.capacity, 9);
     const pristineState = createWorldStateV2(93_002);
     const survivalPower = selectCurrentPowerV2(engine.state, engine.content, germany);
     const pristinePower = selectCurrentPowerV2(
       pristineState, WORLD_CONTENT_V2, germany,
     );
-    expect(survivalPower / pristinePower).toBeGreaterThan(0.15);
-    expect(survivalPower / pristinePower).toBeLessThan(0.25);
+    expect(survivalPower / pristinePower).toBeCloseTo(1, 9);
   });
 
   it('uses the same fixed 1% peace rate for a player and ordinary AI', () => {
@@ -192,7 +184,7 @@ describe('fast symmetric army refill', () => {
     }
   });
 
-  it('refills only a safe player rear at 0.35% during the permanent Rogue war', () => {
+  it('freezes every player territory during the permanent Rogue war', () => {
     const { engine, content } = formedSurvival(93_005);
     const frontId = territoryIdV2('grl');
     const rearId = territoryIdV2('nld');
@@ -208,13 +200,9 @@ describe('fast symmetric army refill', () => {
     )];
 
     expect(selectArmyRefillTerritoryIdsV2(engine.state, content, greenland))
-      .toEqual([rearId]);
+      .toEqual([]);
     expect(selectRecruitmentTrainingPipelineV2(engine.state, content, greenland))
-      .toBeCloseTo(
-        engine.state.territories[rearId]!.army.capacity
-          * SURVIVAL_REAR_ARMY_REFILL_CAPACITY_RATE_V2,
-        6,
-      );
+      .toBe(0);
     const finance = selectWeeklyFinanceBreakdownV2(engine.state, content, greenland);
     const projection = projectFinanceManpowerPhaseV2(
       engine.state,
@@ -225,10 +213,10 @@ describe('fast symmetric army refill', () => {
     const projectedFront = projection.territories.find((territory) => territory.id === frontId)!;
     const projectedRear = projection.territories.find((territory) => territory.id === rearId)!;
     expect(projectedFront.manpower).toBe(0);
-    expect(projectedRear.manpower).toBeGreaterThan(0);
+    expect(projectedRear.manpower).toBe(0);
   });
 
-  it('gives ordinary Survival AI the same rear rate and freezes its active front', () => {
+  it('freezes ordinary Survival AI recruitment in its Rogue war', () => {
     const { engine, content } = unformedSurvival(93_006);
     const germanyId = territoryIdV2('deu');
     engine.state.territories[germanyId]!.army.manpower = 0;

@@ -75,8 +75,9 @@ export const EXTREME_CRISIS_HOME_GUARD_CAPACITY_SHARE = 0.25;
  * deliberately avoid any hidden low-readiness acceleration curve.
  */
 export const PEACE_ARMY_REFILL_CAPACITY_RATE_V2 = 0.01;
-export const SURVIVAL_REAR_ARMY_REFILL_CAPACITY_RATE_V2 = 0.0035;
-/** Legacy reserve-training cadence; active army refill uses the rates above. */
+/** Compatibility export: national recruitment is frozen in every live war. */
+export const SURVIVAL_REAR_ARMY_REFILL_CAPACITY_RATE_V2 = 0;
+/** Retired personnel-pool constants retained as neutral compatibility exports. */
 export const PASSIVE_RECRUITMENT_CAPACITY_RATE = 0.00135;
 /**
  * One smooth 0–100% peacetime recovery curve. A nearly empty army has the
@@ -95,29 +96,24 @@ export const PASSIVE_RECRUITMENT_TRAINING_BONUS = 0.02;
 export const UPKEEP_OVERFUNDING_MAX_RATIO = 1.25;
 /** The maximum is approached smoothly across twelve revenue-weeks above reserve. */
 export const UPKEEP_OVERFUNDING_FULL_SURPLUS_WEEKS = 12;
-/** A finite trained pool: at most one full active army, trained continuously alongside the field army. */
-export const TRAINED_RESERVE_CAPACITY_MULTIPLIER = 1;
-export const TRAINED_RESERVE_ACTIVE_READY_RATIO = 0.85;
-/** Even an empty field army keeps this protected share of the normal reserve pipeline active. */
-export const TRAINED_RESERVE_PEACETIME_BASE_TRICKLE_FACTOR = 0.05;
-/** At 85% field readiness, this share of the normal reserve pipeline is available. */
-export const TRAINED_RESERVE_PEACETIME_TRICKLE_FACTOR = 0.15;
-/** Existing trained soldiers mobilise faster than the pipeline can train fresh replacements. */
-export const TRAINED_RESERVE_DEPLOYMENT_THROUGHPUT_MULTIPLIER = 3.44;
-/** Active war freezes fresh reserve training for every participant. */
+/** All former reserve constants are zero: only territorial active armies exist. */
+export const TRAINED_RESERVE_CAPACITY_MULTIPLIER = 0;
+export const TRAINED_RESERVE_ACTIVE_READY_RATIO = 0;
+export const TRAINED_RESERVE_PEACETIME_BASE_TRICKLE_FACTOR = 0;
+export const TRAINED_RESERVE_PEACETIME_TRICKLE_FACTOR = 0;
+export const TRAINED_RESERVE_DEPLOYMENT_THROUGHPUT_MULTIPLIER = 0;
 export const TRAINED_RESERVE_WARTIME_TRAINING_FACTOR = 0;
-export const TRAINED_RESERVE_TRAINING_COST_MULTIPLIER = 1.25;
-/** Dedicated reserve research improves throughput, never the one-active-army reserve cap. */
-export const RESERVE_TRAINING_RESEARCH_BONUS_PER_EFFECTIVE_LEVEL = 0.02;
-export const RESERVE_TRAINING_RESEARCH_EFFECTIVE_CEILING = 25;
-export const RESERVE_TRAINING_RESEARCH_HALF_SATURATION = 15;
-export const RESERVE_MOBILIZATION_RESEARCH_BONUS_PER_EFFECTIVE_LEVEL = 0.015;
-export const RESERVE_MOBILIZATION_RESEARCH_EFFECTIVE_CEILING = 20;
-export const RESERVE_MOBILIZATION_RESEARCH_HALF_SATURATION = 12;
+export const TRAINED_RESERVE_TRAINING_COST_MULTIPLIER = 0;
+export const RESERVE_TRAINING_RESEARCH_BONUS_PER_EFFECTIVE_LEVEL = 0;
+export const RESERVE_TRAINING_RESEARCH_EFFECTIVE_CEILING = 0;
+export const RESERVE_TRAINING_RESEARCH_HALF_SATURATION = 0;
+export const RESERVE_MOBILIZATION_RESEARCH_BONUS_PER_EFFECTIVE_LEVEL = 0;
+export const RESERVE_MOBILIZATION_RESEARCH_EFFECTIVE_CEILING = 0;
+export const RESERVE_MOBILIZATION_RESEARCH_HALF_SATURATION = 0;
 /**
  * Peace is the efficient rebuild window: fresh formations recover quickly and
- * at a modest 15% fast-track premium. War may only move existing reservists;
- * it can never create fresh active or reserve manpower.
+ * at a modest 15% fast-track premium. War freezes national recruitment; it
+ * cannot create fresh active manpower.
  */
 export const PEACE_RECRUITMENT_ACCELERATION_MULTIPLIER = 4;
 export const PEACE_RECRUITMENT_ACCELERATION_COST_MULTIPLIER = 1.15;
@@ -700,7 +696,9 @@ export const RESEARCH_BRANCH_EFFECTS: Readonly<Record<ResearchBranchV2, readonly
   // The stable branch id keeps authenticated saves and multiplayer snapshots
   // compatible; its gameplay is now military sustainment, not civilian food.
   'food-systems': ['supply', 'recovery'],
-  'reserve-doctrine': ['reserve-training', 'reserve-mobilization'],
+  // The stable branch id preserves saves and multiplayer protocol. Its live
+  // effects now improve direct active-army training and field-force capacity.
+  'reserve-doctrine': ['training', 'force-capacity'],
   'public-administration': ['tax-efficiency', 'operating-efficiency'],
   'education-intelligence': ['iq-increase'],
 };

@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   STARTER_COUNTRY_ID,
   commanderMaxIntegrityV1,
-  commanderPulseAttackV1,
   commanderXpForLevelV1,
   countryMasteryXpForLevelV1,
   countryUnlockQuoteV1,
@@ -311,10 +310,10 @@ describe('commander level and talent menu', () => {
 
   it('describes every country upgrade with exact current and next totals', () => {
     expect(countryUpgradeEffectCopyV1('mobilization', 0)).toBe(
-      'Opening army +0% · trained reserves +0% · Training, Force Capacity and Reserve Training +0 effect levels',
+      'Opening Army +0% · Training and Force Capacity +0 effect levels',
     );
     expect(countryUpgradeEffectCopyV1('mobilization', 1)).toBe(
-      'Opening army +4% · trained reserves +2.5% · Training, Force Capacity and Reserve Training +1 effect levels',
+      'Opening Army +4% · Training and Force Capacity +1 effect levels',
     );
     expect(countryUpgradeEffectCopyV1('logistics', 2)).toBe(
       'Supply +2 effect levels · Operating Efficiency +2 effect levels',
@@ -334,7 +333,7 @@ describe('commander level and talent menu', () => {
     expect(countryMasteryTrackEffectCopyV1('firepower', 4)).toBe('+6% ATK');
     expect(countryMasteryTrackEffectCopyV1('defense', 5)).toBe('+7.5% DEF');
     expect(countryMasteryTrackEffectCopyV1('mobilization', 2)).toBe(
-      '+4% Recruitment · +5% Reserve Training',
+      '+5% Peace Recruitment',
     );
     expect(countryMasteryTrackEffectCopyV1('land-logistics', 2)).toBe(
       '+4% Land Supply · +3% Land Transfer',
@@ -427,15 +426,13 @@ describe('commander level and talent menu', () => {
     ) * 1_000_000).toLocaleString('en');
 
     expect(html.match(/data-talent-card=/g)).toHaveLength(12);
-    expect(html).toContain('<h2>Pulse Warfare</h2>');
+    expect(html).toContain('<h2>Assault Shield</h2>');
     expect(html).toContain('<h2>Reactive Matrix</h2>');
     expect(html).toContain('<h2>Energy Core</h2>');
     expect(html).toContain('<h2>Empire Warfare</h2>');
     expect(html).toContain('APEX CORE');
     expect(html).toContain(`ENERGY ${currentShieldHp} / ${currentShieldHp}`);
-    expect(html).toContain(`PULSE ATTACK ${Math.round(
-      commanderPulseAttackV1(profile.commanderLevel, talents) * 1_000_000,
-    ).toLocaleString('en')}`);
+    expect(html).not.toContain('PULSE ATTACK');
     expect(html).toContain('NEXT LEVEL +');
     expect(nextLevelShieldGain).not.toBe('0');
     expect(html).toContain('RANK 2');
@@ -446,13 +443,13 @@ describe('commander level and talent menu', () => {
     expect(html).toContain('NEXT RANK · 3 · LV 3');
     expect(html).toContain('ADD TALENT POINT · 1 PT');
     expect(html).toContain('Overdrive');
-    expect(html).toContain('Countermeasure');
+    expect(html).toContain('Adaptive Barrier');
     expect(html).toContain('Emergency Reboot');
     expect(html).toContain('Theater Mesh');
     expect(visibleText).not.toMatch(/soldier|personnel|troop|manpower|trained reserve|corps|barracks|hospital|treasury|income|food|research/i);
   });
 
-  it('shows exact numeric Energy and Pulse Attack for account levels and Max Energy ranks', () => {
+  it('shows exact numeric Energy for account levels and Max Energy ranks without direct attack', () => {
     const talents = emptyCommanderTalentsV1();
     const profile = {
       ...createCommanderProfileV1(1, 'shield-hp-preview'),
@@ -466,20 +463,20 @@ describe('commander level and talent menu', () => {
     const nextRank = commanderMaxIntegrityV1(50, rankOneTalents);
     const html = renderCommanderTalentBranchesV1(profile, 'reserve-cadre');
 
-    expect(Math.round(current * 1_000_000)).toBe(12_000);
-    expect(html).toContain('ENERGY 12,000 / 12,000');
-    expect(html).toContain('PULSE ATTACK 18,000');
+    expect(Math.round(current * 1_000_000)).toBe(24_000);
+    expect(html).toContain('ENERGY 24,000 / 24,000');
+    expect(html).not.toContain('PULSE ATTACK');
     expect(html).toContain('NEXT LEVEL +');
     expect(nextLevel).toBeGreaterThan(current);
-    expect(html).toContain('<em>APEX TOTAL · 12,000 MAX ENERGY</em>');
+    expect(html).toContain('<em>APEX TOTAL · 24,000 MAX ENERGY</em>');
     expect(html).toContain(`<em>TALENT GAIN · +${Math.round((nextRank - current) * 1_000_000).toLocaleString('en')} MAX ENERGY</em>`);
 
     const rankZero = renderCommanderTalentBranchesV1({ ...profile, commanderLevel: 1 }, 'reserve-cadre');
     expect(rankZero).toContain('<strong>+0% Max Energy</strong>');
-    expect(rankZero).toContain('APEX TOTAL · 1,000 MAX ENERGY');
+    expect(rankZero).toContain('APEX TOTAL · 2,000 MAX ENERGY');
     expect(rankZero).toContain('<strong>+0.5% Max Energy</strong>');
-    expect(rankZero).toContain('TALENT GAIN · +5 MAX ENERGY');
-    expect(rankZero).not.toContain('<strong>+1,000');
+    expect(rankZero).toContain('TALENT GAIN · +10 MAX ENERGY');
+    expect(rankZero).not.toContain('<strong>+2,000');
   });
 
   it('keeps legacy core ranks visible while showing the next deep-rank level gate', () => {
@@ -511,11 +508,11 @@ describe('commander level and talent menu', () => {
     expect(commanderTalentEffectCopyV1('elite-vanguard', 15, 'next'))
       .not.toBe(commanderTalentEffectCopyV1('elite-vanguard', 0, 'next'));
     expect(commanderTalentEffectCopyV1('treasury-reserve', 15, 'current'))
-      .toBe('+6.3% Split Pulse Retained');
+      .toBe('+6.3% Split-Front Efficiency Retained');
     expect(commanderTalentEffectCopyV1('treasury-reserve', 15, 'current'))
       .not.toMatch(/income|treasury|research|\$/i);
     expect(commanderTalentEffectCopyV1('treasury-reserve', Number.MAX_SAFE_INTEGER, 'current'))
-      .toMatch(/^\+[\d.]+% Split Pulse Retained$/);
+      .toMatch(/^\+[\d.]+% Split-Front Efficiency Retained$/);
 
     const postHundred = commanderLevelProgressV1({
       ...profile,
@@ -552,7 +549,7 @@ describe('commander level and talent menu', () => {
     expect(commanderMenuSource).toContain('APEX EVOLUTION MATRIX');
     expect(commanderMenuSource).not.toContain('commander-talent-overview__rank');
     expect(commanderMenuSource).not.toContain('commander-talent-overview__progress');
-    expect(commanderMenuSource).toContain("label: 'Pulse Warfare'");
+    expect(commanderMenuSource).toContain("label: 'Assault Shield'");
     expect(commanderMenuSource).toContain("label: 'Reactive Matrix'");
     expect(commanderMenuSource).toContain("label: 'Energy Core'");
     expect(commanderMenuSource).toContain("label: 'Empire Warfare'");
@@ -587,7 +584,7 @@ describe('commander level and talent menu', () => {
       expect(locked.host.innerHTML.match(/CAPSTONE ABILITY/g)).toHaveLength(4);
       expect(locked.host.innerHTML.match(/commander-talent-protocol__glyph/g)).toHaveLength(4);
       expect(locked.host.innerHTML).toMatch(
-        /Countermeasure[\s\S]*?REQUIRES Countermeasure Core Rank 5[\s\S]*?data-doctrine="bastion" disabled>CAPSTONE LOCKED/,
+        /Adaptive Barrier[\s\S]*?REQUIRES Adaptive Barrier Core Rank 5[\s\S]*?data-doctrine="bastion" disabled>CAPSTONE LOCKED/,
       );
       expect(locked.host.innerHTML).toMatch(
         /Theater Mesh[\s\S]*?REQUIRES Theater Coordination Rank 5[\s\S]*?data-doctrine="force-multiplier" disabled>CAPSTONE LOCKED/,
@@ -655,8 +652,8 @@ describe('commander level and talent menu', () => {
       expect(mounted.host.innerHTML).not.toMatch(/Command Credits|\bCC\b|purchase/i);
       expect(mounted.host.innerHTML).toContain('BASE POWER');
       expect(mounted.host.innerHTML).toContain('MASTERED POWER');
-      expect(mounted.host.innerHTML).toContain('LEVEL BONUS</b> +0% opening army');
-      expect(mounted.host.innerHTML).toContain('NEXT: +0.25% OPENING ARMY + 1 POINT');
+      expect(mounted.host.innerHTML).toContain('LEVEL BONUS</b> +0% Army Capacity');
+      expect(mounted.host.innerHTML).toContain('NEXT: +0.25% ARMY CAPACITY + 1 POINT');
       expect(mounted.host.innerHTML).toContain('CAMPAIGN · SURVIVAL EMPIRE');
       expect(mounted.host.innerHTML).toContain('Every owned nation brings its mastery build into Survival.');
       expect(mounted.host.innerHTML).toContain('Force Structure');
@@ -665,7 +662,7 @@ describe('commander level and talent menu', () => {
       expect(mounted.host.innerHTML).toContain('+1% Army Capacity');
       expect(mounted.host.innerHTML).toContain('+1.5% ATK');
       expect(mounted.host.innerHTML).toContain('+1.5% DEF');
-      expect(mounted.host.innerHTML).toContain('+2% Recruitment · +2.5% Reserve Training');
+      expect(mounted.host.innerHTML).toContain('+2.5% Peace Recruitment');
       expect(mounted.host.innerHTML).toContain('Land Logistics');
       expect(mounted.host.innerHTML).toContain('+2% Land Supply · +1.5% Land Transfer');
       expect(mounted.host.innerHTML).toContain('Expeditionary');
@@ -793,18 +790,20 @@ describe('commander level and talent menu', () => {
       expect(mounted.host.innerHTML).not.toContain('data-action="start-mode"');
       expect(mounted.host.innerHTML).toContain('OPENING INTELLIGENCE');
       expect(mounted.host.innerHTML).toContain('FULL STRATEGIC INTELLIGENCE');
-      expect(mounted.host.innerHTML).toContain('6 MORE METRICS');
+      expect(mounted.host.innerHTML).toContain('5 MORE METRICS');
       expect(mounted.host.innerHTML).toContain('APEX &amp; META LOADOUT');
       expect(mounted.host.innerHTML).toContain('CONFIRM NETHERLANDS →');
       expect(mounted.host.innerHTML).toContain('aria-pressed="true"');
       expect(mounted.host.innerHTML).toContain('<span>ARMY ATTACK</span>');
       expect(mounted.host.innerHTML).toContain('<span>ARMY DEFENSE</span>');
       expect(mounted.host.innerHTML).toContain('<span>ENERGY</span>');
-      expect(mounted.host.innerHTML).toContain('<strong>1,000 / 1,000</strong>');
-      expect(mounted.host.innerHTML).toContain('<span>PULSE ATTACK</span>');
-      expect(mounted.host.innerHTML).toContain('<strong>1,000</strong>');
+      expect(mounted.host.innerHTML).toContain('<strong>2,000 / 2,000</strong>');
+      expect(mounted.host.innerHTML).toContain('<span>SHIELD ABSORPTION</span>');
+      expect(mounted.host.innerHTML).toContain('<strong>75%</strong>');
       expect(mounted.host.innerHTML).toContain('Only while shield online');
       expect(mounted.host.innerHTML).toContain('DEPLOYMENT LOADOUT PREVIEW');
+      expect(mounted.host.innerHTML).toContain('<small>ARMY CAPACITY</small>');
+      expect(mounted.host.innerHTML).not.toContain('<small>NATION ARMY</small>');
       expect(mounted.host.innerHTML.indexOf('100 POWER')).toBeLessThan(
         mounted.host.innerHTML.indexOf('#150 military'),
       );
@@ -838,7 +837,7 @@ describe('commander level and talent menu', () => {
       expect(apexLoadout).not.toContain('APEX POWER');
       expect(apexLoadout).toContain('<span>ARMY ATTACK</span>');
       expect(apexLoadout).toContain('<span>ENERGY</span>');
-      expect(apexLoadout).toContain('<span>PULSE ATTACK</span>');
+      expect(apexLoadout).toContain('<span>SHIELD ABSORPTION</span>');
       expect(apexLoadout).not.toContain('ACTIVE / CAPACITY');
       expect(mounted.host.innerHTML).toContain('BEGIN CAMPAIGN →');
       expect(mounted.host.innerHTML).toContain('ENTER FUN MODE →');
@@ -865,13 +864,13 @@ describe('commander level and talent menu', () => {
     try {
       mounted.click('open-country-picker');
       mounted.click('confirm-start-country', { country: 'bel' });
-      expect(mounted.host.innerHTML).toContain('ENDGAME MODE · 100 CREDITS · BALANCE 0');
+      expect(mounted.host.innerHTML).toContain('ENDGAME MODE · 50 CREDITS · BALANCE 0');
       expect(mounted.host.innerHTML).toContain('INSUFFICIENT CREDITS');
       expect(mounted.host.innerHTML).toContain('Earn them through meaningful Campaign activity');
 
       mounted.click('start-mode', { mode: 'survival' });
       expect(onStartMode).not.toHaveBeenCalled();
-      expect(mounted.host.innerHTML).toContain('Survival requires 100 Credits. You have 0');
+      expect(mounted.host.innerHTML).toContain('Survival requires 50 Credits. You have 0');
 
       mounted.click('start-mode', { mode: 'standard-2026' });
       expect(onStartMode).toHaveBeenCalledWith('standard-2026', 'bel', false);
@@ -987,17 +986,17 @@ describe('commander level and talent menu', () => {
       expect(mounted.host.innerHTML).toContain('VIEW NATION ARSENAL →');
       expect(mounted.host.innerHTML.match(/commander-meta-card__cta/g)).toHaveLength(2);
       expect(mounted.host.innerHTML).toContain('<small>ENERGY</small>');
-      expect(mounted.host.innerHTML).toContain('<b>1,000 / 1,000</b>');
-      expect(mounted.host.innerHTML).toContain('<small>PULSE ATTACK</small>');
-      expect(mounted.host.innerHTML).toContain('<b>1,000</b>');
-      expect(mounted.host.innerHTML).toContain('<small>ARMY BUFF</small>');
+      expect(mounted.host.innerHTML).toContain('<b>2,000 / 2,000</b>');
+      expect(mounted.host.innerHTML).not.toContain('<small>PULSE ATTACK</small>');
+      expect(mounted.host.innerHTML).toContain('<small>ARMY ATTACK</small>');
+      expect(mounted.host.innerHTML).toContain('<small>ARMY DEFENSE</small>');
       expect(mounted.host.innerHTML).toContain('<small>ENERGY RECHARGE</small>');
       expect(mounted.host.innerHTML).toContain('<small>UNSPENT POINTS</small>');
       expect(mounted.host.innerHTML).not.toContain('EMPIRE START GRANT');
       expect(mounted.host.innerHTML).not.toContain('EMPIRE INCOME');
       expect(mounted.host.innerHTML).not.toContain('EMPIRE TRAINING');
       expect(mounted.host.innerHTML).not.toContain('APEX FOOD');
-      expect(commanderMenuSource).toContain('ARMY BUFF');
+      expect(commanderMenuSource).toContain('ARMY ATTACK');
       expect(commanderMenuSource).not.toMatch(/Empire Food|Food Production|People Fed|Fed\/Week/i);
       expect(mounted.host.innerHTML).not.toContain('APEX ELITES');
       expect(mounted.host.innerHTML).not.toContain('CAPACITY</small>');
@@ -1079,7 +1078,7 @@ describe('commander level and talent menu', () => {
       expect(mounted.host.innerHTML).toContain('NATION MASTERY POINTS');
       expect(mounted.host.innerHTML).toContain('Credits only pay for Survival entry.');
       expect(mounted.host.innerHTML).toContain(
-        'Nations unlock by defeating and integrating Campaign targets',
+        'Defeating a nation in Campaign unlocks it',
       );
       expect(mounted.host.innerHTML).toContain('SPEND 4 APEX TALENT POINTS →');
       expect(mounted.host.innerHTML).toContain('SPEND 2 NATION MASTERY POINTS →');

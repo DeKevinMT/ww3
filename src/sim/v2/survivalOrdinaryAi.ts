@@ -2,16 +2,17 @@ import {
   isRogueAiNationV2,
   type WorldContentV2,
 } from './content';
+import { round } from './balance';
 import { isHumanPlayerV2 } from './humanPlayers';
 import type { PlayerId, TerritoryId, WorldStateV2 } from './types';
 
 /**
- * Compatibility sentinel for older callers. Ordinary Survival AI now starts
- * fully staffed relative to its deliberately reduced effective capacity.
+ * Every ordinary sovereign begins Survival fully deployed at its real live
+ * cap. Capacity, finance and later recruitment use the normal simulation.
  */
 export const SURVIVAL_ORDINARY_AI_STARTING_FORCE_FACTOR_V2 = 1;
-export const SURVIVAL_ORDINARY_AI_STARTING_RESERVE_FACTOR_V2 = 0.01;
-/** The surviving sovereign bloc. The run-local empire name is its durable tag. */
+export const SURVIVAL_ORDINARY_AI_STARTING_RESERVE_FACTOR_V2 = 0;
+/** The surviving Arctic sovereign bloc. The run-local empire name is its durable tag. */
 export const SURVIVAL_DAWNLINE_ACCORD_NAME_V2 = 'The Dawnline Accord';
 
 export function isSurvivalDawnlineNationV2(
@@ -21,22 +22,16 @@ export function isSurvivalDawnlineNationV2(
   return state.players[playerId]?.empireName === SURVIVAL_DAWNLINE_ACCORD_NAME_V2;
 }
 
-/**
- * Ordinary Survival states field about 20% of their pristine-world force.
- * Population damage is modeled separately and does not reduce the military
- * power selector a second time, so this capacity factor is the full authored
- * reduction. The smaller army starts at 100% of that reduced cap.
- */
-export const SURVIVAL_ORDINARY_AI_CAPACITY_FACTOR_V2 = 0.20;
+/** Compatibility export: Survival no longer changes ordinary Army Capacity. */
+export const SURVIVAL_ORDINARY_AI_CAPACITY_FACTOR_V2 = 1;
 
 /**
- * Reserve training and reserve mobilisation keep their existing 10% Survival
- * cadence. Active army refill is controller-neutral and is handled separately
- * from this reserve-only compatibility factor.
+ * Compatibility export for the retired reinforcement limiter. Active army
+ * refill is controller-neutral and uses the normal peace-only recruitment.
  */
-export const SURVIVAL_ORDINARY_AI_REINFORCEMENT_FACTOR_V2 = 0.10;
+export const SURVIVAL_ORDINARY_AI_REINFORCEMENT_FACTOR_V2 = 1;
 
-/** One canonical scope check for the damaged, non-player world in Survival. */
+/** One canonical scope check for non-player, non-Dawnline sovereigns in Survival. */
 export function isSurvivalOrdinaryAiNationV2(
   state: WorldStateV2,
   content: WorldContentV2,
@@ -73,13 +68,37 @@ export function survivalOrdinaryAiTerritoryCapacityFactorV2(
     : 1;
 }
 
-/** Existing reserve training and mobilisation limiter. */
+/** Neutral compatibility helper; it no longer scales any active system. */
 export function survivalOrdinaryAiReinforcementFactorV2(
   state: WorldStateV2,
   content: WorldContentV2,
   playerId: PlayerId,
 ): number {
-  return isSurvivalOrdinaryAiNationV2(state, content, playerId)
-    ? SURVIVAL_ORDINARY_AI_REINFORCEMENT_FACTOR_V2
-    : 1;
+  void state;
+  void content;
+  void playerId;
+  return SURVIVAL_ORDINARY_AI_REINFORCEMENT_FACTOR_V2;
+}
+
+/**
+ * Canonical tick-zero readiness pass. Every non-Rogue sovereign deploys at
+ * 100% of its already-synchronised live cap. Antarctica is untouched.
+ * Calling this again at tick zero is intentionally idempotent, which keeps
+ * country selection and multiplayer roster preparation deterministic.
+ */
+export function applySurvivalOpeningArmyReadinessV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+): void {
+  if (content.metadata?.scenarioId !== 'survival' || state.tick !== 0) return;
+  for (const territoryId of content.territoryIds) {
+    const definition = content.territories[territoryId];
+    const territory = state.territories[territoryId];
+    if (!definition || !territory || (definition.kind ?? 'sovereign') !== 'sovereign') continue;
+    if (isRogueAiNationV2(content, territory.owner)) continue;
+    territory.army.manpower = round(
+      territory.army.capacity * SURVIVAL_ORDINARY_AI_STARTING_FORCE_FACTOR_V2,
+      9,
+    );
+  }
 }
