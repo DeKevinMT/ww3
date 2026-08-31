@@ -159,7 +159,12 @@ function rawTerritoryArmyCapacityTargetV2(
     ARMY_CAPACITY_STRUCTURAL_POPULATION_SHARE,
     localProfessionalForceShare,
   );
-  return round(Math.max(0.0001, Math.max(0, population)
+  const capacityPopulation = territory.armyCapacityWeight === undefined
+    ? Math.max(0, population)
+    : Math.max(0, territory.armyCapacityWeight)
+      * Math.max(0, population)
+      / Math.max(0.0001, territory.baseline.population);
+  return round(Math.max(0.0001, capacityPopulation
     * structuralPopulationShare
     * clamp(integration, 0, 1)
     * (1 + 0.01 * Math.max(0, forceCapacityLevel))));

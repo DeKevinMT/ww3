@@ -7,7 +7,7 @@ import type {
   TerrainType,
 } from './types';
 
-export const V2_RULES_VERSION = 'frontier-command-v2.77-apex-shield-multipliers';
+export const V2_RULES_VERSION = 'frontier-command-v2.78-rogue-perimeter-balance';
 export const V2_CONTENT_VERSION = 'natural-earth-countries-2026-v8-antarctica-survival';
 export const V2_MAP_ID = 'natural-earth-countries-2026';
 export const V2_TICK_DURATION_MS = 1_000;

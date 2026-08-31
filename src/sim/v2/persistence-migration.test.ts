@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import { WorldEngineV2 } from './WorldEngineV2';
 import {
   V2_CONTENT_VERSION,
   V2_RULES_VERSION,
   WAR_CAMPAIGN_MAX_TICKS,
   WAR_REVENGE_WINDOW_TICKS,
+  round,
 } from './balance';
 import { createWorldStateV2 } from './bootstrap';
 import { stateTerritoryArmyCapacityTargetV2, synchronizeArmyCapacityV2 } from './capacity';
@@ -11,6 +13,7 @@ import {
   ANTARCTIC_TERRITORY_IDS_V2,
   ROGUE_AI_NATION_ID_V2,
   WORLD_CONTENT_V2,
+  type WorldContentV2,
 } from './content';
 import {
   beginTerritoryIntegrationV2,
@@ -27,9 +30,12 @@ import {
   invalidateTerritoryIndexV2,
 } from './selectors';
 import { selectNorthPoleModifiersV2 } from './northPoleModifiers';
+import { resolveScenarioV2 } from './scenarios';
 import { nationIdV2, territoryIdV2 } from './types';
 
 const LEGACY_CONTENT_VERSION_V16 = 'natural-earth-countries-2026-v6-naval';
+const LEGACY_RULES_VERSION_V22_76 = 'frontier-command-v2.76-logistics-readiness';
+const LEGACY_RULES_VERSION_V22_77 = 'frontier-command-v2.77-apex-shield-multipliers';
 
 function removeSchema22Fields(save: Record<string, any>): void {
   delete save.commanderForces;
@@ -185,6 +191,69 @@ function legacySaveV14(): Record<string, any> {
   }
   current.canonicalStateHash = canonicalStateHashV2(current);
   return current;
+}
+
+function antarcticWeightShareByTerritory(content: WorldContentV2): Record<string, number> {
+  const totalWeight = ANTARCTIC_TERRITORY_IDS_V2.reduce((sum, territoryId) => (
+    sum + (content.territories[territoryId]?.armyCapacityWeight ?? 0)
+  ), 0);
+  return Object.fromEntries(ANTARCTIC_TERRITORY_IDS_V2.map((territoryId) => [
+    territoryId,
+    (content.territories[territoryId]?.armyCapacityWeight ?? 0) / totalWeight,
+  ]));
+}
+
+function antarcticPopulationShareByTerritory(content: WorldContentV2): Record<string, number> {
+  const totalPopulation = ANTARCTIC_TERRITORY_IDS_V2.reduce((sum, territoryId) => (
+    sum + (content.territories[territoryId]?.baseline.population ?? 0)
+  ), 0);
+  return Object.fromEntries(ANTARCTIC_TERRITORY_IDS_V2.map((territoryId) => [
+    territoryId,
+    (content.territories[territoryId]?.baseline.population ?? 0) / totalPopulation,
+  ]));
+}
+
+function totalAntarcticBaseManpower(save: Record<string, any>): number {
+  return round(ANTARCTIC_TERRITORY_IDS_V2.reduce((sum, territoryId) => (
+    sum
+      + (save.territories[territoryId]?.army.manpower ?? 0)
+      - (save.polarEndgame?.rogueWaveManpowerByTerritory?.[territoryId] ?? 0)
+  ), 0), 9);
+}
+
+function totalAntarcticManpower(save: Record<string, any>): number {
+  return round(ANTARCTIC_TERRITORY_IDS_V2.reduce((sum, territoryId) => (
+    sum + (save.territories[territoryId]?.army.manpower ?? 0)
+  ), 0), 9);
+}
+
+function applyLegacyAntarcticPopulationDistribution(
+  save: Record<string, any>,
+  content: WorldContentV2,
+): void {
+  const shares = antarcticPopulationShareByTerritory(content);
+  const totalBaseManpower = totalAntarcticBaseManpower(save);
+  let assigned = 0;
+  ANTARCTIC_TERRITORY_IDS_V2.forEach((territoryId, index) => {
+    const wave = save.polarEndgame?.rogueWaveManpowerByTerritory?.[territoryId] ?? 0;
+    const base = index === ANTARCTIC_TERRITORY_IDS_V2.length - 1
+      ? round(totalBaseManpower - assigned, 9)
+      : round(totalBaseManpower * shares[territoryId]!, 9);
+    assigned = round(assigned + base, 9);
+    save.territories[territoryId].army.manpower = round(wave + base, 9);
+  });
+}
+
+function createLegacyAntarcticRedistributionSave(
+  state: ReturnType<typeof createWorldStateV2>,
+  content: WorldContentV2,
+  rulesVersion: string,
+): Record<string, any> {
+  const legacy = structuredClone(createSaveV2(state, content)) as Record<string, any>;
+  legacy.rulesVersion = rulesVersion;
+  applyLegacyAntarcticPopulationDistribution(legacy, content);
+  legacy.canonicalStateHash = canonicalStateHashV2(legacy);
+  return legacy;
 }
 
 describe('V2 legacy save migration', () => {
@@ -1151,5 +1220,191 @@ describe('V2 legacy save migration', () => {
     expect(resaved.offers).toEqual([]);
     expect(resaved.ceasefireObligations).toEqual([]);
     expect(resaved.players[nationIdV2('bel')].ceasefiresRequested).toBe(0);
+  });
+
+  it('redistributes authenticated v2.76/v2.77 Survival saves toward the Antarctic perimeter with exact totals', () => {
+    const content = resolveScenarioV2({ mode: 'survival', seed: 97_601 }).content;
+    const weightedShares = antarcticWeightShareByTerritory(content);
+    const perimeterIds = ANTARCTIC_TERRITORY_IDS_V2.filter((territoryId) => (
+      content.territories[territoryId]?.kind === 'rogue-perimeter'
+    ));
+    const coreId = territoryIdV2('zero-point-core');
+
+    for (const rulesVersion of [LEGACY_RULES_VERSION_V22_76, LEGACY_RULES_VERSION_V22_77]) {
+      const state = createWorldStateV2(97_601, content);
+      const legacy = createLegacyAntarcticRedistributionSave(state, content, rulesVersion);
+      const totalBefore = totalAntarcticManpower(legacy);
+      const baseBefore = totalAntarcticBaseManpower(legacy);
+      const legacyPerimeter = round(perimeterIds.reduce((sum, territoryId) => (
+        sum + legacy.territories[territoryId].army.manpower
+      ), 0), 9);
+      const legacyCore = legacy.territories[coreId].army.manpower;
+
+      const loaded = loadSaveV2(legacy as never, content);
+      const totalAfter = round(ANTARCTIC_TERRITORY_IDS_V2.reduce((sum, territoryId) => (
+        sum + loaded.territories[territoryId]!.army.manpower
+      ), 0), 9);
+      const migratedPerimeter = round(perimeterIds.reduce((sum, territoryId) => (
+        sum + loaded.territories[territoryId]!.army.manpower
+      ), 0), 9);
+
+      expect(loaded.rulesVersion).toBe(V2_RULES_VERSION);
+      expect(totalAfter).toBe(totalBefore);
+      expect(migratedPerimeter).toBeGreaterThan(legacyPerimeter);
+      expect(loaded.territories[coreId]!.army.manpower).toBeLessThan(legacyCore);
+      for (const territoryId of ANTARCTIC_TERRITORY_IDS_V2) {
+        expect(loaded.territories[territoryId]!.army.manpower).toBeCloseTo(
+          round(baseBefore * weightedShares[territoryId]!, 9),
+          9,
+        );
+      }
+    }
+  });
+
+  it('repairs an authenticated v2.77 Survival opening while its Rogue war is already active', () => {
+    const seed = 97_606;
+    const content = resolveScenarioV2({ mode: 'survival', seed }).content;
+    const engine = new WorldEngineV2(seed, content);
+    expect(engine.chooseCountry('bel')).toEqual({ accepted: true });
+    expect(engine.formSurvivalEmpire('bel', [])).toEqual({ accepted: true });
+    expect(engine.state.wars.some((war) => war.attackerId === ROGUE_AI_NATION_ID_V2)).toBe(true);
+
+    const legacy = createLegacyAntarcticRedistributionSave(
+      engine.state,
+      content,
+      LEGACY_RULES_VERSION_V22_77,
+    );
+    const totalBefore = totalAntarcticManpower(legacy);
+    const drakeBefore = legacy.territories['drake-entry'].army.manpower;
+    const activeWarIds = legacy.wars.map((war: { id: string }) => war.id);
+
+    const loaded = loadSaveV2(legacy as never, content);
+
+    expect(loaded.wars.map((war) => war.id)).toEqual(activeWarIds);
+    expect(loaded.wars.some((war) => war.attackerId === ROGUE_AI_NATION_ID_V2)).toBe(true);
+    expect(loaded.territories[territoryIdV2('drake-entry')]!.army.manpower)
+      .toBeGreaterThan(drakeBefore);
+    expect(round(ANTARCTIC_TERRITORY_IDS_V2.reduce((sum, territoryId) => (
+      sum + loaded.territories[territoryId]!.army.manpower
+    ), 0), 9)).toBe(totalBefore);
+  });
+
+  it('preserves wave ledgers and territory-local wave manpower while redistributing only the Antarctic base cohort', () => {
+    const content = resolveScenarioV2({ mode: 'survival', seed: 97_602 }).content;
+    const weightedShares = antarcticWeightShareByTerritory(content);
+    const legacy = createLegacyAntarcticRedistributionSave(
+      createWorldStateV2(97_602, content),
+      content,
+      LEGACY_RULES_VERSION_V22_77,
+    );
+    legacy.polarEndgame.rogueWaveManpowerByTerritory = {
+      'drake-entry': 0.031,
+      'queen-maud-grid': 0.047,
+      'zero-point-core': 0.113,
+    };
+    for (const [territoryId, waveManpower] of Object.entries(
+      legacy.polarEndgame.rogueWaveManpowerByTerritory,
+    )) {
+      legacy.territories[territoryId].army.manpower = round(
+        legacy.territories[territoryId].army.manpower + Number(waveManpower),
+        9,
+      );
+    }
+    const totalBefore = totalAntarcticManpower(legacy);
+    const baseBefore = totalAntarcticBaseManpower(legacy);
+    legacy.canonicalStateHash = canonicalStateHashV2(legacy);
+
+    const loaded = loadSaveV2(legacy as never, content);
+
+    expect(loaded.polarEndgame.rogueWaveManpowerByTerritory).toEqual(
+      legacy.polarEndgame.rogueWaveManpowerByTerritory,
+    );
+    expect(round(ANTARCTIC_TERRITORY_IDS_V2.reduce((sum, territoryId) => (
+      sum + loaded.territories[territoryId]!.army.manpower
+    ), 0), 9)).toBe(totalBefore);
+    for (const territoryId of ANTARCTIC_TERRITORY_IDS_V2) {
+      const wave = legacy.polarEndgame.rogueWaveManpowerByTerritory[territoryId] ?? 0;
+      expect(loaded.territories[territoryId]!.army.manpower - wave).toBeCloseTo(
+        round(baseBefore * weightedShares[territoryId]!, 9),
+        9,
+      );
+    }
+  });
+
+  it('skips Antarctic redistribution once any sector is no longer Rogue-owned', () => {
+    const content = resolveScenarioV2({ mode: 'survival', seed: 97_603 }).content;
+    const breachedId = territoryIdV2('drake-entry');
+    const invaderId = nationIdV2('grl');
+    const legacy = createLegacyAntarcticRedistributionSave(
+      createWorldStateV2(97_603, content),
+      content,
+      LEGACY_RULES_VERSION_V22_77,
+    );
+    const before = Object.fromEntries(ANTARCTIC_TERRITORY_IDS_V2.map((territoryId) => [
+      territoryId,
+      legacy.territories[territoryId].army.manpower,
+    ]));
+    legacy.territories[breachedId].owner = invaderId;
+    legacy.territories[breachedId].coreOwner = invaderId;
+    legacy.canonicalStateHash = canonicalStateHashV2(legacy);
+
+    const loaded = loadSaveV2(legacy as never, content);
+    const resaved = createSaveV2(loaded, content);
+
+    expect(loaded.rulesVersion).toBe(V2_RULES_VERSION);
+    for (const territoryId of ANTARCTIC_TERRITORY_IDS_V2) {
+      expect(loaded.territories[territoryId]!.army.manpower).toBe(before[territoryId]);
+    }
+    expect(createSaveV2(loadSaveV2(resaved, content), content)).toEqual(resaved);
+  });
+
+  it('round-trips current v2.78 Antarctic saves idempotently without legacy redistribution', () => {
+    const content = resolveScenarioV2({ mode: 'survival', seed: 97_604 }).content;
+    const current = structuredClone(createSaveV2(
+      createWorldStateV2(97_604, content),
+      content,
+    )) as Record<string, any>;
+    current.polarEndgame.rogueWaveManpowerByTerritory = {
+      'maud-entry': 0.022,
+      'transantarctic-vault': 0.064,
+    };
+    current.territories['drake-entry'].army.manpower = 0.04;
+    current.territories['maud-entry'].army.manpower = 0.08;
+    current.territories['ross-entry'].army.manpower = 0.12;
+    current.territories['weddell-forge'].army.manpower = 0.18;
+    current.territories['queen-maud-grid'].army.manpower = 0.23;
+    current.territories['ross-array'].army.manpower = 0.27;
+    current.territories['sentinel-labyrinth'].army.manpower = 0.11;
+    current.territories['transantarctic-vault'].army.manpower = 0.29;
+    current.territories['zero-point-core'].army.manpower = 0.09;
+    current.canonicalStateHash = canonicalStateHashV2(current);
+
+    const loaded = loadSaveV2(current as never, content);
+    const resaved = createSaveV2(loaded, content);
+
+    expect(resaved).toEqual(current);
+  });
+
+  it('redistributes authenticated pre-contact Campaign v2.77 saves before first Antarctic contact', () => {
+    const state = createWorldStateV2(97_605, WORLD_CONTENT_V2);
+    const weightedShares = antarcticWeightShareByTerritory(WORLD_CONTENT_V2);
+    const legacy = createLegacyAntarcticRedistributionSave(
+      state,
+      WORLD_CONTENT_V2,
+      LEGACY_RULES_VERSION_V22_77,
+    );
+    const baseBefore = totalAntarcticBaseManpower(legacy);
+
+    expect(state.polarEndgame.phase).toBe('dormant');
+
+    const loaded = loadSaveV2(legacy as never, WORLD_CONTENT_V2);
+
+    expect(loaded.polarEndgame.phase).toBe('dormant');
+    for (const territoryId of ANTARCTIC_TERRITORY_IDS_V2) {
+      expect(loaded.territories[territoryId]!.army.manpower).toBeCloseTo(
+        round(baseBefore * weightedShares[territoryId]!, 9),
+        9,
+      );
+    }
   });
 });

@@ -122,6 +122,12 @@ export interface TerritoryConnectionV2 {
 export interface TerritoryContentV2 {
   id: TerritoryId;
   kind?: TerritoryKindV2;
+  /**
+   * Population-equivalent local military infrastructure. Fictional machine
+   * sectors may use this instead of their civilian population to distribute
+   * Army Capacity without changing the country's total calibrated force.
+   */
+  armyCapacityWeight?: number;
   initialOwnerId: PlayerId;
   name: string;
   regionId: string;
@@ -1035,6 +1041,7 @@ interface AntarcticTerritoryAuthoringV2 {
   readonly id: AntarcticSectorIdV2;
   readonly name: string;
   readonly kind: Exclude<TerritoryKindV2, 'sovereign'>;
+  readonly armyCapacityWeight: number;
   readonly population: number;
   readonly gdp: number;
   readonly landArea: number;
@@ -1042,15 +1049,18 @@ interface AntarcticTerritoryAuthoringV2 {
 }
 
 const ANTARCTIC_TERRITORY_AUTHORING_V2: readonly AntarcticTerritoryAuthoringV2[] = Object.freeze([
-  { id: 'drake-entry', name: 'Drake Icehead', kind: 'rogue-perimeter', population: 0.35, gdp: 55, landArea: 420_000, connections: ['weddell-forge'] },
-  { id: 'maud-entry', name: 'Maud Landing', kind: 'rogue-perimeter', population: 0.42, gdp: 70, landArea: 520_000, connections: ['queen-maud-grid'] },
-  { id: 'ross-entry', name: 'Ross Breach', kind: 'rogue-perimeter', population: 0.50, gdp: 85, landArea: 650_000, connections: ['ross-array'] },
-  { id: 'weddell-forge', name: 'Weddell Forge', kind: 'rogue-outer', population: 2.2, gdp: 420, landArea: 1_180_000, connections: ['drake-entry', 'queen-maud-grid', 'sentinel-labyrinth'] },
-  { id: 'queen-maud-grid', name: 'Queen Maud Grid', kind: 'rogue-outer', population: 2.8, gdp: 560, landArea: 1_620_000, connections: ['maud-entry', 'weddell-forge', 'ross-array', 'sentinel-labyrinth', 'transantarctic-vault'] },
-  { id: 'ross-array', name: 'Ross Replicator Array', kind: 'rogue-outer', population: 3.4, gdp: 720, landArea: 1_430_000, connections: ['ross-entry', 'queen-maud-grid', 'transantarctic-vault'] },
-  { id: 'sentinel-labyrinth', name: 'Sentinel Labyrinth', kind: 'rogue-inner', population: 12, gdp: 2_600, landArea: 2_150_000, connections: ['weddell-forge', 'queen-maud-grid', 'transantarctic-vault', 'zero-point-core'] },
-  { id: 'transantarctic-vault', name: 'Transantarctic Vault', kind: 'rogue-inner', population: 18, gdp: 4_200, landArea: 2_300_000, connections: ['queen-maud-grid', 'ross-array', 'sentinel-labyrinth', 'zero-point-core'] },
-  { id: 'zero-point-core', name: 'Zero Point Core', kind: 'rogue-core', population: 300, gdp: 23_290, landArea: 3_930_000, connections: ['sentinel-labyrinth', 'transantarctic-vault'] },
+  // The nine weights total the Rogue's authored 340M structural population.
+  // Perimeter 10.5% -> outer 22.5% -> inner 27% -> core 40% keeps every
+  // deeper individual sector stronger while ending the former 88% core pileup.
+  { id: 'drake-entry', name: 'Drake Icehead', kind: 'rogue-perimeter', armyCapacityWeight: 10.2, population: 0.35, gdp: 55, landArea: 420_000, connections: ['weddell-forge'] },
+  { id: 'maud-entry', name: 'Maud Landing', kind: 'rogue-perimeter', armyCapacityWeight: 11.9, population: 0.42, gdp: 70, landArea: 520_000, connections: ['queen-maud-grid'] },
+  { id: 'ross-entry', name: 'Ross Breach', kind: 'rogue-perimeter', armyCapacityWeight: 13.6, population: 0.50, gdp: 85, landArea: 650_000, connections: ['ross-array'] },
+  { id: 'weddell-forge', name: 'Weddell Forge', kind: 'rogue-outer', armyCapacityWeight: 22.1, population: 2.2, gdp: 420, landArea: 1_180_000, connections: ['drake-entry', 'queen-maud-grid', 'sentinel-labyrinth'] },
+  { id: 'queen-maud-grid', name: 'Queen Maud Grid', kind: 'rogue-outer', armyCapacityWeight: 25.5, population: 2.8, gdp: 560, landArea: 1_620_000, connections: ['maud-entry', 'weddell-forge', 'ross-array', 'sentinel-labyrinth', 'transantarctic-vault'] },
+  { id: 'ross-array', name: 'Ross Replicator Array', kind: 'rogue-outer', armyCapacityWeight: 28.9, population: 3.4, gdp: 720, landArea: 1_430_000, connections: ['ross-entry', 'queen-maud-grid', 'transantarctic-vault'] },
+  { id: 'sentinel-labyrinth', name: 'Sentinel Labyrinth', kind: 'rogue-inner', armyCapacityWeight: 42.5, population: 12, gdp: 2_600, landArea: 2_150_000, connections: ['weddell-forge', 'queen-maud-grid', 'transantarctic-vault', 'zero-point-core'] },
+  { id: 'transantarctic-vault', name: 'Transantarctic Vault', kind: 'rogue-inner', armyCapacityWeight: 49.3, population: 18, gdp: 4_200, landArea: 2_300_000, connections: ['queen-maud-grid', 'ross-array', 'sentinel-labyrinth', 'zero-point-core'] },
+  { id: 'zero-point-core', name: 'Zero Point Core', kind: 'rogue-core', armyCapacityWeight: 136, population: 300, gdp: 23_290, landArea: 3_930_000, connections: ['sentinel-labyrinth', 'transantarctic-vault'] },
 ] as const);
 
 export const ANTARCTIC_TERRITORY_IDS_V2 = Object.freeze(
@@ -1184,6 +1194,7 @@ for (const authored of ANTARCTIC_TERRITORY_AUTHORING_V2) {
   territories[id] = {
     id,
     kind: authored.kind,
+    armyCapacityWeight: authored.armyCapacityWeight,
     initialOwnerId: ROGUE_AI_NATION_ID_V2,
     name: authored.name,
     regionId: 'antarctica',

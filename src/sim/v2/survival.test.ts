@@ -66,7 +66,7 @@ function addTestRogueWar(engine: WorldEngineV2, defenderId: PlayerId): WarStateV
 }
 
 describe('Survival Rogue AI empire', () => {
-  it('boots one real Rogue nation with nine weak-to-core normal territories', () => {
+  it('boots one real Rogue nation with a strong but no longer overwhelming core', () => {
     const engine = new WorldEngineV2(501);
     expect(WORLD_CONTENT_V2.nations[ROGUE_AI_NATION_ID_V2]).toMatchObject({
       kind: 'rogue-ai',
@@ -79,8 +79,24 @@ describe('Survival Rogue AI empire', () => {
         coreOwner: ROGUE_AI_NATION_ID_V2,
       });
     }
-    expect(engine.state.territories[ROGUE_AI_CORE_TERRITORY_ID_V2]!.army.manpower)
-      .toBeGreaterThan(engine.state.territories[territoryIdV2('drake-entry')]!.army.manpower * 100);
+    const manpowerByKind = new Map<string, number[]>();
+    let totalManpower = 0;
+    for (const territoryId of ANTARCTIC_TERRITORY_IDS_V2) {
+      const manpower = engine.state.territories[territoryId]!.army.manpower;
+      const kind = engine.content.territories[territoryId]!.kind!;
+      manpowerByKind.set(kind, [...(manpowerByKind.get(kind) ?? []), manpower]);
+      totalManpower += manpower;
+    }
+    const perimeter = manpowerByKind.get('rogue-perimeter')!;
+    const outer = manpowerByKind.get('rogue-outer')!;
+    const inner = manpowerByKind.get('rogue-inner')!;
+    const core = manpowerByKind.get('rogue-core')![0]!;
+    expect(Math.min(...outer)).toBeGreaterThan(Math.max(...perimeter));
+    expect(Math.min(...inner)).toBeGreaterThan(Math.max(...outer));
+    expect(core).toBeGreaterThan(Math.max(...inner));
+    expect(core / totalManpower).toBeCloseTo(0.40, 6);
+    expect(core / engine.state.territories[territoryIdV2('drake-entry')]!.army.manpower)
+      .toBeLessThan(15);
   });
 
   it('starts active at week zero in Survival and cannot be selected by a human', () => {

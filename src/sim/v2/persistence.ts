@@ -21,7 +21,11 @@ import {
   normalizeApexCapstoneProtocolV2,
   reconcileCommanderForcesV2,
 } from './commanderForce';
-import { ROGUE_AI_NATION_ID_V2, type WorldContentV2 } from './content';
+import {
+  ANTARCTIC_TERRITORY_IDS_V2,
+  ROGUE_AI_NATION_ID_V2,
+  type WorldContentV2,
+} from './content';
 import {
   absorbedNationSuccessorV2,
   retireDormantAbsorbedNationsV2,
@@ -159,10 +163,17 @@ const LEGACY_RULES_VERSION_V22_74 = 'frontier-command-v2.74-shared-apex-economy'
 const LEGACY_RULES_VERSION_V22_75 = 'frontier-command-v2.75-no-land-condition';
 /** Last authenticated release where APEX persisted a synthetic elite Army. */
 const LEGACY_RULES_VERSION_V22_76 = 'frontier-command-v2.76-logistics-readiness';
+/** Last release before the Antarctic base garrison was redistributed toward its perimeter. */
+const LEGACY_RULES_VERSION_V22_77 = 'frontier-command-v2.77-apex-shield-multipliers';
 const LEGACY_CONTENT_VERSION_V16 = 'natural-earth-countries-2026-v6-naval';
 const LEGACY_CONTENT_VERSION_V17 = 'natural-earth-countries-2026-v7-greenland';
 const LEGACY_BOT_MANPOWER_PER_UNIT = 0.10;
 const LEGACY_BOT_TECH_STRENGTH_MULTIPLIER = 1.22;
+
+function hasCurrentCanonicalShapeV2(rulesVersion: string): boolean {
+  return rulesVersion === V2_RULES_VERSION
+    || rulesVersion === LEGACY_RULES_VERSION_V22_77;
+}
 
 interface LegacyBattleBotProgramV13 {
   unlocked: boolean;
@@ -1294,7 +1305,7 @@ function currentStateFromSave(
       propagandaProgram: canonicalNation.propagandaProgram ? { ...canonicalNation.propagandaProgram } : null,
       ...(hasOpeningArmyBonus
         ? { openingArmyBonus: clonedOpeningArmyBonus }
-        : save.rulesVersion === V2_RULES_VERSION
+        : hasCurrentCanonicalShapeV2(save.rulesVersion)
           ? {}
           : { openingArmyBonus: null }),
     }];
@@ -1302,7 +1313,7 @@ function currentStateFromSave(
   const territories = Object.fromEntries(Object.entries(save.territories).map(([rawId, territory]) => {
     const serializedTerritory = territory as TerritoryStateV2 & { condition?: unknown };
     const { condition: _retiredCondition, ...territoryWithoutCondition } = serializedTerritory;
-    const canonicalTerritory = save.rulesVersion === V2_RULES_VERSION
+    const canonicalTerritory = hasCurrentCanonicalShapeV2(save.rulesVersion)
       ? serializedTerritory : territoryWithoutCondition;
     const program = serializedTerritory.integrationProgram;
     const serializedAnnualCost = (program as { annualCost?: number } | undefined)?.annualCost;
@@ -1334,7 +1345,7 @@ function currentStateFromSave(
   const serializedCommanderForces = 'commanderForces' in save
     ? save.commanderForces : {};
   const commanderForces: WorldStateV2['commanderForces'] = 'commanderForces' in save
-    ? save.rulesVersion === V2_RULES_VERSION
+    ? hasCurrentCanonicalShapeV2(save.rulesVersion)
       // Current authenticated saves must survive this boundary exactly so
       // invariant validation rejects missing or malformed canonical fields.
       ? structuredClone(save.commanderForces as WorldStateV2['commanderForces'])
@@ -1397,7 +1408,7 @@ function currentStateFromSave(
   // Authenticated releases before exclusive protocol selection could freeze
   // several capstones into one solo APEX. Preserve the most clearly active
   // protocol and clear incompatible runtime state before canonical validation.
-  if (save.rulesVersion !== V2_RULES_VERSION) {
+  if (!hasCurrentCanonicalShapeV2(save.rulesVersion)) {
     for (const force of Object.values(commanderForces)) {
       if (force) normalizeApexCapstoneProtocolV2(force);
     }
@@ -1753,6 +1764,88 @@ function legacyV7ContentMatchesResolvedScenarioV2(
     && content.metadata.generatedFromSeed === seed);
 }
 
+/**
+ * V2.76/V2.77 distributed the Rogue's opening force by Antarctic civilian
+ * population, leaving almost the entire base garrison in Zero Point. Once that
+ * exact save has authenticated, redistribute only its surviving non-wave cohort
+ * according to the new authored military-infrastructure weights. Existing wave
+ * personnel stay on their recorded territories and the operation never creates
+ * manpower. A breached Antarctic empire is left untouched so migration cannot
+ * undo player progress or move soldiers through a captured sector.
+ */
+function reconcileLegacyAntarcticBaseGarrisonV276V277(
+  state: WorldStateV2,
+  content: WorldContentV2,
+): void {
+  const sectors = ANTARCTIC_TERRITORY_IDS_V2.map((territoryId) => ({
+    territoryId,
+    definition: content.territories[territoryId],
+    territory: state.territories[territoryId],
+  }));
+  if (sectors.length !== 9 || sectors.some(({ definition, territory }) => (
+    !definition
+      || !territory
+      || territory.owner !== ROGUE_AI_NATION_ID_V2
+      || !Number.isFinite(definition.armyCapacityWeight)
+      || (definition.armyCapacityWeight ?? 0) <= 0
+  ))) return;
+
+  const cohorts = sectors.map(({ territoryId, definition, territory }) => {
+    const manpower = territory!.army.manpower;
+    const waveManpower = state.polarEndgame.rogueWaveManpowerByTerritory[territoryId] ?? 0;
+    return {
+      territoryId,
+      territory: territory!,
+      weight: definition!.armyCapacityWeight!,
+      manpower,
+      waveManpower,
+      baseManpower: manpower - waveManpower,
+    };
+  });
+  if (cohorts.some(({ manpower, waveManpower, baseManpower }) => (
+    !Number.isFinite(manpower)
+      || !Number.isFinite(waveManpower)
+      || waveManpower < 0
+      || baseManpower < -0.000000001
+  ))) return;
+
+  const totalWeight = cohorts.reduce((sum, cohort) => sum + cohort.weight, 0);
+  const totalManpowerBefore = round(cohorts.reduce(
+    (sum, cohort) => sum + cohort.manpower,
+    0,
+  ), 9);
+  const totalBaseManpower = round(cohorts.reduce(
+    (sum, cohort) => sum + Math.max(0, cohort.baseManpower),
+    0,
+  ), 9);
+  if (!Number.isFinite(totalWeight) || totalWeight <= 0
+    || !Number.isFinite(totalManpowerBefore)
+    || !Number.isFinite(totalBaseManpower)) return;
+
+  let allocatedBaseManpower = 0;
+  for (let index = 0; index < cohorts.length; index += 1) {
+    const cohort = cohorts[index]!;
+    const baseManpower = index === cohorts.length - 1
+      ? round(totalBaseManpower - allocatedBaseManpower, 9)
+      : round(totalBaseManpower * cohort.weight / totalWeight, 9);
+    allocatedBaseManpower = round(allocatedBaseManpower + baseManpower, 9);
+    cohort.territory.army.manpower = round(cohort.waveManpower + baseManpower, 9);
+  }
+
+  // Keep the saved national headcount exact even when nine rounded shares leave
+  // a one-billionth residual. The final (and largest) core cohort absorbs only
+  // that arithmetic remainder; its wave component is never reduced or moved.
+  const totalManpowerAfter = round(cohorts.reduce(
+    (sum, cohort) => sum + cohort.territory.army.manpower,
+    0,
+  ), 9);
+  const remainder = round(totalManpowerBefore - totalManpowerAfter, 9);
+  if (remainder !== 0) {
+    const core = cohorts[cohorts.length - 1]!;
+    core.territory.army.manpower = round(core.territory.army.manpower + remainder, 9);
+  }
+}
+
 export function loadSaveV2(
   input: string | SaveGameV2 | LegacySaveGameV22ApexArmyV276 | LegacySaveGameV22FoodV275 | LegacySaveGameV22ConditionV274 | LegacySaveGameV22FinanceV272 | LegacySaveGameV22RunV271 | LegacySaveGameV22CommanderV268 | LegacySaveGameV22CommanderV269 | LegacySaveGameV22CommanderV270 | LegacySaveGameV22PreCommander | LegacySaveGameV22PrePolar | LegacySaveGameV21 | LegacySaveGameV20 | LegacySaveGameV19 | LegacySaveGameV18 | LegacySaveGameV17 | LegacySaveGameV16 | LegacySaveGameV15 | LegacySaveGameV14 | LegacySaveGameV13,
   content: WorldContentV2,
@@ -1776,6 +1869,7 @@ export function loadSaveV2(
                 : LEGACY_RULES_VERSION_V13;
   const supportedRules = schemaVersion === 22
     ? parsed.rulesVersion === V2_RULES_VERSION
+      || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_77
       || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_76
       || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_75
       || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_74
@@ -1808,6 +1902,7 @@ export function loadSaveV2(
     : keys;
   const expectedSaveKeys = schemaVersion === 22
     ? parsed.rulesVersion === V2_RULES_VERSION
+      || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_77
       || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_76
       || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_75
       || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_74
@@ -1845,6 +1940,7 @@ export function loadSaveV2(
   if (schemaVersion === 22 && parsed.contentVersion !== V2_CONTENT_VERSION
     && !legacyV7Content
     && parsed.rulesVersion !== V2_RULES_VERSION
+    && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_77
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_76
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_75
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_74
@@ -1899,6 +1995,7 @@ export function loadSaveV2(
               )), content), content);
   if (schemaVersion === 22
     && parsed.rulesVersion !== V2_RULES_VERSION
+    && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_77
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_76
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_75
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_74) {
@@ -1909,6 +2006,7 @@ export function loadSaveV2(
   // those would resurrect defeated nations and break its canonical hash.
   if (legacyV7Content) hydrateNewContentAfterAuthenticationV2(state, content);
   if (parsed.rulesVersion !== V2_RULES_VERSION
+    && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_77
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_76
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_75
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_74) {
@@ -1966,6 +2064,11 @@ export function loadSaveV2(
   normalizeRetiredReserveCompatibilityV2(state);
   synchronizeRunProgressionRosterV2(state);
   enforceSurvivalScorchedWorldV2(state, content);
+  if (schemaVersion === 22
+    && (parsed.rulesVersion === LEGACY_RULES_VERSION_V22_77
+      || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_76)) {
+    reconcileLegacyAntarcticBaseGarrisonV276V277(state, content);
+  }
   synchronizeArmyCapacityV2(state, content);
   reconcileSurvivalRogueFocusWarsV2(state, content);
   retireDormantAbsorbedNationsV2(state, content);

@@ -58,7 +58,7 @@ describe('Survival physical opening and push-pull pacing', () => {
     assertInvariantsV2(engine.state, engine.content);
   });
 
-  it('preserves an exact human counteroffensive without exceeding the two-axis war cap', () => {
+  it('keeps an exact human counteroffensive legal without gifting away the reinforced perimeter', () => {
     const engine = formedPacificFront(81_002);
     const human = nationIdV2('usa');
     const war = engine.state.wars.find((candidate) => (
@@ -89,18 +89,20 @@ describe('Survival physical opening and push-pull pacing', () => {
       targetId: chosen.targetId,
     }));
     const humanConquests = new Set<string>();
+    let battles = 0;
     engine.subscribe((_state, change) => {
+      if (change.battle) battles += 1;
       if (change.battle?.conquered && change.battle.attackerId === human) {
         humanConquests.add(change.battle.targetId);
       }
     });
-    for (let week = 0; week < 156 && humanConquests.size === 0; week += 1) {
-      engine.step(1);
+    engine.step(26);
+    expect(battles).toBeGreaterThan(0);
+    expect(humanConquests).toEqual(new Set());
+    for (const territoryId of ANTARCTIC_TERRITORY_IDS_V2) {
+      expect(engine.state.territories[territoryId]!.owner).toBe(ROGUE_AI_NATION_ID_V2);
     }
-    expect(humanConquests.size).toBeGreaterThan(0);
-    for (const territoryId of humanConquests) {
-      expect(engine.state.territories[territoryId]!.owner).toBe(human);
-    }
+    expect(engine.state.territories.chl!.owner).toBe(human);
     for (const operation of [...war!.attackerOperations, ...war!.defenderOperations]) {
       expect(engine.state.territories[operation.sourceId]!.army.manpower).toBeGreaterThan(0);
     }
