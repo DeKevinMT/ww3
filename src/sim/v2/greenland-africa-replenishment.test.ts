@@ -256,7 +256,7 @@ describe('Greenland to Africa post-conquest replenishment', () => {
     // Prove the physical path independently from local post-conquest
     // recruitment. This is the exact redistribution phase that used to stall.
     const treasuryBeforeRoute = greenland.treasury;
-    const routeCapacity = state.territories[GREENLAND_TERRITORY]!.army.capacity * 0.05;
+    const routeCapacity = state.territories[GREENLAND_TERRITORY]!.army.capacity * 0.10;
     const openingMoves = redistributeArmiesV2(state, WORLD_CONTENT_V2)
       .filter((movement) => movement.playerId === GREENLAND);
     const openingMoved = openingMoves.reduce((sum, movement) => sum + movement.manpower, 0);

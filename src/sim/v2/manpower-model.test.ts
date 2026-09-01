@@ -124,9 +124,10 @@ describe('V2 one-source manpower combat', () => {
   });
 
   it('lowers combat DEF while preserving parity and flattening extreme advantages', () => {
-    expect(combatDefenseEffectV2(1, 1)).toBeCloseTo(0.75, 9);
-    expect(combatDefenseEffectV2(2, 2)).toBeCloseTo(1.5, 9);
-    expect(combatDefenseEffectV2(0.8, 1)).toBeCloseTo(0.60, 9);
+    expect(COMBAT_DEFENSE_BASE_EFFECT_V2).toBe(0.65);
+    expect(combatDefenseEffectV2(1, 1)).toBeCloseTo(0.65, 9);
+    expect(combatDefenseEffectV2(2, 2)).toBeCloseTo(1.30, 9);
+    expect(combatDefenseEffectV2(0.8, 1)).toBeCloseTo(0.52, 9);
 
     const atParity = combatDefenseEffectV2(1, 1);
     const twiceAttack = combatDefenseEffectV2(2, 1);
@@ -137,8 +138,8 @@ describe('V2 one-source manpower combat', () => {
     expect(twiceAttack).toBeGreaterThan(atParity);
     expect(fiveTimesAttack).toBeGreaterThan(twiceAttack);
     expect(tenTimesAttack).toBeGreaterThan(fiveTimesAttack);
-    expect(twiceAttack).toBeLessThan(2 * 0.75);
-    expect(tenTimesAttack).toBeLessThan(10 * 0.75 * 0.75);
+    expect(twiceAttack).toBeLessThan(2 * COMBAT_DEFENSE_BASE_EFFECT_V2);
+    expect(tenTimesAttack).toBeLessThan(10 * COMBAT_DEFENSE_BASE_EFFECT_V2 * 0.75);
     expect((fiveTimesAttack - twiceAttack) / 3).toBeGreaterThan(
       (tenTimesAttack - fiveTimesAttack) / 5,
     );

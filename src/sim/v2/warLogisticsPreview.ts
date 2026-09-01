@@ -24,7 +24,7 @@ export interface WarLogisticsPreviewV2 {
   /** Canonical distance-only supply factor before terrain and country-trait adjustments. */
   readonly routeSupplyMultiplier: number;
   readonly attackCapacityShare: number;
-  readonly attackSupplyLabel: '10% CAP / ATTACK' | '5% CAP / ATTACK · NAVAL';
+  readonly attackSupplyLabel: '20% CAP / ATTACK' | '10% CAP / ATTACK · NAVAL';
   readonly routeDistancePressure: number;
   readonly currentWeeklyWarOperations: number;
   readonly projectedWeeklyWarOperations: number;

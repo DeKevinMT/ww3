@@ -3,11 +3,11 @@ import type { WarAccessV2 } from './types';
 
 /**
  * The entire logistics contract in two numbers. Every weekly land connection
- * and every land battle can move/field ten percent of the source country's
+ * and every land battle can move/field twenty percent of the source country's
  * local Army Capacity. Sea routes carry exactly half that amount.
  */
-export const LAND_ARMY_CAPACITY_SUPPLY_SHARE_V2 = 0.10;
-export const NAVAL_ARMY_CAPACITY_SUPPLY_SHARE_V2 = 0.05;
+export const LAND_ARMY_CAPACITY_SUPPLY_SHARE_V2 = 0.20;
+export const NAVAL_ARMY_CAPACITY_SUPPLY_SHARE_V2 = 0.10;
 
 /** Logistics is intentionally cheap and never becomes a movement gate. */
 export const LAND_LOGISTICS_COST_PER_MILLION_V2 = 0.0005;
@@ -78,6 +78,6 @@ export function quoteArmyCapacitySupplyV2(
 
 export function armyCapacitySupplyLabelV2(
   access: Exclude<WarAccessV2, 'none'>,
-): '10% CAP / ATTACK' | '5% CAP / ATTACK · NAVAL' {
-  return access === 'naval' ? '5% CAP / ATTACK · NAVAL' : '10% CAP / ATTACK';
+): '20% CAP / ATTACK' | '10% CAP / ATTACK · NAVAL' {
+  return access === 'naval' ? '10% CAP / ATTACK · NAVAL' : '20% CAP / ATTACK';
 }

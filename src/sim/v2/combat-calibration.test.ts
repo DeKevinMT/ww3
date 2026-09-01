@@ -294,7 +294,7 @@ describe('V2 coherent combat and forecast calibration', () => {
     const state = calibratedState(4_001_001);
     for (const territoryId of [belTerritory, nldTerritory]) {
       state.territories[territoryId]!.army.baseAttack = 1;
-      state.territories[territoryId]!.army.baseDefense = 5;
+      state.territories[territoryId]!.army.baseDefense = 6;
     }
     const expectedOpeningDamage = battleDamageMeanV2(0);
     const projection = projectCombatExchangeV2(
@@ -375,8 +375,11 @@ describe('V2 coherent combat and forecast calibration', () => {
     const two = projection(0.40);
     const overwhelming = projection(2);
     expect(two.rawDefenderLosses).toBeCloseTo(one.rawDefenderLosses * 2, 9);
-    expect(two.defenderLosses).toBeCloseTo(one.defenderLosses * 2, 9);
-    expect(two.defenderLossRate).toBeCloseTo(one.defenderLossRate * 2, 9);
+    // Rounded public damage and rate stay proportional within 1e-8.
+    expect(Math.abs(two.defenderLosses - one.defenderLosses * 2))
+      .toBeLessThanOrEqual(1e-8);
+    expect(Math.abs(two.defenderLossRate - one.defenderLossRate * 2))
+      .toBeLessThanOrEqual(1e-8);
     expect(overwhelming.rawDefenderLosses).toBeGreaterThan(overwhelming.defenderHitCap);
     expect(overwhelming.defenderLosses).toBeCloseTo(overwhelming.defenderHitCap, 9);
   });

@@ -84,7 +84,7 @@ describe('multi-terrain runtime', () => {
 
     expect(landQuote.readiness).toBe(1);
     expect(navalQuote.readiness).toBe(1);
-    expect(navalQuote.capacityShare).toBe(0.05);
+    expect(navalQuote.capacityShare).toBe(0.10);
     expect(navalQuote.capacityBudget).toBeCloseTo(landQuote.capacityBudget * 0.5, 9);
   });
 

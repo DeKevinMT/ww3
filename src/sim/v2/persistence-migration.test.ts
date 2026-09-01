@@ -43,6 +43,7 @@ const LEGACY_RULES_VERSION_V22_77 = 'frontier-command-v2.77-apex-shield-multipli
 const LEGACY_RULES_VERSION_V22_78 = 'frontier-command-v2.78-rogue-perimeter-balance';
 const LEGACY_RULES_VERSION_V22_79 = 'frontier-command-v2.79-active-research';
 const LEGACY_RULES_VERSION_V22_80 = 'frontier-command-v2.80-daily-ticks';
+const LEGACY_RULES_VERSION_V22_81 = 'frontier-command-v2.81-parallel-research';
 
 function removeParallelResearchDirections(save: Record<string, any>): void {
   for (const nation of Object.values(save.players) as Array<Record<string, any>>) {
@@ -1389,6 +1390,38 @@ describe('V2 legacy save migration', () => {
       expect(loaded.territories[territoryId]!.army.manpower).toBe(before[territoryId]);
     }
     expect(createSaveV2(loadSaveV2(resaved, content), content)).toEqual(resaved);
+  });
+
+  it('authenticates v2.81 and preserves every parallel research direction', () => {
+    const state = createWorldStateV2(97_611, WORLD_CONTENT_V2);
+    const playerId = nationIdV2('bel');
+    state.players[playerId]!.research.categoryDirections = {
+      people: { branch: 'education-intelligence', effect: 'iq-increase' },
+      army: { branch: 'military-industry', effect: 'reinforcement-efficiency' },
+      combat: { branch: 'defensive-systems', effect: 'casualty-reduction' },
+      sustainment: { branch: 'food-systems', effect: 'supply' },
+      state: { branch: 'public-administration', effect: 'tax-efficiency' },
+    };
+    const current = structuredClone(createSaveV2(
+      state,
+      WORLD_CONTENT_V2,
+    )) as Record<string, any>;
+    const directionsBefore = structuredClone(
+      current.players[playerId].research.categoryDirections,
+    );
+    const researchBefore = researchNumerics(current.players[playerId].research);
+    current.rulesVersion = LEGACY_RULES_VERSION_V22_81;
+    current.canonicalStateHash = canonicalStateHashV2(current);
+
+    const loaded = loadSaveV2(current as never, WORLD_CONTENT_V2);
+    const resaved = createSaveV2(loaded, WORLD_CONTENT_V2);
+
+    expect(loaded.rulesVersion).toBe(V2_RULES_VERSION);
+    expectCanonicalParallelResearch(loaded.players[playerId]!.research);
+    expect(loaded.players[playerId]!.research.categoryDirections).toEqual(directionsBefore);
+    expect(researchNumerics(loaded.players[playerId]!.research)).toEqual(researchBefore);
+    expect(createSaveV2(loadSaveV2(resaved, WORLD_CONTENT_V2), WORLD_CONTENT_V2))
+      .toEqual(resaved);
   });
 
   it('authenticates v2.80, preserves Antarctic and research numbers, then adds parallel directions', () => {

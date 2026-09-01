@@ -1,14 +1,14 @@
-# v2.81 publish checklist
+# v2.82 publish checklist
 
 ## Required gates
 
-- [x] Complete Vitest suite passes: 228 files, 1,589 passed and 1 intentionally skipped test.
+- [x] Complete Vitest suite passes: 228 files, 1,590 passed and 1 intentionally skipped test.
 - [x] TypeScript, matchmaker TypeScript and Vite production build pass.
 - [x] `git diff --check` has no errors.
 - [x] Release commit is based on the current remote `main` without overwriting remote history.
 - [ ] GitHub Pages workflow completes successfully.
 - [ ] Published page loads its versioned JavaScript, CSS, map data and audio assets.
-- [ ] Published UI reports `v2.81` and opens the country picker.
+- [ ] Published UI reports `v2.82` and opens the country picker.
 - [ ] Production matchmaker health endpoint responds successfully.
 
 ## Manual smoke test
@@ -22,7 +22,7 @@
 - [x] Research throughput is capped at 80% useful portfolio output, and the UI explains funded R&D, live IQ and the +25% funding scenario.
 - [x] Target review projects GDP on capture, fully integrated GDP, purge cost and the resulting national-IQ effect on Research.
 - [x] Pending multiplayer Research direction orders stay disabled until the authoritative host applies or rejects them.
-- [x] Land target cards show `10% CAP / ATTACK`; naval target cards show `5% CAP / ATTACK · NAVAL`.
+- [x] Land target cards show `20% CAP / ATTACK`; naval target cards show `10% CAP / ATTACK · NAVAL`.
 - [x] Guyana-Haiti and Costa Rica-Papua New Guinea are valid authored naval routes.
 - [x] Naval routes are visible but subtle cyan for ordinary access and muted red when the Rogue owns an endpoint; distant sea shield tethers are absent.
 - [x] Survival opens with Rogue-only Antarctica and all three gateways active.

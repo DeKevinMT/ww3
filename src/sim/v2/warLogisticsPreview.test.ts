@@ -27,8 +27,8 @@ describe('attack review logistics preview', () => {
     expect(preview.routeOperationMultiplier).toBeGreaterThanOrEqual(1.35);
     expect(preview.routeOperationMultiplier).toBeLessThanOrEqual(2.15);
     expect(preview.routeSupplyMultiplier).toBe(0.5);
-    expect(preview.attackCapacityShare).toBe(0.05);
-    expect(preview.attackSupplyLabel).toBe('5% CAP / ATTACK · NAVAL');
+    expect(preview.attackCapacityShare).toBe(0.10);
+    expect(preview.attackSupplyLabel).toBe('10% CAP / ATTACK · NAVAL');
     expect(preview.projectedWeeklyWarOperations).toBeGreaterThan(
       preview.currentWeeklyWarOperations,
     );
@@ -53,8 +53,8 @@ describe('attack review logistics preview', () => {
     expect(preview.distanceKm).toBeUndefined();
     expect(preview.routeOperationMultiplier).toBe(1);
     expect(preview.routeSupplyMultiplier).toBe(1);
-    expect(preview.attackCapacityShare).toBe(0.10);
-    expect(preview.attackSupplyLabel).toBe('10% CAP / ATTACK');
+    expect(preview.attackCapacityShare).toBe(0.20);
+    expect(preview.attackSupplyLabel).toBe('20% CAP / ATTACK');
     expect(preview.routeDistancePressure).toBe(0);
     expect(preview.projectedWeeklyWarOperations).toBeGreaterThan(
       preview.currentWeeklyWarOperations,
@@ -113,6 +113,6 @@ describe('attack review logistics preview', () => {
     expect(regional.routeSupplyMultiplier).toBe(0.5);
     expect(longRange.routeSupplyMultiplier).toBe(0.5);
     expect(pacific.routeSupplyMultiplier).toBe(0.5);
-    expect(regional.attackCapacityShare).toBe(0.05);
+    expect(regional.attackCapacityShare).toBe(0.10);
   });
 });

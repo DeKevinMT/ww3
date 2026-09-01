@@ -7,7 +7,7 @@ import type {
   TerrainType,
 } from './types';
 
-export const V2_RULES_VERSION = 'frontier-command-v2.81-parallel-research';
+export const V2_RULES_VERSION = 'frontier-command-v2.82-attack-tempo';
 export const V2_CONTENT_VERSION = 'natural-earth-countries-2026-v8-antarctica-survival';
 export const V2_MAP_ID = 'natural-earth-countries-2026';
 /** One authoritative simulation tick advances the visible world by one day. */
@@ -191,8 +191,8 @@ export function effectiveDefenseStatV2(rawDefense: number): number {
   // the UI continues to show every real quality and research improvement.
   return Math.max(0, rawDefense);
 }
-/** The displayed DEF number contributes 75% of its former battlefield weight. */
-export const COMBAT_DEFENSE_BASE_EFFECT_V2 = 0.75;
+/** The displayed DEF number contributes 65% of its former battlefield weight. */
+export const COMBAT_DEFENSE_BASE_EFFECT_V2 = 0.65;
 /** Relative DEF advantages bend logarithmically beyond opposing ATK parity. */
 export const COMBAT_DEFENSE_RELATIVE_SOFTNESS_V2 = 8;
 /**

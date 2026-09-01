@@ -121,14 +121,15 @@ economyResearchMultiplier = 1
   + 0.30 × convertedEconomyLevel / (convertedEconomyLevel + 25)
 ```
 
-`systemQuality × economyResearchMultiplier` modernises both ATK and DEF. Branch-specific effects then apply. Effective DEF above neutral is deliberately weaker and bounded:
+`systemQuality × economyResearchMultiplier` modernises both ATK and DEF. Branch-specific effects then apply. The player-facing DEF value remains linear and is shared by the UI, Nation power contribution and post-war reports. Combat converts that unchanged value into protection at 65% base weight. A relative advantage above opposing ATK parity bends logarithmically and approaches a universal 4×-ATK ceiling before that 0.65 multiplier; terrain, positioning and supply remain separate real multipliers:
 
 ```text
-effectiveDEF = rawDEF                                      when rawDEF <= 1
-effectiveDEF = 1 + 0.90 × (rawDEF − 1) / (1 + 0.05 × (rawDEF − 1)) otherwise
+displayedDEF = max(0, rawDEF)
+combatDEF = 0.65 × displayedDEF                            when displayedDEF <= opposingATK
+combatDEF = 0.65 × opposingATK × boundedRelativeCurve     otherwise
 ```
 
-The resulting effective values—not hidden pre-IQ baselines—are shared by combat, forecasts, Nation power contribution and post-war reports.
+Forecasts and live combat use this same combat-only conversion. The resulting displayed values—not hidden pre-IQ baselines—remain the canonical visible military stats.
 
 There is one global military ranking and no blended or economic table:
 
@@ -307,7 +308,7 @@ When a nation's final active war ends, post-war fatigue decays gradually instead
 
 Ordinary wars stage for eight weeks and then resolve battle pulses every two weeks. This staging period creates no soldiers and is distinct from the retired reserve-mobilization system. The once-only guided first Campaign war instead stages for four weeks and resolves weekly pulses; all later wars use the ordinary cadence. The two belligerents share one canonical operation: initiative can reverse its direction, and conquest can replace its source and target, but it never duplicates within the same war. The strategically strongest valid contact is chosen deterministically from supply, supporting armies, target army fill, economy, capital value, power ratio and access penalty. Separate simultaneous wars remain separate fronts. The Survival player-versus-Rogue exception may keep two unique physical operations under its one permanent war.
 
-Supply remains bounded to `[0.25, 1]` and depends on route connectivity, distance from the capital, access and Supply research. Naval attacks use the documented distance-scaled supply friction and operations cost. They have no separate assault-strength or casualty multiplier. Troop routing and supply limitations affect combat effectiveness but never charge treasury for movement.
+Supply remains bounded to `[0.25, 1]` and depends on route connectivity, distance from the capital, access and Supply research. Every land attack may field up to **20% of its source Army Capacity**; every naval attack may field up to **10%**. Naval attacks also use the documented distance-scaled supply friction and operations cost. They have no separate assault-strength or casualty multiplier. Troop routing and supply limitations affect combat effectiveness but never charge treasury for movement.
 
 In co-op, each country's armies remain its own real formations. At most one strongest legal ally contingent may support each side of a battle pulse. It is bounded to 18% of its source formation and 25% of the formal side's strength before route throughput, fights at 85% support efficiency and cannot reuse the same source twice in that pulse. Its source loses the real casualties; its contributing nation pays the route treasury cost and supply from its own stock.
 

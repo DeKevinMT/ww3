@@ -1258,7 +1258,7 @@ export function projectCombatExchangeV2(
     * defenderRogueDefense * defenderPolarOperation;
   const attackerCombatDefense = combatDefenseEffectV2(attackerDefense, defenderAttack);
   const defenderCombatDefense = combatDefenseEffectV2(defenderDefense, attackerAttack);
-  // The 10%/5% quote is the supply requirement for this battle, not an
+  // The 20%/10% quote is the supply requirement for this battle, not an
   // artificial deletion of the soldiers already deployed on the front.
   // Readiness scales their effectiveness once; naval supply is therefore not
   // halved a second time inside combat.
@@ -4546,7 +4546,7 @@ export function internalArmyTransferLogisticsTermsV2(
     distanceKm: round(distanceKm, 3),
     interiorDistanceKm: 0,
     interiorOperationMultiplier: 1,
-    // This is a ratio against the land 10% budget: naval is exactly half.
+    // This is a ratio against the land 20% budget: naval is exactly half.
     throughputMultiplier: access === 'naval' ? 0.5 : 1,
     costPerMillion: quote.costPerMillion,
     logisticsCost: round(Math.max(0, manpower) * quote.costPerMillion, 9),
@@ -5246,8 +5246,8 @@ export function redistributeArmiesV2(state: WorldStateV2, content: WorldContentV
               ? rogueWaveManpowerAtV2(state, plan.id) : 0,
           )];
     }));
-    // Each ordinary donor gets one weekly 10%-of-local-cap pool. A naval edge
-    // may consume at most half, making sea throughput exactly 5%. Literal
+    // Each ordinary donor gets one weekly 20%-of-local-cap pool. A naval edge
+    // may consume at most half, making sea throughput exactly 10%. Literal
     // Routed expedition formations use the external empire support envelope.
     const donorBudget = new Map(plans.map((plan) => {
       const capacity = plan.scorchedTransit

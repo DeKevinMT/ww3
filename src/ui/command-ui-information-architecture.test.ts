@@ -179,6 +179,16 @@ describe('command UI information architecture', () => {
     expect(polar).toContain('START ANALYSIS · ${cash(terms.cost)}');
     expect(polar).toContain('terms.durationTicks');
     expect(polar).not.toMatch(/20W|OPTIONAL INTELLIGENCE|OPEN INVESTIGATION/);
+
+    const matrixStart = stylesSource.indexOf('/* Desktop-first parallel research matrix. */');
+    const matrixEnd = stylesSource.indexOf('@media (max-width: 1080px)', matrixStart);
+    const matrixStyles = stylesSource.slice(matrixStart, matrixEnd);
+    expect(matrixStart).toBeGreaterThan(0);
+    expect(matrixEnd).toBeGreaterThan(matrixStart);
+    expect(matrixStyles).toContain('.world-ui-v2 .research-direction-card > strong');
+    expect(matrixStyles).toContain('font-size: 14px;');
+    expect(matrixStyles).toContain('.world-ui-v2 .research-direction-card > p');
+    expect(matrixStyles).not.toMatch(/font-size:\s*[789]px/);
   });
 
   it('keeps territory inspection power-first and EONSCAR status read-only', () => {
@@ -225,6 +235,8 @@ describe('command UI information architecture', () => {
     expect(review).toContain('<strong>${mobilizationWeeks} DAYS</strong>');
     expect(review).toContain('ARRIVES D${apexForecast.etaWeeks}');
     expect(review).toContain('criticalRisks.slice(0, 3)');
+    expect(review).toContain('naval attacks field 10% Army Capacity');
+    expect(review).not.toContain('naval attacks field 5% Army Capacity');
     expect(review).toContain('aria-label="Power and win chance"');
     expect(review).toContain('aria-label="Exact combat detail"');
     expect(review).toContain('data-action="cancel-war"');

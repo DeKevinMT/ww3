@@ -44,7 +44,7 @@ The player-facing military model is compact:
 
 - **Local Threat** identifies the strongest plausible nearby hostile country from legal access, distance, relative Power, nearby expansion and current war state. It is active from the beginning of a Campaign; new wars are no longer locked behind the retired guided intro.
 - **Army Readiness** is the real deployed Army divided by its live capacity. Battle losses are replaced directly in local active armies through ordinary funded peacetime recruitment.
-- **War Supply** is the share of active front demand that the Empire actually delivers. It reads 0% outside war and 100% only when every active front is fully supplied. Land movement uses a fixed share of Army Capacity; naval movement receives exactly half that throughput. Active wars are supplied first and peaceful borders divide remaining protection evenly.
+- **War Supply** is the share of active front demand that the Empire actually delivers. It reads 0% outside war and 100% only when every active front is fully supplied. Each land attack can field 20% of source Army Capacity; naval attacks can field 10%. Active wars are supplied first and peaceful borders divide remaining protection evenly.
 - **Rogue Attention** appears only after EONSCAR has revealed that threat through the story.
 
 Political suspicion, propaganda, containment coalitions, defensive federations and revolt are not active gameplay systems. Signal Purge is stable in-run integration progress: it has no hidden uprising chance, rebel force or rollback, and it does not gate account unlocks. Each endpoint has one immutable 1–6 year duration. EONSCAR presence delivers `3×` purge work, every supplied active front processes its own territory in parallel at `1×`, and an ordinary rear or remote focus advances at a deterministic 50% rate. A front never has to clear before progress can begin.
@@ -107,7 +107,7 @@ The browser client uses [Phaser](https://github.com/phaserjs/phaser) and [flag-i
 
 ## Architecture and verification
 
-The deterministic TypeScript simulation, AI, persistence and multiplayer protocol are isolated from rendering and the DOM HUD. Canonical saves use schema 22 and rules version `frontier-command-v2.81-parallel-research`. Supported authenticated migrations preserve deterministic hashes, in-progress research and every existing deadline while moving the visible calendar from weeks to days.
+The deterministic TypeScript simulation, AI, persistence and multiplayer protocol are isolated from rendering and the DOM HUD. Canonical saves use schema 22 and rules version `frontier-command-v2.82-attack-tempo`. Supported authenticated migrations preserve deterministic hashes, in-progress research and every existing deadline while moving the visible calendar from weeks to days.
 
 Development runs the full invariant boundary every tick. Production schedules the same full scan and forces it on terminal paths. Map presentation caches peaceful statistics, uses bounded active-operation animation and keeps polar simulation constant-size so rapid Rogue expansion does not multiply rendering or simulation work.
 

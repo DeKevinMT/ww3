@@ -38,7 +38,7 @@ export interface FrontLogisticsReadinessV2 extends LogisticsReadinessPresentatio
   readonly routeLabel: 'LAND ROUTE' | 'NAVAL ROUTE';
   readonly capacityShare: number;
   readonly capacityBudget: number;
-  readonly ruleLabel: '10% CAP / ATTACK' | '5% CAP / ATTACK · NAVAL';
+  readonly ruleLabel: '20% CAP / ATTACK' | '10% CAP / ATTACK · NAVAL';
   readonly distanceKm: number;
   readonly nextBattleWeeks: number;
   readonly weight: number;
@@ -65,7 +65,7 @@ export function presentLogisticsReadinessV2(
 ): LogisticsReadinessPresentationV2 {
   const bounded = hasSupportingArmy ? clamp(factor, 0, 1) : 0;
   const status = logisticsReadinessStatusV2(bounded);
-  let limitingReason = access === 'naval' ? '5% Army Capacity per attack' : '10% Army Capacity per attack';
+  let limitingReason = access === 'naval' ? '10% Army Capacity per attack' : '20% Army Capacity per attack';
   if (!hasSupportingArmy) limitingReason = 'No army available';
   else if (status === 'critical') limitingReason = 'Front demand mostly unfunded';
   else if (status === 'strained') limitingReason = 'Front demand partly supplied';

@@ -182,7 +182,7 @@ describe('national IQ gameplay proxy', () => {
       .toBeGreaterThan(selectResearchOutputV2(state, lowContent, belgium, lowFinance, 1));
     expect(logisticsThroughputShareV2(0.25, 0, highView.logisticsMultiplier))
       .toBe(logisticsThroughputShareV2(0.25, 0, lowView.logisticsMultiplier));
-    expect(logisticsThroughputShareV2(0.25, 0, highView.logisticsMultiplier)).toBe(0.10);
+    expect(logisticsThroughputShareV2(0.25, 0, highView.logisticsMultiplier)).toBe(0.20);
     expect(selectPopulationDynamicsV2(state, highContent, belgium, 0).annualNetRate)
       .toBeLessThan(selectPopulationDynamicsV2(state, lowContent, belgium, 0).annualNetRate);
   });

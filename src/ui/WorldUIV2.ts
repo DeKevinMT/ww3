@@ -4843,7 +4843,7 @@ export class WorldUIV2 {
     if (navalLogistics && logisticsPreview && logisticsPreview.routeOperationMultiplier >= 1.75) {
       criticalRisks.push({
         label: 'LONG SEA CROSSING',
-        detail: `${routeDistance} · naval attacks field 5% Army Capacity`,
+        detail: `${routeDistance} · naval attacks field 10% Army Capacity`,
       });
     }
     if (forecast.retaliationExpected) {
