@@ -1,4 +1,4 @@
-import { clamp, round } from './balance';
+import { clamp, researchSpeedBonusV2, round } from './balance';
 import {
   ANTARCTIC_TERRITORY_IDS_V2,
   type WorldContentV2,
@@ -541,7 +541,7 @@ export function selectArcticProjectTermsV2(
   // Stage I is a fixed three-month story gate for every country and reconnect.
   const researchSpeedDurationReduction = project.id === 'polar-demography'
     ? 0
-    : Math.min(0.18, researchLevel * 0.006);
+    : 0.80 * researchSpeedBonusV2(researchLevel);
   const quotedDurationTicks = Math.max(1, Math.ceil(
     project.durationTicks * (1 - researchSpeedDurationReduction),
   ));

@@ -26,7 +26,7 @@ import {
   ECONOMY_FOOD_SHORTAGE_MAX_DRAG,
   ECONOMY_FOOD_SURPLUS_MAX_BONUS,
   ECONOMY_INVESTMENT_GROWTH_MULTIPLIER,
-  ECONOMY_RESEARCH_GROWTH_PER_LEVEL,
+  economyResearchGrowthRateV2,
   NUCLEAR_POWER_ATTACK_BONUS_PER_LEVEL,
   NUCLEAR_POWER_MAX_LEVEL,
   nuclearPowerTierCostV2,
@@ -126,6 +126,9 @@ import {
   RESEARCH_INSTITUTION_MULTIPLIER_MAX,
   RESEARCH_INSTITUTION_MULTIPLIER_MIN,
   RESEARCH_MASTERY_POWER,
+  populationResearchAdjustedAnnualRateV2,
+  researchEfficiencyDiscountV2,
+  researchSpeedBonusV2,
   TAX_EFFICIENCY_RESEARCH_BONUS_PER_EFFECTIVE_LEVEL,
   TAX_EFFICIENCY_RESEARCH_EFFECTIVE_CEILING,
   TAX_EFFICIENCY_RESEARCH_HALF_SATURATION,
@@ -1522,7 +1525,7 @@ export function selectResearchEffectImpactV2(
     ).wealthPerPerson);
     // Catch-up is strongest in low-output economies, while rich economies
     // still receive a useful but bounded improvement from every level.
-    return round(clamp(2.4 / (1 + wealthPerPerson / 40), 0.40, 2.4));
+    return round(clamp(1.6 / (1 + wealthPerPerson / 40), 0.40, 1.6));
   }
   return 1;
 }
@@ -2437,7 +2440,9 @@ function researchBranchCostForCompletionsV2(
   const nation = state.players[playerId];
   if (!nation) return 0;
   void powerSnapshot;
-  const efficiency = diminishingResearchLevelV2(nation.research.effectLevels['research-efficiency']);
+  const efficiency = researchEfficiencyDiscountV2(
+    nation.research.effectLevels['research-efficiency'],
+  );
   const researchCapacity = Math.max(0, content.nations[playerId]?.real.researchCapacity ?? 0);
   const capacityCostMultiplier = clamp(
     researchCapacity / RESEARCH_COST_CAPACITY_REFERENCE,
@@ -2449,7 +2454,7 @@ function researchBranchCostForCompletionsV2(
     * capacityCostMultiplier
     * (completions + 1) ** RESEARCH_MASTERY_POWER
     * RESEARCH_COST_GROWTH ** completions
-    * (1 - 0.01 * efficiency));
+    * (1 - efficiency));
 }
 
 export function selectResearchBranchCostV2(
@@ -2528,7 +2533,7 @@ export function selectResearchOutputV2(
   // from the old double linear punishment without granting progress at $0.
   const base = 0.22 + 0.08 * Math.log2(1 + Math.max(0, finance.research));
   const output = base * Math.sqrt(clamp(fundingRatio, 0, 1.25))
-    * (1 + 0.01 * nation.research.effectLevels['research-speed'])
+    * (1 + researchSpeedBonusV2(nation.research.effectLevels['research-speed']))
     * selectResearchInstitutionalCapacityV2(state, content, playerId)
     * (catchUpOverride ?? selectResearchCatchUpFactorV2(state, content, playerId))
     * nationalAiEfficiencyV2(selectNationalIqViewV2(state, content, playerId).score)
@@ -2761,9 +2766,10 @@ function economicGrowthRatesV2(
     playerId,
     'economy-growth',
   );
-  const rawResearch = Math.min(0.012,
-    ECONOMY_RESEARCH_GROWTH_PER_LEVEL
-      * nation.research.effectLevels['economy-growth'] * researchImpact);
+  const rawResearch = economyResearchGrowthRateV2(
+    nation.research.effectLevels['economy-growth'],
+    researchImpact,
+  );
   const iqGrowthMultiplier = selectNationalIqViewV2(state, content, playerId).economyGrowthMultiplier;
   const base = ECONOMY_BASE_ANNUAL_GROWTH * iqGrowthMultiplier;
   const investment = rawInvestment * iqGrowthMultiplier
@@ -3553,6 +3559,20 @@ export function selectWeeklyPopulationTrendV2(state: WorldStateV2, content: Worl
   return selectPopulationDynamicsV2(state, content, playerId).weeklyNet;
 }
 
+/** Population-weighted natural net rate before research, funding, IQ, traits or war. */
+export function selectPopulationBaselineNetRateV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  playerId: PlayerId,
+): number {
+  const owned = selectTerritoriesOfV2(state, playerId);
+  const population = owned.reduce((sum, territory) => sum + territory.population, 0);
+  if (population <= 0) return 0;
+  return owned.reduce((sum, territory) => sum
+    + (content.territories[territory.id]?.baseline.populationGrowthRate ?? 0)
+      / 100 * territory.population, 0) / population;
+}
+
 /**
  * Explicit demographic accounting. The source population-growth input is net
  * of normal deaths, so the calibrated birth estimate reconstructs it by adding
@@ -3579,18 +3599,22 @@ export function selectPopulationDynamicsV2(
     ? selectWeeklyFinanceBreakdownV2(state, content, playerId)
     : undefined;
   const funds = populationGrowthFunding ?? projectedFinance!.populationGrowth;
-  const baselineNetRate = owned.reduce((sum, territory) => sum
-    + (content.territories[territory.id]?.baseline.populationGrowthRate ?? 0) / 100 * territory.population, 0)
-    / Math.max(0.01, population);
+  const baselineNetRate = selectPopulationBaselineNetRateV2(
+    state,
+    content,
+    playerId,
+  );
   const baselineDeathRate = owned.reduce((sum, territory) => sum
     + (content.territories[territory.id]?.baseline.deathRatePerThousand ?? 8) / 1_000 * territory.population, 0)
     / Math.max(0.01, population);
   const level = nation.research.effectLevels['population-growth'];
   const impact = selectResearchEffectImpactV2(state, content, playerId, 'population-growth');
   const warPressure = selectWarPressureV2(state, playerId);
-  const researchedNet = baselineNetRate >= 0
-    ? baselineNetRate * (1 + 0.005 * level * impact)
-    : baselineNetRate * (1 - 0.004 * level * impact);
+  const researchedNet = populationResearchAdjustedAnnualRateV2(
+    baselineNetRate,
+    level,
+    impact,
+  );
   const iq = selectNationalIqViewV2(state, content, playerId);
   const nationTraitContext = traitNationContextV2(state, playerId);
   const naturalAndResearchedNet = researchedNet > 0

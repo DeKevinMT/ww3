@@ -7,7 +7,7 @@ import type {
   TerrainType,
 } from './types';
 
-export const V2_RULES_VERSION = 'frontier-command-v2.82-attack-tempo';
+export const V2_RULES_VERSION = 'frontier-command-v2.83-research-balance';
 export const V2_CONTENT_VERSION = 'natural-earth-countries-2026-v8-antarctica-survival';
 export const V2_MAP_ID = 'natural-earth-countries-2026';
 /** One authoritative simulation tick advances the visible world by one day. */
@@ -341,7 +341,7 @@ export const NATIONAL_IQ_SCORE_MAX = 108;
 export const NATIONAL_IQ_EFFECTIVE_SCORE_MAX = 112;
 /** Education research approaches +8 IQ points but can never push the live score above 112. */
 export const NATIONAL_IQ_RESEARCH_MAX_BONUS = 8;
-export const NATIONAL_IQ_RESEARCH_HALF_SATURATION = 5;
+export const NATIONAL_IQ_RESEARCH_HALF_SATURATION = 10;
 export const NATIONAL_IQ_GDP_PER_CAPITA_FLOOR = 500;
 export const NATIONAL_IQ_GDP_PER_CAPITA_CEILING = 100_000;
 export const NATIONAL_IQ_INSTITUTIONAL_CAPACITY_FLOOR = 0.2;
@@ -367,7 +367,7 @@ export const NATIONAL_COMBAT_GDP_PER_CAPITA_CEILING = 250_000;
 export const NATIONAL_COMBAT_RESEARCH_CONVERSION_MIN = 0.75;
 export const NATIONAL_COMBAT_RESEARCH_CONVERSION_MAX = 1.25;
 /** Economy & Science modernises both ATK and DEF with diminishing returns. */
-export const NATIONAL_COMBAT_ECONOMY_RESEARCH_MAX_BONUS = 0.30;
+export const NATIONAL_COMBAT_ECONOMY_RESEARCH_MAX_BONUS = 0.15;
 export const NATIONAL_COMBAT_ECONOMY_RESEARCH_HALF_SATURATION = 25;
 /** Bounded per-IQ-point effects used by the live national systems. */
 export const NATIONAL_IQ_ECONOMY_GROWTH_PER_POINT = 0.002;
@@ -378,7 +378,14 @@ export const NATIONAL_IQ_POPULATION_GROWTH_PER_POINT = 0.0025;
 export const ECONOMY_BASE_ANNUAL_GROWTH = 0.003;
 /** Productive investment matters, but normal countries no longer compound at arcade-like rates. */
 export const ECONOMY_INVESTMENT_GROWTH_MULTIPLIER = 0.22;
-export const ECONOMY_RESEARCH_GROWTH_PER_LEVEL = 0.0006;
+/** Industrial Modernisation is useful, but cannot become a runaway compounding engine. */
+export const ECONOMY_RESEARCH_GROWTH_PER_LEVEL = 0.00015;
+export const ECONOMY_RESEARCH_GROWTH_MAX = 0.003;
+/** Civil Renewal improves only the existing natural trend and flattens permanently. */
+export const POPULATION_RESEARCH_EFFECTIVE_CEILING = 10;
+export const POPULATION_RESEARCH_HALF_SATURATION = 10;
+export const POPULATION_RESEARCH_RELATIVE_BONUS_PER_EFFECTIVE_LEVEL = 0.0025;
+export const POPULATION_RESEARCH_DECLINE_RELIEF_SHARE = 0.80;
 export const ECONOMY_FOOD_SURPLUS_MAX_BONUS = 0.001;
 export const ECONOMY_FOOD_SHORTAGE_MAX_DRAG = 0.03;
 export const ECONOMY_ANNUAL_GROWTH_MIN = -0.06;
@@ -683,6 +690,12 @@ export const RESEARCH_INSTITUTION_MULTIPLIER_MAX = 1.15;
 /** A twelve-upgrade technology gap earns the complete bounded catch-up bonus. */
 export const RESEARCH_CATCH_UP_FULL_GAP = 12;
 export const RESEARCH_CATCH_UP_MAX_BONUS = 0.35;
+/** Open Science is self-reinforcing, so its output bonus is deliberately bounded. */
+export const RESEARCH_SPEED_EFFECTIVE_CEILING = 30;
+export const RESEARCH_SPEED_HALF_SATURATION = 20;
+export const RESEARCH_SPEED_BONUS_PER_EFFECTIVE_LEVEL = 0.005;
+/** Lean Laboratories may reduce any future project cost by at most twenty percent. */
+export const RESEARCH_EFFICIENCY_MAX_DISCOUNT = 0.20;
 
 export const DEFAULT_RESEARCH_ALLOCATIONS_V2: Readonly<ResearchAllocationsV2> = {
   'population-recruitment': 0,
@@ -997,4 +1010,55 @@ export function debtPressureV2(treasuryWeeks: number): DebtPressureV2 {
 export function diminishingResearchLevelV2(level: number, ceiling = 40, halfSaturation = 20): number {
   const safeLevel = Math.max(0, level);
   return ceiling * safeLevel / (safeLevel + halfSaturation);
+}
+
+/** Relative change to the natural population trend, never an absolute percentage-point grant. */
+export function populationResearchRelativeBonusV2(level: number, impact: number): number {
+  return POPULATION_RESEARCH_RELATIVE_BONUS_PER_EFFECTIVE_LEVEL
+    * diminishingResearchLevelV2(
+      level,
+      POPULATION_RESEARCH_EFFECTIVE_CEILING,
+      POPULATION_RESEARCH_HALF_SATURATION,
+    )
+    * Math.max(0, Number.isFinite(impact) ? impact : 0);
+}
+
+/** Applies Civil Renewal symmetrically: growth rises modestly and decline becomes modestly shallower. */
+export function populationResearchAdjustedAnnualRateV2(
+  baselineAnnualRate: number,
+  level: number,
+  impact: number,
+): number {
+  const baseline = Number.isFinite(baselineAnnualRate) ? baselineAnnualRate : 0;
+  const relativeBonus = populationResearchRelativeBonusV2(level, impact);
+  return baseline >= 0
+    ? baseline * (1 + relativeBonus)
+    : baseline * Math.max(0, 1 - POPULATION_RESEARCH_DECLINE_RELIEF_SHARE * relativeBonus);
+}
+
+/** Bounded raw simulation-year GDP growth granted by Industrial Modernisation. */
+export function economyResearchGrowthRateV2(level: number, impact: number): number {
+  return Math.min(
+    ECONOMY_RESEARCH_GROWTH_MAX,
+    ECONOMY_RESEARCH_GROWTH_PER_LEVEL
+      * Math.max(0, Number.isFinite(level) ? level : 0)
+      * Math.max(0, Number.isFinite(impact) ? impact : 0),
+  );
+}
+
+/** Bounded research-output bonus used by the ordinary portfolio and special projects. */
+export function researchSpeedBonusV2(level: number): number {
+  return RESEARCH_SPEED_BONUS_PER_EFFECTIVE_LEVEL * diminishingResearchLevelV2(
+    level,
+    RESEARCH_SPEED_EFFECTIVE_CEILING,
+    RESEARCH_SPEED_HALF_SATURATION,
+  );
+}
+
+/** Hard-capped cost reduction so research efficiency cannot bootstrap itself forever. */
+export function researchEfficiencyDiscountV2(level: number): number {
+  return Math.min(
+    RESEARCH_EFFICIENCY_MAX_DISCOUNT,
+    0.01 * diminishingResearchLevelV2(level),
+  );
 }

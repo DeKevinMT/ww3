@@ -3,8 +3,15 @@ import {
   PASSIVE_RECRUITMENT_CAPACITY_RATE,
   PEACE_ARMY_REFILL_CAPACITY_RATE_V2,
   PEACE_READINESS_RECOVERY_MAX_MULTIPLIER,
+  ECONOMY_RESEARCH_GROWTH_MAX,
+  economyResearchGrowthRateV2,
+  populationResearchAdjustedAnnualRateV2,
+  populationResearchRelativeBonusV2,
   RESEARCH_BRANCHES,
   RESEARCH_BRANCH_EFFECTS,
+  RESEARCH_EFFICIENCY_MAX_DISCOUNT,
+  researchEfficiencyDiscountV2,
+  researchSpeedBonusV2,
 } from './balance';
 import { createWorldStateV2 } from './bootstrap';
 import { initialArmyCapacityRatioV2 } from './capacity';
@@ -21,6 +28,7 @@ import {
   selectRecruitmentUnitCostV2,
   selectResearchBranchCostV2,
   selectResearchEffectImpactV2,
+  selectPopulationBaselineNetRateV2,
   selectWeeklyFinanceBreakdownV2,
 } from './selectors';
 import { nationIdV2, territoryIdV2 } from './types';
@@ -94,7 +102,40 @@ describe('V2 integrated research programs and army economy', () => {
     expect(luxPopulationImpact).toBeGreaterThan(indiaPopulationImpact * 4);
     expect(poorEconomyImpact).toBeGreaterThan(richEconomyImpact * 3);
     expect(luxPopulationImpact).toBeLessThanOrEqual(2.4);
-    expect(poorEconomyImpact).toBeLessThanOrEqual(2.4);
+    expect(poorEconomyImpact).toBeLessThanOrEqual(1.6);
+  });
+
+  it('keeps Civil Renewal relative, diminishing and far below an absolute percentage point', () => {
+    const state = createWorldStateV2(4_020);
+    const greenland = nationIdV2('grl');
+    const baseline = selectPopulationBaselineNetRateV2(
+      state,
+      WORLD_CONTENT_V2,
+      greenland,
+    );
+    const impact = selectResearchEffectImpactV2(
+      state,
+      WORLD_CONTENT_V2,
+      greenland,
+      'population-growth',
+    );
+    const levelOne = populationResearchAdjustedAnnualRateV2(baseline, 1, impact);
+    const extreme = populationResearchAdjustedAnnualRateV2(baseline, 1_000_000, impact);
+
+    expect(levelOne - baseline).toBeCloseTo(
+      baseline * populationResearchRelativeBonusV2(1, impact),
+      9,
+    );
+    expect(levelOne - baseline).toBeLessThan(0.0001);
+    expect(extreme).toBeLessThan(baseline * 1.06);
+  });
+
+  it('hard-caps the compounding economy and research feedback choices', () => {
+    expect(economyResearchGrowthRateV2(1_000_000, 1.6))
+      .toBe(ECONOMY_RESEARCH_GROWTH_MAX);
+    expect(researchSpeedBonusV2(1_000_000)).toBeLessThanOrEqual(0.15);
+    expect(researchEfficiencyDiscountV2(1_000_000))
+      .toBe(RESEARCH_EFFICIENCY_MAX_DISCOUNT);
   });
 
   it('lets research efficiency reduce future exponential RP costs by at most 20%', () => {
@@ -102,6 +143,9 @@ describe('V2 integrated research programs and army economy', () => {
     const base = selectResearchBranchCostV2(state, WORLD_CONTENT_V2, bel, 'economy-science');
     state.players[bel].research.effectLevels['research-efficiency'] = 20;
     expect(selectResearchBranchCostV2(state, WORLD_CONTENT_V2, bel, 'economy-science')).toBeCloseTo(base * 0.80, 5);
+    state.players[bel].research.effectLevels['research-efficiency'] = 1_000_000;
+    expect(selectResearchBranchCostV2(state, WORLD_CONTENT_V2, bel, 'economy-science'))
+      .toBeCloseTo(base * 0.80, 5);
   });
 
   it('makes reinforcement efficiency lower recruitment unit costs', () => {

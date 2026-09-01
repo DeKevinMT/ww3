@@ -1,14 +1,14 @@
-# v2.82 publish checklist
+# v2.83 publish checklist
 
 ## Required gates
 
-- [x] Complete Vitest suite passes: 228 files, 1,590 passed and 1 intentionally skipped test.
+- [x] Complete Vitest suite passes: 228 files, 1,592 passed and 1 intentionally skipped test.
 - [x] TypeScript, matchmaker TypeScript and Vite production build pass.
 - [x] `git diff --check` has no errors.
 - [x] Release commit is based on the current remote `main` without overwriting remote history.
 - [ ] GitHub Pages workflow completes successfully.
 - [ ] Published page loads its versioned JavaScript, CSS, map data and audio assets.
-- [ ] Published UI reports `v2.82` and opens the country picker.
+- [ ] Published UI reports `v2.83` and opens the country picker.
 - [ ] Production matchmaker health endpoint responds successfully.
 
 ## Manual smoke test
@@ -19,7 +19,9 @@
 - [x] Topbar Economy, Population, Army readiness, EONSCAR Energy, live war supply and all five active Research categories render clearly.
 - [x] The desktop-first Research Matrix shows five parallel categories with three authored directions each and exactly one active direction per category.
 - [x] Every selected direction researches continuously, applies its exact permanent effect automatically and starts its next level without a blocking choice.
-- [x] Research throughput is capped at 80% useful portfolio output, and the UI explains funded R&D, live IQ and the +25% funding scenario.
+- [x] Civil Renewal reports its true annual percentage-point gain rather than presenting a relative natural-growth multiplier as absolute population growth.
+- [x] Population, GDP growth, R&D speed, R&D cost efficiency and education use bounded or diminishing curves; an imported v2.82 campaign keeps all levels, directions and progress.
+- [x] Research throughput is capped at 80% useful portfolio output, and one compact strip shows funded R&D, live IQ and the +25% funding scenario.
 - [x] Target review projects GDP on capture, fully integrated GDP, purge cost and the resulting national-IQ effect on Research.
 - [x] Pending multiplayer Research direction orders stay disabled until the authoritative host applies or rejects them.
 - [x] Land target cards show `20% CAP / ATTACK`; naval target cards show `10% CAP / ATTACK · NAVAL`.

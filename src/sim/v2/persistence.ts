@@ -181,6 +181,8 @@ const LEGACY_RULES_VERSION_V22_79 = 'frontier-command-v2.79-active-research';
 const LEGACY_RULES_VERSION_V22_80 = 'frontier-command-v2.80-daily-ticks';
 /** Parallel-research release before attack throughput and DEF tempo were rebalanced. */
 const LEGACY_RULES_VERSION_V22_81 = 'frontier-command-v2.81-parallel-research';
+/** Attack-tempo release before permanent research effects received bounded curves. */
+const LEGACY_RULES_VERSION_V22_82 = 'frontier-command-v2.82-attack-tempo';
 const LEGACY_CONTENT_VERSION_V16 = 'natural-earth-countries-2026-v6-naval';
 const LEGACY_CONTENT_VERSION_V17 = 'natural-earth-countries-2026-v7-greenland';
 const LEGACY_BOT_MANPOWER_PER_UNIT = 0.10;
@@ -188,6 +190,7 @@ const LEGACY_BOT_TECH_STRENGTH_MULTIPLIER = 1.22;
 
 function hasCurrentCanonicalShapeV2(rulesVersion: string): boolean {
   return rulesVersion === V2_RULES_VERSION
+    || rulesVersion === LEGACY_RULES_VERSION_V22_82
     || rulesVersion === LEGACY_RULES_VERSION_V22_81
     || rulesVersion === LEGACY_RULES_VERSION_V22_80
     || rulesVersion === LEGACY_RULES_VERSION_V22_79
@@ -1369,6 +1372,7 @@ function currentStateFromSave(
         ...canonicalNation.research,
         allocations: { ...canonicalNation.research.allocations },
         ...(save.rulesVersion === V2_RULES_VERSION
+          || save.rulesVersion === LEGACY_RULES_VERSION_V22_82
           || save.rulesVersion === LEGACY_RULES_VERSION_V22_81
           ? { categoryDirections: cloneResearchDirectionsV2(
               canonicalNation.research.categoryDirections,
@@ -1976,6 +1980,7 @@ export function loadSaveV2(
                 : LEGACY_RULES_VERSION_V13;
   const supportedRules = schemaVersion === 22
     ? parsed.rulesVersion === V2_RULES_VERSION
+      || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_82
       || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_81
       || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_80
       || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_79
@@ -2013,6 +2018,7 @@ export function loadSaveV2(
     : keys;
   const expectedSaveKeys = schemaVersion === 22
     ? parsed.rulesVersion === V2_RULES_VERSION
+      || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_82
       || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_81
       || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_80
       || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_79
@@ -2055,6 +2061,7 @@ export function loadSaveV2(
   if (schemaVersion === 22 && parsed.contentVersion !== V2_CONTENT_VERSION
     && !legacyV7Content
     && parsed.rulesVersion !== V2_RULES_VERSION
+    && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_82
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_81
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_80
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_79
@@ -2116,6 +2123,7 @@ export function loadSaveV2(
                 content,
               )), content), content);
   if (parsed.rulesVersion !== V2_RULES_VERSION
+    && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_82
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_81
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_80
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_79) {
@@ -2123,6 +2131,7 @@ export function loadSaveV2(
   }
   if (schemaVersion === 22
     && parsed.rulesVersion !== V2_RULES_VERSION
+    && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_82
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_81
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_80
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_79
@@ -2138,6 +2147,7 @@ export function loadSaveV2(
   // those would resurrect defeated nations and break its canonical hash.
   if (legacyV7Content) hydrateNewContentAfterAuthenticationV2(state, content);
   if (parsed.rulesVersion !== V2_RULES_VERSION
+    && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_82
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_81
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_80
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_79
@@ -2195,6 +2205,7 @@ export function loadSaveV2(
   // rebuild the legacy research object. The final current state has exactly
   // five category directions and never retains the former global focus.
   if (parsed.rulesVersion !== V2_RULES_VERSION
+    && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_82
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_81) {
     migrateResearchDirectionsV2(state);
   }

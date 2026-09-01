@@ -28,7 +28,11 @@ import {
   DEFENSE_RESEARCH_HALF_SATURATION,
   DEFENSE_RESEARCH_MAX_BONUS,
   diminishingResearchLevelV2,
+  ECONOMY_ANNUAL_GROWTH_MAX,
+  ECONOMY_ANNUAL_GROWTH_MIN,
+  economyResearchGrowthRateV2,
   effectiveDefenseStatV2,
+  NATIONAL_IQ_EFFECTIVE_SCORE_MAX,
   NATIONAL_IQ_RESEARCH_HALF_SATURATION,
   NATIONAL_IQ_RESEARCH_MAX_BONUS,
   OPERATING_EFFICIENCY_RESEARCH_EFFECTIVE_CEILING,
@@ -37,6 +41,9 @@ import {
   TAX_EFFICIENCY_RESEARCH_BONUS_PER_EFFECTIVE_LEVEL,
   TAX_EFFICIENCY_RESEARCH_EFFECTIVE_CEILING,
   TAX_EFFICIENCY_RESEARCH_HALF_SATURATION,
+  populationResearchAdjustedAnnualRateV2,
+  researchEfficiencyDiscountV2,
+  researchSpeedBonusV2,
   V2_CALENDAR_DAYS_PER_TICK,
   V2_CALENDAR_DAYS_PER_YEAR,
   WAR_MOBILIZATION_TICKS,
@@ -100,6 +107,7 @@ import {
   selectNationalEconomyV2,
   selectNationalIqViewV2,
   selectPopulationDynamicsV2,
+  selectPopulationBaselineNetRateV2,
   projectNationalIqFusionV2,
   selectResearchDriversV2,
   selectResearchEffectImpactV2,
@@ -502,7 +510,7 @@ const RESEARCH_EFFECT_COPY: Readonly<Record<ResearchEffectV2, Readonly<{
   name: string;
   description: string;
 }>>> = Object.freeze({
-  'population-growth': { name: 'Civil Renewal', description: 'Accelerate the population base that feeds your economy and Army.' },
+  'population-growth': { name: 'Civil Renewal', description: 'Modestly improve the natural demographic trend; gains flatten at every level.' },
   training: { name: 'Professional Command', description: 'Turn available manpower into trained soldiers faster.' },
   'force-capacity': { name: 'Expanded Force Structure', description: 'Raise the maximum active Army your Empire can sustain.' },
   'reinforcement-efficiency': { name: 'Modular Arsenals', description: 'Reduce the treasury cost of replacing combat losses.' },
@@ -511,9 +519,9 @@ const RESEARCH_EFFECT_COPY: Readonly<Record<ResearchEffectV2, Readonly<{
   'casualty-reduction': { name: 'Force Protection', description: 'Lose fewer trained soldiers in every combat exchange.' },
   recovery: { name: 'Field Medicine', description: 'Reduce preventable deaths and preserve national manpower.' },
   supply: { name: 'Strategic Logistics', description: 'Improve the supply systems supporting your armed forces.' },
-  'economy-growth': { name: 'Industrial Modernisation', description: 'Increase long-term national economic growth.' },
-  'research-speed': { name: 'Open Science Network', description: 'Generate more research progress from the same daily budget.' },
-  'research-efficiency': { name: 'Lean Laboratories', description: 'Reduce the cost of every future breakthrough.' },
+  'economy-growth': { name: 'Industrial Modernisation', description: 'Add bounded long-term GDP growth without creating a runaway economy.' },
+  'research-speed': { name: 'Open Science Network', description: 'Generate more progress from the same budget, with diminishing returns.' },
+  'research-efficiency': { name: 'Lean Laboratories', description: 'Reduce future breakthrough costs, capped at a 20% saving.' },
   'food-production': { name: 'Domestic Production', description: 'Strengthen the Empire supply base.' },
   'food-storage': { name: 'Strategic Reserves', description: 'Improve recovery through deeper national reserves.' },
   'reserve-training': { name: 'Reserve Academies', description: 'Train reserve formations faster.' },
@@ -540,7 +548,11 @@ interface ResearchEffectDisplayContextV2 {
   researchConversion: number;
   baseDefense: number;
   combinedMultiplier: number;
-  iqResearchBonus: number;
+  iqBaselineScore: number;
+  populationBaselineNetRate: number;
+  economyAnnualGrowthRate: number;
+  economyResearchGrowthRate: number;
+  economyGrowthIqMultiplier: number;
 }
 
 function researchEffectTotal(
@@ -567,16 +579,54 @@ function researchEffectTotal(
   if (effect === 'recovery') return percent(-20 * level / (level + 46.67), ' deaths');
   if (effect === 'training') return percent(2 * diminishingResearchLevelV2(level, 30, 20), ' speed');
   if (effect === 'reinforcement-efficiency') return percent(-diminishingResearchLevelV2(level), ' cost');
-  if (effect === 'research-efficiency') return percent(-diminishingResearchLevelV2(level), ' R&D cost');
-  if (effect === 'economy-growth') return percent(0.06 * level * impact, '/yr growth');
-  if (effect === 'population-growth') return percent(0.5 * level * impact, ' base growth');
+  if (effect === 'research-efficiency') return percent(
+    -100 * researchEfficiencyDiscountV2(level),
+    ' R&D cost',
+  );
+  if (effect === 'economy-growth') {
+    const researchedRate = economyResearchGrowthRateV2(level, impact)
+      * (context?.economyGrowthIqMultiplier ?? 1);
+    const withoutResearch = context
+      ? clamp(
+        context.economyAnnualGrowthRate - context.economyResearchGrowthRate,
+        ECONOMY_ANNUAL_GROWTH_MIN,
+        ECONOMY_ANNUAL_GROWTH_MAX,
+      )
+      : 0;
+    const withResearch = clamp(
+      withoutResearch + researchedRate,
+      ECONOMY_ANNUAL_GROWTH_MIN,
+      ECONOMY_ANNUAL_GROWTH_MAX,
+    );
+    const annualPointGain = (
+      calendarAnnualGrowthRateV2(withResearch)
+        - calendarAnnualGrowthRateV2(withoutResearch)
+    ) * 100;
+    return `${signed(annualPointGain, annualPointGain < 0.01 ? 3 : 2)} pp/yr GDP growth`;
+  }
+  if (effect === 'population-growth') {
+    const baselineRate = context?.populationBaselineNetRate ?? 0;
+    const researchedRate = populationResearchAdjustedAnnualRateV2(
+      baselineRate,
+      level,
+      impact,
+    );
+    const annualPointGain = (
+      calendarAnnualGrowthRateV2(researchedRate)
+        - calendarAnnualGrowthRateV2(baselineRate)
+    ) * 100;
+    return `${signed(annualPointGain, annualPointGain < 0.01 ? 3 : 2)} pp/yr natural growth`;
+  }
   if (effect === 'force-capacity') return percent(level, ' capacity');
   if (effect === 'attack') return percent(
     level * (context?.researchConversion ?? 1),
     ' effective ATK',
   );
   if (effect === 'supply') return percent(level, ' supply');
-  if (effect === 'research-speed') return percent(level, ' R&D speed');
+  if (effect === 'research-speed') return percent(
+    100 * researchSpeedBonusV2(level),
+    ' R&D speed',
+  );
   // Legacy save keys are migrated into Training and Force Capacity. Keeping a
   // readable fallback here prevents old snapshots from surfacing reserve UI.
   if (effect === 'reserve-training') return percent(2 * diminishingResearchLevelV2(level, 30, 20), ' speed');
@@ -593,13 +643,20 @@ function researchEffectTotal(
         OPERATING_EFFICIENCY_RESEARCH_HALF_SATURATION),
     ' base cost',
   );
-  if (effect === 'iq-increase') return `${signed(
-    context?.iqResearchBonus ?? diminishingResearchLevelV2(
+  if (effect === 'iq-increase') {
+    const uncappedBonus = diminishingResearchLevelV2(
       level,
       NATIONAL_IQ_RESEARCH_MAX_BONUS,
       NATIONAL_IQ_RESEARCH_HALF_SATURATION,
-    ), 1,
-  )} IQ`;
+    );
+    const bonus = context
+      ? Math.min(
+        uncappedBonus,
+        Math.max(0, NATIONAL_IQ_EFFECTIVE_SCORE_MAX - context.iqBaselineScore),
+      )
+      : uncappedBonus;
+    return `${signed(bonus, 1)} IQ`;
+  }
   return percent(level);
 }
 
@@ -3853,7 +3910,15 @@ export class WorldUIV2 {
       researchConversion: nationalQuality?.researchConversion ?? 1,
       baseDefense: nationalArmy.baseDefense,
       combinedMultiplier: nationalQuality?.combinedMultiplier ?? 1,
-      iqResearchBonus: liveIq.researchBonus,
+      iqBaselineScore: liveIq.baselineScore,
+      populationBaselineNetRate: selectPopulationBaselineNetRateV2(
+        this.engine.state,
+        this.engine.content,
+        human.id,
+      ),
+      economyAnnualGrowthRate: finance.annualEconomyGrowthRate,
+      economyResearchGrowthRate: finance.economyResearchGrowthRate,
+      economyGrowthIqMultiplier: liveIq.economyGrowthMultiplier,
     };
     const portfolio = this.engine.researchPortfolio(human.id, finance);
     const research = this.engine.state.players[human.id]!.research;
@@ -3947,10 +4012,10 @@ export class WorldUIV2 {
                ? `ACTIVE · ${cardProgress}%${cardDays ? ` · ${cardDays}D` : ''}`
                : program.progress > 0
                  ? direction.branch === activeDirection.branch
-                   ? `SELECT · SHARES ${cardProgress}% BRANCH PROGRESS`
+                   ? `SELECT · ${cardProgress}% SHARED`
                    : `SELECT · ${cardProgress}% SAVED`
-                 : 'SELECT DIRECTION';
-         return `<button type="button" class="research-direction-card research-choice-card--${visual.tone} ${isActive ? 'is-active' : ''} ${isPending ? 'is-pending' : ''} ${program.maxed ? 'is-maxed' : ''}" style="--project:${RESEARCH_COLORS[direction.branch]}" data-action="set-research-direction" data-category="${pillar.id}" data-branch="${direction.branch}" data-effect="${direction.effect}" aria-pressed="${isActive ? 'true' : 'false'}" ${researchOrderPending || isActive || program.maxed ? 'disabled aria-disabled="true"' : ''} ${isPending ? 'aria-busy="true"' : ''} aria-label="${escapeHtml(pillar.label)}: ${escapeHtml(copy.name)}. ${escapeHtml(transition)}"><header><i aria-hidden="true">${visual.icon}</i><span>${escapeHtml(RESEARCH_META[direction.branch].shortLabel)} · ${escapeHtml(researchEffectLabel(direction.effect))}</span><b>${isActive ? '●' : '○'}</b></header><strong>${escapeHtml(copy.name)}</strong><p>${escapeHtml(copy.description)}</p><small>${escapeHtml(transition)}</small><em>${status}</em>${isActive ? `<i class="research-direction-progress"><b style="width:${cardProgress}%"></b></i>` : ''}</button>`;
+                 : 'SELECT';
+         return `<button type="button" class="research-direction-card research-choice-card--${visual.tone} ${isActive ? 'is-active' : ''} ${isPending ? 'is-pending' : ''} ${program.maxed ? 'is-maxed' : ''}" style="--project:${RESEARCH_COLORS[direction.branch]}" data-action="set-research-direction" data-category="${pillar.id}" data-branch="${direction.branch}" data-effect="${direction.effect}" aria-pressed="${isActive ? 'true' : 'false'}" ${researchOrderPending || isActive || program.maxed ? 'disabled aria-disabled="true"' : ''} ${isPending ? 'aria-busy="true"' : ''} aria-label="${escapeHtml(pillar.label)}: ${escapeHtml(copy.name)}. ${escapeHtml(copy.description)} ${escapeHtml(transition)}"><header><i aria-hidden="true">${visual.icon}</i><span>${escapeHtml(RESEARCH_META[direction.branch].shortLabel)} · ${escapeHtml(researchEffectLabel(direction.effect))}</span><b>${isActive ? '●' : '○'}</b></header><strong>${escapeHtml(copy.name)}</strong><small>${escapeHtml(transition)}</small><em>${status}</em>${isActive ? `<i class="research-direction-progress"><b style="width:${cardProgress}%"></b></i>` : ''}</button>`;
       }).join('');
       const surgeTitle = researchOrderPending
         ? 'Another research order is awaiting confirmation.'
@@ -3958,29 +4023,22 @@ export class WorldUIV2 {
       const laneStatus = activeProgram.maxed
         ? 'MASTERED · AUTO-SWITCH'
         : activeProgram.weeklyProgress > 0 ? 'AUTO RESEARCH' : 'NO FUNDED OUTPUT';
-      return `<section class="research-category-row" style="--project:${RESEARCH_COLORS[activeDirection.branch]}"><header><i aria-hidden="true">${pillar.icon}</i><div><strong>${pillar.label}</strong><small>${pillar.purpose}</small></div><b>${format(activeProgram.weeklyProgress, 2)}/DAY</b></header><div class="research-category-status"><span>${laneStatus}</span><strong>${escapeHtml(RESEARCH_EFFECT_COPY[activeDirection.effect].name)}</strong><small>${activeProgress}%${activeDays ? ` · next level in about ${activeDays} days` : ''}</small><button type="button" class="secondary-button research-surge-button" data-action="research-surge" data-branch="${activeDirection.branch}" ${researchOrderPending || !surgeTerms.allowed ? 'disabled aria-disabled="true"' : ''} ${researchOrderPending ? 'aria-busy="true"' : ''} title="${escapeHtml(surgeTitle)}">INITIATIVE · ${cash(surgeTerms.cost)}</button></div><div class="research-direction-grid">${directionCards}</div></section>`;
+      return `<section class="research-category-row" style="--project:${RESEARCH_COLORS[activeDirection.branch]}"><header><i aria-hidden="true">${pillar.icon}</i><div><strong>${pillar.label}</strong></div><b>${format(activeProgram.weeklyProgress, 2)}/DAY</b></header><div class="research-category-status"><span>${laneStatus}</span><strong>${escapeHtml(RESEARCH_EFFECT_COPY[activeDirection.effect].name)}</strong><small>${activeProgress}%${activeDays ? ` · ~${activeDays}D` : ''}</small><button type="button" class="secondary-button research-surge-button" data-action="research-surge" data-branch="${activeDirection.branch}" ${researchOrderPending || !surgeTerms.allowed ? 'disabled aria-disabled="true"' : ''} ${researchOrderPending ? 'aria-busy="true"' : ''} title="${escapeHtml(surgeTitle)}">INITIATIVE · ${cash(surgeTerms.cost)}</button></div><div class="research-direction-grid">${directionCards}</div></section>`;
     }).join('');
     const heroStatus = nextCompletion
-      ? `NEXT · ${escapeHtml(RESEARCH_EFFECT_COPY[nextCompletion.direction.effect].name)} · ~${nextCompletion.days}D`
+      ? `${escapeHtml(RESEARCH_EFFECT_COPY[nextCompletion.direction.effect].name)} · ~${nextCompletion.days}D`
       : runningCategories === 0 ? 'NO FUNDED OUTPUT' : 'PORTFOLIO STABLE';
-    const hero = `<section class="research-blueprint-hero research-portfolio-hero is-active" style="--project:#b59cff"><header><span>AUTOMATIC EMPIRE PORTFOLIO</span><b>${activeViews.length}/${RESEARCH_CATEGORIES.length} DIRECTIONS SET · ${runningCategories} FUNDED</b></header><h3>Five directions develop in parallel</h3><p>Select one path in every category. Completed levels apply immediately and the next level starts automatically; switching direction preserves its branch progress.</p><i role="progressbar" aria-label="Average research progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${averageProgress}"><b style="width:${averageProgress}%"></b></i><footer><span>Average cycle ${averageProgress}%</span><b>${heroStatus}</b></footer></section>`;
+    const compactSummary = `<section class="research-compact-summary" aria-label="Research portfolio status"><article><span>PORTFOLIO</span><strong>${activeViews.length}/${RESEARCH_CATEGORIES.length} ACTIVE · ${runningCategories} FUNDED</strong></article><article><span>NEXT</span><strong>${heroStatus}</strong></article><article><span>OUTPUT</span><strong>${format(dailyOutput, 2)}/DAY · ${portfolioThroughput}% USEFUL</strong></article><article><span>LEVELS</span><strong>${totalCompleted}</strong></article><i role="progressbar" aria-label="Average research progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${averageProgress}"><b style="width:${averageProgress}%"></b></i></section>`;
     return `
       <aside class="world-panel command-drawer glass-panel progress-command research-command command-drawer--clean command-drawer--unified command-drawer--decision" data-scroll-session="${drawerScrollSessionId('research')}">
         <button class="panel-close" data-action="close-panel" aria-label="Close research">×</button>
         <div class="drawer-heading drawer-heading--compact drawer-heading--single"><div><span class="panel-kicker">DIRECT THE WHOLE EMPIRE</span><h2>Research · Strategic Matrix</h2></div><strong class="${researchOrderPending ? 'is-warning' : 'is-positive'}" aria-live="polite">${researchOrderPending ? 'ORDER QUEUED' : `${activeViews.length}/${RESEARCH_CATEGORIES.length} ACTIVE`}</strong></div>
 
-        ${hero}
+        ${compactSummary}
 
-         <section class="decision-stat-grid decision-stat-grid--research" aria-label="Research status">
-           <article class="is-primary"><span>ACTIVE DIRECTIONS</span><strong>${activeViews.length}/${RESEARCH_CATEGORIES.length}</strong><small>${runningCategories} funded now</small></article>
-           <article><span>NEXT COMPLETION</span><strong>${nextCompletion ? `~${nextCompletion.days}D` : '—'}</strong><small>${nextCompletion ? escapeHtml(RESEARCH_EFFECT_COPY[nextCompletion.direction.effect].name) : 'No funded completion'}</small></article>
-           <article><span>COMPLETED LEVELS</span><strong>${totalCompleted}</strong><small>Permanent Empire upgrades</small></article>
-           <article class="${finance.warResearchPenalty > 0 ? 'is-warn' : 'is-good'}"><span>USEFUL THROUGHPUT</span><strong>${portfolioThroughput}%</strong><small>${finance.warResearchPenalty > 0 ? `${format(finance.warResearchPenalty * 100, 1)}% wartime drag` : '20% overhead limits runaway power'}</small></article>
-         </section>
+         <section class="research-driver-strip" aria-label="Economy and IQ research impact"><article class="is-economy"><i aria-hidden="true">GDP</i><div><span>${cash(economy.controlledOutput)} GDP · ${cash(annual(finance.research))}/YR R&amp;D</span><strong>+${format(researchDrivers.economyExpansionShare * 100, 0)}% FUNDS → ${signed(economyExpansionGain, 2)}%/DAY</strong></div></article><article class="is-iq"><i aria-hidden="true">IQ</i><div><span>${format(researchDrivers.iqScore, 1)} LIVE · ×${format(researchDrivers.iqOutputMultiplier, 3)} OUTPUT</span><strong>${researchDrivers.iqStepPoints > 0 ? `+${format(researchDrivers.iqStepPoints, 1)} IQ → ${signed(iqStepGain, 2)}%/DAY` : 'RESEARCH IQ MAXED'}</strong></div></article></section>
 
-         <section class="research-driver-panel" aria-label="Economy and IQ research impact"><header><span>WHAT POWERS YOUR RESEARCH</span><small>See what expansion and education can actually add</small></header><div class="research-driver-grid"><article class="is-economy"><header><i aria-hidden="true">GDP</i><div><span>ECONOMY ENGINE</span><strong>${cash(economy.controlledOutput)} integrated output</strong></div></header><div class="research-driver-flow"><span><small>FUNDED R&amp;D · ${format(researchDrivers.fundingRatio * 100, 0)}% ACTIVE</small><b>${cash(annual(finance.research))}/YR</b></span><i aria-hidden="true">→</i><span><small>ACTIVE PORTFOLIO · 80% CAP</small><b>${format(dailyOutput, 2)}/DAY</b></span></div><footer><span>IF FUNDED R&amp;D +${format(researchDrivers.economyExpansionShare * 100, 0)}%</span><strong>${signed(economyExpansionGain, 2)}% research/day</strong></footer></article><article class="is-iq"><header><i aria-hidden="true">IQ</i><div><span>INTELLIGENCE ENGINE</span><strong>${format(researchDrivers.iqScore, 1)} live national IQ</strong></div></header><div class="research-driver-flow"><span><small>INSTITUTIONS</small><b>×${format(researchDrivers.institutionalCapacity, 3)}</b></span><i aria-hidden="true">→</i><span><small>TOTAL IQ EFFECT</small><b>×${format(researchDrivers.iqOutputMultiplier, 3)}</b></span></div><footer><span>EDUCATION UPSIDE</span><strong>${researchDrivers.iqStepPoints > 0 ? `+${format(researchDrivers.iqStepPoints, 1)} IQ → ${signed(iqStepGain, 2)}% research/day` : 'IQ research ceiling reached'}</strong></footer></article></div><p><b>Expansion rule:</b> integrated GDP increases the money available for R&amp;D. Integrated population also changes your fused IQ after Signal Purge, so a territory can raise or lower the IQ side of this equation. The +25% economy quote is a funding scenario, not a target forecast.</p></section>
-
-         <section class="research-blueprint research-matrix" aria-label="Empire research categories"><header><span>FIVE PARALLEL CATEGORIES</span><small>One active direction in every category · completion never pauses</small></header><div class="research-category-grid">${categoryRows}</div></section>
+         <section class="research-blueprint research-matrix" aria-label="Empire research categories"><header><span>CHOOSE 1 PER CATEGORY</span><small>AUTO-CONTINUES · PROGRESS SAVED</small></header><div class="research-category-grid">${categoryRows}</div></section>
 
         <details class="decision-details research-special-lane" data-disclosure-session="drawer:research:polar"><summary>Special project lane <b>NORTH POLE</b></summary><div class="decision-details__body">${this.renderPolarResearchItem(human)}</div></details>
         <details class="decision-details" data-disclosure-session="drawer:research:completed-effects"><summary>Completed effects <b>${totalCompleted} upgrades</b></summary><div class="decision-details__body"><section class="research-effects" aria-labelledby="research-effects-title"><header><span class="section-label" id="research-effects-title">ACTIVE EFFECTS</span></header><div class="upgrade-total-grid">${upgradeTotals}${polarCompletedEffects}${!upgradeTotals && !polarCompletedEffects ? '<div class="empty-state">No completed research effects yet.</div>' : ''}</div></section></div></details>

@@ -154,21 +154,30 @@ describe('command UI information architecture', () => {
     }
     expect(research).toContain('${this.renderPolarResearchItem(human)}');
     expect(research).toContain('Research · Strategic Matrix');
-    expect(research).toContain('AUTOMATIC EMPIRE PORTFOLIO');
-    expect(research).toContain('Five directions develop in parallel');
-    expect(research).toContain('FIVE PARALLEL CATEGORIES');
-    expect(research).toContain('One active direction in every category · completion never pauses');
-    expect(research).toContain('Completed levels apply immediately and the next level starts automatically');
-    expect(research).toContain('WHAT POWERS YOUR RESEARCH');
-    expect(research).toContain('ACTIVE PORTFOLIO · 80% CAP');
-    expect(research).toContain('TOTAL IQ EFFECT');
-    expect(research).toContain('IF FUNDED R&amp;D +');
-    expect(research).toContain('next level in about ${activeDays} days');
+    expect(research).toContain('research-compact-summary');
+    expect(research).toContain('<span>PORTFOLIO</span>');
+    expect(research).toContain('<span>OUTPUT</span>');
+    expect(research).toContain('research-driver-strip');
+    expect(research).toContain('% FUNDS → ${signed(economyExpansionGain, 2)}%/DAY');
+    expect(research).toContain('IQ → ${signed(iqStepGain, 2)}%/DAY');
+    expect(research).toContain('CHOOSE 1 PER CATEGORY');
+    expect(research).toContain('AUTO-CONTINUES · PROGRESS SAVED');
+    expect(research).toContain('${activeProgress}%${activeDays ? ` · ~${activeDays}D` : \'\'}');
     expect(research).toContain('RESEARCH_CATEGORY_DIRECTIONS[pillar.id].map');
     expect(research).toContain('data-action="set-research-direction"');
     expect(research).toContain('RESEARCH_PILLARS.map');
     expect(research).toContain('Special project lane <b>NORTH POLE</b>');
     expect(research).toContain('Completed effects');
+    expect(worldUiSource).toContain('pp/yr natural growth');
+    expect(worldUiSource).toContain('pp/yr GDP growth');
+    expect(worldUiSource).toContain('researchSpeedBonusV2(level)');
+    expect(worldUiSource).toContain('researchEfficiencyDiscountV2(level)');
+    expect(worldUiSource).toContain('NATIONAL_IQ_EFFECTIVE_SCORE_MAX - context.iqBaselineScore');
+    expect(worldUiSource).not.toContain("' base growth'");
+    expect(research).not.toContain('${pillar.purpose}');
+    expect(research).not.toContain('<p>${escapeHtml(copy.description)}</p>');
+    expect(research).not.toContain('Expansion rule:');
+    expect(research).not.toContain('Five directions develop in parallel');
     expect(research).not.toMatch(/BREAKTHROUGH READY|CHOICE READY|nothing is awarded automatically/i);
     expect(research).not.toContain('data-action="choose-research-breakthrough"');
     expect(research).not.toContain('data-action="set-research-focus"');
@@ -180,15 +189,16 @@ describe('command UI information architecture', () => {
     expect(polar).toContain('terms.durationTicks');
     expect(polar).not.toMatch(/20W|OPTIONAL INTELLIGENCE|OPEN INVESTIGATION/);
 
-    const matrixStart = stylesSource.indexOf('/* Desktop-first parallel research matrix. */');
+    const matrixStart = stylesSource.indexOf('/* Desktop-first compact parallel research matrix. */');
     const matrixEnd = stylesSource.indexOf('@media (max-width: 1080px)', matrixStart);
     const matrixStyles = stylesSource.slice(matrixStart, matrixEnd);
     expect(matrixStart).toBeGreaterThan(0);
     expect(matrixEnd).toBeGreaterThan(matrixStart);
     expect(matrixStyles).toContain('.world-ui-v2 .research-direction-card > strong');
     expect(matrixStyles).toContain('font-size: 14px;');
-    expect(matrixStyles).toContain('.world-ui-v2 .research-direction-card > p');
-    expect(matrixStyles).not.toMatch(/font-size:\s*[789]px/);
+    expect(matrixStyles).toMatch(/\.research-direction-card > small \{[^}]*font-size: 11px;/s);
+    expect(matrixStyles).toMatch(/\.research-direction-card > em \{[^}]*font-size: 11px;/s);
+    expect(matrixStyles).not.toMatch(/font-size:\s*(?:[789]|10)px/);
   });
 
   it('keeps territory inspection power-first and EONSCAR status read-only', () => {

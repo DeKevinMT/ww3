@@ -262,32 +262,27 @@ Army redistribution moves manpower through owned routes while conserving total m
 
 ## 8. Automatic Development portfolio
 
-All ten programs are active at the same time. There is no exclusive focus, separate upgrade currency or manual quality/volume slider. Every national AI reassesses its target portfolio every eight weeks according to active Army fill, technology gap, administration, live IQ, economy and current wars. The saved allocation then moves only two to four percentage points toward that target, using the same IQ-scaled transition limit as the budget. The Progress drawer shows the total completed level of every Empire-wide effect, separate from progress toward the next breakthrough.
+Research runs as five parallel categories: People, Army, Combat, Sustainment and State. Each category has exactly one selected direction and three authored choices. A completed level applies immediately and the same direction continues automatically; changing direction preserves the underlying branch progress. There is no blocking post-completion choice or separate upgrade currency. The Research Matrix shows all fifteen directions, their current-to-next effect, five live progress tracks, completed effect levels, GDP-funded output and the bounded national-IQ contribution.
 
-| Program | Seeded-random +1% result |
+| Category | Three selectable directions |
 | --- | --- |
-| Population & Recruitment | Population Growth or Training |
-| Military Industry | Force Capacity or Reinforcement Efficiency |
-| Advanced Weapons | Attack or Control |
-| Defensive Systems | Defense or Casualty Reduction |
-| Logistics & Medicine | Recovery or Supply |
-| Economy & Science | Economy Growth, Research Speed or Research Efficiency |
-| Sustainment Systems | Supply or Recovery |
-| Force Doctrine (legacy branch id retained) | Training or Force Capacity |
-| Public Administration | Tax Efficiency or Operating Efficiency |
-| Education & Intelligence | Live IQ Increase |
+| People | Civil Renewal, National Learning Grid, Open Science Network |
+| Army | Professional Command, Expanded Force Structure, Modular Arsenals |
+| Combat | Precision Weapons, Layered Defence, Force Protection |
+| Sustainment | Field Medicine, Strategic Logistics, Efficient State |
+| State | Industrial Modernisation, Lean Laboratories, Revenue Modernisation |
 
-Thirty percent of the Research pot is the equal passive baseline: 3% for each branch. The remaining 70% follows the exact-100 allocation. Every branch stores its own progress and breakthrough count. Education & Intelligence costs roughly six ordinary first-tier programs, raises live IQ with diminishing returns and cannot push the score above 112.
+Every selected category receives 16% of national research output. The remaining 20% is portfolio overhead, so five simultaneous lanes cannot multiply the former single-track throughput. Every branch stores its own progress and breakthrough count. Research output blends funded R&D, bounded institutional capacity, live IQ, a bounded catch-up factor and wartime disruption. Education & Intelligence costs roughly six ordinary first-tier programs, raises live IQ with diminishing returns and cannot push the score above 112.
 
 The requirement for a branch with `B` completed breakthroughs follows the deterministic mastery curve:
 
 ```text
-branchBaseRP × 0.45 × (B + 1) × 1.18^B
-  × bounded power catch-up
-  × research-efficiency modifier
+branchBaseRP × 0.55 × bounded national-capacity multiplier
+  × (B + 1) × 1.18^B
+  × bounded research-efficiency discount
 ```
 
-Research may improve indefinitely, while the exponential requirement slows extreme late-game growth. The active player UI contains no Research Surge request button or modal; Development advances only through the visible recurring portfolio in normal play. Compatibility fields and engine commands may remain canonical for deterministic loading and replay, but they are not a player purchase surface.
+Stored effect levels may increase indefinitely, while their costs grow exponentially and sensitive effects flatten or stop at explicit limits. Civil Renewal is relative to the natural population trend—not an absolute annual growth grant—and its card reports the real calendar-year percentage-point gain. Industrial Modernisation is bounded to `0.003` in the simulation growth rate before calendar presentation. Open Science approaches at most `+15%` ordinary research output, Lean Laboratories cannot reduce a project by more than `20%`, and National Learning Grid approaches `+8 IQ` without exceeding live IQ 112. Existing authenticated saves keep every level, direction and progress value when a newer balance curve is applied. A visible National Initiative may buy a costly one-time progress push without changing the selected direction or bypassing the next escalating requirement.
 
 ## 9. War declaration, access and costs
 
