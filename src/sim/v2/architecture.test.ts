@@ -5,6 +5,11 @@ import { ANTARCTIC_TERRITORY_IDS_V2, ROGUE_AI_NATION_ID_V2, WORLD_CONTENT_V2 } f
 import { COUNTRIES, TERRITORIES, isSeaConnection, validateMap } from '../../game/data/worldMap';
 import { assertInvariantsV2 } from './invariants';
 import { canonicalStateHashV2, createSaveV2, loadSaveV2, type SaveGameV2 } from './persistence';
+import {
+  RESEARCH_CATEGORIES,
+  RESEARCH_CATEGORY_DIRECTIONS,
+  researchDirectionIsValidV2,
+} from './researchDirections';
 import { nationIdV2, territoryIdV2 } from './types';
 
 describe('V2 canonical architecture', () => {
@@ -73,20 +78,30 @@ describe('V2 canonical architecture', () => {
       'baseAttack', 'baseDefense', 'capacity', 'manpower',
     ]);
     expect(Object.keys(nation.research).sort()).toEqual([
-      'activeProgram', 'allocations', 'breakthroughs', 'effectLevels', 'progress',
+      'activeProgram', 'allocations', 'breakthroughs', 'categoryDirections', 'effectLevels', 'progress',
     ]);
+    expect(nation.research.activeProgram).toBeNull();
+    expect(Object.keys(nation.research.categoryDirections).sort())
+      .toEqual([...RESEARCH_CATEGORIES].sort());
+    for (const category of RESEARCH_CATEGORIES) {
+      expect(RESEARCH_CATEGORY_DIRECTIONS[category]).toHaveLength(3);
+      expect(researchDirectionIsValidV2(
+        category,
+        nation.research.categoryDirections[category],
+      )).toBe(true);
+    }
     expect(nation.budget).toEqual(DEFAULT_BUDGET_V2);
   });
 
   it('uses only the normative research pools and omits derived/UI state from saves', () => {
     expect(RESEARCH_BRANCH_EFFECTS).toEqual({
-      'population-recruitment': ['population-growth', 'training'],
+      'population-recruitment': ['population-growth', 'training', 'research-speed'],
       'military-industry': ['force-capacity', 'reinforcement-efficiency'],
       'advanced-weapons': ['attack', 'reinforcement-efficiency'],
       'defensive-systems': ['defense', 'casualty-reduction'],
       'logistics-medicine': ['recovery', 'supply'],
       'economy-science': ['economy-growth', 'research-speed', 'research-efficiency'],
-      'food-systems': ['supply', 'recovery'],
+      'food-systems': ['supply', 'recovery', 'operating-efficiency'],
       'reserve-doctrine': ['training', 'force-capacity'],
       'public-administration': ['tax-efficiency', 'operating-efficiency'],
       'education-intelligence': ['iq-increase'],
@@ -120,5 +135,20 @@ describe('V2 canonical architecture', () => {
     save.truces.push({ leftId: nationIdV2('missing'), rightId: nationIdV2('bel'), expiresTick: 12 });
     save.canonicalStateHash = canonicalStateHashV2(save);
     expect(() => loadSaveV2(save, WORLD_CONTENT_V2)).toThrow(/invalid references/);
+  });
+
+  it('rejects a revived single focus or a cross-category research direction', () => {
+    const focused = structuredClone(createSaveV2(createWorldStateV2(6), WORLD_CONTENT_V2));
+    focused.players[nationIdV2('bel')].research.activeProgram = 'advanced-weapons';
+    focused.canonicalStateHash = canonicalStateHashV2(focused);
+    expect(() => loadSaveV2(focused, WORLD_CONTENT_V2)).toThrow(/retired single-focus/i);
+
+    const crossed = structuredClone(createSaveV2(createWorldStateV2(7), WORLD_CONTENT_V2));
+    crossed.players[nationIdV2('bel')].research.categoryDirections.people = {
+      branch: 'economy-science',
+      effect: 'research-efficiency',
+    };
+    crossed.canonicalStateHash = canonicalStateHashV2(crossed);
+    expect(() => loadSaveV2(crossed, WORLD_CONTENT_V2)).toThrow(/invalid people research direction/i);
   });
 });

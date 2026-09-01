@@ -7,6 +7,7 @@ import {
   clamp,
   round,
 } from './balance';
+import { createDefaultResearchDirectionsV2 } from './researchDirections';
 import type { WorldContentV2 } from './content';
 import { calculateBlendedFiscalCapacityV2 } from './fiscal';
 import { OPENING_ARMY_BONUS_DURATION_TICKS_V2 } from './openingArmyBonus';
@@ -183,6 +184,7 @@ export function createNationStateV2(
     research: {
       allocations: { ...DEFAULT_RESEARCH_ALLOCATIONS_V2 },
       activeProgram: null,
+      categoryDirections: createDefaultResearchDirectionsV2(),
       progress: { ...EMPTY_RESEARCH_PROGRESS },
       effectLevels: { ...EMPTY_RESEARCH_EFFECT_LEVELS },
       breakthroughs: { ...EMPTY_RESEARCH_BREAKTHROUGHS },

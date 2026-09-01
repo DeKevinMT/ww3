@@ -30,11 +30,13 @@ export function authorizeMultiplayerCommandV2(
         ? allowed() : rejected('The Survival flagship must be your own country.');
     case 'deploy-antarctic-expedition':
       return rejected('Antarctic expeditions were retired; use normal wars and logistics.');
+    case 'choose-research-breakthrough':
+      return rejected('Post-completion research choices were retired; set a research direction instead.');
     case 'set-speed':
       return isRoomHost ? allowed() : rejected('Only the room host can change the shared game speed.');
     case 'set-research-allocations':
     case 'set-research-focus':
-    case 'choose-research-breakthrough':
+    case 'set-research-direction':
     case 'set-commander-priorities':
     case 'issue-commander-order':
     case 'adjust-budget':

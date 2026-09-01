@@ -1,12 +1,13 @@
 import type { SaveGameV2 } from '../sim/v2/persistence';
 import { RESEARCH_BRANCHES } from '../sim/v2/balance';
-import { researchEffectBelongsToBranchV2 } from '../sim/v2/research';
+import { researchCategoryForDirectionV2 } from '../sim/v2/researchDirections';
 import { normalizeScenarioConfigV2, type ScenarioConfigV2 } from '../sim/v2/scenarios';
 import { APEX_TRANSMISSION_IDS_V2 } from '../sim/v2/types';
 import type {
   CommanderForceInitializationV2,
   PlayerId,
   ResearchBranchV2,
+  ResearchCategoryV2,
   ResearchEffectV2,
   WorldCommandV2,
   WorldSpeedV2,
@@ -15,7 +16,7 @@ import type { CountryMasteryRuntimeModifiersV2 } from '../sim/v2/countryMasteryR
 import { APEX_EMPIRE_ANNUAL_FOOD_OUTPUT_CAP_V2 } from '../sim/v2/commanderForce';
 import type { EmpireFlagIdentityV1 } from '../meta/commanderProfile';
 
-export const MULTIPLAYER_PROTOCOL_VERSION = 7 as const;
+export const MULTIPLAYER_PROTOCOL_VERSION = 8 as const;
 export const MULTIPLAYER_DEPLOYMENT_SCHEMA_VERSION = 1 as const;
 export const MIN_MULTIPLAYER_PLAYERS = 2;
 export const MAX_MULTIPLAYER_PLAYERS = 8;
@@ -723,24 +724,24 @@ function validateWorldCommand(value: unknown): WorldCommandV2 {
       }
       break;
     }
-    case 'choose-research-breakthrough': {
+    case 'set-research-direction': {
       requireExactKeys(
         command,
-        ['branch', 'effect', 'playerId', 'type'],
-        'Research breakthrough commands',
+        ['branch', 'category', 'effect', 'playerId', 'type'],
+        'Research direction commands',
       );
       requirePlayerId(command.playerId, 'command.playerId');
-      if (typeof command.branch !== 'string' || !RESEARCH_BRANCH_SET.has(command.branch)) {
-        fail('command.branch is invalid.');
-      }
-      const effect = requireString(command.effect, 'command.effect', 64);
-      if (!researchEffectBelongsToBranchV2(
-        command.branch as ResearchBranchV2,
-        effect as ResearchEffectV2,
-      )) {
-        fail('command.effect is invalid for command.branch.');
+      const category = requireString(command.category, 'command.category', 32) as ResearchCategoryV2;
+      const branch = requireString(command.branch, 'command.branch', 64) as ResearchBranchV2;
+      const effect = requireString(command.effect, 'command.effect', 64) as ResearchEffectV2;
+      if (!RESEARCH_BRANCH_SET.has(branch)
+        || researchCategoryForDirectionV2(branch, effect) !== category) {
+        fail('command research direction is invalid for command.category.');
       }
       break;
+    }
+    case 'choose-research-breakthrough': {
+      fail('Post-completion research breakthrough commands are retired; set a research direction instead.');
     }
     case 'adjust-budget':
       requirePlayerId(command.playerId, 'command.playerId');

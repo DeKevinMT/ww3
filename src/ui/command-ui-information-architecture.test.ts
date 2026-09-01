@@ -1,5 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import {
+  RESEARCH_CATEGORIES,
+  RESEARCH_CATEGORY_DIRECTIONS,
+} from '../sim/v2/researchDirections';
 import worldUiSourceRaw from './WorldUIV2.ts?raw';
 
 const normalized = (source: string): string => source.replace(/\r\n/g, '\n');
@@ -141,23 +145,33 @@ describe('command UI information architecture', () => {
     expect(worldUiSource).not.toContain('const WEEKS_PER_YEAR = 52;');
   });
 
-  it('makes Research an active Empire Blueprint with explicit breakthrough choices', () => {
+  it('shows five parallel research categories with three pre-completion directions each', () => {
     const research = methodSource('  private renderResearchPanel(', '  private renderWarPanel(');
     const polar = methodSource('  private renderPolarResearchItem(', '  private renderPolarCompletedEffects(');
+    expect(RESEARCH_CATEGORIES).toEqual(['people', 'army', 'combat', 'sustainment', 'state']);
+    for (const category of RESEARCH_CATEGORIES) {
+      expect(RESEARCH_CATEGORY_DIRECTIONS[category]).toHaveLength(3);
+    }
     expect(research).toContain('${this.renderPolarResearchItem(human)}');
-    expect(research).toContain('Research · Empire Blueprint');
-    expect(research).toContain('CHOOSE A DIRECTION');
-    expect(research).toContain('One active focus · switching preserves progress');
-    expect(research).toContain('Choose your first national focus');
-    expect(research).toContain('ACTIVE R&amp;D / DAY');
-    expect(research).toContain('about ${activeDays} days');
-    expect(research).toContain('nothing is awarded automatically');
-    expect(research).toContain("isReady ? 'noop' : 'set-research-focus'");
-    expect(research).toContain('data-action="choose-research-breakthrough"');
+    expect(research).toContain('Research · Strategic Matrix');
+    expect(research).toContain('AUTOMATIC EMPIRE PORTFOLIO');
+    expect(research).toContain('Five directions develop in parallel');
+    expect(research).toContain('FIVE PARALLEL CATEGORIES');
+    expect(research).toContain('One active direction in every category · completion never pauses');
+    expect(research).toContain('Completed levels apply immediately and the next level starts automatically');
+    expect(research).toContain('WHAT POWERS YOUR RESEARCH');
+    expect(research).toContain('ACTIVE PORTFOLIO · 80% CAP');
+    expect(research).toContain('TOTAL IQ EFFECT');
+    expect(research).toContain('IF FUNDED R&amp;D +');
+    expect(research).toContain('next level in about ${activeDays} days');
+    expect(research).toContain('RESEARCH_CATEGORY_DIRECTIONS[pillar.id].map');
+    expect(research).toContain('data-action="set-research-direction"');
     expect(research).toContain('RESEARCH_PILLARS.map');
     expect(research).toContain('Special project lane <b>NORTH POLE</b>');
     expect(research).toContain('Completed effects');
-    expect(research).not.toContain('NEXT BREAKTHROUGH');
+    expect(research).not.toMatch(/BREAKTHROUGH READY|CHOICE READY|nothing is awarded automatically/i);
+    expect(research).not.toContain('data-action="choose-research-breakthrough"');
+    expect(research).not.toContain('data-action="set-research-focus"');
     expect(research).not.toContain('All research programs');
     expect(polar).toContain('this.engine.arcticProjectTerms(human.id, project.id)');
     expect(polar).toContain('project.benefits.join');
@@ -196,6 +210,7 @@ describe('command UI information architecture', () => {
       'YOUR TOTAL POWER', 'ENEMY POWER', 'WIN CHANCE',
       'WAR SUPPLY', 'PREPARATION', 'OPERATION COST',
       'YOUR FRONT SOLDIERS', 'ENEMY FRONT SOLDIERS', 'FIRST BATTLE ESTIMATE',
+      'EMPIRE EXPANSION YIELD', 'GDP ON CAPTURE', 'GDP AFTER PURGE', 'IQ AFTER PURGE',
       'START OPERATION',
     ]) expect(review).toContain(label);
     expect(review).toContain('ownTotalPower = ownPower * (1 + apexSupportBonus / 100)');

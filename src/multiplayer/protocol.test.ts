@@ -58,8 +58,8 @@ function snapshotWithExtraPayload(payload: string): SnapshotMessage {
 }
 
 describe('multiplayer protocol', () => {
-  it('uses multiplayer protocol version 7 for active research commands', () => {
-    expect(MULTIPLAYER_PROTOCOL_VERSION).toBe(7);
+  it('uses multiplayer protocol version 8 for parallel research directions', () => {
+    expect(MULTIPLAYER_PROTOCOL_VERSION).toBe(8);
   });
 
   it('replicates the bounded Survival contact speed', () => {
@@ -191,6 +191,23 @@ describe('multiplayer protocol', () => {
       },
     } as const;
     expect(() => validateProtocolMessage(command)).toThrow(/retired/i);
+  });
+
+  it('rejects retired post-completion research choices on the wire', () => {
+    const command = {
+      type: 'command',
+      requestId: 'request_retired_breakthrough',
+      clientSequence: 2,
+      baseTick: 12,
+      command: {
+        type: 'choose-research-breakthrough',
+        playerId: nationIdV2('bel'),
+        branch: 'advanced-weapons',
+        effect: 'reinforcement-efficiency',
+      },
+    } as const;
+
+    expect(() => validateProtocolMessage(command)).toThrow(/retired.*research direction/i);
   });
 
   it('round-trips only canonical EONSCAR narrative responses', () => {
@@ -397,55 +414,46 @@ describe('multiplayer protocol', () => {
     })).toThrow(/must contain exactly/i);
   });
 
-  it('round-trips exact research focus and breakthrough choices', () => {
-    const focus: MultiplayerProtocolMessage = {
+  it('round-trips only an exact authored research direction for its category', () => {
+    const direction: MultiplayerProtocolMessage = {
       type: 'command',
-      requestId: 'research_focus_1',
+      requestId: 'research_direction_1',
       clientSequence: 4,
       baseTick: 18,
       command: {
-        type: 'set-research-focus',
+        type: 'set-research-direction',
         playerId: nationIdV2('bel'),
+        category: 'state',
         branch: 'economy-science',
-      },
-    };
-    const pause: MultiplayerProtocolMessage = {
-      ...focus,
-      requestId: 'research_focus_2',
-      clientSequence: 5,
-      command: { ...focus.command, branch: null },
-    };
-    const breakthrough: MultiplayerProtocolMessage = {
-      type: 'command',
-      requestId: 'research_breakthrough_1',
-      clientSequence: 6,
-      baseTick: 18,
-      command: {
-        type: 'choose-research-breakthrough',
-        playerId: nationIdV2('bel'),
-        branch: 'economy-science',
-        effect: 'research-speed',
+        effect: 'research-efficiency',
       },
     };
 
-    expect(decodeProtocolMessage(encodeProtocolMessage(focus))).toEqual(focus);
-    expect(decodeProtocolMessage(encodeProtocolMessage(pause))).toEqual(pause);
-    expect(decodeProtocolMessage(encodeProtocolMessage(breakthrough))).toEqual(breakthrough);
+    expect(decodeProtocolMessage(encodeProtocolMessage(direction))).toEqual(direction);
     expect(() => validateProtocolMessage({
-      ...focus,
-      command: { ...focus.command, branch: 'forged-branch' },
-    })).toThrow(/command\.branch is invalid/i);
+      ...direction,
+      command: { ...direction.command, category: 'combat' },
+    })).toThrow(/invalid for command\.category/i);
     expect(() => validateProtocolMessage({
-      ...focus,
-      command: { ...focus.command, debug: true },
-    })).toThrow(/must contain exactly/i);
+      ...direction,
+      command: {
+        ...direction.command,
+        category: 'combat',
+        branch: 'advanced-weapons',
+        effect: 'attack',
+      },
+    })).not.toThrow();
     expect(() => validateProtocolMessage({
-      ...breakthrough,
-      command: { ...breakthrough.command, effect: 'attack' },
-    })).toThrow(/invalid for command\.branch/i);
+      ...direction,
+      command: { ...direction.command, effect: 'attack' },
+    })).toThrow(/invalid for command\.category/i);
     expect(() => validateProtocolMessage({
-      ...breakthrough,
-      command: { ...breakthrough.command, autoChoose: true },
+      ...direction,
+      command: { ...direction.command, branch: 'forged-branch' },
+    })).toThrow(/invalid for command\.category/i);
+    expect(() => validateProtocolMessage({
+      ...direction,
+      command: { ...direction.command, autoChoose: true },
     })).toThrow(/must contain exactly/i);
   });
 

@@ -97,8 +97,20 @@ describe('empire-wide EONSCAR field presentation', () => {
     expect(presentation.active).toBe(true);
     expect(presentation.coverageTerritoryIds).toEqual(['grl', 'isl']);
     expect(presentation.activeFrontTerritoryIds).toEqual(['grl']);
-    expect(presentation.networkEdges).toEqual([{ sourceId: 'grl', targetId: 'isl' }]);
+    expect(presentation.networkEdges).toEqual([]);
     expect(presentation.percent).toBe(100);
+  });
+
+  it('keeps land continuity but leaves sea-distance continuity to naval gateways', () => {
+    const world = engine();
+    world.state.territories.can!.ownerId = 'human';
+    world.state.territories.can!.coreOwnerId = 'human';
+    world.state.territories.usa!.ownerId = 'human';
+    world.state.territories.usa!.coreOwnerId = 'human';
+
+    const presentation = selectApexEmpireFieldPresentation(world);
+    expect(presentation.coverageTerritoryIds).toEqual(['can', 'grl', 'isl', 'usa']);
+    expect(presentation.networkEdges).toEqual([{ sourceId: 'can', targetId: 'usa' }]);
   });
 
   it('shares one integrity pool and ignores sub-five-percent geometry noise', () => {

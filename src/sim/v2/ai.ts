@@ -16,7 +16,6 @@ import {
   NATIONAL_IQ_SCORE_MIN,
   aiHighSuspicionAlertV2,
   aiActiveWarCapV2,
-  RESEARCH_BRANCH_EFFECTS,
   RESEARCH_BRANCHES,
   clamp,
   smoothstep,
@@ -51,7 +50,6 @@ import {
   selectNationalIqViewV2,
   selectNuclearPowerV2,
   selectPopulationDynamicsV2,
-  selectResearchBranchCostV2,
   selectResearchBranchMaxedV2,
   selectTerritoriesOfV2,
   selectTotalManpowerV2,
@@ -62,6 +60,10 @@ import {
   type PowerSnapshotV2,
   type MilitaryBaseSnapshotV2,
 } from './selectors';
+import {
+  RESEARCH_CATEGORIES,
+  RESEARCH_CATEGORY_DIRECTIONS,
+} from './researchDirections';
 import { isDefensiveFederationV2, selectGlobalResistanceV2 } from './resistance';
 import { isSurvivalStateV2, rogueAiSurvivalActiveV2 } from './survival';
 import {
@@ -98,7 +100,7 @@ import type {
   PlayerId,
   ResearchAllocationsV2,
   ResearchBranchV2,
-  ResearchEffectV2,
+  ResearchDirectionsV2,
   WarAccessV2,
   WarStateV2,
   WorldCommandV2,
@@ -1069,15 +1071,21 @@ export function selectAiResearchAllocationsV2(
   return weightedResearchAllocationsV2(scores, inactiveBranches);
 }
 
-/** One deterministic strategic focus; allocations now serve only as an AI scoring projection. */
-export function selectAiResearchFocusV2(
+/**
+ * One deterministic direction per parallel research category. The existing
+ * allocation model remains the national-need score, while lower effect levels
+ * gently diversify equally useful paths. Stable authored order and retaining
+ * an equally scored current direction prevent command churn.
+ */
+export function selectAiResearchDirectionsV2(
   state: WorldStateV2,
   content: WorldContentV2,
   playerId: PlayerId,
   powers: PowerSnapshotV2 = createPowerSnapshotV2(state, content),
   planningView?: AiNationalPlanningViewV2,
-): ResearchBranchV2 | undefined {
-  if (selectHumanPlayerIdsV2(state).includes(playerId)) return undefined;
+): ResearchDirectionsV2 | undefined {
+  const player = state.players[playerId];
+  if (!player || selectHumanPlayerIdsV2(state).includes(playerId)) return undefined;
   const allocations = selectAiResearchAllocationsV2(
     state,
     content,
@@ -1085,22 +1093,25 @@ export function selectAiResearchFocusV2(
     powers,
     planningView,
   );
-  return RESEARCH_BRANCHES
-    .filter((branch) => !selectResearchBranchMaxedV2(state, content, playerId, branch))
-    .sort((left, right) => allocations[right] - allocations[left]
-      || RESEARCH_BRANCHES.indexOf(left) - RESEARCH_BRANCHES.indexOf(right))[0];
-}
-
-/** Lowest-level authored effect first gives every AI a stable, diversified build. */
-export function selectAiResearchBreakthroughEffectV2(
-  state: WorldStateV2,
-  playerId: PlayerId,
-  branch: ResearchBranchV2,
-): ResearchEffectV2 {
-  const levels = state.players[playerId]!.research.effectLevels;
-  return RESEARCH_BRANCH_EFFECTS[branch]
-    .map((effect, index) => ({ effect, index, level: levels[effect] }))
-    .sort((left, right) => left.level - right.level || left.index - right.index)[0]!.effect;
+  return Object.fromEntries(RESEARCH_CATEGORIES.map((category) => {
+    const current = player.research.categoryDirections[category];
+    const candidates = RESEARCH_CATEGORY_DIRECTIONS[category].map((direction, index) => ({
+      direction,
+      index,
+      current: current.branch === direction.branch && current.effect === direction.effect,
+      maxed: selectResearchBranchMaxedV2(state, content, playerId, direction.branch),
+      score: allocations[direction.branch]
+        / 1.10 ** player.research.effectLevels[direction.effect],
+    }));
+    const selected = candidates
+      .filter((candidate) => !candidate.maxed)
+      .sort((left, right) => right.score - left.score
+        || Number(right.current) - Number(left.current)
+        || left.index - right.index)[0]
+      ?? candidates.sort((left, right) => Number(right.current) - Number(left.current)
+        || left.index - right.index)[0]!;
+    return [category, { ...selected.direction }];
+  })) as ResearchDirectionsV2;
 }
 
 function planAiResearchCommandsV2(
@@ -1113,26 +1124,26 @@ function planAiResearchCommandsV2(
   if (selectHumanPlayerIdsV2(state).includes(playerId)) return [];
   const nation = state.players[playerId];
   if (!nation || selectIsEliminatedV2(state, playerId)) return [];
-  const commands: WorldCommandV2[] = [];
-  for (const branch of RESEARCH_BRANCHES) {
-    const cost = selectResearchBranchCostV2(state, content, playerId, branch, powers);
-    if (cost <= 0 || nation.research.progress[branch] + 1e-9 < cost) continue;
-    commands.push({
-      type: 'choose-research-breakthrough',
-      playerId,
-      branch,
-      effect: selectAiResearchBreakthroughEffectV2(state, playerId, branch),
-    });
-  }
-  const focus = selectAiResearchFocusV2(
+  const directions = selectAiResearchDirectionsV2(
     state,
     content,
     playerId,
     powers,
     planningView,
   );
-  if (focus !== nation.research.activeProgram) {
-    commands.push({ type: 'set-research-focus', playerId, branch: focus ?? null });
+  if (!directions) return [];
+  const commands: WorldCommandV2[] = [];
+  for (const category of RESEARCH_CATEGORIES) {
+    const current = nation.research.categoryDirections[category];
+    const direction = directions[category];
+    if (current.branch === direction.branch && current.effect === direction.effect) continue;
+    commands.push({
+      type: 'set-research-direction',
+      playerId,
+      category,
+      branch: direction.branch,
+      effect: direction.effect,
+    });
   }
   return commands;
 }

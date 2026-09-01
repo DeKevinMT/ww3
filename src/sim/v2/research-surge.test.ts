@@ -28,7 +28,10 @@ function belgiumState(seed: number) {
   const state = createWorldStateV2(seed, WORLD_CONTENT_V2);
   state.humanPlayerId = bel;
   state.wars = [];
-  state.players[bel].research.activeProgram = targetBranch;
+  state.players[bel].research.categoryDirections.combat = {
+    branch: targetBranch,
+    effect: 'defense',
+  };
   return state;
 }
 
@@ -73,7 +76,7 @@ describe('targeted Research Surge', () => {
     expect(selectResearchSurgeTermsV2(state, WORLD_CONTENT_V2, bel, targetBranch).cost).toBeGreaterThan(damaged.cost);
   });
 
-  it('queues the chosen program, advances no other program, and starts a 208-week cooldown', () => {
+  it('queues the chosen category, advances no other category, and starts a 208-day cooldown', () => {
     const surgeState = belgiumState(2_404);
     surgeState.players[bel].treasury = 1_000_000;
     const controlState = structuredClone(surgeState);
@@ -97,11 +100,10 @@ describe('targeted Research Surge', () => {
       const surgeProgress = engine.state.players[bel].research.progress[branch];
       const controlProgress = control.state.players[bel].research.progress[branch];
       if (branch === targetBranch) {
-        expect(surgeProgress).toBeGreaterThan(controlProgress);
-        expect(surgeProgress).toBeLessThanOrEqual(
-          selectResearchPortfolioV2(surgeState, WORLD_CONTENT_V2, bel)
-            .find((program) => program.branch === targetBranch)!.nextCost,
-        );
+        const surgeBreakthroughs = engine.state.players[bel].research.breakthroughs[branch];
+        const controlBreakthroughs = control.state.players[bel].research.breakthroughs[branch];
+        expect(surgeProgress > controlProgress || surgeBreakthroughs > controlBreakthroughs)
+          .toBe(true);
       } else expect(surgeProgress).toBe(controlProgress);
     }
     expect(engine.state.players[bel].manualActionUses.researchSurge).toBe(1);
@@ -109,19 +111,18 @@ describe('targeted Research Surge', () => {
     expect(engine.state.players[bel].researchSurgeAvailableTick).toBe(208);
     expect(selectWeeklyFinanceBreakdownV2(
       engine.state, WORLD_CONTENT_V2, bel,
-    ).research).toBe(0);
+    ).research).toBeGreaterThan(0);
     const netSurgeCost = control.state.players[bel].treasury
       - engine.state.players[bel].treasury;
-    expect(netSurgeCost).toBeGreaterThan(terms.cost - controlResearchSpending);
-    expect(netSurgeCost).toBeLessThan(terms.cost);
+    expect(netSurgeCost).toBeCloseTo(terms.cost, 5);
   });
 
-  it('rejects inactive and ready programs and clamps a surge exactly to cost', () => {
+  it('rejects inactive programs and auto-completes a surge clamped exactly to cost', () => {
     const state = belgiumState(2_406);
     state.players[bel].treasury = 1_000_000;
     expect(selectResearchSurgeTermsV2(
       state, WORLD_CONTENT_V2, bel, 'advanced-weapons',
-    ).reason).toMatch(/active program/i);
+    ).reason).toMatch(/active category direction/i);
 
     const row = selectResearchPortfolioV2(state, WORLD_CONTENT_V2, bel)
       .find((program) => program.branch === targetBranch)!;
@@ -133,9 +134,41 @@ describe('targeted Research Surge', () => {
     const engine = new WorldEngineV2(2_406, WORLD_CONTENT_V2, state);
     expect(engine.researchSurge(bel, targetBranch)).toEqual({ accepted: true });
     engine.step();
-    expect(engine.state.players[bel].research.progress[targetBranch]).toBe(row.nextCost);
+    expect(engine.state.players[bel].research.effectLevels.defense).toBe(1);
+    expect(engine.state.players[bel].research.progress[targetBranch]).toBeGreaterThan(0);
     expect(engine.researchSurgeTerms(bel, targetBranch).allowed).toBe(false);
-    expect(engine.researchSurgeTerms(bel, targetBranch).reason).toMatch(/ready/i);
+    expect(engine.researchSurgeTerms(bel, targetBranch).reason).toMatch(/returns in/i);
+  });
+
+  it('rejects the retired choice command in the Surge pre-tick window', () => {
+    const state = belgiumState(2_407);
+    state.players[bel].treasury = 1_000_000;
+    const row = selectResearchPortfolioV2(state, WORLD_CONTENT_V2, bel)
+      .find((program) => program.branch === targetBranch)!;
+    state.players[bel].research.progress[targetBranch] = row.nextCost - 0.001;
+    const engine = new WorldEngineV2(2_407, WORLD_CONTENT_V2, state);
+    let exploitResult: ReturnType<WorldEngineV2['submitCommand']> | undefined;
+
+    engine.subscribe((_nextState, change) => {
+      if (change.reason !== 'research-surge') return;
+      exploitResult = engine.submitCommand({
+        type: 'choose-research-breakthrough',
+        playerId: bel,
+        branch: targetBranch,
+        effect: 'casualty-reduction',
+      });
+    });
+
+    expect(engine.researchSurge(bel, targetBranch)).toEqual({ accepted: true });
+    engine.step();
+
+    expect(exploitResult).toEqual({
+      accepted: false,
+      reason: 'Post-completion research choices were retired; set a research direction instead.',
+    });
+    expect(engine.state.players[bel].research.effectLevels['casualty-reduction']).toBe(0);
+    expect(engine.state.players[bel].research.effectLevels.defense).toBe(1);
+    expect(engine.state.players[bel].research.breakthroughs[targetBranch]).toBe(1);
   });
 
   it('rejects a runtime target that is not one of the ten existing programs', () => {

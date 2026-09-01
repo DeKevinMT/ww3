@@ -27,6 +27,10 @@ import { synchronizeOpeningArmyHumanRosterV2 } from './nationState';
 import { OPENING_ARMY_BONUS_DURATION_TICKS_V2 } from './openingArmyBonus';
 import { createRandomWorldContentV2 } from './randomWorld';
 import {
+  RESEARCH_CATEGORIES,
+  researchDirectionIsValidV2,
+} from './researchDirections';
+import {
   invalidateTerritoryIndexV2,
 } from './selectors';
 import { selectNorthPoleModifiersV2 } from './northPoleModifiers';
@@ -38,6 +42,33 @@ const LEGACY_RULES_VERSION_V22_76 = 'frontier-command-v2.76-logistics-readiness'
 const LEGACY_RULES_VERSION_V22_77 = 'frontier-command-v2.77-apex-shield-multipliers';
 const LEGACY_RULES_VERSION_V22_78 = 'frontier-command-v2.78-rogue-perimeter-balance';
 const LEGACY_RULES_VERSION_V22_79 = 'frontier-command-v2.79-active-research';
+const LEGACY_RULES_VERSION_V22_80 = 'frontier-command-v2.80-daily-ticks';
+
+function removeParallelResearchDirections(save: Record<string, any>): void {
+  for (const nation of Object.values(save.players) as Array<Record<string, any>>) {
+    delete nation.research.categoryDirections;
+  }
+}
+
+function researchNumerics(research: Record<string, any>): Record<string, unknown> {
+  return structuredClone({
+    progress: research.progress,
+    effectLevels: research.effectLevels,
+    breakthroughs: research.breakthroughs,
+  });
+}
+
+function expectCanonicalParallelResearch(research: Record<string, any>): void {
+  expect(research.activeProgram).toBeNull();
+  expect(Object.keys(research.categoryDirections).sort())
+    .toEqual([...RESEARCH_CATEGORIES].sort());
+  for (const category of RESEARCH_CATEGORIES) {
+    expect(researchDirectionIsValidV2(
+      category,
+      research.categoryDirections[category],
+    )).toBe(true);
+  }
+}
 
 function removeSchema22Fields(save: Record<string, any>): void {
   delete save.commanderForces;
@@ -1360,12 +1391,21 @@ describe('V2 legacy save migration', () => {
     expect(createSaveV2(loadSaveV2(resaved, content), content)).toEqual(resaved);
   });
 
-  it('round-trips current v2.80 Antarctic saves idempotently without legacy redistribution', () => {
+  it('authenticates v2.80, preserves Antarctic and research numbers, then adds parallel directions', () => {
     const content = resolveScenarioV2({ mode: 'survival', seed: 97_604 }).content;
+    const playerId = nationIdV2('bel');
+    const state = createWorldStateV2(97_604, content);
+    state.players[playerId]!.research.progress['advanced-weapons'] = 7.25;
+    state.players[playerId]!.research.effectLevels.attack = 4;
+    state.players[playerId]!.research.breakthroughs['advanced-weapons'] = 3;
     const current = structuredClone(createSaveV2(
-      createWorldStateV2(97_604, content),
+      state,
       content,
     )) as Record<string, any>;
+    const researchBefore = researchNumerics(current.players[playerId].research);
+    current.rulesVersion = LEGACY_RULES_VERSION_V22_80;
+    current.players[playerId].research.activeProgram = 'advanced-weapons';
+    removeParallelResearchDirections(current);
     current.polarEndgame.rogueWaveManpowerByTerritory = {
       'maud-entry': 0.022,
       'transantarctic-vault': 0.064,
@@ -1384,15 +1424,27 @@ describe('V2 legacy save migration', () => {
     const loaded = loadSaveV2(current as never, content);
     const resaved = createSaveV2(loaded, content);
 
-    expect(resaved).toEqual(current);
+    expect(loaded.rulesVersion).toBe(V2_RULES_VERSION);
+    expectCanonicalParallelResearch(loaded.players[playerId]!.research);
+    expect(loaded.players[playerId]!.research.categoryDirections.combat).toEqual({
+      branch: 'advanced-weapons', effect: 'attack',
+    });
+    expect(researchNumerics(loaded.players[playerId]!.research)).toEqual(researchBefore);
+    for (const territoryId of ANTARCTIC_TERRITORY_IDS_V2) {
+      expect(loaded.territories[territoryId]!.army.manpower)
+        .toBe(current.territories[territoryId].army.manpower);
+    }
+    expect(createSaveV2(loadSaveV2(resaved, content), content)).toEqual(resaved);
   });
 
-  it('authenticates v2.79 and preserves active research plus every tick deadline without x7 scaling', () => {
+  it('authenticates v2.79 and migrates its focus without changing numbers or tick deadlines', () => {
     const state = createWorldStateV2(97_610, WORLD_CONTENT_V2);
     const playerId = nationIdV2('bel');
     const rivalId = nationIdV2('nld');
     state.tick = 91;
-    state.players[playerId]!.research.activeProgram = 'logistics-medicine';
+    state.players[playerId]!.research.progress['logistics-medicine'] = 5.75;
+    state.players[playerId]!.research.effectLevels.recovery = 2;
+    state.players[playerId]!.research.breakthroughs['logistics-medicine'] = 1;
     state.players[playerId]!.rapidRecruitmentAvailableTick = 121;
     state.players[playerId]!.researchSurgeAvailableTick = 173;
     state.players[playerId]!.propagandaAvailableTick = 195;
@@ -1413,7 +1465,10 @@ describe('V2 legacy save migration', () => {
       state,
       WORLD_CONTENT_V2,
     )) as Record<string, any>;
+    const researchBefore = researchNumerics(legacy.players[playerId].research);
     legacy.rulesVersion = LEGACY_RULES_VERSION_V22_79;
+    legacy.players[playerId].research.activeProgram = 'logistics-medicine';
+    removeParallelResearchDirections(legacy);
     legacy.canonicalStateHash = canonicalStateHashV2(legacy);
 
     const tampered = structuredClone(legacy);
@@ -1426,7 +1481,11 @@ describe('V2 legacy save migration', () => {
 
     expect(loaded.rulesVersion).toBe(V2_RULES_VERSION);
     expect(loaded.tick).toBe(91);
-    expect(loaded.players[playerId]!.research.activeProgram).toBe('logistics-medicine');
+    expectCanonicalParallelResearch(loaded.players[playerId]!.research);
+    expect(loaded.players[playerId]!.research.categoryDirections.sustainment).toEqual({
+      branch: 'logistics-medicine', effect: 'recovery',
+    });
+    expect(researchNumerics(loaded.players[playerId]!.research)).toEqual(researchBefore);
     expect(loaded.players[playerId]).toMatchObject({
       rapidRecruitmentAvailableTick: 121,
       researchSurgeAvailableTick: 173,
@@ -1444,7 +1503,7 @@ describe('V2 legacy save migration', () => {
     expect(resaved.rulesVersion).toBe(V2_RULES_VERSION);
     expect(resaved.tick).toBe(legacy.tick);
     expect(resaved.players[playerId]!.research.activeProgram)
-      .toBe(legacy.players[playerId].research.activeProgram);
+      .toBeNull();
     expect(resaved.players[playerId]!.rapidRecruitmentAvailableTick)
       .toBe(legacy.players[playerId].rapidRecruitmentAvailableTick);
     expect(resaved.players[playerId]!.researchSurgeAvailableTick)
@@ -1479,7 +1538,7 @@ describe('V2 legacy save migration', () => {
     }
   });
 
-  it('authenticates v2.78 before deterministically migrating the highest allocation to active research', () => {
+  it('authenticates v2.78 before deriving parallel directions from its highest allocation', () => {
     const state = createWorldStateV2(97_606, WORLD_CONTENT_V2);
     const playerId = nationIdV2('bel');
     state.rngState = 123_456_789;
@@ -1497,11 +1556,16 @@ describe('V2 legacy save migration', () => {
       'public-administration': 0,
       'education-intelligence': 0,
     };
+    state.players[playerId]!.research.progress['military-industry'] = 6.5;
+    state.players[playerId]!.research.effectLevels['research-speed'] = 3;
+    state.players[playerId]!.research.breakthroughs['public-administration'] = 2;
     const legacy = structuredClone(createSaveV2(state, WORLD_CONTENT_V2)) as Record<string, any>;
+    const researchBefore = researchNumerics(legacy.players[playerId].research);
     legacy.rulesVersion = LEGACY_RULES_VERSION_V22_78;
     for (const nation of Object.values(legacy.players) as Array<Record<string, any>>) {
       delete nation.research.activeProgram;
     }
+    removeParallelResearchDirections(legacy);
     legacy.canonicalStateHash = canonicalStateHashV2(legacy);
     const tampered = structuredClone(legacy);
     tampered.players[playerId].research.allocations['military-industry'] = 39;
@@ -1512,7 +1576,11 @@ describe('V2 legacy save migration', () => {
     const reloaded = loadSaveV2(resaved, WORLD_CONTENT_V2);
 
     expect(loaded.rulesVersion).toBe(V2_RULES_VERSION);
-    expect(loaded.players[playerId]!.research.activeProgram).toBe('military-industry');
+    expectCanonicalParallelResearch(loaded.players[playerId]!.research);
+    expect(loaded.players[playerId]!.research.categoryDirections.army).toEqual({
+      branch: 'military-industry', effect: 'force-capacity',
+    });
+    expect(researchNumerics(loaded.players[playerId]!.research)).toEqual(researchBefore);
     expect(loaded.tick).toBe(0);
     expect(loaded.rngState).toBe(123_456_789);
     expect(loaded.actionSequence).toBe(7);
@@ -1520,22 +1588,32 @@ describe('V2 legacy save migration', () => {
     expect(createSaveV2(reloaded, WORLD_CONTENT_V2)).toEqual(resaved);
   });
 
-  it('rejects missing or malformed active research in rehashed current saves', () => {
+  it('rejects missing or malformed directions and a retired focus in rehashed current saves', () => {
     const missing = structuredClone(createSaveV2(
       createWorldStateV2(97_607), WORLD_CONTENT_V2,
     )) as Record<string, any>;
-    delete missing.players.bel.research.activeProgram;
+    delete missing.players.bel.research.categoryDirections.people;
     missing.canonicalStateHash = canonicalStateHashV2(missing);
     expect(() => loadSaveV2(missing as never, WORLD_CONTENT_V2))
-      .toThrow(/research|active research/i);
+      .toThrow(/people research direction|research categories/i);
 
     const malformed = structuredClone(createSaveV2(
       createWorldStateV2(97_608), WORLD_CONTENT_V2,
     )) as Record<string, any>;
-    malformed.players.bel.research.activeProgram = 'forged-program';
+    malformed.players.bel.research.categoryDirections.combat = {
+      branch: 'economy-science', effect: 'attack',
+    };
     malformed.canonicalStateHash = canonicalStateHashV2(malformed);
     expect(() => loadSaveV2(malformed as never, WORLD_CONTENT_V2))
-      .toThrow(/active research/i);
+      .toThrow(/combat research direction/i);
+
+    const retiredFocus = structuredClone(createSaveV2(
+      createWorldStateV2(976_080), WORLD_CONTENT_V2,
+    )) as Record<string, any>;
+    retiredFocus.players.bel.research.activeProgram = 'advanced-weapons';
+    retiredFocus.canonicalStateHash = canonicalStateHashV2(retiredFocus);
+    expect(() => loadSaveV2(retiredFocus as never, WORLD_CONTENT_V2))
+      .toThrow(/retired single-focus research programme/i);
 
     const preseededLegacy = structuredClone(createSaveV2(
       createWorldStateV2(976_081), WORLD_CONTENT_V2,
@@ -1546,14 +1624,19 @@ describe('V2 legacy save migration', () => {
       .toThrow(/non-canonical research state/i);
   });
 
-  it('keeps a created save immutable when live research changes afterwards', () => {
+  it('deep-clones current nested directions across state, save and load boundaries', () => {
     const state = createWorldStateV2(97_609, WORLD_CONTENT_V2);
     const playerId = nationIdV2('bel');
-    state.players[playerId]!.research.activeProgram = 'military-industry';
     const save = createSaveV2(state, WORLD_CONTENT_V2);
     const savedResearch = structuredClone(save.players[playerId]!.research);
+    expect(save.players[playerId]!.research.categoryDirections)
+      .not.toBe(state.players[playerId]!.research.categoryDirections);
+    for (const category of RESEARCH_CATEGORIES) {
+      expect(save.players[playerId]!.research.categoryDirections[category])
+        .not.toBe(state.players[playerId]!.research.categoryDirections[category]);
+    }
 
-    state.players[playerId]!.research.activeProgram = 'economy-science';
+    state.players[playerId]!.research.categoryDirections.people.effect = 'research-speed';
     state.players[playerId]!.research.allocations['military-industry'] = 0;
     state.players[playerId]!.research.allocations['economy-science'] = 100;
     state.players[playerId]!.research.progress['military-industry'] += 7;
@@ -1562,5 +1645,16 @@ describe('V2 legacy save migration', () => {
 
     expect(save.players[playerId]!.research).toEqual(savedResearch);
     expect(canonicalStateHashV2(save)).toBe(save.canonicalStateHash);
+
+    const loaded = loadSaveV2(save, WORLD_CONTENT_V2);
+    expect(loaded.players[playerId]!.research.categoryDirections)
+      .not.toBe(save.players[playerId]!.research.categoryDirections);
+    for (const category of RESEARCH_CATEGORIES) {
+      expect(loaded.players[playerId]!.research.categoryDirections[category])
+        .not.toBe(save.players[playerId]!.research.categoryDirections[category]);
+    }
+    loaded.players[playerId]!.research.categoryDirections.people.effect = 'research-speed';
+    expect(save.players[playerId]!.research.categoryDirections.people)
+      .toEqual(savedResearch.categoryDirections.people);
   });
 });

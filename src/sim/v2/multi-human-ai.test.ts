@@ -90,6 +90,7 @@ describe('multi-human simulation boundaries', () => {
       'playerId' in command && command.playerId === secondHuman && (
         command.type === 'set-research-allocations'
           || command.type === 'set-research-focus'
+          || command.type === 'set-research-direction'
           || command.type === 'choose-research-breakthrough'
       )
     ))).toBe(false);

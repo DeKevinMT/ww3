@@ -43,6 +43,12 @@ import { OPENING_ARMY_BONUS_DURATION_TICKS_V2 } from './openingArmyBonus';
 import { normalizeRetiredFoodCompatibilityV2 } from './retiredFood';
 import { normalizeRetiredReserveCompatibilityV2 } from './retiredReserves';
 import {
+  cloneResearchDirectionsV2,
+  createDefaultResearchDirectionsV2,
+  defaultResearchDirectionForBranchV2,
+  researchCategoryForDirectionV2,
+} from './researchDirections';
+import {
   clonePolarEndgameV2,
   createInitialPolarEndgameV2,
   selectPolarVictoryWinnerV2,
@@ -171,6 +177,8 @@ const LEGACY_RULES_VERSION_V22_77 = 'frontier-command-v2.77-apex-shield-multipli
 const LEGACY_RULES_VERSION_V22_78 = 'frontier-command-v2.78-rogue-perimeter-balance';
 /** Last weekly-calendar release; its canonical state already uses active research. */
 const LEGACY_RULES_VERSION_V22_79 = 'frontier-command-v2.79-active-research';
+/** Last single-focus, post-completion-choice research release. */
+const LEGACY_RULES_VERSION_V22_80 = 'frontier-command-v2.80-daily-ticks';
 const LEGACY_CONTENT_VERSION_V16 = 'natural-earth-countries-2026-v6-naval';
 const LEGACY_CONTENT_VERSION_V17 = 'natural-earth-countries-2026-v7-greenland';
 const LEGACY_BOT_MANPOWER_PER_UNIT = 0.10;
@@ -178,6 +186,7 @@ const LEGACY_BOT_TECH_STRENGTH_MULTIPLIER = 1.22;
 
 function hasCurrentCanonicalShapeV2(rulesVersion: string): boolean {
   return rulesVersion === V2_RULES_VERSION
+    || rulesVersion === LEGACY_RULES_VERSION_V22_80
     || rulesVersion === LEGACY_RULES_VERSION_V22_79
     || rulesVersion === LEGACY_RULES_VERSION_V22_78
     || rulesVersion === LEGACY_RULES_VERSION_V22_77;
@@ -556,10 +565,26 @@ function cloneResearchStateV2(research: NationStateV2['research']): NationStateV
   return {
     ...research,
     allocations: { ...research.allocations },
+    categoryDirections: cloneResearchDirectionsV2(research.categoryDirections),
     progress: { ...research.progress },
     effectLevels: { ...research.effectLevels },
     breakthroughs: { ...research.breakthroughs },
   };
+}
+
+function migrateResearchDirectionsV2(state: WorldStateV2): void {
+  for (const nation of Object.values(state.players)) {
+    const legacyActive = nation.research.activeProgram;
+    const directions = createDefaultResearchDirectionsV2();
+    if (legacyActive) {
+      const direction = defaultResearchDirectionForBranchV2(legacyActive);
+      const category = direction
+        ? researchCategoryForDirectionV2(direction.branch, direction.effect) : undefined;
+      if (direction && category) directions[category] = direction;
+    }
+    nation.research.activeProgram = null;
+    nation.research.categoryDirections = directions;
+  }
 }
 
 export function createSaveV2(state: WorldStateV2, content: WorldContentV2): SaveGameV2 {
@@ -1340,6 +1365,11 @@ function currentStateFromSave(
       research: {
         ...canonicalNation.research,
         allocations: { ...canonicalNation.research.allocations },
+        ...(save.rulesVersion === V2_RULES_VERSION
+          ? { categoryDirections: cloneResearchDirectionsV2(
+              canonicalNation.research.categoryDirections,
+            ) }
+          : {}),
         progress: { ...canonicalNation.research.progress },
         effectLevels: { ...canonicalNation.research.effectLevels },
         breakthroughs: { ...canonicalNation.research.breakthroughs },
@@ -1651,6 +1681,7 @@ function migrateLegacyStateV18(
     territories: canonicalTerritories,
   };
   migrateRetiredSystemsV2(legacyState);
+  migrateResearchDirectionsV2(legacyState);
   // Army capacity is derived from the current population/research/trait rules.
   // Normalize it only after the exact legacy payload has authenticated.
   synchronizeArmyCapacityV2(legacyState, content);
@@ -1735,6 +1766,7 @@ function migrateRetiredSystemsV2(state: WorldStateV2): void {
     };
     nation.research = {
       activeProgram: selectLegacyResearchActiveProgramV2(allocations),
+      categoryDirections: createDefaultResearchDirectionsV2(),
       allocations,
       progress: {
         ...EMPTY_RESEARCH_PROGRESS,
@@ -1940,6 +1972,7 @@ export function loadSaveV2(
                 : LEGACY_RULES_VERSION_V13;
   const supportedRules = schemaVersion === 22
     ? parsed.rulesVersion === V2_RULES_VERSION
+      || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_80
       || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_79
       || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_78
       || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_77
@@ -1975,6 +2008,7 @@ export function loadSaveV2(
     : keys;
   const expectedSaveKeys = schemaVersion === 22
     ? parsed.rulesVersion === V2_RULES_VERSION
+      || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_80
       || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_79
       || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_78
       || parsed.rulesVersion === LEGACY_RULES_VERSION_V22_77
@@ -2015,6 +2049,7 @@ export function loadSaveV2(
   if (schemaVersion === 22 && parsed.contentVersion !== V2_CONTENT_VERSION
     && !legacyV7Content
     && parsed.rulesVersion !== V2_RULES_VERSION
+    && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_80
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_79
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_78
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_77
@@ -2074,11 +2109,13 @@ export function loadSaveV2(
                 content,
               )), content), content);
   if (parsed.rulesVersion !== V2_RULES_VERSION
+    && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_80
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_79) {
     migrateLegacyResearchActiveProgramsV2(state);
   }
   if (schemaVersion === 22
     && parsed.rulesVersion !== V2_RULES_VERSION
+    && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_80
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_79
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_78
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_77
@@ -2092,6 +2129,7 @@ export function loadSaveV2(
   // those would resurrect defeated nations and break its canonical hash.
   if (legacyV7Content) hydrateNewContentAfterAuthenticationV2(state, content);
   if (parsed.rulesVersion !== V2_RULES_VERSION
+    && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_80
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_79
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_78
     && parsed.rulesVersion !== LEGACY_RULES_VERSION_V22_77
@@ -2143,6 +2181,10 @@ export function loadSaveV2(
       }
     }
   }
+  // Run this after every older migration because retired-system hydration can
+  // rebuild the legacy research object. The final current state has exactly
+  // five category directions and never retains the former global focus.
+  if (parsed.rulesVersion !== V2_RULES_VERSION) migrateResearchDirectionsV2(state);
   // Normalize authenticated legacy/current saves at the load boundary. This
   // never mutates the caller's live state or changes the authenticated input.
   state.offers = [];

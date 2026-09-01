@@ -73,7 +73,11 @@ import {
   type AntarcticExpeditionTermsV2,
   type ArcticProjectTermsV2,
 } from './polarEndgame';
-import { processResearchV2, researchEffectBelongsToBranchV2 } from './research';
+import { processResearchV2 } from './research';
+import {
+  defaultResearchDirectionForBranchV2,
+  researchCategoryForDirectionV2,
+} from './researchDirections';
 import { normalizeRetiredReserveCompatibilityV2 } from './retiredReserves';
 import { processRoguePrimeV2, reconcileRoguePrimeV2 } from './roguePrime';
 import {
@@ -190,6 +194,7 @@ import type {
   GlobalResistanceV2,
   ResearchAllocationsV2,
   ResearchBranchV2,
+  ResearchCategoryV2,
   ResearchEffectV2,
   ResearchPortfolioV2,
   ResearchSurgeTermsV2,
@@ -1196,7 +1201,7 @@ export class WorldEngineV2 {
     return selectWeeklyRecruitmentV2(this.state, this.content, nationIdV2(playerId));
   }
 
-  /** Ordered ten-program view. Weekly funding sums to the one committed Research pot. */
+  /** Ordered ten-program view backed by five concurrent category directions. */
   researchPortfolio(
     playerId: string,
     finance?: WeeklyFinanceBreakdownV2,
@@ -1235,7 +1240,7 @@ export class WorldEngineV2 {
         this.state,
         'research',
         isHumanPlayerV2(this.state, id) ? 'action' : 'info',
-        `${this.content.nations[id]?.name ?? id}: ${targetBranch.replaceAll('-', ' ')} breakthrough ready — choose one upgrade.`,
+        `${this.content.nations[id]?.name ?? id}: ${targetBranch.replaceAll('-', ' ')} completion queued — the active direction will apply automatically.`,
         undefined,
         id,
       );
@@ -1432,7 +1437,7 @@ export class WorldEngineV2 {
     return { accepted: true };
   }
 
-  /** Selects the sole national program that receives research progress. */
+  /** Legacy command compatibility: redirects the category that owns this branch. */
   setResearchFocus(
     playerId: string,
     branch: ResearchBranchV2 | null,
@@ -1445,32 +1450,24 @@ export class WorldEngineV2 {
     if (branch !== null && !RESEARCH_BRANCHES.includes(branch)) {
       return { accepted: false, reason: 'Unknown research program.' };
     }
-    if (nation.research.activeProgram === branch) {
-      return { accepted: false, reason: branch === null
-        ? 'National research is already paused.'
-        : 'That research program is already active.' };
-    }
-    if (branch !== null) {
-      if (selectResearchBranchMaxedV2(this.state, this.content, id, branch)) {
-        return { accepted: false, reason: 'That research program has reached its useful limit.' };
-      }
-      const cost = selectResearchBranchCostV2(this.state, this.content, id, branch);
-      if (cost <= 0) return { accepted: false, reason: 'That research program is unavailable.' };
-      if (nation.research.progress[branch] + 1e-9 >= cost) {
-        return { accepted: false, reason: 'Choose the ready breakthrough before focusing this program.' };
-      }
+    if (branch === null) return { accepted: false, reason: 'Parallel research categories cannot be paused.' };
+    const direction = defaultResearchDirectionForBranchV2(branch);
+    const category = direction
+      ? researchCategoryForDirectionV2(direction.branch, direction.effect) : undefined;
+    if (!direction || !category) return { accepted: false, reason: 'That legacy research focus has no current direction.' };
+    if (selectResearchBranchMaxedV2(this.state, this.content, id, branch)) {
+      return { accepted: false, reason: 'That research direction has reached its useful limit.' };
     }
     if (!this.applyingCommand) {
       return this.queue({ type: 'set-research-focus', playerId: id, branch });
     }
-    nation.research.activeProgram = branch;
+    nation.research.activeProgram = null;
+    nation.research.categoryDirections[category] = direction;
     addWorldEventV2(
       this.state,
       'research',
       isHumanPlayerV2(this.state, id) ? 'action' : 'info',
-      branch === null
-        ? `${this.content.nations[id]?.name ?? id}: national research paused.`
-        : `${this.content.nations[id]?.name ?? id}: research focused on ${branch.replaceAll('-', ' ')}.`,
+      `${this.content.nations[id]?.name ?? id}: ${category} research redirected to ${direction.effect.replaceAll('-', ' ')}.`,
       undefined,
       id,
     );
@@ -1479,9 +1476,9 @@ export class WorldEngineV2 {
     return { accepted: true };
   }
 
-  /** Claims one ready program by selecting exactly one authored branch effect. */
-  chooseResearchBreakthrough(
+  setResearchDirection(
     playerId: string,
+    category: ResearchCategoryV2,
     branch: ResearchBranchV2,
     effect: ResearchEffectV2,
   ): CommandResultV2 {
@@ -1490,48 +1487,44 @@ export class WorldEngineV2 {
     if (!nation || this.territoriesOf(id).length === 0) {
       return { accepted: false, reason: 'Nation has no gameplay agency.' };
     }
-    if (!RESEARCH_BRANCHES.includes(branch)) {
-      return { accepted: false, reason: 'Unknown research program.' };
-    }
-    if (!researchEffectBelongsToBranchV2(branch, effect)) {
-      return { accepted: false, reason: 'That upgrade does not belong to this research program.' };
+    if (researchCategoryForDirectionV2(branch, effect) !== category) {
+      return { accepted: false, reason: 'That option does not belong to this research category.' };
     }
     if (selectResearchBranchMaxedV2(this.state, this.content, id, branch)) {
-      return { accepted: false, reason: 'That research program has reached its useful limit.' };
+      return { accepted: false, reason: 'That research direction has reached its useful limit.' };
     }
-    const cost = selectResearchBranchCostV2(this.state, this.content, id, branch);
-    if (cost <= 0 || nation.research.progress[branch] + 1e-9 < cost) {
-      return { accepted: false, reason: 'That research breakthrough is not ready.' };
+    const current = nation.research.categoryDirections[category];
+    if (current.branch === branch && current.effect === effect) {
+      return { accepted: false, reason: 'That research direction is already active.' };
     }
     if (!this.applyingCommand) {
-      return this.queue({
-        type: 'choose-research-breakthrough',
-        playerId: id,
-        branch,
-        effect,
-      });
+      return this.queue({ type: 'set-research-direction', playerId: id, category, branch, effect });
     }
-    nation.research.progress[branch] = 0;
-    nation.research.effectLevels[effect] += 1;
-    nation.research.breakthroughs[branch] += 1;
-    if (nation.research.activeProgram === branch
-      && selectResearchBranchMaxedV2(this.state, this.content, id, branch)) {
-      nation.research.activeProgram = null;
-    }
-    if (effect === 'force-capacity') {
-      synchronizeArmyCapacityV2(this.state, this.content);
-    }
+    nation.research.activeProgram = null;
+    nation.research.categoryDirections[category] = { branch, effect };
     addWorldEventV2(
       this.state,
       'research',
       isHumanPlayerV2(this.state, id) ? 'action' : 'info',
-      `${this.content.nations[id]?.name ?? id}: ${effect.replaceAll('-', ' ')} breakthrough selected.`,
+      `${this.content.nations[id]?.name ?? id}: ${category} research redirected to ${effect.replaceAll('-', ' ')}; saved progress is preserved.`,
       undefined,
       id,
     );
     this.recordAppliedAction();
-    this.emit({ reason: 'research-breakthrough' });
+    this.emit({ reason: 'research-focus' });
     return { accepted: true };
+  }
+
+  /** Retired compatibility edge: parallel directions now award their effect automatically. */
+  chooseResearchBreakthrough(
+    _playerId: string,
+    _branch: ResearchBranchV2,
+    _effect: ResearchEffectV2,
+  ): CommandResultV2 {
+    return {
+      accepted: false,
+      reason: 'Post-completion research choices were retired; set a research direction instead.',
+    };
   }
 
   private applyBudgetPolicy(playerId: PlayerId, budget: BudgetPolicyV2, notify = true): CommandResultV2 {
@@ -1783,6 +1776,9 @@ export class WorldEngineV2 {
       );
       case 'set-research-allocations': return this.setResearchAllocations(command.playerId, command.allocations);
       case 'set-research-focus': return this.setResearchFocus(command.playerId, command.branch);
+      case 'set-research-direction': return this.setResearchDirection(
+        command.playerId, command.category, command.branch, command.effect,
+      );
       case 'choose-research-breakthrough': return this.chooseResearchBreakthrough(
         command.playerId,
         command.branch,

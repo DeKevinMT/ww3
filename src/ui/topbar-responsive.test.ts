@@ -70,7 +70,7 @@ describe('responsive strategic topbar', () => {
     const combinedPower = worldUiSource.indexOf('class="top-metric top-metric--combined-power ');
     const population = worldUiSource.indexOf('class="top-metric top-metric--population"');
     const logistics = worldUiSource.indexOf('class="top-metric top-metric--logistics ');
-    const research = worldUiSource.indexOf('class="top-metric top-metric--research ');
+    const research = worldUiSource.indexOf('class="top-metric top-metric--research"');
 
     expect(economy).toBeGreaterThan(0);
     expect(population).toBeGreaterThan(economy);
@@ -91,12 +91,14 @@ describe('responsive strategic topbar', () => {
     expect(worldUiSource).toContain('<span>POPULATION</span>');
     expect(worldUiSource).toContain('<span>WAR SUPPLY</span>');
     expect(worldUiSource).toContain('data-panel="research"');
-    expect(worldUiSource).toContain("? 'CHOOSE' : allResearchMastered");
-    expect(worldUiSource).toContain("? `${topbarResearchProgress}%` : 'SELECT'");
-    expect(worldUiSource).toContain("'Breakthrough ready'");
-    expect(worldUiSource).toContain("'Select an Empire focus'");
-    expect(worldUiSource).toContain('const topbarResearchDays =');
-    expect(worldUiSource).toContain("topbarResearchDays ? ` · ${topbarResearchDays}D` : ''");
+    expect(worldUiSource).toContain('const topbarResearchTracks = RESEARCH_CATEGORIES.map');
+    expect(worldUiSource).toContain('const runningTopbarResearch = topbarResearchTracks.filter');
+    expect(worldUiSource).toContain('`${RESEARCH_CATEGORIES.length} ACTIVE`');
+    expect(worldUiSource).toContain('`${runningTopbarResearch}/${RESEARCH_CATEGORIES.length} RUNNING`');
+    expect(worldUiSource).toContain('${nextTopbarResearch.days}D');
+    expect(worldUiSource).toContain("'Directions selected · no funded research output'");
+    expect(worldUiSource).toContain('const researchDockLabel = `AUTO · ${topbarResearchProgress}% AVG`;');
+    expect(worldUiSource).not.toContain('const topbarResearchDays =');
     expect(worldUiSource).not.toContain('const topbarResearchWeeks =');
     expect(worldUiSource).not.toContain('data-panel="progress"');
     expect(worldUiSource).toContain('<small><span>CASH ${cash(human.treasury)}</span>');

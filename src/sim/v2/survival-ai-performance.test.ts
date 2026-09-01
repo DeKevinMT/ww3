@@ -5,6 +5,7 @@ import {
   type AiPlanningWorkStatsV2,
 } from './ai';
 import { NATIONAL_AI_REVIEW_TICKS } from './balance';
+import { RESEARCH_CATEGORY_DIRECTIONS } from './researchDirections';
 import { WorldEngineV2 } from './WorldEngineV2';
 import { resolveScenarioV2 } from './scenarios';
 import {
@@ -48,9 +49,20 @@ describe('Survival AI planning performance', () => {
         warAccessIndexBuilds: 0,
       });
       expect(commands.every((command) => command.type === 'set-budget-policy'
-        || command.type === 'set-research-focus'
-        || command.type === 'choose-research-breakthrough')).toBe(true);
-      expect(commands.length).toBeLessThanOrEqual(cohort.length * 2);
+        || command.type === 'set-research-direction')).toBe(true);
+      const directionsByPlayer = new Map<string, Set<string>>();
+      for (const command of commands) {
+        if (command.type !== 'set-research-direction') continue;
+        expect(RESEARCH_CATEGORY_DIRECTIONS[command.category]).toContainEqual({
+          branch: command.branch,
+          effect: command.effect,
+        });
+        const categories = directionsByPlayer.get(command.playerId) ?? new Set<string>();
+        categories.add(command.category);
+        directionsByPlayer.set(command.playerId, categories);
+      }
+      expect([...directionsByPlayer.values()].every((categories) => categories.size <= 5)).toBe(true);
+      expect(commands.length).toBeLessThanOrEqual(cohort.length * 6);
     }
 
     const activeNationCount = engine.content.nationIds.filter((playerId) => (

@@ -7,7 +7,7 @@ import type {
   TerrainType,
 } from './types';
 
-export const V2_RULES_VERSION = 'frontier-command-v2.80-daily-ticks';
+export const V2_RULES_VERSION = 'frontier-command-v2.81-parallel-research';
 export const V2_CONTENT_VERSION = 'natural-earth-countries-2026-v8-antarctica-survival';
 export const V2_MAP_ID = 'natural-earth-countries-2026';
 /** One authoritative simulation tick advances the visible world by one day. */
@@ -666,7 +666,10 @@ export const RESEARCH_BRANCHES: readonly ResearchBranchV2[] = [
 export const RESEARCH_PASSIVE_FUNDING_SHARE = 0.03;
 export const RESEARCH_ALLOCATED_FUNDING_SHARE = 0.70;
 export const RESEARCH_COST_GROWTH = 1.18;
-export const RESEARCH_BASE_COST_SCALE = 0.45;
+/** Parallel auto-research is intentionally slower than the former manual focus. */
+export const RESEARCH_BASE_COST_SCALE = 0.55;
+/** Each of five categories receives 16%; portfolio administration absorbs 20%. */
+export const RESEARCH_CATEGORY_OUTPUT_SHARE = 0.16;
 export const RESEARCH_MASTERY_POWER = 1;
 /** Larger research systems need proportionally larger programs, within a firm band. */
 export const RESEARCH_COST_CAPACITY_REFERENCE = 12;
@@ -709,7 +712,7 @@ export const RESEARCH_BRANCH_BASE_RP: Readonly<Record<ResearchBranchV2, number>>
 };
 
 export const RESEARCH_BRANCH_EFFECTS: Readonly<Record<ResearchBranchV2, readonly ResearchEffectV2[]>> = {
-  'population-recruitment': ['population-growth', 'training'],
+  'population-recruitment': ['population-growth', 'training', 'research-speed'],
   'military-industry': ['force-capacity', 'reinforcement-efficiency'],
   'advanced-weapons': ['attack', 'reinforcement-efficiency'],
   'defensive-systems': ['defense', 'casualty-reduction'],
@@ -717,7 +720,7 @@ export const RESEARCH_BRANCH_EFFECTS: Readonly<Record<ResearchBranchV2, readonly
   'economy-science': ['economy-growth', 'research-speed', 'research-efficiency'],
   // The stable branch id keeps authenticated saves and multiplayer snapshots
   // compatible; its gameplay is now military sustainment, not civilian food.
-  'food-systems': ['supply', 'recovery'],
+  'food-systems': ['supply', 'recovery', 'operating-efficiency'],
   // The stable branch id preserves saves and multiplayer protocol. Its live
   // effects now improve direct active-army training and field-force capacity.
   'reserve-doctrine': ['training', 'force-capacity'],

@@ -3,6 +3,7 @@ import {
   RESEARCH_BRANCH_EFFECTS,
   round,
 } from './balance';
+import { synchronizeArmyCapacityV2 } from './capacity';
 import type { WorldContentV2 } from './content';
 import { addWorldEventV2 } from './events';
 import type { FinancePlansV2 } from './economy';
@@ -13,12 +14,16 @@ import {
   selectResearchBranchMaxedV2,
   selectIsEliminatedV2,
   selectResearchBranchCostV2,
-  selectResearchFundableActiveProgramV2,
+  selectResearchFundingSharesV2,
   selectResearchOutputV2,
   selectWeeklyFinanceBreakdownV2,
   sortedNationIdsV2,
   type PowerSnapshotV2,
 } from './selectors';
+import {
+  RESEARCH_CATEGORIES,
+  RESEARCH_CATEGORY_DIRECTIONS,
+} from './researchDirections';
 import { applyResearchProgressTraitV2 } from './traitResearch';
 import { traitNationContextV2 } from './traitContext';
 import { isNationOperationalV2 } from './survival';
@@ -59,17 +64,11 @@ export function processResearchV2(
   powerSnapshot: PowerSnapshotV2 = createPowerSnapshotV2(state, content),
 ): void {
   const playerIds = sortedNationIdsV2(state);
+  let capacityChanged = false;
   for (const playerId of playerIds) {
     if (selectIsEliminatedV2(state, playerId)
       || !isNationOperationalV2(state, content, playerId)) continue;
     const nation = state.players[playerId]!;
-    const branch = selectResearchFundableActiveProgramV2(
-      state,
-      content,
-      playerId,
-      powerSnapshot,
-    );
-    if (!branch) continue;
     const finance = financePlans?.get(playerId)
       ?? selectWeeklyFinanceBreakdownV2(state, content, playerId, powerSnapshot);
     // Research uses one stable national trait view throughout this nation's
@@ -95,36 +94,60 @@ export function processResearchV2(
       nationTraitContext,
       powerSnapshot,
     );
-    const cost = selectResearchBranchCostV2(
-      state,
-      content,
-      playerId,
-      branch,
-      powerSnapshot,
+    const fundingShares = selectResearchFundingSharesV2(
+      state, content, playerId, powerSnapshot,
     );
-    if (cost <= 0) continue;
-    const current = Math.max(0, nation.research.progress[branch]);
-    if (current + 1e-9 >= cost) {
-      nation.research.progress[branch] = cost;
-      continue;
-    }
-    const weeklyProgress = applyResearchProgressTraitV2(
-      playerId,
-      branch,
-      poolOutput,
-      nationTraitContext,
-    );
-    const next = Math.min(cost, round(current + weeklyProgress));
-    nation.research.progress[branch] = next;
-    if (next + 1e-9 >= cost) {
-      addWorldEventV2(
-        state,
-        'research',
-        isHumanPlayerV2(state, playerId) ? 'action' : 'info',
-        `${content.nations[playerId]?.name ?? playerId}: ${branch.replaceAll('-', ' ')} breakthrough ready — choose one upgrade.`,
-        undefined,
+    for (const category of RESEARCH_CATEGORIES) {
+      let direction = nation.research.categoryDirections[category];
+      if (selectResearchBranchMaxedV2(state, content, playerId, direction.branch)) {
+        const fallback = RESEARCH_CATEGORY_DIRECTIONS[category].find((candidate) => (
+          !selectResearchBranchMaxedV2(state, content, playerId, candidate.branch)
+        ));
+        if (!fallback) continue;
+        direction = { ...fallback };
+        nation.research.categoryDirections[category] = direction;
+      }
+      const branch = direction.branch;
+      const fundingShare = fundingShares[branch];
+      if (fundingShare <= 0) continue;
+      const weeklyProgress = applyResearchProgressTraitV2(
         playerId,
+        branch,
+        poolOutput * fundingShare,
+        nationTraitContext,
       );
+      let carriedProgress = round(Math.max(0, nation.research.progress[branch]) + weeklyProgress);
+      for (let completion = 0; completion < 8; completion += 1) {
+        const cost = selectResearchBranchCostV2(
+          state, content, playerId, branch, powerSnapshot,
+        );
+        if (cost <= 0 || carriedProgress + 1e-9 < cost) {
+          nation.research.progress[branch] = cost <= 0 ? 0 : carriedProgress;
+          break;
+        }
+        carriedProgress = round(Math.max(0, carriedProgress - cost));
+        nation.research.effectLevels[direction.effect] += 1;
+        nation.research.breakthroughs[branch] += 1;
+        capacityChanged ||= direction.effect === 'force-capacity';
+        addWorldEventV2(
+          state,
+          'research',
+          isHumanPlayerV2(state, playerId) ? 'action' : 'info',
+          `${content.nations[playerId]?.name ?? playerId}: ${category.toUpperCase()} · ${direction.effect.replaceAll('-', ' ')} level ${nation.research.effectLevels[direction.effect]} online — automatic research continues.`,
+          undefined,
+          playerId,
+        );
+        if (selectResearchBranchMaxedV2(state, content, playerId, branch)) {
+          nation.research.progress[branch] = 0;
+          const fallback = RESEARCH_CATEGORY_DIRECTIONS[category].find((candidate) => (
+            !selectResearchBranchMaxedV2(state, content, playerId, candidate.branch)
+          ));
+          if (fallback) nation.research.categoryDirections[category] = { ...fallback };
+          break;
+        }
+        nation.research.progress[branch] = carriedProgress;
+      }
     }
   }
+  if (capacityChanged) synchronizeArmyCapacityV2(state, content);
 }

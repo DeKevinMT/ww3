@@ -25,7 +25,6 @@ describe('V2 finance and research', () => {
     const bel = nationIdV2('bel');
     // Keep this baseline below the separate >10%-of-GDP surplus-investment path.
     state.players[bel].treasury = 0;
-    state.players[bel].research.activeProgram = 'advanced-weapons';
     const plan = selectWeeklyFinanceBreakdownV2(state, WORLD_CONTENT_V2, bel);
     expect(plan.expenses).toBeCloseTo(plan.baseOperatingCost + plan.foodProduction
       + plan.military + plan.research + plan.development, 5);
@@ -61,7 +60,6 @@ describe('V2 finance and research', () => {
       'food-systems': 0, 'reserve-doctrine': 0, 'public-administration': 0,
       'education-intelligence': 0,
     };
-    state.players[bel].research.activeProgram = 'advanced-weapons';
     state.players[bel].research.effectLevels.attack = 20;
     state.players[bel].research.effectLevels['reinforcement-efficiency'] = 20;
     const plans = createFinancePlansV2(state, WORLD_CONTENT_V2);
@@ -74,19 +72,17 @@ describe('V2 finance and research', () => {
     state.players[bel].research.progress['advanced-weapons'] = selectResearchBranchCostV2(
       state, WORLD_CONTENT_V2, bel, 'advanced-weapons',
     );
-    expect(engine.chooseResearchBreakthrough(bel, 'advanced-weapons', 'attack').accepted).toBe(true);
     engine.step();
     expect(state.players[bel].research.effectLevels.attack
       + state.players[bel].research.effectLevels['reinforcement-efficiency']).toBe(beforeLevels + 1);
     expect(state.players[bel].research.progress['advanced-weapons']).toBeGreaterThan(0);
-    expect(state.players[bel].research.progress['population-recruitment']).toBe(0);
+    expect(state.players[bel].research.progress['population-recruitment']).toBeGreaterThan(0);
   });
 
   it('protects the peace floor and manages wartime cash as an adaptive runway', () => {
     const peace = createWorldStateV2(11);
     const bel = nationIdV2('bel');
     peace.players[bel].treasury = 0;
-    peace.players[bel].research.activeProgram = 'advanced-weapons';
     const peacePlan = selectWeeklyFinanceBreakdownV2(peace, WORLD_CONTENT_V2, bel);
     const peacePolicy = nationalAiTreasuryPolicyV2(
       WORLD_CONTENT_V2.nations[bel]!.iqScore,
@@ -104,7 +100,6 @@ describe('V2 finance and research', () => {
     const war = createWorldStateV2(11);
     const nld = nationIdV2('nld');
     war.players[bel].treasury = 0;
-    war.players[bel].research.activeProgram = 'advanced-weapons';
     war.wars.push({
       id: 'war-test', attackerId: bel, defenderId: nld, startedTick: 0, lastBattleTick: 0,
       warScore: 0, battles: 0, attackerLosses: 0, defenderLosses: 0,
@@ -162,7 +157,6 @@ describe('V2 finance and research', () => {
     const state = createWorldStateV2(1_102);
     const bel = nationIdV2('bel');
     const nld = nationIdV2('nld');
-    state.players[bel].research.activeProgram = 'advanced-weapons';
     state.wars.push({
       id: 'war-smooth-cash', attackerId: bel, defenderId: nld, startedTick: 0,
       lastBattleTick: 0, warScore: 0, battles: 0, attackerLosses: 0,
@@ -256,7 +250,6 @@ describe('V2 finance and research', () => {
     const state = createWorldStateV2(111);
     const bel = nationIdV2('bel');
     state.players[bel].treasury = 0.25;
-    state.players[bel].research.activeProgram = 'advanced-weapons';
     for (const [index, defender] of ['nld', 'lux'].entries()) {
       state.wars.push({
         id: `war-runway-${index}`, attackerId: bel, defenderId: nationIdV2(defender),
@@ -365,12 +358,10 @@ describe('V2 finance and research', () => {
     const state = engine.state;
     const bel = nationIdV2('bel');
     state.players[bel].treasury = 100;
-    state.players[bel].research.activeProgram = 'advanced-weapons';
     state.players[bel].research.progress['advanced-weapons'] = selectResearchBranchCostV2(
       state, WORLD_CONTENT_V2, bel, 'advanced-weapons',
     );
     const beforeEffects = Object.values(state.players[bel].research.effectLevels).reduce((a, b) => a + b, 0);
-    expect(engine.chooseResearchBreakthrough(bel, 'advanced-weapons', 'attack').accepted).toBe(true);
     engine.step();
     const afterEffects = Object.values(state.players[bel].research.effectLevels).reduce((a, b) => a + b, 0);
     expect(afterEffects - beforeEffects).toBe(1);

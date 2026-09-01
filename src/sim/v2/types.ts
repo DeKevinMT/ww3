@@ -47,6 +47,12 @@ export type ResearchEffectV2 =
   | 'tax-efficiency'
   | 'operating-efficiency'
   | 'iq-increase';
+export type ResearchCategoryV2 = 'people' | 'army' | 'combat' | 'sustainment' | 'state';
+export interface ResearchDirectionV2 {
+  branch: ResearchBranchV2;
+  effect: ResearchEffectV2;
+}
+export type ResearchDirectionsV2 = Record<ResearchCategoryV2, ResearchDirectionV2>;
 export type OperationDoctrineV2 = 'pressure' | 'breakthrough' | 'siege' | 'counteroffensive' | 'consolidation';
 export type PolarRegionV2 = 'arctic' | 'antarctica';
 export type PolarEndgamePhaseV2 =
@@ -345,8 +351,10 @@ export type ResearchProgressByBranchV2 = Record<ResearchBranchV2, number>;
 export interface ResearchStateV2 {
   /** Legacy exact-100 mix retained for authenticated saves and old commands. */
   allocations: ResearchAllocationsV2;
-  /** The sole program receiving national research output; null pauses research. */
+  /** Legacy single-focus compatibility. Current portfolios keep this null. */
   activeProgram: ResearchBranchV2 | null;
+  /** One continuously running direction in each of the five research categories. */
+  categoryDirections: ResearchDirectionsV2;
   progress: ResearchProgressByBranchV2;
   effectLevels: ResearchEffectLevelsV2;
   breakthroughs: ResearchBreakthroughsV2;
@@ -1526,6 +1534,13 @@ export type WorldCommandV2 =
   }
   | { type: 'set-research-allocations'; playerId: PlayerId; allocations: ResearchAllocationsV2 }
   | { type: 'set-research-focus'; playerId: PlayerId; branch: ResearchBranchV2 | null }
+  | {
+    type: 'set-research-direction';
+    playerId: PlayerId;
+    category: ResearchCategoryV2;
+    branch: ResearchBranchV2;
+    effect: ResearchEffectV2;
+  }
   | {
     type: 'choose-research-breakthrough';
     playerId: PlayerId;

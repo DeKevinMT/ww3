@@ -85,19 +85,15 @@ describe('multiplayer command authorization', () => {
     });
   });
 
-  it('binds active national research choices to their owning seat', () => {
+  it('binds parallel national research directions to their owning seat', () => {
     const state = createWorldStateV2(550, WORLD_CONTENT_V2);
     const ownCommands = [
       {
-        type: 'set-research-focus' as const,
+        type: 'set-research-direction' as const,
         playerId: belgium,
+        category: 'state' as const,
         branch: 'economy-science' as const,
-      },
-      {
-        type: 'choose-research-breakthrough' as const,
-        playerId: belgium,
-        branch: 'economy-science' as const,
-        effect: 'research-speed' as const,
+        effect: 'research-efficiency' as const,
       },
     ];
     for (const command of ownCommands) {
@@ -107,6 +103,21 @@ describe('multiplayer command authorization', () => {
         reason: 'You can only manage your own country.',
       });
     }
+  });
+
+  it('rejects retired post-completion research choices even for the owning seat', () => {
+    const state = createWorldStateV2(550_1, WORLD_CONTENT_V2);
+    const command = {
+      type: 'choose-research-breakthrough' as const,
+      playerId: belgium,
+      branch: 'advanced-weapons' as const,
+      effect: 'reinforcement-efficiency' as const,
+    };
+
+    expect(authorizeMultiplayerCommandV2(state, belgium, command, false)).toEqual({
+      accepted: false,
+      reason: 'Post-completion research choices were retired; set a research direction instead.',
+    });
   });
 
   it('binds the separate Commander economy and manual route to its owning seat', () => {

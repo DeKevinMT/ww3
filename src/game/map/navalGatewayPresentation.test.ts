@@ -61,11 +61,15 @@ describe('authored naval gateway presentation', () => {
     }
   });
 
-  it('keeps the permanent overlay understated and emphasizes endpoint context only', () => {
+  it('keeps the permanent overlay clearly legible but understated', () => {
+    expect(NAVAL_GATEWAY_PRESENTATION_STYLE.opacity).toBeGreaterThanOrEqual(0.18);
     expect(NAVAL_GATEWAY_PRESENTATION_STYLE.opacity).toBeLessThan(0.20);
+    expect(NAVAL_GATEWAY_PRESENTATION_STYLE.widthPx).toBeGreaterThanOrEqual(0.64);
     expect(NAVAL_GATEWAY_PRESENTATION_STYLE.widthPx).toBeLessThan(0.70);
+    expect(NAVAL_GATEWAY_PRESENTATION_STYLE.glowOpacity).toBeGreaterThanOrEqual(0.05);
     expect(NAVAL_GATEWAY_PRESENTATION_STYLE.glowOpacity)
       .toBeLessThan(NAVAL_GATEWAY_PRESENTATION_STYLE.opacity);
+    expect(NAVAL_GATEWAY_PRESENTATION_STYLE.glowWidthPx).toBeGreaterThanOrEqual(1.5);
     expect(NAVAL_GATEWAY_PRESENTATION_STYLE.glowWidthPx)
       .toBeGreaterThan(NAVAL_GATEWAY_PRESENTATION_STYLE.widthPx);
     expect(NAVAL_GATEWAY_PRESENTATION_STYLE.emphasizedOpacity).toBeLessThanOrEqual(0.30);

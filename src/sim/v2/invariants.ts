@@ -25,6 +25,10 @@ import { selectCoopMilitaryAccessRouteBetweenV2 } from './coopAccess';
 import { isHumanPlayerV2 } from './humanPlayers';
 import { OPENING_ARMY_BONUS_DURATION_TICKS_V2 } from './openingArmyBonus';
 import {
+  RESEARCH_CATEGORIES,
+  researchDirectionIsValidV2,
+} from './researchDirections';
+import {
   SURVIVAL_DAWNLINE_ARCTIC_NATION_IDS_V2,
   isSurvivalDawnlineNationV2,
 } from './survivalOrdinaryAi';
@@ -62,7 +66,8 @@ import {
 
 const NATION_KEYS = ['budget', 'capitalId', 'ceasefiresRequested', 'domesticFoodCapacity', 'empireName', 'foodSecurity', 'foodStock', 'manualActionUses', 'openingArmyBonus', 'propagandaAvailableTick', 'propagandaProgram', 'rapidRecruitmentAvailableTick', 'research', 'researchSurgeAvailableTick', 'trainedReserves', 'treasury', 'warFatigue'];
 const TERRITORY_KEYS = ['army', 'coreOwner', 'economy', 'integration', 'integrationProgram', 'owner', 'population', 'survivalBasePacket'];
-const RESEARCH_KEYS = ['activeProgram', 'allocations', 'breakthroughs', 'effectLevels', 'progress'];
+const RESEARCH_KEYS = ['activeProgram', 'allocations', 'breakthroughs', 'categoryDirections', 'effectLevels', 'progress'];
+const RESEARCH_DIRECTION_KEYS = ['branch', 'effect'];
 const BUDGET_KEYS = ['development', 'military', 'research'];
 const MANUAL_ACTION_USE_KEYS = ['propaganda', 'rapidRecruitment', 'researchSurge'];
 const EFFECT_KEYS = [
@@ -944,9 +949,19 @@ export function invariantErrorsV2(state: WorldStateV2, content: WorldContentV2):
     if (!exactKeys(nation.research.breakthroughs, BREAKTHROUGH_KEYS)) errors.push(`Nation ${id} breakthroughs have non-canonical keys.`);
     if (!exactKeys(nation.research.allocations, BREAKTHROUGH_KEYS)) errors.push(`Nation ${id} research allocations have non-canonical keys.`);
     if (!exactKeys(nation.research.progress, BREAKTHROUGH_KEYS)) errors.push(`Nation ${id} research progress has non-canonical keys.`);
-    if (nation.research.activeProgram !== null
-      && !RESEARCH_BRANCHES.includes(nation.research.activeProgram)) {
-      errors.push(`Nation ${id} has an invalid active research programme.`);
+    if (nation.research.activeProgram !== null) {
+      errors.push(`Nation ${id} has a retired single-focus research programme.`);
+    }
+    if (!exactKeys(nation.research.categoryDirections, [...RESEARCH_CATEGORIES].sort())) {
+      errors.push(`Nation ${id} has non-canonical research categories.`);
+    } else {
+      for (const category of RESEARCH_CATEGORIES) {
+        const direction = nation.research.categoryDirections[category];
+        if (!direction || !exactKeys(direction, RESEARCH_DIRECTION_KEYS)
+          || !researchDirectionIsValidV2(category, direction)) {
+          errors.push(`Nation ${id} has an invalid ${category} research direction.`);
+        }
+      }
     }
     const budget = nation.budget;
     if (![budget.military, budget.research, budget.development].every((value) => Number.isInteger(value) && value >= 5 && value <= 90)

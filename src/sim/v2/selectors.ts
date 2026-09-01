@@ -114,6 +114,7 @@ import {
   RESEARCH_BRANCH_BASE_RP,
   RESEARCH_BRANCH_EFFECTS,
   RESEARCH_BASE_COST_SCALE,
+  RESEARCH_CATEGORY_OUTPUT_SHARE,
   RESEARCH_CATCH_UP_FULL_GAP,
   RESEARCH_CATCH_UP_MAX_BONUS,
   RESEARCH_COST_CAPACITY_MAX_MULTIPLIER,
@@ -144,6 +145,7 @@ import {
   smoothstep,
   upkeepFundingTargetRatioV2,
 } from './balance';
+import { RESEARCH_CATEGORIES } from './researchDirections';
 import {
   ROGUE_AI_NATION_ID_V2,
   WORLD_CONTENT_V2,
@@ -2398,23 +2400,30 @@ export function selectNationalAggressivenessV2(
   ), 1);
 }
 
-/** The active program receives the complete national research pool; every other branch is paused. */
+/**
+ * Current portfolios fund one direction in each category concurrently.
+ */
 export function selectResearchFundingSharesV2(
   state: WorldStateV2,
   content: WorldContentV2,
   playerId: PlayerId,
   powerSnapshot?: PowerSnapshotV2,
 ): Readonly<Record<ResearchBranchV2, number>> {
-  const activeProgram = selectResearchFundableActiveProgramV2(
-    state,
-    content,
-    playerId,
-    powerSnapshot,
-  );
-  return Object.fromEntries(RESEARCH_BRANCHES.map((branch) => [
-    branch,
-    branch === activeProgram ? 1 : 0,
-  ])) as Record<ResearchBranchV2, number>;
+  const nation = state.players[playerId];
+  const shares = Object.fromEntries(
+    RESEARCH_BRANCHES.map((branch) => [branch, 0]),
+  ) as Record<ResearchBranchV2, number>;
+  if (!nation) return shares;
+  for (const category of RESEARCH_CATEGORIES) {
+    const branch = nation.research.categoryDirections[category].branch;
+    if (selectResearchBranchMaxedV2(state, content, playerId, branch)) continue;
+    const cost = powerSnapshot
+      ? selectResearchBranchCostV2(state, content, playerId, branch, powerSnapshot)
+      : selectResearchBranchCostV2(state, content, playerId, branch);
+    if (cost <= 0) continue;
+    shares[branch] = round(shares[branch] + RESEARCH_CATEGORY_OUTPUT_SHARE, 9);
+  }
+  return shares;
 }
 
 function researchBranchCostForCompletionsV2(
@@ -2478,6 +2487,24 @@ export function selectResearchFundableActiveProgramV2(
   return activeProgram;
 }
 
+function selectHasFundableResearchV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  playerId: PlayerId,
+  powerSnapshot?: PowerSnapshotV2,
+): boolean {
+  const nation = state.players[playerId];
+  if (!nation) return false;
+  return RESEARCH_CATEGORIES.some((category) => {
+    const branch = nation.research.categoryDirections[category].branch;
+    if (selectResearchBranchMaxedV2(state, content, playerId, branch)) return false;
+    const cost = powerSnapshot
+      ? selectResearchBranchCostV2(state, content, playerId, branch, powerSnapshot)
+      : selectResearchBranchCostV2(state, content, playerId, branch);
+    return cost > 0;
+  });
+}
+
 export function selectResearchOutputV2(
   state: WorldStateV2,
   content: WorldContentV2,
@@ -2488,7 +2515,7 @@ export function selectResearchOutputV2(
   powerSnapshot?: PowerSnapshotV2,
 ): number {
   const nation = state.players[playerId];
-  if (!nation || !selectResearchFundableActiveProgramV2(
+  if (!nation || !selectHasFundableResearchV2(
     state,
     content,
     playerId,
@@ -2515,6 +2542,46 @@ export function selectResearchOutputV2(
 }
 
 /** Bounded IQ gameplay-proxy effect used by ordinary R&D. */
+function researchInstitutionalCapacityForIqV2(
+  content: WorldContentV2,
+  playerId: PlayerId,
+  iqScore: number,
+): number {
+  const researchCapacity = content.nations[playerId]?.real.researchCapacity
+    ?? NATIONAL_IQ_INSTITUTIONAL_CAPACITY_FLOOR;
+  const capacityShare = clamp(
+    (researchCapacity - NATIONAL_IQ_INSTITUTIONAL_CAPACITY_FLOOR)
+      / (NATIONAL_IQ_INSTITUTIONAL_CAPACITY_CEILING
+        - NATIONAL_IQ_INSTITUTIONAL_CAPACITY_FLOOR),
+    0,
+    1,
+  );
+  const capacityBase = RESEARCH_INSTITUTION_CAPACITY_BASE_MIN
+    + (RESEARCH_INSTITUTION_CAPACITY_BASE_MAX
+      - RESEARCH_INSTITUTION_CAPACITY_BASE_MIN) * capacityShare;
+  const boundedIq = clamp(iqScore, NATIONAL_IQ_SCORE_MIN, NATIONAL_IQ_EFFECTIVE_SCORE_MAX);
+  const iqResearchMultiplier = 1
+    + (boundedIq - NATIONAL_IQ_SCORE_NEUTRAL) * NATIONAL_IQ_RESEARCH_PER_POINT;
+  return round(clamp(
+    capacityBase * iqResearchMultiplier,
+    RESEARCH_INSTITUTION_MULTIPLIER_MIN,
+    RESEARCH_INSTITUTION_MULTIPLIER_MAX,
+  ));
+}
+
+/** Exact combined IQ factor used by ordinary research output at a given score. */
+export function researchIqOutputFactorV2(
+  content: WorldContentV2,
+  playerId: PlayerId,
+  iqScore: number,
+): number {
+  return round(
+    researchInstitutionalCapacityForIqV2(content, playerId, iqScore)
+      * nationalAiEfficiencyV2(iqScore),
+    9,
+  );
+}
+
 export function selectResearchInstitutionalCapacityV2(content: WorldContentV2, playerId: PlayerId): number;
 export function selectResearchInstitutionalCapacityV2(
   state: WorldStateV2,
@@ -2530,25 +2597,74 @@ export function selectResearchInstitutionalCapacityV2(
   const content = effectivePlayerId === undefined
     ? stateOrContent as WorldContentV2 : contentOrPlayerId as WorldContentV2;
   const playerId = effectivePlayerId ?? contentOrPlayerId as PlayerId;
-  const researchCapacity = content.nations[playerId]?.real.researchCapacity
-    ?? NATIONAL_IQ_INSTITUTIONAL_CAPACITY_FLOOR;
-  const capacityShare = clamp(
-    (researchCapacity - NATIONAL_IQ_INSTITUTIONAL_CAPACITY_FLOOR)
-      / (NATIONAL_IQ_INSTITUTIONAL_CAPACITY_CEILING
-        - NATIONAL_IQ_INSTITUTIONAL_CAPACITY_FLOOR),
-    0,
-    1,
+  const iqScore = state
+    ? selectNationalIqViewV2(state, content, playerId).score
+    : selectNationalIqViewV2(content, playerId).score;
+  return researchInstitutionalCapacityForIqV2(content, playerId, iqScore);
+}
+
+export interface ResearchDriversV2 {
+  currentOutput: number;
+  fundedResearch: number;
+  fundingRatio: number;
+  economyExpansionShare: number;
+  economyExpansionOutputGain: number;
+  institutionalCapacity: number;
+  iqScore: number;
+  iqOutputMultiplier: number;
+  iqStepPoints: number;
+  iqStepOutputGain: number;
+}
+
+/**
+ * Explainable economy and IQ levers for the research UI. The expansion quote
+ * is deliberately a fixed counterfactual: funded R&D and revenue both rise by
+ * 25%, while war, traits, catch-up and the chosen portfolio stay unchanged.
+ */
+export function selectResearchDriversV2(
+  state: WorldStateV2,
+  content: WorldContentV2,
+  playerId: PlayerId,
+  finance = selectWeeklyFinanceBreakdownV2(state, content, playerId),
+): ResearchDriversV2 {
+  const economyExpansionShare = 0.25;
+  const currentOutput = selectResearchOutputV2(state, content, playerId, finance);
+  const expansionFinance: WeeklyFinanceBreakdownV2 = {
+    ...finance,
+    revenue: round(finance.revenue * (1 + economyExpansionShare)),
+    research: round(finance.research * (1 + economyExpansionShare)),
+  };
+  const expansionOutput = selectResearchOutputV2(
+    state, content, playerId, expansionFinance,
   );
-  const capacityBase = RESEARCH_INSTITUTION_CAPACITY_BASE_MIN
-    + (RESEARCH_INSTITUTION_CAPACITY_BASE_MAX
-      - RESEARCH_INSTITUTION_CAPACITY_BASE_MIN) * capacityShare;
-  return round(clamp(
-    capacityBase * (state
-      ? selectNationalIqViewV2(state, content, playerId)
-      : selectNationalIqViewV2(content, playerId)).researchMultiplier,
-    RESEARCH_INSTITUTION_MULTIPLIER_MIN,
-    RESEARCH_INSTITUTION_MULTIPLIER_MAX,
-  ));
+  const iqScore = selectNationalIqViewV2(state, content, playerId).score;
+  const neutralIqFactor = researchIqOutputFactorV2(
+    content, playerId, NATIONAL_IQ_SCORE_NEUTRAL,
+  );
+  const currentIqFactor = researchIqOutputFactorV2(content, playerId, iqScore);
+  const steppedIq = Math.min(NATIONAL_IQ_EFFECTIVE_SCORE_MAX, iqScore + 5);
+  const steppedIqFactor = researchIqOutputFactorV2(content, playerId, steppedIq);
+  return {
+    currentOutput,
+    fundedResearch: finance.research,
+    fundingRatio: round(clamp(
+      finance.research / Math.max(0.001, finance.revenue * 0.25),
+      0,
+      1.25,
+    )),
+    economyExpansionShare,
+    economyExpansionOutputGain: currentOutput > 0
+      ? round(expansionOutput / currentOutput - 1, 9) : 0,
+    institutionalCapacity: selectResearchInstitutionalCapacityV2(
+      state, content, playerId,
+    ),
+    iqScore,
+    iqOutputMultiplier: neutralIqFactor > 0
+      ? round(currentIqFactor / neutralIqFactor, 9) : 1,
+    iqStepPoints: round(steppedIq - iqScore, 3),
+    iqStepOutputGain: currentIqFactor > 0
+      ? round(steppedIqFactor / currentIqFactor - 1, 9) : 0,
+  };
 }
 
 interface NationalAiPlanSelectorInputsV2 {
@@ -2702,6 +2818,12 @@ export function selectResearchPortfolioV2(
   const lastFundedIndex = RESEARCH_BRANCHES.reduce((last, branch, index) => (
     fundingShares[branch] > 0 ? index : last
   ), -1);
+  const totalFundingShare = round(RESEARCH_BRANCHES.reduce(
+    (sum, branch) => sum + fundingShares[branch],
+    0,
+  ), 9);
+  const fundedBudget = round(finance.research * totalFundingShare, 9);
+  const fundedOutput = round(poolOutput * totalFundingShare, 9);
   let assignedFunding = 0;
   let assignedOutput = 0;
   return RESEARCH_BRANCHES.map((branch, index) => {
@@ -2709,10 +2831,10 @@ export function selectResearchPortfolioV2(
     const isLastFunded = index === lastFundedIndex;
     const fundingShare = fundingShares[branch];
     const weeklyFunding = maxed ? 0 : isLastFunded
-      ? round(Math.max(0, finance.research - assignedFunding), 9)
+      ? round(Math.max(0, fundedBudget - assignedFunding), 9)
       : round(finance.research * fundingShare, 9);
     const outputShare = maxed ? 0 : isLastFunded
-      ? round(Math.max(0, poolOutput - assignedOutput), 9)
+      ? round(Math.max(0, fundedOutput - assignedOutput), 9)
       : round(poolOutput * fundingShare, 9);
     assignedFunding = round(assignedFunding + weeklyFunding, 9);
     assignedOutput = round(assignedOutput + outputShare, 9);
@@ -2775,9 +2897,11 @@ export function selectResearchSurgeTermsV2(
   let reason: string | undefined;
   if (!nation || selectTerritoriesOfV2(state, playerId).length === 0) reason = 'Country is unavailable.';
   else if (!target) reason = 'Research program is unavailable.';
-  else if (nation.research.activeProgram !== targetBranch) reason = 'Research Surge can only advance the active program.';
+  else if (!RESEARCH_CATEGORIES.some((category) => (
+      nation.research.categoryDirections[category].branch === targetBranch
+    ))) reason = 'Research Surge can only advance an active category direction.';
   else if (target.maxed) reason = 'Selected research program has reached its useful limit.';
-  else if (target.nextCost > 0 && target.progress + 1e-9 >= target.nextCost) reason = 'Active research breakthrough is ready for a choice.';
+  else if (target.nextCost > 0 && target.progress + 1e-9 >= target.nextCost) reason = 'That direction is completing automatically.';
   else if (cooldownRemaining > 0) reason = `Research Surge returns in ${cooldownRemaining} days.`;
   else if (nation.treasury <= 0) reason = 'Research Surge is locked while the treasury is in debt.';
   else if (progressAdded <= 0.0000001) reason = 'Selected research program cannot advance.';
@@ -3051,7 +3175,7 @@ export function selectWeeklyFinanceBreakdownV2(
   const excessResearch = excessCashRemaining * excessResearchShare;
   const excessDevelopment = excessCashRemaining - excessResearch;
   const plannedResearch = envelope * budget.research / 100 + excessResearch;
-  const research = selectResearchFundableActiveProgramV2(
+  const research = selectHasFundableResearchV2(
     state,
     content,
     playerId,

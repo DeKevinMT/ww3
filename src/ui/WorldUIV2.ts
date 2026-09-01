@@ -100,7 +100,10 @@ import {
   selectNationalEconomyV2,
   selectNationalIqViewV2,
   selectPopulationDynamicsV2,
+  projectNationalIqFusionV2,
+  selectResearchDriversV2,
   selectResearchEffectImpactV2,
+  researchIqOutputFactorV2,
   selectWarRouteDistanceKmV2,
   isSurvivalScorchedTransitTerritoryV2,
   type MilitaryBaseSnapshotV2,
@@ -133,6 +136,10 @@ import {
   type SurvivalCounteroffensiveTargetV2,
 } from '../sim/v2/war';
 import { isSurvivalStateV2 } from '../sim/v2/survival';
+import {
+  RESEARCH_CATEGORIES,
+  RESEARCH_CATEGORY_DIRECTIONS,
+} from '../sim/v2/researchDirections';
 import {
   captureDisclosureSessions,
   captureScrollSessions,
@@ -172,6 +179,7 @@ import type {
   PopulationDynamicsV2,
   RankingEntryV2,
   ResearchBranchV2,
+  ResearchCategoryV2,
   ResearchEffectV2,
   ResearchBranchProgressV2,
   ResearchSurgeTermsV2,
@@ -194,7 +202,7 @@ import type {
 
 type CommandOutcome = boolean | CommandResultV2 | void;
 type ResearchCommandV2 = Extract<WorldCommandV2, {
-  type: 'set-research-focus' | 'choose-research-breakthrough' | 'research-surge';
+  type: 'set-research-focus' | 'set-research-direction' | 'research-surge';
 }>;
 type PendingResearchActionV2 = {
   command: ResearchCommandV2;
@@ -202,14 +210,14 @@ type PendingResearchActionV2 = {
   submittedActionSequence: number;
   queuedActionSequence: number;
   activeProgramBefore: ResearchBranchV2 | null | undefined;
-  effectLevelBefore?: number;
+  directionBefore?: string;
   progressBefore?: number;
   surgeUsesBefore?: number;
 };
 
 function isResearchCommandV2(command: WorldCommandV2): command is ResearchCommandV2 {
   return command.type === 'set-research-focus'
-    || command.type === 'choose-research-breakthrough'
+    || command.type === 'set-research-direction'
     || command.type === 'research-surge';
 }
 
@@ -218,8 +226,11 @@ function sameResearchCommandV2(left: ResearchCommandV2, right: ResearchCommandV2
   switch (left.type) {
     case 'set-research-focus':
       return right.type === left.type && right.branch === left.branch;
-    case 'choose-research-breakthrough':
-      return right.type === left.type && right.branch === left.branch && right.effect === left.effect;
+    case 'set-research-direction':
+      return right.type === left.type
+        && right.category === left.category
+        && right.branch === left.branch
+        && right.effect === left.effect;
     case 'research-surge':
       return right.type === left.type && right.targetBranch === left.targetBranch;
   }
@@ -314,8 +325,9 @@ export interface WorldEngineV2UIContract {
     finance?: WeeklyFinanceBreakdownV2,
   ): readonly ResearchBranchProgressV2[];
   setResearchFocus(playerId: string, branch: ResearchBranchV2 | null): CommandOutcome;
-  chooseResearchBreakthrough(
+  setResearchDirection(
     playerId: string,
+    category: ResearchCategoryV2,
     branch: ResearchBranchV2,
     effect: ResearchEffectV2,
   ): CommandOutcome;
@@ -464,30 +476,25 @@ const RESEARCH_COLORS: Record<ResearchBranchV2, string> = {
 };
 
 const RESEARCH_PILLARS: readonly Readonly<{
+  id: ResearchCategoryV2;
   label: string;
   icon: string;
   purpose: string;
-  branches: readonly [ResearchBranchV2, ResearchBranchV2];
 }>[] = [
   {
-    label: 'People', icon: 'POP', purpose: 'Grow citizens, recruits and national intelligence.',
-    branches: ['population-recruitment', 'education-intelligence'],
+    id: 'people', label: 'People', icon: 'POP', purpose: 'Shape citizens, education and national potential.',
   },
   {
-    label: 'Army', icon: 'MIL', purpose: 'Expand capacity, training and replacement strength.',
-    branches: ['military-industry', 'reserve-doctrine'],
+    id: 'army', label: 'Army', icon: 'MIL', purpose: 'Build capacity, training or replacement strength.',
   },
   {
-    label: 'Combat', icon: 'ATK', purpose: 'Choose sharper attacks or stronger protection.',
-    branches: ['advanced-weapons', 'defensive-systems'],
+    id: 'combat', label: 'Combat', icon: 'ATK', purpose: 'Choose offence, defence or force protection.',
   },
   {
-    label: 'Sustainment', icon: 'SUP', purpose: 'Keep forces supplied, recovered and in the field.',
-    branches: ['logistics-medicine', 'food-systems'],
+    id: 'sustainment', label: 'Sustainment', icon: 'SUP', purpose: 'Keep forces supplied, recovered and affordable.',
   },
   {
-    label: 'State', icon: 'ECO', purpose: 'Build a richer, faster and cheaper empire.',
-    branches: ['economy-science', 'public-administration'],
+    id: 'state', label: 'State', icon: 'ECO', purpose: 'Develop growth, efficient R&D or public revenue.',
   },
 ] as const;
 
@@ -2335,8 +2342,10 @@ export class WorldUIV2 {
       submittedActionSequence: this.engine.state.actionSequence,
       queuedActionSequence: this.engine.state.actionSequence,
       activeProgramBefore: nation?.research.activeProgram,
-      ...(command.type === 'choose-research-breakthrough'
-        ? { effectLevelBefore: nation?.research.effectLevels[command.effect] ?? 0 }
+      ...(command.type === 'set-research-direction'
+        ? { directionBefore: nation
+            ? `${nation.research.categoryDirections[command.category].branch}:${nation.research.categoryDirections[command.category].effect}`
+            : undefined }
         : {}),
       ...(command.type === 'research-surge'
         ? {
@@ -2378,9 +2387,13 @@ export class WorldUIV2 {
         return change.reason === 'research-focus'
           && pending.activeProgramBefore !== pending.command.branch
           && nation.research.activeProgram === pending.command.branch;
-      case 'choose-research-breakthrough':
-        return change.reason === 'research-breakthrough'
-          && nation.research.effectLevels[pending.command.effect] > (pending.effectLevelBefore ?? 0);
+      case 'set-research-direction': {
+        const direction = nation.research.categoryDirections[pending.command.category];
+        return change.reason === 'research-focus'
+          && `${direction.branch}:${direction.effect}` !== pending.directionBefore
+          && direction.branch === pending.command.branch
+          && direction.effect === pending.command.effect;
+      }
       case 'research-surge':
         return change.reason === 'research-surge'
           && (nation.manualActionUses.researchSurge > (pending.surgeUsesBefore ?? 0)
@@ -3105,38 +3118,35 @@ export class WorldUIV2 {
       : `WEAK ${logisticsReadiness.weakest?.percent ?? logisticsReadiness.percent}% · ${logisticsReadiness.frontCount} ${logisticsReadiness.frontCount === 1 ? 'FRONT' : 'FRONTS'}`;
     const researchPortfolio = this.engine.researchPortfolio(human.id, finance);
     const researchState = state.players[human.id]!.research;
-    const activeTopbarResearch = researchPortfolio.find((program) => (
-      program.branch === researchState.activeProgram
-    ));
-    const readyTopbarResearch = researchPortfolio.find((program) => (
-      !program.maxed && program.nextCost > 0 && program.progress + 1e-9 >= program.nextCost
-    ));
-    const allResearchMastered = researchPortfolio.length > 0
-      && researchPortfolio.every((program) => program.maxed);
-    const topbarResearchProgress = readyTopbarResearch
-      ? 100 : activeTopbarResearch
-        ? Math.round(clamp(activeTopbarResearch.progressRatio, 0, 1) * 100)
-        : allResearchMastered ? 100 : 0;
-    const topbarResearchValue = readyTopbarResearch
-      ? 'CHOOSE' : allResearchMastered
-        ? 'MASTERED' : activeTopbarResearch
-          ? `${topbarResearchProgress}%` : 'SELECT';
-    const topbarResearchDays = activeTopbarResearch && activeTopbarResearch.weeklyProgress > 0
-      ? Math.max(1, Math.ceil(Math.max(
-        0,
-        activeTopbarResearch.nextCost - activeTopbarResearch.progress,
-      ) / activeTopbarResearch.weeklyProgress))
-      : 0;
-    const topbarResearchLabel = readyTopbarResearch
-      ? 'Breakthrough ready'
-      : activeTopbarResearch
-        ? `${RESEARCH_META[activeTopbarResearch.branch].shortLabel}${topbarResearchDays ? ` · ${topbarResearchDays}D` : ''}`
-        : allResearchMastered ? 'Empire Blueprint complete' : 'Select an Empire focus';
-    const researchDockLabel = readyTopbarResearch
-      ? 'CHOOSE EFFECT'
-      : activeTopbarResearch
-        ? `${RESEARCH_META[activeTopbarResearch.branch].shortLabel} · ${topbarResearchProgress}%`
-        : allResearchMastered ? 'All mastered' : 'SELECT FOCUS';
+    const researchByBranch = new Map(researchPortfolio.map((program) => [program.branch, program]));
+    const topbarResearchTracks = RESEARCH_CATEGORIES.map((category) => {
+      const direction = researchState.categoryDirections[category];
+      const program = researchByBranch.get(direction.branch)!;
+      const days = program.weeklyProgress > 0
+        ? Math.max(1, Math.ceil(Math.max(0, program.nextCost - program.progress) / program.weeklyProgress))
+        : 0;
+      return { category, direction, program, days };
+    });
+    const nextTopbarResearch = [...topbarResearchTracks]
+      .filter((track) => !track.program.maxed && track.days > 0)
+      .sort((left, right) => left.days - right.days
+        || RESEARCH_CATEGORIES.indexOf(left.category) - RESEARCH_CATEGORIES.indexOf(right.category))[0];
+    const topbarResearchProgress = Math.round(topbarResearchTracks.reduce(
+      (sum, track) => sum + clamp(track.program.progressRatio, 0, 1),
+      0,
+    ) * 100 / Math.max(1, topbarResearchTracks.length));
+    const runningTopbarResearch = topbarResearchTracks.filter((track) => (
+      !track.program.maxed && track.program.weeklyProgress > 0
+    )).length;
+    const topbarResearchValue = runningTopbarResearch === RESEARCH_CATEGORIES.length
+      ? `${RESEARCH_CATEGORIES.length} ACTIVE`
+      : `${runningTopbarResearch}/${RESEARCH_CATEGORIES.length} RUNNING`;
+    const topbarResearchLabel = nextTopbarResearch
+      ? `Next: ${RESEARCH_EFFECT_COPY[nextTopbarResearch.direction.effect].name} · ${nextTopbarResearch.days}D`
+      : runningTopbarResearch === 0
+        ? 'Directions selected · no funded research output'
+        : 'Five automatic research directions selected';
+    const researchDockLabel = `AUTO · ${topbarResearchProgress}% AVG`;
     const warOutcome = this.warOutcomeQueue[0];
     const apexTransmission = !warOutcome ? this.pendingApexTransmission() : undefined;
     const commandOpen = this.contextPanelOpen && !this.selectedTerritoryId && !this.selectedPolarRegion;
@@ -3156,7 +3166,7 @@ export class WorldUIV2 {
           <button type="button" class="top-metric top-metric--population" data-action="panel" data-panel="nation" title="Integrated population and annual change" aria-label="Open Nation. Integrated population ${format(integratedPopulation, 2)} million; annual change ${signed(calendarPopulationGrowth * 100, 2)} percent"><span>POPULATION</span><strong>${population(integratedPopulation)}<i class="${calendarPopulationGrowth >= 0 ? 'is-positive' : 'is-negative'}">${signed(calendarPopulationGrowth * 100, 2)}%</i></strong></button>
           <button type="button" class="top-metric top-metric--combined-power top-metric--defence-stack ${wars.length ? 'has-war' : ''}" data-action="panel" data-panel="war" title="Empire Army with EONSCAR Energy projected over it" aria-label="Open War. Shield-supported army power ${compactNumber(combinedPower)}. Base Empire Army power ${compactNumber(combatPower)}, ${armyReadiness.percent} percent ready, ${armyReadiness.status.toLowerCase()}. ${apexPowerState.recovering ? `EONSCAR Energy recharging at ${apexPowerState.integrityPercent} percent and currently unavailable` : `EONSCAR Energy ${apexPowerState.integrityPercent} percent; Army support plus ${format(apexPowerState.supportBonusPercent, 1)} percent`}"><span>EMPIRE DEFENCE</span><strong>${compactNumber(combinedPower)}<i class="topbar-army-ready ${armyReadiness.className}">${armyReadiness.value} ARMY</i></strong><i class="topbar-defence-stack" role="img" aria-label="Army readiness ${armyReadiness.percent} percent with EONSCAR Energy ${apexPowerState.integrityPercent} percent overlaid"><b style="--army-ready:${armyReadiness.percent}%"></b><em class="${apexPowerState.recovering ? 'is-recharging' : 'is-active'}" style="--shield-integrity:${apexPowerState.integrityPercent}%"><i data-empire-defence-glow></i></em></i><small><span>ARMY ${compactNumber(combatPower)}</span><b class="${apexPowerState.recovering ? 'is-warn' : 'is-positive'}">ENERGY ${apexPowerState.integrityPercent}% · +${format(apexPowerState.supportBonusPercent, 1)}% SUPPORT</b></small></button>
           <button type="button" class="top-metric top-metric--logistics is-${logisticsReadiness.status}" data-action="panel" data-panel="war" title="Actual supply delivered to active war fronts" aria-label="Open War. War Supply ${logisticsReadiness.percent} percent. ${escapeHtml(logisticsDetail)}"><span>WAR SUPPLY</span><strong>${logisticsReadiness.percent}%<i>${logisticsReadiness.frontCount === 0 ? 'NO WAR' : logisticsReadiness.statusLabel}</i></strong><i class="topbar-progress-bar" role="progressbar" aria-label="War supply delivered" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${logisticsReadiness.percent}"><b style="width:${logisticsReadiness.percent}%"></b></i></button>
-          <button type="button" class="top-metric top-metric--research ${readyTopbarResearch ? 'is-actionable' : !activeTopbarResearch && !allResearchMastered ? 'is-idle' : ''}" data-action="panel" data-panel="research" title="Choose and direct Empire research" aria-label="Open Research. ${escapeHtml(topbarResearchLabel)}"><span>RESEARCH</span><strong>${topbarResearchValue}</strong><i class="topbar-progress-bar" role="progressbar" aria-label="Research progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${topbarResearchProgress}"><b style="width:${topbarResearchProgress}%"></b></i><small>${escapeHtml(topbarResearchLabel)}</small></button>
+          <button type="button" class="top-metric top-metric--research" data-action="panel" data-panel="research" title="Direct five parallel Empire research categories" aria-label="Open Research. ${escapeHtml(topbarResearchLabel)}"><span>RESEARCH</span><strong>${topbarResearchValue}</strong><i class="topbar-progress-bar" role="progressbar" aria-label="Average research progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${topbarResearchProgress}"><b style="width:${topbarResearchProgress}%"></b></i><small>${escapeHtml(topbarResearchLabel)}</small></button>
         </nav>
         <div class="top-actions">
           ${this.options.onSurrenderRequested && !this.introOpen && !spectating && !state.gameOver
@@ -3178,7 +3188,7 @@ export class WorldUIV2 {
         <button class="${commandOpen && this.panelMode === 'war' ? 'is-active' : ''} ${wars.length ? 'has-war' : ''}" data-action="panel" data-panel="war"><i>⚔</i><span><b>WAR</b><small>${wars.length ? `${wars.length} active` : 'Choose target'}</small></span></button>
         <button class="${commandOpen && this.panelMode === 'commander' ? 'is-active' : ''}" data-action="panel" data-panel="commander"><i class="eonscar-command-mark"><img src="${eonscarLogoUrl}" alt=""></i><span><b>EONSCAR</b><small>AUTO · ${escapeHtml(apexDockStatus)}</small></span></button>
         <button class="${commandOpen && this.panelMode === 'nation' ? 'is-active' : ''}" data-action="panel" data-panel="nation"><i>◇</i><span><b>NATION</b><small>AI · ${escapeHtml(finance.aiMode)}</small></span></button>
-        <button class="${commandOpen && this.panelMode === 'research' ? 'is-active' : ''} ${readyTopbarResearch ? 'has-alert' : ''}" data-action="panel" data-panel="research"><i>⌁</i><span><b>RESEARCH</b><small>${escapeHtml(researchDockLabel)}</small></span></button>
+        <button class="${commandOpen && this.panelMode === 'research' ? 'is-active' : ''}" data-action="panel" data-panel="research"><i>⌁</i><span><b>RESEARCH</b><small>${escapeHtml(researchDockLabel)}</small></span></button>
         <button class="${commandOpen && this.panelMode === 'economy' ? 'is-active' : ''} ${displayedNet < 0 ? 'is-negative' : ''}" data-action="panel" data-panel="economy"><i>$</i><span><b>ECONOMY</b><small>${signed(calendarEconomyGrowth * 100, 2)}%/yr</small></span></button>
       </nav>` : ''}
       ${!warOutcome && !spectating && !state.gameOver && !this.introOpen
@@ -3847,16 +3857,16 @@ export class WorldUIV2 {
     };
     const portfolio = this.engine.researchPortfolio(human.id, finance);
     const research = this.engine.state.players[human.id]!.research;
+    const economy = this.engine.nationalEconomy(human.id);
+    const researchDrivers = selectResearchDriversV2(
+      this.engine.state,
+      this.engine.content,
+      human.id,
+      finance,
+    );
     const researchOrderPending = this.pendingResearchAction !== undefined;
     const pendingResearchCommand = this.pendingResearchAction?.command;
-    const deterrence = this.engine.nuclearPower(human.id);
-    const active = portfolio.find((program) => program.branch === research.activeProgram);
-    const readyPrograms = portfolio.filter((program) => (
-      !program.maxed && program.nextCost > 0 && program.progress + 1e-9 >= program.nextCost
-    ));
-    const ready = readyPrograms.find((program) => program.branch === research.activeProgram)
-      ?? readyPrograms[0];
-    const allMastered = portfolio.length > 0 && portfolio.every((program) => program.maxed);
+    const portfolioByBranch = new Map(portfolio.map((program) => [program.branch, program]));
     const completed = portfolio.reduce((sum, branch) => sum + branch.breakthroughs, 0);
     const polarCompleted = this.engine.state.polarEndgame
       .arcticPrograms[human.id]?.completedProjects.length ?? 0;
@@ -3880,73 +3890,97 @@ export class WorldUIV2 {
         return `<article class="research-effect-card research-effect-card--${visual.tone}" aria-label="${escapeHtml(label)}, ${escapeHtml(total)}, level ${level}"><i aria-hidden="true">${visual.icon}</i><div><span>${escapeHtml(label)}</span><strong>${escapeHtml(total)}</strong></div><small>LEVEL ${level}</small></article>`;
       })
       .join('');
-    const activeProgress = active ? Math.round(clamp(active.progressRatio, 0, 1) * 100) : 0;
-    const activeDays = active && active.weeklyProgress > 0
-      ? Math.max(1, Math.ceil(Math.max(0, active.nextCost - active.progress) / active.weeklyProgress))
-      : 0;
-    const activeRemaining = active ? Math.max(0, active.nextCost - active.progress) : 0;
-    const nuclearProgress = Math.round(deterrence.progressRatio * 100);
-    const dailyOutput = active?.weeklyProgress ?? 0;
-    const choiceCards = ready?.effects.map((effect) => {
-      const copy = RESEARCH_EFFECT_COPY[effect.effect];
-      const visual = researchEffectVisualV2(effect.effect);
-      const transition = researchEffectTransitionV2(
-        effect.effect,
-        effect.level,
-        1,
-        effect.impactPerLevel,
-        effectDisplayContext,
-      );
-      return `<button type="button" class="research-choice-card research-choice-card--${visual.tone}" data-action="choose-research-breakthrough" data-branch="${ready.branch}" data-effect="${effect.effect}" ${researchOrderPending ? 'disabled aria-disabled="true" aria-busy="true"' : ''} aria-label="Choose ${escapeHtml(copy.name)}. ${escapeHtml(transition)}"><i aria-hidden="true">${visual.icon}</i><span><small>${escapeHtml(researchEffectLabel(effect.effect))} · LEVEL ${effect.level} → ${effect.level + 1}</small><strong>${escapeHtml(copy.name)}</strong><p>${escapeHtml(copy.description)}</p><b>${escapeHtml(transition)}</b></span><em>${researchOrderPending ? 'ORDER PENDING' : 'CHOOSE'}</em></button>`;
-    }).join('') ?? '';
-    const surgeTerms = active && !ready
-      ? this.engine.researchSurgeTerms(human.id, active.branch)
-      : undefined;
-    const hero = ready
-      ? `<section class="research-blueprint-hero is-ready" style="--project:${RESEARCH_COLORS[ready.branch]}" aria-label="Breakthrough ready"><header><span>BREAKTHROUGH READY</span><b>CHOOSE 1 OF ${ready.effects.length}</b></header><h3>${escapeHtml(RESEARCH_META[ready.branch].label)}</h3><p>The research is complete. Pick the exact capability your Empire receives; nothing is awarded automatically.</p><div class="research-choice-grid">${choiceCards}</div></section>`
-      : allMastered
-        ? `<section class="research-blueprint-hero is-mastered" style="--project:#69e3a2"><header><span>EMPIRE BLUEPRINT</span><b>MASTERED</b></header><h3>Every programme is complete</h3><p>Your full national research portfolio is active. Completed effects remain permanent for this run.</p></section>`
-        : active
-          ? `<section class="research-blueprint-hero is-active" style="--project:${RESEARCH_COLORS[active.branch]}"><header><span>ACTIVE EMPIRE FOCUS</span><b>${activeProgress}%</b></header><h3>${escapeHtml(RESEARCH_META[active.branch].label)}</h3><p>${escapeHtml(RESEARCH_META[active.branch].effect)}</p><i role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${activeProgress}"><b style="width:${activeProgress}%"></b></i><footer><span>${format(activeRemaining, 2)} R&amp;D remaining${activeDays ? ` · about ${activeDays} days` : ''}</span>${surgeTerms ? `<button type="button" class="secondary-button research-surge-button" data-action="research-surge" data-branch="${active.branch}" ${researchOrderPending || !surgeTerms.allowed ? 'disabled aria-disabled="true"' : ''} ${researchOrderPending ? 'aria-busy="true"' : ''} title="${escapeHtml(researchOrderPending ? 'Another research order is awaiting confirmation.' : (surgeTerms.reason ?? `Add ${format(surgeTerms.progressAdded, 2)} progress`))}">${researchOrderPending ? 'ORDER PENDING' : `NATIONAL INITIATIVE · ${cash(surgeTerms.cost)}`}</button>` : ''}</footer></section>`
-          : `<section class="research-blueprint-hero is-idle" style="--project:#b59cff"><header><span>EMPIRE BLUEPRINT</span><b>YOUR CHOICE</b></header><h3>Choose your first national focus</h3><p>Research is no longer passive. Select one programme below; the full daily R&amp;D output goes there, and you can switch direction without losing progress.</p></section>`;
-    const pillars = RESEARCH_PILLARS.map((pillar) => {
-      const programs = pillar.branches.map((branchId) => {
-        const program = portfolio.find((entry) => entry.branch === branchId)!;
-        const progress = program.maxed ? 100 : Math.round(clamp(program.progressRatio, 0, 1) * 100);
-        const isActive = research.activeProgram === branchId;
-        const isReady = !program.maxed && program.nextCost > 0
-          && program.progress + 1e-9 >= program.nextCost;
-        const effectSummary = program.effects.map((effect) => (
-          `${RESEARCH_EFFECT_COPY[effect.effect].name} · LV ${effect.level}`
-        )).join(' / ');
-        const pendingForBranch = pendingResearchCommand?.type === 'set-research-focus'
-          && pendingResearchCommand.branch === branchId;
-        const status = pendingForBranch ? 'ORDER QUEUED'
-          : program.maxed ? 'MASTERED'
-          : isReady ? 'CHOOSE UPGRADE'
-            : isActive ? 'ACTIVE' : 'SET FOCUS';
-        const nextDifficulty = !program.maxed && program.nextCostIncreaseRatio > 1
-          ? ` · next level +${format((program.nextCostIncreaseRatio - 1) * 100)}% cost` : '';
-        return `<article class="research-program-card ${isActive ? 'is-active' : ''} ${isReady ? 'is-ready' : ''} ${program.maxed ? 'is-maxed' : ''}" style="--project:${RESEARCH_COLORS[branchId]}"><header><span>${escapeHtml(RESEARCH_META[branchId].shortLabel)}</span><b>${program.maxed ? 'MAX' : `${progress}%`}</b></header><h4>${escapeHtml(RESEARCH_META[branchId].label)}</h4><p>${escapeHtml(RESEARCH_META[branchId].effect)}</p><small>${escapeHtml(effectSummary)}${nextDifficulty}</small><i><b style="width:${progress}%"></b></i><button type="button" data-action="${isReady ? 'noop' : 'set-research-focus'}" data-branch="${branchId}" ${researchOrderPending || program.maxed || isActive || isReady ? 'disabled aria-disabled="true"' : ''} ${researchOrderPending ? 'aria-busy="true"' : ''}>${status}</button></article>`;
+    const activeViews = RESEARCH_PILLARS.map((pillar) => {
+      const direction = research.categoryDirections[pillar.id];
+      const program = portfolioByBranch.get(direction.branch)!;
+      const effect = program.effects.find((entry) => entry.effect === direction.effect)!;
+      const progress = program.maxed ? 100 : Math.round(clamp(program.progressRatio, 0, 1) * 100);
+      const days = program.weeklyProgress > 0
+        ? Math.max(1, Math.ceil(Math.max(0, program.nextCost - program.progress) / program.weeklyProgress))
+        : 0;
+      const surgeTerms = this.engine.researchSurgeTerms(human.id, direction.branch);
+      return { pillar, direction, program, effect, progress, days, surgeTerms };
+    });
+    const nextCompletion = [...activeViews]
+      .filter((view) => !view.program.maxed && view.days > 0)
+      .sort((left, right) => left.days - right.days
+        || RESEARCH_CATEGORIES.indexOf(left.pillar.id) - RESEARCH_CATEGORIES.indexOf(right.pillar.id))[0];
+    const averageProgress = Math.round(activeViews.reduce((sum, view) => sum + view.progress, 0)
+      / Math.max(1, activeViews.length));
+    const runningCategories = activeViews.filter((view) => (
+      !view.program.maxed && view.program.weeklyProgress > 0
+    )).length;
+    const dailyOutput = activeViews.reduce((sum, view) => sum + view.program.weeklyProgress, 0);
+    const portfolioThroughput = Math.round(portfolio.reduce(
+      (sum, program) => sum + program.fundingShare,
+      0,
+    ) * 100);
+    const economyExpansionGain = researchDrivers.economyExpansionOutputGain * 100;
+    const iqStepGain = researchDrivers.iqStepOutputGain * 100;
+    const categoryRows = activeViews.map(({ pillar, direction: activeDirection, program: activeProgram, progress: activeProgress, days: activeDays, surgeTerms }) => {
+      const directionCards = RESEARCH_CATEGORY_DIRECTIONS[pillar.id].map((direction) => {
+        const program = portfolioByBranch.get(direction.branch)!;
+        const effect = program.effects.find((entry) => entry.effect === direction.effect)!;
+        const copy = RESEARCH_EFFECT_COPY[direction.effect];
+        const visual = researchEffectVisualV2(direction.effect);
+        const isActive = activeDirection.branch === direction.branch
+          && activeDirection.effect === direction.effect;
+        const isPending = pendingResearchCommand?.type === 'set-research-direction'
+          && pendingResearchCommand.category === pillar.id
+          && pendingResearchCommand.branch === direction.branch
+          && pendingResearchCommand.effect === direction.effect;
+        const cardProgress = program.maxed ? 100
+          : Math.round(clamp(program.progressRatio, 0, 1) * 100);
+        const cardDays = program.weeklyProgress > 0
+          ? Math.max(1, Math.ceil(Math.max(0, program.nextCost - program.progress) / program.weeklyProgress))
+          : 0;
+        const transition = researchEffectTransitionV2(
+          direction.effect,
+          effect.level,
+          1,
+          effect.impactPerLevel,
+          effectDisplayContext,
+        );
+         const status = isPending ? 'SWITCHING…'
+           : program.maxed ? 'MASTERED'
+             : isActive
+               ? `ACTIVE · ${cardProgress}%${cardDays ? ` · ${cardDays}D` : ''}`
+               : program.progress > 0
+                 ? direction.branch === activeDirection.branch
+                   ? `SELECT · SHARES ${cardProgress}% BRANCH PROGRESS`
+                   : `SELECT · ${cardProgress}% SAVED`
+                 : 'SELECT DIRECTION';
+         return `<button type="button" class="research-direction-card research-choice-card--${visual.tone} ${isActive ? 'is-active' : ''} ${isPending ? 'is-pending' : ''} ${program.maxed ? 'is-maxed' : ''}" style="--project:${RESEARCH_COLORS[direction.branch]}" data-action="set-research-direction" data-category="${pillar.id}" data-branch="${direction.branch}" data-effect="${direction.effect}" aria-pressed="${isActive ? 'true' : 'false'}" ${researchOrderPending || isActive || program.maxed ? 'disabled aria-disabled="true"' : ''} ${isPending ? 'aria-busy="true"' : ''} aria-label="${escapeHtml(pillar.label)}: ${escapeHtml(copy.name)}. ${escapeHtml(transition)}"><header><i aria-hidden="true">${visual.icon}</i><span>${escapeHtml(RESEARCH_META[direction.branch].shortLabel)} · ${escapeHtml(researchEffectLabel(direction.effect))}</span><b>${isActive ? '●' : '○'}</b></header><strong>${escapeHtml(copy.name)}</strong><p>${escapeHtml(copy.description)}</p><small>${escapeHtml(transition)}</small><em>${status}</em>${isActive ? `<i class="research-direction-progress"><b style="width:${cardProgress}%"></b></i>` : ''}</button>`;
       }).join('');
-      return `<section class="research-pillar"><header><i aria-hidden="true">${pillar.icon}</i><div><strong>${pillar.label}</strong><small>${pillar.purpose}</small></div></header><div>${programs}</div></section>`;
+      const surgeTitle = researchOrderPending
+        ? 'Another research order is awaiting confirmation.'
+        : (surgeTerms.reason ?? `Add ${format(surgeTerms.progressAdded, 2)} progress to this category`);
+      const laneStatus = activeProgram.maxed
+        ? 'MASTERED · AUTO-SWITCH'
+        : activeProgram.weeklyProgress > 0 ? 'AUTO RESEARCH' : 'NO FUNDED OUTPUT';
+      return `<section class="research-category-row" style="--project:${RESEARCH_COLORS[activeDirection.branch]}"><header><i aria-hidden="true">${pillar.icon}</i><div><strong>${pillar.label}</strong><small>${pillar.purpose}</small></div><b>${format(activeProgram.weeklyProgress, 2)}/DAY</b></header><div class="research-category-status"><span>${laneStatus}</span><strong>${escapeHtml(RESEARCH_EFFECT_COPY[activeDirection.effect].name)}</strong><small>${activeProgress}%${activeDays ? ` · next level in about ${activeDays} days` : ''}</small><button type="button" class="secondary-button research-surge-button" data-action="research-surge" data-branch="${activeDirection.branch}" ${researchOrderPending || !surgeTerms.allowed ? 'disabled aria-disabled="true"' : ''} ${researchOrderPending ? 'aria-busy="true"' : ''} title="${escapeHtml(surgeTitle)}">INITIATIVE · ${cash(surgeTerms.cost)}</button></div><div class="research-direction-grid">${directionCards}</div></section>`;
     }).join('');
+    const heroStatus = nextCompletion
+      ? `NEXT · ${escapeHtml(RESEARCH_EFFECT_COPY[nextCompletion.direction.effect].name)} · ~${nextCompletion.days}D`
+      : runningCategories === 0 ? 'NO FUNDED OUTPUT' : 'PORTFOLIO STABLE';
+    const hero = `<section class="research-blueprint-hero research-portfolio-hero is-active" style="--project:#b59cff"><header><span>AUTOMATIC EMPIRE PORTFOLIO</span><b>${activeViews.length}/${RESEARCH_CATEGORIES.length} DIRECTIONS SET · ${runningCategories} FUNDED</b></header><h3>Five directions develop in parallel</h3><p>Select one path in every category. Completed levels apply immediately and the next level starts automatically; switching direction preserves its branch progress.</p><i role="progressbar" aria-label="Average research progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${averageProgress}"><b style="width:${averageProgress}%"></b></i><footer><span>Average cycle ${averageProgress}%</span><b>${heroStatus}</b></footer></section>`;
     return `
       <aside class="world-panel command-drawer glass-panel progress-command research-command command-drawer--clean command-drawer--unified command-drawer--decision" data-scroll-session="${drawerScrollSessionId('research')}">
         <button class="panel-close" data-action="close-panel" aria-label="Close research">×</button>
-        <div class="drawer-heading drawer-heading--compact drawer-heading--single"><div><span class="panel-kicker">CUSTOMIZE THE WHOLE EMPIRE</span><h2>Research · Empire Blueprint</h2></div><strong class="${researchOrderPending || ready ? 'is-warning' : 'is-positive'}" aria-live="polite">${researchOrderPending ? 'ORDER QUEUED' : ready ? 'CHOICE READY' : `${totalCompleted} COMPLETE`}</strong></div>
+        <div class="drawer-heading drawer-heading--compact drawer-heading--single"><div><span class="panel-kicker">DIRECT THE WHOLE EMPIRE</span><h2>Research · Strategic Matrix</h2></div><strong class="${researchOrderPending ? 'is-warning' : 'is-positive'}" aria-live="polite">${researchOrderPending ? 'ORDER QUEUED' : `${activeViews.length}/${RESEARCH_CATEGORIES.length} ACTIVE`}</strong></div>
 
         ${hero}
 
-        <section class="decision-stat-grid decision-stat-grid--research" aria-label="Research status">
-          <article class="is-primary"><span>ACTIVE R&amp;D / DAY</span><strong>${format(dailyOutput, 2)}</strong><small>${cash(annual(finance.research))} projected / year</small></article>
-          <article><span>CONVERSION</span><strong>×${format(nationalQuality?.researchConversion ?? 1, 2)}</strong><small>Live system output</small></article>
-          <article><span>LIVE IQ</span><strong>${format(liveIq.score, 1)}</strong><small>${signed(liveIq.researchBonus, 1)} education</small></article>
-          <article class="${finance.warResearchPenalty > 0 ? 'is-warn' : 'is-good'}"><span>THROUGHPUT</span><strong>${format((1 - finance.warResearchPenalty) * 100, 1)}%</strong><small>${finance.warResearchPenalty > 0 ? 'Reduced by active war' : 'No wartime disruption'}</small></article>
-          <article><span>DETERRENCE</span><strong>${deterrence.level ? `TIER ${deterrence.level}` : `${nuclearProgress}%`}</strong><small>+${format(deterrence.attackBonus * 100)}% attack</small></article>
-        </section>
+         <section class="decision-stat-grid decision-stat-grid--research" aria-label="Research status">
+           <article class="is-primary"><span>ACTIVE DIRECTIONS</span><strong>${activeViews.length}/${RESEARCH_CATEGORIES.length}</strong><small>${runningCategories} funded now</small></article>
+           <article><span>NEXT COMPLETION</span><strong>${nextCompletion ? `~${nextCompletion.days}D` : '—'}</strong><small>${nextCompletion ? escapeHtml(RESEARCH_EFFECT_COPY[nextCompletion.direction.effect].name) : 'No funded completion'}</small></article>
+           <article><span>COMPLETED LEVELS</span><strong>${totalCompleted}</strong><small>Permanent Empire upgrades</small></article>
+           <article class="${finance.warResearchPenalty > 0 ? 'is-warn' : 'is-good'}"><span>USEFUL THROUGHPUT</span><strong>${portfolioThroughput}%</strong><small>${finance.warResearchPenalty > 0 ? `${format(finance.warResearchPenalty * 100, 1)}% wartime drag` : '20% overhead limits runaway power'}</small></article>
+         </section>
 
-        <section class="research-blueprint" aria-label="Empire research programmes"><header><span>CHOOSE A DIRECTION</span><small>One active focus · switching preserves progress</small></header>${pillars}</section>
+         <section class="research-driver-panel" aria-label="Economy and IQ research impact"><header><span>WHAT POWERS YOUR RESEARCH</span><small>See what expansion and education can actually add</small></header><div class="research-driver-grid"><article class="is-economy"><header><i aria-hidden="true">GDP</i><div><span>ECONOMY ENGINE</span><strong>${cash(economy.controlledOutput)} integrated output</strong></div></header><div class="research-driver-flow"><span><small>FUNDED R&amp;D · ${format(researchDrivers.fundingRatio * 100, 0)}% ACTIVE</small><b>${cash(annual(finance.research))}/YR</b></span><i aria-hidden="true">→</i><span><small>ACTIVE PORTFOLIO · 80% CAP</small><b>${format(dailyOutput, 2)}/DAY</b></span></div><footer><span>IF FUNDED R&amp;D +${format(researchDrivers.economyExpansionShare * 100, 0)}%</span><strong>${signed(economyExpansionGain, 2)}% research/day</strong></footer></article><article class="is-iq"><header><i aria-hidden="true">IQ</i><div><span>INTELLIGENCE ENGINE</span><strong>${format(researchDrivers.iqScore, 1)} live national IQ</strong></div></header><div class="research-driver-flow"><span><small>INSTITUTIONS</small><b>×${format(researchDrivers.institutionalCapacity, 3)}</b></span><i aria-hidden="true">→</i><span><small>TOTAL IQ EFFECT</small><b>×${format(researchDrivers.iqOutputMultiplier, 3)}</b></span></div><footer><span>EDUCATION UPSIDE</span><strong>${researchDrivers.iqStepPoints > 0 ? `+${format(researchDrivers.iqStepPoints, 1)} IQ → ${signed(iqStepGain, 2)}% research/day` : 'IQ research ceiling reached'}</strong></footer></article></div><p><b>Expansion rule:</b> integrated GDP increases the money available for R&amp;D. Integrated population also changes your fused IQ after Signal Purge, so a territory can raise or lower the IQ side of this equation. The +25% economy quote is a funding scenario, not a target forecast.</p></section>
+
+         <section class="research-blueprint research-matrix" aria-label="Empire research categories"><header><span>FIVE PARALLEL CATEGORIES</span><small>One active direction in every category · completion never pauses</small></header><div class="research-category-grid">${categoryRows}</div></section>
 
         <details class="decision-details research-special-lane" data-disclosure-session="drawer:research:polar"><summary>Special project lane <b>NORTH POLE</b></summary><div class="decision-details__body">${this.renderPolarResearchItem(human)}</div></details>
         <details class="decision-details" data-disclosure-session="drawer:research:completed-effects"><summary>Completed effects <b>${totalCompleted} upgrades</b></summary><div class="decision-details__body"><section class="research-effects" aria-labelledby="research-effects-title"><header><span class="section-label" id="research-effects-title">ACTIVE EFFECTS</span></header><div class="upgrade-total-grid">${upgradeTotals}${polarCompletedEffects}${!upgradeTotals && !polarCompletedEffects ? '<div class="empty-state">No completed research effects yet.</div>' : ''}</div></section></div></details>
@@ -4651,7 +4685,7 @@ export class WorldUIV2 {
       <article><i aria-hidden="true">MIL</i><div><h3>Army and EONSCAR</h3><p>EONSCAR projects one autonomous shield across the Empire and concentrates it where the fighting matters most.</p></div></article>
       <article><i aria-hidden="true">⚔</i><div><h3>War Supply</h3><p>100% means every active front receives its full Army Capacity allocation. Naval routes deliver half the land amount.</p></div></article>
       <article><i aria-hidden="true">AI</i><div><h3>EONSCAR autonomy</h3><p>Energy powers the dome. At 0% it collapses, recharges safely and returns only at 100%.</p></div></article>
-      <article><i aria-hidden="true">R&amp;D</i><div><h3>Research</h3><p>Choose one Empire focus for your full daily R&amp;D output. When it finishes, you choose the exact permanent breakthrough; switching focus never loses progress.</p></div></article>
+      <article><i aria-hidden="true">R&amp;D</i><div><h3>Research</h3><p>Choose one direction in each of five categories. All five research in parallel, completed levels apply automatically, and switching a direction preserves its branch progress. Economy and IQ determine the pace.</p></div></article>
       <article><i aria-hidden="true">◇</i><div><h3>Liberation and signal purge</h3><p>${campaignEveryNationForItself ? 'The machine signal shattered every alliance; each nation now fights for itself. ' : ''}Captured land starts partly usable while EONSCAR purges the Rogue signal. A short post-war recovery window prevents immediate redeclaration.</p></div></article>
       <article><i aria-hidden="true">POL</i><div><h3>North Pole and Rogue Attention</h3><p>The staged North Pole investigation gradually improves EONSCAR intel and preparation; it never awakens the Rogue. Time and world liberation determine when Antarctica begins to react.</p></div></article>
       <article><i aria-hidden="true">↔</i><div><h3>Controls and multiplayer</h3><p>Click territories, drag the globe, wheel or pinch to zoom, recenter with ⌖ and close drawers with Escape. Multiplayer orders are host-validated; absorbed commanders spectate.</p></div></article>
@@ -4757,6 +4791,37 @@ export class WorldUIV2 {
     const annualCostDetail = logisticsPreview
       ? `${cash(annual(logisticsPreview.additionalWeeklyWarOperations))} / year`
       : 'No quote available';
+    const conquest = this.engine.conquestForecast(human.id, target.id);
+    const targetTerritoryIds = (Object.entries(
+      this.engine.state.territories,
+    ) as [TerritoryId, TerritoryStateV2][])
+      .filter(([, territory]) => territory.owner === target.id)
+      .map(([territoryId]) => territoryId)
+      .sort((left, right) => left.localeCompare(right));
+    const integrationPreview = quoteConquestIntegrationPreviewV2(
+      this.engine.state,
+      human.id,
+      targetTerritoryIds,
+      forecast.access === 'none' ? undefined : forecast.access,
+      this.engine.content,
+    );
+    const iqProjection = projectNationalIqFusionV2(
+      this.engine.state,
+      this.engine.content,
+      human.id,
+      target.id,
+    );
+    const currentIqResearchFactor = researchIqOutputFactorV2(
+      this.engine.content, human.id, iqProjection.current.score,
+    );
+    const projectedIqResearchFactor = researchIqOutputFactorV2(
+      this.engine.content, human.id, iqProjection.projected.score,
+    );
+    const projectedIqResearchDelta = currentIqResearchFactor > 0
+      ? (projectedIqResearchFactor / currentIqResearchFactor - 1) * 100
+      : 0;
+    const iqYieldTone = iqProjection.scoreDelta > 0.0005
+      ? 'is-positive' : iqProjection.scoreDelta < -0.0005 ? 'is-negative' : 'is-neutral';
     const criticalRisks: Array<{ label: string; detail: string }> = [];
     if (!declaration.allowed) {
       criticalRisks.push({ label: 'OPERATION BLOCKED', detail: declaration.reason ?? 'Attack requirements are not met.' });
@@ -4814,6 +4879,8 @@ export class WorldUIV2 {
         <article class="is-enemy"><span>ENEMY FRONT SOLDIERS</span><strong>${people(forecast.defenderStrength)}</strong><small>ATK ${format(forecast.defenderAttack, 2)} · DEF ${format(forecast.defenderDefense, 2)}</small></article>
         <article class="is-exchange"><span>FIRST BATTLE ESTIMATE</span><strong><i>YOU −${people(forecast.projectedAttackerLosses)}</i><b>ENEMY −${people(forecast.projectedDefenderLosses)}</b></strong><small>Live forecast · terrain and position included</small></article>
       </section>
+
+      <section class="review-expansion-yield" aria-label="Economy and IQ gains after conquest and integration"><header><div><span>EMPIRE EXPANSION YIELD</span><strong>FULL-INTEGRATION PROJECTION</strong></div><small>${conquest.territoryCount} ${conquest.territoryCount === 1 ? 'territory' : 'territories'} · Signal Purge ${compactWarTime(integrationPreview.durationWeeks)}</small></header><div><article class="is-economy"><span>GDP ON CAPTURE</span><strong>+${cash(conquest.initialIntegratedOutput)}</strong><small>10% usable immediately</small></article><article class="is-economy"><span>GDP AFTER PURGE</span><strong>+${cash(conquest.retainedEconomy)}</strong><small>100% integrated target economy</small></article><article class="${iqYieldTone}"><span>IQ AFTER PURGE</span><strong>${format(iqProjection.current.score, 1)} → ${format(iqProjection.projected.score, 1)}</strong><small>${signed(iqProjection.scoreDelta, 2)} IQ · ${signed(projectedIqResearchDelta, 2)}% total IQ effect on R&amp;D</small></article></div><footer><span>PURGE COST ${cash(integrationPreview.annualCost)}/YR</span><b>UP TO ${cash(conquest.maxTreasurySeized)} TREASURY ON FINAL ELIMINATION</b></footer></section>
 
       ${riskReview}
 
@@ -5298,15 +5365,19 @@ export class WorldUIV2 {
             );
             break;
           }
-          case 'choose-research-breakthrough': {
+          case 'set-research-direction': {
+            const category = element.dataset.category as ResearchCategoryV2 | undefined;
             const branch = element.dataset.branch as ResearchBranchV2 | undefined;
             const effect = element.dataset.effect as ResearchEffectV2 | undefined;
-            if (!branch || !effect || !RESEARCH_META[branch] || !RESEARCH_EFFECT_COPY[effect]) break;
+            if (!category || !branch || !effect
+              || !RESEARCH_CATEGORIES.includes(category)
+              || !RESEARCH_META[branch]
+              || !RESEARCH_EFFECT_COPY[effect]) break;
             const playerId = this.viewerPlayerId();
             this.submitResearchAction(
-              { type: 'choose-research-breakthrough', playerId, branch, effect },
-              () => this.engine.chooseResearchBreakthrough(playerId, branch, effect),
-              'That breakthrough choice is no longer available.',
+              { type: 'set-research-direction', playerId, category, branch, effect },
+              () => this.engine.setResearchDirection(playerId, category, branch, effect),
+              'That research direction is unavailable.',
             );
             break;
           }

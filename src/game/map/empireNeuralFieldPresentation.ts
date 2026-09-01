@@ -1,3 +1,4 @@
+import { isSeaConnection } from '../data/worldMap';
 import {
   mapTerritoryIsIntegrating,
   type MapCommanderForceState,
@@ -23,7 +24,7 @@ export interface ApexEmpireFieldPresentation {
   readonly coverageTerritoryIds: readonly string[];
   /** Friendly territories carrying a live offensive or defensive front. */
   readonly activeFrontTerritoryIds: readonly string[];
-  /** Authored land/sea links joining the distributed field into one network. */
+  /** Land links joining nearby shield caps; naval continuity uses the gateway overlay. */
   readonly networkEdges: readonly ApexEmpireNetworkEdge[];
   /** Stable, quantized rebuild key; tick/progress and numerical noise are excluded. */
   readonly geometrySignature: string;
@@ -119,6 +120,10 @@ export function selectApexEmpireFieldPresentation(
     const connections = engine.content?.territories?.[sourceId]?.connections ?? [];
     for (const connection of connections) {
       if (!coverage.has(connection.targetId)) continue;
+      // Intercontinental sea links already have a dedicated dashed gateway
+      // overlay. Reusing them here would stack a bright shield tether over the
+      // cooler cartographic route and make one naval relationship read twice.
+      if (isSeaConnection(sourceId, connection.targetId)) continue;
       const key = canonicalEdgeKey(sourceId, connection.targetId);
       if (seenEdges.has(key)) continue;
       seenEdges.add(key);

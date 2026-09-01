@@ -50,13 +50,13 @@ describe('V2 integrated research programs and army economy', () => {
       'education-intelligence',
     ]);
     expect(RESEARCH_BRANCH_EFFECTS).toEqual({
-      'population-recruitment': ['population-growth', 'training'],
+      'population-recruitment': ['population-growth', 'training', 'research-speed'],
       'military-industry': ['force-capacity', 'reinforcement-efficiency'],
       'advanced-weapons': ['attack', 'reinforcement-efficiency'],
       'defensive-systems': ['defense', 'casualty-reduction'],
       'logistics-medicine': ['recovery', 'supply'],
       'economy-science': ['economy-growth', 'research-speed', 'research-efficiency'],
-      'food-systems': ['supply', 'recovery'],
+      'food-systems': ['supply', 'recovery', 'operating-efficiency'],
       'reserve-doctrine': ['training', 'force-capacity'],
       'public-administration': ['tax-efficiency', 'operating-efficiency'],
       'education-intelligence': ['iq-increase'],

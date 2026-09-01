@@ -3,7 +3,7 @@ import {
   activeAutonomousAiVsAiWarsV2,
   planAiCommandsV2,
   selectAiResearchAllocationsV2,
-  selectAiResearchFocusV2,
+  selectAiResearchDirectionsV2,
   selectDefensiveAidAssessmentV2,
 } from './ai';
 import {
@@ -28,6 +28,10 @@ import {
 } from './integration';
 import { invariantErrorsV2 } from './invariants';
 import {
+  RESEARCH_CATEGORIES,
+  RESEARCH_CATEGORY_DIRECTIONS,
+} from './researchDirections';
+import {
   moveBudgetTowardTargetV2,
   moveResearchTowardTargetV2,
   nationalAiAllocationStepLimitV2,
@@ -48,7 +52,6 @@ import {
   createPowerSnapshotV2,
   selectNationalAggressivenessV2,
   selectNationalAiPlanV2,
-  selectResearchBranchCostV2,
   selectResearchFundingSharesV2,
   selectRecruitmentUnitCostV2,
   selectTerritoriesOfV2,
@@ -61,7 +64,7 @@ import { WorldEngineV2 } from './WorldEngineV2';
 import { enterPostBlackoutCampaignForTestV2 } from './testSupport';
 
 describe('V2 shared national AI', () => {
-  it('keeps capped Education out of AI focus without inventing passive funding', () => {
+  it('keeps capped Education out of the parallel AI directions', () => {
     const state = createWorldStateV2(8_230_001);
     const singapore = nationIdV2('sgp');
     state.players[singapore]!.research.effectLevels['iq-increase'] = 1_000_000;
@@ -71,12 +74,14 @@ describe('V2 shared national AI', () => {
       'economy-science': 0,
       'education-intelligence': 100,
     };
-    state.players[singapore]!.research.activeProgram = 'education-intelligence';
+    state.players[singapore]!.research.categoryDirections.people = {
+      branch: 'education-intelligence',
+      effect: 'iq-increase',
+    };
     const shares = selectResearchFundingSharesV2(
       state, WORLD_CONTENT_V2, singapore,
     );
     expect(shares['education-intelligence']).toBe(0);
-    expect(Object.values(shares).reduce((sum, share) => sum + share, 0)).toBe(0);
 
     const allocation = selectAiResearchAllocationsV2(
       state,
@@ -86,14 +91,17 @@ describe('V2 shared national AI', () => {
     );
     expect(allocation['education-intelligence']).toBe(0);
     expect(Object.values(allocation).reduce((sum, value) => sum + value, 0)).toBe(100);
-    const focus = selectAiResearchFocusV2(
+    const directions = selectAiResearchDirectionsV2(
       state,
       WORLD_CONTENT_V2,
       singapore,
       createPowerSnapshotV2(state, WORLD_CONTENT_V2),
     );
-    expect(focus).toBeDefined();
-    expect(focus).not.toBe('education-intelligence');
+    expect(directions).toBeDefined();
+    expect(directions?.people.branch).not.toBe('education-intelligence');
+    for (const category of RESEARCH_CATEGORIES) {
+      expect(RESEARCH_CATEGORY_DIRECTIONS[category]).toContainEqual(directions?.[category]);
+    }
   });
 
   it('combines a recent military-posture baseline with live national readiness', () => {
@@ -237,7 +245,7 @@ describe('V2 shared national AI', () => {
     )).toEqual(research);
   });
 
-  it('makes enemy AI repair weak armies and select a research focus automatically', () => {
+  it('makes enemy AI repair weak armies and select valid category directions automatically', () => {
     const state = createWorldStateV2(702);
     const belgium = nationIdV2('nld');
     for (const territory of Object.values(state.territories)) {
@@ -261,32 +269,38 @@ describe('V2 shared national AI', () => {
       ));
       expect(Object.values(budgetCommand.budget).reduce((sum, value) => sum + value, 0)).toBe(100);
     }
-    const research = commands.find((command) => command.type === 'set-research-focus');
-    expect(research?.type).toBe('set-research-focus');
-    if (research?.type === 'set-research-focus') {
-      expect(research.branch).toBe(selectAiResearchFocusV2(
-        state,
-        WORLD_CONTENT_V2,
-        belgium,
-        createPowerSnapshotV2(state, WORLD_CONTENT_V2),
-      ));
+    const directions = selectAiResearchDirectionsV2(
+      state,
+      WORLD_CONTENT_V2,
+      belgium,
+      createPowerSnapshotV2(state, WORLD_CONTENT_V2),
+    );
+    expect(directions).toBeDefined();
+    for (const command of commands.filter((candidate) => candidate.type === 'set-research-direction')) {
+      if (command.type !== 'set-research-direction') continue;
+      expect(command).toMatchObject(directions?.[command.category]);
+      expect(RESEARCH_CATEGORY_DIRECTIONS[command.category]).toContainEqual({
+        branch: command.branch,
+        effect: command.effect,
+      });
     }
   });
 
-  it('selects different research focuses for different national needs', () => {
+  it('selects five valid deterministic directions for different national needs', () => {
     const state = createWorldStateV2(704);
     state.tick = 32;
-    const commands = planAiCommandsV2(state, WORLD_CONTENT_V2)
-      .filter((command) => command.type === 'set-research-focus');
-    const focuses = new Map(commands.map((command) => [command.playerId, command.branch]));
-    const selected = [
-      focuses.get(nationIdV2('lux')),
-      focuses.get(nationIdV2('ind')),
-      focuses.get(nationIdV2('bdi')),
-      focuses.get(nationIdV2('usa')),
-    ];
-    expect(selected.every((focus) => focus !== undefined && focus !== null)).toBe(true);
-    expect(new Set(selected).size).toBeGreaterThanOrEqual(2);
+    const powers = createPowerSnapshotV2(state, WORLD_CONTENT_V2);
+    const selected = ['lux', 'ind', 'bdi', 'usa'].map((id) => (
+      selectAiResearchDirectionsV2(state, WORLD_CONTENT_V2, nationIdV2(id), powers)
+    ));
+    expect(selected.every((directions) => directions !== undefined)).toBe(true);
+    for (const directions of selected) {
+      for (const category of RESEARCH_CATEGORIES) {
+        expect(RESEARCH_CATEGORY_DIRECTIONS[category]).toContainEqual(directions?.[category]);
+      }
+    }
+    expect(new Set(selected.map((directions) => JSON.stringify(directions))).size)
+      .toBeGreaterThanOrEqual(2);
   });
 
   it('uses different national budgets for a food-and-debt crisis and an army rebuild', () => {
@@ -319,6 +333,7 @@ describe('V2 shared national AI', () => {
     expect(commands.some((command) => 'playerId' in command && command.playerId === human && (
       command.type === 'set-research-allocations'
         || command.type === 'set-research-focus'
+        || command.type === 'set-research-direction'
         || command.type === 'choose-research-breakthrough'
     ))).toBe(false);
     expect(commands.some((command) => command.type === 'declare-war' && command.attackerId === human)).toBe(false);
@@ -334,40 +349,77 @@ describe('V2 shared national AI', () => {
       }
     }
     state.tick = 8;
+    const selected = selectAiResearchDirectionsV2(
+      state,
+      WORLD_CONTENT_V2,
+      rival,
+      createPowerSnapshotV2(state, WORLD_CONTENT_V2),
+    )!;
+    state.players[rival]!.research.categoryDirections = structuredClone(selected);
+    const staleStateDirection = RESEARCH_CATEGORY_DIRECTIONS.state.find((direction) => (
+      direction.branch !== selected.state.branch || direction.effect !== selected.state.effect
+    ))!;
+    state.players[rival]!.research.categoryDirections.state = { ...staleStateDirection };
+    state.players[rival]!.research.effectLevels[staleStateDirection.effect] = 100;
     const commands = planAiCommandsV2(state, WORLD_CONTENT_V2);
     expect(commands.some((command) => 'playerId' in command && command.playerId === human && (
       command.type === 'set-research-focus'
+        || command.type === 'set-research-direction'
         || command.type === 'choose-research-breakthrough'
     ))).toBe(false);
-    expect(commands.some((command) => command.type === 'set-research-focus' && command.playerId === rival)).toBe(true);
+    expect(commands.some((command) => command.type === 'set-research-direction'
+      && command.playerId === rival)).toBe(true);
   });
 
-  it('claims AI breakthroughs deterministically while leaving human choices ready', () => {
+  it('emits deterministic AI direction commands only when a category changes', () => {
     const state = createWorldStateV2(713);
     const human = state.humanPlayerId;
     const rival = nationIdV2('nld');
     state.tick = 8;
-    for (const playerId of [human, rival]) {
-      state.players[playerId]!.research.activeProgram = 'advanced-weapons';
-      state.players[playerId]!.research.progress['advanced-weapons'] = selectResearchBranchCostV2(
-        state,
-        WORLD_CONTENT_V2,
-        playerId,
-        'advanced-weapons',
-      );
+    const powers = createPowerSnapshotV2(state, WORLD_CONTENT_V2);
+    const settled = selectAiResearchDirectionsV2(
+      state, WORLD_CONTENT_V2, rival, powers,
+    )!;
+    state.players[rival]!.research.categoryDirections = structuredClone(settled);
+
+    const unchanged = planAiCommandsV2(state, WORLD_CONTENT_V2);
+    expect(unchanged.some((command) => command.type === 'set-research-direction'
+      && command.playerId === rival)).toBe(false);
+
+    const selectedCombat = settled.combat;
+    const alternative = RESEARCH_CATEGORY_DIRECTIONS.combat.find((direction) => (
+      direction.branch !== selectedCombat.branch || direction.effect !== selectedCombat.effect
+    ))!;
+    state.players[rival]!.research.categoryDirections.combat = { ...alternative };
+    state.players[rival]!.research.effectLevels[alternative.effect] = 100;
+
+    const expected = selectAiResearchDirectionsV2(
+      state,
+      WORLD_CONTENT_V2,
+      rival,
+      createPowerSnapshotV2(state, WORLD_CONTENT_V2),
+    )!;
+    for (const category of RESEARCH_CATEGORIES) {
+      if (category !== 'combat') {
+        state.players[rival]!.research.categoryDirections[category] = { ...expected[category] };
+      }
     }
     const left = planAiCommandsV2(state, WORLD_CONTENT_V2);
     const right = planAiCommandsV2(structuredClone(state), WORLD_CONTENT_V2);
     expect(left).toEqual(right);
-    expect(left.some((command) => command.type === 'choose-research-breakthrough'
+    expect(left.some((command) => command.type === 'set-research-direction'
       && command.playerId === human)).toBe(false);
-    const rivalChoice = left.find((command) => command.type === 'choose-research-breakthrough'
+    expect(left.some((command) => command.type === 'set-research-focus'
+      || command.type === 'choose-research-breakthrough')).toBe(false);
+    const rivalDirections = left.filter((command) => command.type === 'set-research-direction'
       && command.playerId === rival);
-    expect(rivalChoice).toMatchObject({
-      type: 'choose-research-breakthrough',
+    expect(rivalDirections).toHaveLength(1);
+    expect(rivalDirections[0]).toMatchObject({
+      type: 'set-research-direction',
       playerId: rival,
-      branch: 'advanced-weapons',
-      effect: 'attack',
+      category: 'combat',
+      branch: expected.combat.branch,
+      effect: expected.combat.effect,
     });
   });
 

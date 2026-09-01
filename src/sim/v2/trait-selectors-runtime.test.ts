@@ -375,7 +375,10 @@ describe('retired country-trait selector runtime', () => {
 
     const china = identityFixtureV2('chn', 82_042);
     configureBothV2(china, (state, playerId) => {
-      state.players[playerId]!.research.activeProgram = 'military-industry';
+      state.players[playerId]!.research.categoryDirections.army = {
+        branch: 'military-industry',
+        effect: 'force-capacity',
+      };
     });
     const finance = selectWeeklyFinanceBreakdownV2(
       china.neutralState, china.neutralContent, china.neutralId,
